@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a new resource client, method, or improvement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that the SDK does not support today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: The API surface you'd like (e.g. `client.Assignments.BulkAssign(...)`) and how it maps to an Octonomy endpoint.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Related Octonomy endpoint(s) in `docs/openapi.yaml`, roadmap item, or related issues.
+    validations:
+      required: false

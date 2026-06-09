@@ -1,0 +1,27 @@
+# Compiled binaries and the example binary
+/quickstart
+examples/quickstart/quickstart
+*.exe
+*.test
+*.out
+
+# Coverage artifacts
+coverage.out
+coverage.html
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
+
+# Local environment
+.env
+.envrc
+
+# Local code review pipeline artifacts (keep the tracked placeholder)
+code-review/*
+!code-review/.gitkeep

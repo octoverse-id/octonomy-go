@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a problem with the Octonomy Go SDK.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A minimal Go snippet, the SDK call(s) made, and the observed result.
+      render: go
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error or APIError details
+      description: The returned error string, and APIError fields (Code, StatusCode, RequestID) if applicable.
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: sdk-version
+    attributes:
+      label: SDK version / commit
+      description: e.g. v0.1.0 or a commit SHA.
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Go version (`go version`), OS/arch, and the Octonomy server version you target.
+    validations:
+      required: false
