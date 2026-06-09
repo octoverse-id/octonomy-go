@@ -42,7 +42,7 @@ func TestTags_Create(t *testing.T) {
 }
 
 func TestTags_CreateConflict(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, http.StatusConflict, map[string]any{
 			"error": map[string]any{"code": CodeConflict, "message": "duplicate slug", "request_id": "req_9"},
 		})
@@ -123,7 +123,7 @@ func TestTags_List_NilParams(t *testing.T) {
 }
 
 func TestTags_GetNotFound(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, http.StatusNotFound, map[string]any{
 			"error": map[string]any{"code": CodeNotFound, "message": "Resource not found."},
 		})

@@ -75,7 +75,7 @@ func (p *TagListParams) query() url.Values {
 	if p == nil {
 		return q
 	}
-	p.ListOptions.apply(q)
+	p.apply(q)
 	if p.ApplicationID != nil {
 		q.Set("application_id", *p.ApplicationID)
 	}

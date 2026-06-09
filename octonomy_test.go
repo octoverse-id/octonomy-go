@@ -153,7 +153,7 @@ func TestDo_ErrorEnvelope(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 				writeJSON(t, w, tt.status, map[string]any{
 					"error": map[string]any{
 						"code":       tt.code,
@@ -192,7 +192,7 @@ func TestDo_ErrorEnvelope(t *testing.T) {
 }
 
 func TestDo_ErrorFallbackNonEnvelope(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("upstream down"))
 	})
