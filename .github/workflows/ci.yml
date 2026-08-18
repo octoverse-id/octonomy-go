@@ -17,9 +17,9 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25"
           cache: true
@@ -43,9 +43,9 @@ jobs:
       matrix:
         go-version: ["1.24", "1.25"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
@@ -59,9 +59,9 @@ jobs:
   vuln:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25"
           cache: true
@@ -69,3 +69,8 @@ jobs:
         uses: golang/govulncheck-action@v1
         with:
           go-version-input: "1.25"
+          # The job already checked out above. Letting the action check out a
+          # second time leaves two credential configs in place, and git sends
+          # both -- the fetch then fails with `Duplicate header: "Authorization"`
+          # and HTTP 400.
+          repo-checkout: "false"
