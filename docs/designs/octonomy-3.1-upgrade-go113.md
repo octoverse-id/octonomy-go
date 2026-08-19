@@ -682,3 +682,98 @@ resolved, per the convergence guard:
   exchange for avoiding a duplicated client. The tripwire mitigates the symptom, not the cause.
 - **`data: null` vs `data: []`** is decided for the modern line only; the compat line shares the wire
   behaviour and inherits whatever `encoding/json` does today.
+
+
+---
+
+# ENGINEERING REVIEW (rev 5 amendments)
+
+`/plan-eng-review` on 2026-08-19. Four sections, 8 issues + 1 follow-up, 1 mandated regression, plus
+a Codex outside voice. **All decisions resolved; none left open.**
+
+## The finding that reframed everything
+
+**`v0.1.0` was never released.** Zero git tags, empty `git ls-remote --tags`, and
+`proxy.golang.org/.../@v/list` has never served a semantic version — while `CHANGELOG.md:10` claims
+`## [0.1.0] - 2026-06-08` and `:29` links a `releases/tag/v0.1.0` that does not exist, in a public
+repo. Three adversarial passes and a Codex pass all read those documents and believed them. Nobody
+ran `git tag`.
+
+Consequences: the breaking-change risks in R3 and R9 apply to a population of ~zero, and the
+mechanism Go actually enforces became available at ~zero cost.
+
+## Architecture change: semantic import versioning replaces the version-range split
+
+```
+github.com/octoverse-id/octonomy-go        compat line   v1.x   Go 1.13   FROZEN
+github.com/octoverse-id/octonomy-go/v2     modern line   v2.x   Go 1.24+  keeps generics
+    └── /v2/webhook
+```
+
+Go treats these as **different modules**, so version selection, `go get -u`, and Dependabot cannot
+cross between them. Verified against the proxy:
+
+```
+go: github.com/google/go-github@v50.0.0: invalid version:
+    go.mod has post-v50 module path "github.com/google/go-github/v50" at revision v50.0.0
+```
+
+This **deletes** the build-tag tripwire and the consumer-side pin snippet, and downgrades the mistag
+guard's path half to advisory. Correction 34's `replace` recommendation is moot (and `exclude` could
+never have expressed an upper bound anyway).
+
+Rev 5 supersedes the rev-1..4 staging numbers: **v1.0.0** (compat), **v2.0.0-alpha.1**,
+**v2.0.0-alpha.2** (modern). Milestones renamed accordingly.
+
+## Decisions
+
+| # | Decision | Outcome |
+|---|---|---|
+| D1a | Two lines via `/v2` semantic import versioning | Adopted |
+| D2 | Complexity gate (18 issues, ~40 files) | Proceed — scope was settled deliberately in the CEO review |
+| 1A | Modern line uses prereleases until API freeze | Adopted. Gate is **API freeze + integration + docs + RC**, not endpoint count |
+| 2A | One blocking issue for the rename; tags split into `release/*` PRs per `AGENTS.md:81` | Adopted (#24) |
+| 3A | Actionable hint on an envelope-less 404 naming a likely `APIVersion` mismatch | Adopted |
+| 4A | Minimal scoped docs on the compat branch, main stays canonical | Adopted |
+| 5A/5bA | Mistag guard split: path check advisory, `go`-directive check **blocking** | Adopted |
+| 6A | Minimal integration smoke test on the compat line | Adopted (needs #25) |
+| 7A | Coverage floor at 82.6%, ratcheting, `examples/` excluded, **separate baseline per branch** | Adopted |
+| 8A | Cap response reads in `do()` with a named error | Adopted, **both lines** |
+| T1 | Compat line version number | **User chose `v1.0.0`** over my and Codex's recommendation of `v0.2.x`. Defensible: for a genuinely frozen line, `v1.x` is honest under SemVer — a stable API is what frozen means. The unusual part is refusing bug fixes, which is a support-policy choice, not a versioning violation |
+| T2 | `/v2` REST-version scope | **Keep both REST versions.** Codex argued for REST-v2-only (deleting `APIVersion`, the v1 guard, and dual tests). Rejected because it conflates two independent axes and would strand modern-Go services on pre-3.0 servers |
+
+## Mandated regression test (IRON RULE — not optional)
+
+`octonomy_test.go:194-211` is the only envelope-less test. It uses a **502** and asserts `StatusCode`
+and `Message` but **never `Code`** — which is how the 404 trap went unnoticed. There is no
+envelope-less 404 test at all. Required: envelope-less 404 → `IsNotFound` **false**; envelope-ed 404
+→ **true**; envelope-less 503 distinguishable from an envelope-ed `503 namespace_api_disabled`; and
+extend the existing test to assert `Code`.
+
+## Two things nobody had noticed
+
+- **`ci.yml` triggers only on `main`**, so the compat branch would have had zero CI. And the `go1.13`
+  job must run **`go test`**, not just `go build ./...` — four of the five `io.ReadAll` sites and all
+  18 test-file `any` occurrences live in `_test.go`, which a build-only job never compiles.
+- **`compat/go1.13` is an invalid branch name** under `AGENTS.md:65` (`compat` is not an allowed
+  type). Use `release/go1.13-compat`.
+
+## New issues
+
+- **#24** — blocking: `/v2` rename + false-release-record correction. Gates all modern-line work
+- **#25** — reusable container harness, predecessor to **both** integration suites (the compat smoke
+  test had no harness to run on, since it sat inside the modern line's #17)
+
+## Reviewer Concerns — residual
+
+1. **Rev 5's own amendments are unreviewed.** The pattern across four passes is that each revision's
+   new prose introduced a fresh defect. Re-check any number you depend on.
+2. **The response cap is still underspecified** — exact ceiling, whether it is configurable, and the
+   error contract are left to #7. `http.MaxBytesReader` is a server-oriented helper; `io.LimitReader`
+   plus an explicit length check may read better client-side. Decide at implementation.
+3. **The coverage-floor mechanism needs definition**, not just a number: separate baselines per
+   branch, comparison precision, exclusions, and who raises it.
+4. **`v1.0.0` on a 2-of-8-resource client** carries a stability signal Codex called misleading. The
+   user accepted that knowingly; the mitigation is the published sunset date.
+5. Unchanged from the CEO review: webhook replay and `Each[T]` offset drift remain unmitigable by
+   design, and #4's estimate remains a floor rather than a forecast.
