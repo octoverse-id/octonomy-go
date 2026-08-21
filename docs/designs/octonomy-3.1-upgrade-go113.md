@@ -100,6 +100,7 @@ single tested abstraction rather than N per-resource walkers, and `DecodeMetadat
 
 | # | Proposal | Effort (CC / human) | Decision | Reasoning |
 |---|----------|---------------------|----------|-----------|
+| **S1b** | Minimal integration smoke test on the compat line (~5 assertions vs the real container) | ~20 m / ~1 d | **ACCEPTED** | Decision 6A. The compat line's releases cannot be recalled and were otherwise verified only by `httptest` fakes. Consumes the S0b harness. |
 | **S1** | Go 1.13 compat line: remove generics, `any`→`interface{}`, `io.ReadAll`→`ioutil.ReadAll`, **both** `t.Cleanup` sites, `go.mod` `go 1.13`, **CI triggers for the branch**, real go1.13 CI job (`cache: false`), mistag guard, `version.go`+CHANGELOG bump, `SECURITY.md`, compat policy on-branch | ~1 h / ~3 d | **ACCEPTED** | Unblocks the consuming team. Sole content of v1.0.0. **Estimate knowingly optimistic — see Revision 3 open items.** |
 | **C** | Modern line: v1+v2 surface, namespaces, all 8 resource groups | ~5 h / ~14 d | **ACCEPTED** | Chosen over compat-only and v2-without-resources. Both alternatives leave the SDK unable to assign a tag or resolve a slug — the core operations of a tagging service. |
 | **E1a** | Webhook `Verify` + signature test vectors | ~30 m / ~1 d | **ACCEPTED (narrowed)** | Narrowed in rev 3 per Correction 24 — the security-critical part only, correct regardless of payload evolution. Issue #16. |
@@ -113,20 +114,21 @@ single tested abstraction rather than N per-resource walkers, and `DecodeMetadat
 | **E8** | One runnable example per resource group + `make dev-server` | ~1 h / ~3 d | **ACCEPTED** | Re-estimated up: rides E3's harness but the harness itself is bigger than rev 1 assumed. |
 | **S12** | Documentation truth pass (**11 files on `main`**) | ~1.5 h / ~3.5 d | **ACCEPTED** | Rev 2 said 5 and priced on 5; rev 6 said 9. Eleven assert facts this plan makes false — the nine of Correction 18 plus `SECURITY.md` and `docs/release.md`, which the ownership table assigns to S12-on-`main` as well as to S1 on the compat line. |
 
-**Total: ~16.2 h CC / ~42 human days.** Derived, not asserted (Correction 31):
+**Total: ~16.75 h CC / ~43 human days.** Derived, not asserted (Correction 31; recomputed again in rev 7 after S12 rose to 1.5 h and S1b was added):
 
 ```
   ITEM WORK (accepted rows only; E1b and E7 are deferred and excluded)
-    S1  1.00   C   5.00   E1a 0.50   E2  0.17   E3  3.00
-    E4  1.00   E5  0.50   E6  0.25   E8  1.00   S12 1.25   = 13.67 h
+    S1  1.00   S1b 0.33   C   5.00   E1a 0.50   E2  0.17
+    E3  3.00   E4  1.00   E5  0.50   E6  0.25   E8  1.00   S12 1.50   = 14.25 h
 
-  OVERHEAD (18 issues, 3 release PRs, 3 release gates) — allocated, not dumped in one stage
+  OVERHEAD (20 issues, 3 release PRs, 3 release gates) — allocated, not dumped in one stage
     v1.0.0          1.00   (new toolchain job proven green, mistag guard, version+CHANGELOG, policy doc)
     v2.0.0-alpha.1  1.00   (11 issues, release PR + gate)
     v2.0.0-alpha.2  0.50   (4 issues, release PR + gate, Docker CI stabilisation)   = 2.50 h
 
-  STAGE TOTALS      v1.0.0 2.00   v2.0.0-alpha.1 8.17   v2.0.0-alpha.2 6.00  = 16.17 ≈ 16.2 h
-  CHECK             13.67 item + 2.50 overhead = 16.17  ✓
+  STAGE TOTALS      v1.0.0 2.33   v2.0.0-alpha.1 8.42   v2.0.0-alpha.2 6.00  = 16.75 h
+  CHECK             14.25 item + 2.50 overhead = 16.75  ✓
+                    per stage: (1.00+0.33)+1.00 | (7.17+0.25)+1.00 | 5.50+0.50  ✓
 ```
 
 Three prior revisions got this wrong: 9.5 h, then a 15.5 h headline against 16.5 h stages, then
@@ -320,7 +322,7 @@ config-coherence guard opportunity.
 
 ## Release Staging
 
-### v1.0.0 — Go 1.13 unblock (~2.0 h CC: 1.0 item + 1.0 overhead) — line `support/go1.13`
+### v1.0.0 — Go 1.13 unblock (~2.33 h CC: 1.33 item + 1.0 overhead) — line `support/go1.13`
 
 | Issue | Title |
 |---|---|
@@ -336,7 +338,7 @@ release. What remains is the two blocking prerequisites, the compat conversion, 
 **Order:** S0a → (S0b ∥ S1) → S1b. S0a must land before any tag, because the module rename is what
 makes the line split enforceable at all.
 
-### v2.0.0-alpha.1 — Server 3.1.0 contract (~8.2 h CC: 7.17 item + 1.0 overhead) — branch `main` (`/v2`)
+### v2.0.0-alpha.1 — Server 3.1.0 contract (~8.42 h CC: 7.42 item + 1.0 overhead) — branch `main` (`/v2`)
 
 | Issue | Title | Depends on |
 |---|---|---|
@@ -371,7 +373,7 @@ transport and a re-derived roadmap.
 | S17 | Tag tree assembly helper (deferred — needs consumer-defined semantics) |
 | S18 | Webhook typed events, snapshot types, `http.Handler` (deferred — no deployment emits webhooks) |
 
-**Stage totals: 2.0 + 8.17 + 6.0 = 16.17 ≈ 16.2 h.** Full derivation in the Scope Decisions section.
+**Stage totals: 2.33 + 8.42 + 6.0 = 16.75 h.** Full derivation in the Scope Decisions section.
 Rev 3's version of this paragraph double-counted the deferred E1b and used a stale S12 figure; it is
 replaced rather than patched.
 
