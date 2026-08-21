@@ -46,9 +46,10 @@ func writeJSON(t *testing.T, w http.ResponseWriter, status int, body interface{}
 }
 
 // writeData wraps body in the server's single-resource envelope,
-// {"data": {...}}, and writes it. Every non-list 2xx from Octonomy looks like
-// this; canned handlers that returned the bare object are what let the missing
-// unwrap in doData go unnoticed.
+// {"data": {...}}, and writes it. Every Octonomy 2xx that carries a resource
+// looks like this -- DELETE is the exception, answering 204 with no body at all.
+// Canned handlers that returned the bare object are what let the missing unwrap
+// in doData go unnoticed.
 func writeData(t *testing.T, w http.ResponseWriter, status int, body interface{}) {
 	t.Helper()
 	writeJSON(t, w, status, map[string]interface{}{"data": body})
@@ -241,6 +242,87 @@ func TestDoData_NullEnvelopeIsAnError(t *testing.T) {
 
 	if _, err := c.Tags.Get(context.Background(), "abc"); err == nil {
 		t.Fatal("expected an error for a null data envelope")
+	}
+}
+
+// The list path has the same silent-zero trap as the single-resource path, one
+// type further out: decoding straight into a *TagList turns an empty body, a {},
+// or a renamed data key into "this tenant has no tags" with a nil error. A caller
+// cannot tell that from a real empty page, so each shape must be an error.
+func TestDoList_RejectsBodiesThatWouldLookLikeAnEmptyPage(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"empty body", ""},
+		{"empty object", `{}`},
+		{"pagination without data", `{"pagination":{"limit":50,"offset":0,"count":0}}`},
+		{"data key renamed", `{"items":[],"pagination":{"limit":50}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := tt.body
+			c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(body))
+			})
+			defer cleanup()
+
+			page, err := c.Tags.List(context.Background(), nil)
+			if err == nil {
+				t.Fatalf("expected an error, got page %+v", page)
+			}
+			if page != nil {
+				t.Errorf("page = %+v, want nil alongside the error", page)
+			}
+		})
+	}
+}
+
+// The converse: a real empty page must still succeed. An over-eager envelope
+// check that rejected "data": [] would break every caller paging past the end.
+func TestDoList_EmptyPageIsNotAnError(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, http.StatusOK, map[string]interface{}{
+			"data":       []Tag{},
+			"pagination": map[string]interface{}{"limit": 50, "offset": 0, "count": 0},
+		})
+	})
+	defer cleanup()
+
+	page, err := c.Tags.List(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if page == nil || len(page.Data) != 0 || page.Pagination.Limit != 50 {
+		t.Errorf("unexpected page: %+v", page)
+	}
+}
+
+// A 2xx with no body at all, where a resource was expected, is an error too --
+// the same class as the missing envelope, and previously a silent nil return.
+func TestDoData_EmptyBodyIsAnError(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	defer cleanup()
+
+	if _, err := c.Tags.Get(context.Background(), "abc"); err == nil {
+		t.Fatal("expected an error for an empty 2xx body")
+	}
+}
+
+// DELETE is the one path that legitimately answers 204 with no body, so it must
+// stay lenient while the decoding paths tightened around it.
+func TestDo_DeleteAcceptsEmpty204(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer cleanup()
+
+	if err := c.Tags.Delete(context.Background(), "tag_1"); err != nil {
+		t.Fatalf("Delete: %v", err)
 	}
 }
 

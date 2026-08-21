@@ -47,9 +47,11 @@ stays a faithful, ergonomic client.
 - List methods return a **per-resource** envelope (`*TagList`, `*VocabularyList`) decoding
   `{data, pagination}` — this line has no `List[T]`, because type parameters need Go 1.18. Embed
   `ListOptions` in each resource's `*ListParams`.
-- Single-resource methods call `client.doData`, not `client.do`: the server wraps every non-list
-  payload in `{"data": {...}}`. `do` decodes the whole body and is for lists and bodiless calls.
-  Getting this wrong does not fail loudly — it returns a zero-valued struct with a nil error.
+- Pick the transport helper by response shape: `client.doData` for a single resource (unwraps the
+  server's `{"data": {...}}`), `client.doList` for a list envelope, `client.do` for a call with no
+  payload to decode (DELETE's 204). Getting this wrong does not fail loudly — it returns a
+  zero-valued struct or an empty-looking page with a nil error. `doRaw` is the shared request path;
+  do not call it directly from a resource file.
 - Non-2xx responses become `*APIError` carrying the `{error:{code,message,details,request_id}}`
   envelope. Add `Is<Code>` helpers for common error codes.
 - Server read-only fields are decode-only; write structs (`*Create`/`*Update`) use pointer fields

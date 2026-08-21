@@ -9,7 +9,7 @@ existing resource file and changing the types and paths.
 | File | Responsibility |
 | ---- | -------------- |
 | `octonomy.go` | `Config`, `Client`, `New()` (validation + service wiring). |
-| `transport.go` | `do()`: URL building under `/api/v1`, auth/tenant headers, JSON encode/decode, non-2xx → `*APIError`. Plus `doData()`, which unwraps the server's single-resource `{"data": ...}` envelope. Also `RequestOption` / `WithActor`. |
+| `transport.go` | `doRaw()`: URL building under `/api/v1`, auth/tenant headers, JSON encoding, non-2xx → `*APIError`. Then one decoder per response shape: `doData()` (single resource, unwraps `{"data": ...}`), `doList()` (list envelope), `do()` (no payload, e.g. DELETE's 204). Also `RequestOption` / `WithActor`. |
 | `errors.go` | `APIError`, error `Code*` constants, and `Is*` / `AsAPIError` helpers. |
 | `pagination.go` | `ListOptions` and `Pagination`. The list envelope itself is per-resource on this line (`TagList`, `VocabularyList`) because `List[T]` needs Go 1.18. |
 | `types.go` | Shared `Metadata` alias and the `String`/`Bool`/`Int` pointer helpers. |
@@ -18,11 +18,17 @@ existing resource file and changing the types and paths.
 
 ## Request lifecycle
 
-1. A service method (e.g. `TagService.Create`) calls `client.do(ctx, method, path, query, body, out, opts...)`.
-2. `do` builds `BaseURL + /api/v1 + path`, attaches headers, and JSON-encodes the body.
-3. On a 2xx it decodes the response into `out`; on anything else it calls `parseError`, which decodes
-   the `{error:{...}}` envelope into an `*APIError` (falling back to the raw body + a status-derived
-   code when the envelope is absent).
+1. A service method picks the transport helper that matches the response shape it expects:
+   `doData` for a single resource (`Create`/`Get`/`Update`), `doList` for a list, plain `do` for a
+   call with no payload to decode (`Delete`). All four funnel into `doRaw`.
+2. `doRaw` builds `BaseURL + /api/v1 + path`, attaches headers, JSON-encodes the body, and returns
+   the raw 2xx body. On a non-2xx it calls `parseError`, which decodes the `{error:{...}}` envelope
+   into an `*APIError` (falling back to the raw body + a status-derived code when the envelope is
+   absent).
+3. The caller decodes: `doData` unwraps `{"data": {...}}`, `doList` asserts the envelope then decodes
+   `{data, pagination}` whole. Either way a 2xx whose body does not carry `data` is an **error**, not
+   a zero-valued result — decoding a wrapped body straight into a `*Tag` or a `*TagList` produces an
+   empty struct with a nil error, and a caller cannot tell that from "no such tag" or "no tags".
 
 ```
 Caller ──▶ Service.Method ──▶ Client.do ──▶ net/http ──▶ Octonomy /api/v1

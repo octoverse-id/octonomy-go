@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check version-check \
-	dev-server dev-server-down dev-server-logs compat-guard smoke test-go113
+	dev-server dev-server-down dev-server-logs compat-guard smoke test-go113 tools-check
 
 # A real go1.13 toolchain, for the one gate a modern toolchain cannot provide.
 # Override with the path to any go1.13.x binary:
@@ -55,6 +55,19 @@ examples: ## Compile-check the runnable examples (no binaries emitted)
 		echo "build ./$$dir"; go build -o /dev/null "./$$dir" || exit 1; \
 	done
 
+tools-check: ## Fail unless the optional gate tools are actually installed
+	@missing=""; \
+	command -v golangci-lint >/dev/null 2>&1 || missing="$$missing golangci-lint"; \
+	command -v govulncheck   >/dev/null 2>&1 || missing="$$missing govulncheck"; \
+	if [ -n "$$missing" ]; then \
+		echo "release gate tools missing:$$missing"; \
+		echo "\`make lint\` and \`make vuln\` SKIP when their tool is absent, which is fine"; \
+		echo "day to day and wrong for a release: release-check would print 'passed'"; \
+		echo "having run neither. Install them (see docs/development.md) and re-run."; \
+		exit 1; \
+	fi; \
+	echo "release gate tools present"
+
 compat-guard: ## Assert go.mod still matches this release line (blocking on the go directive)
 	@scripts/compat-guard.sh
 
@@ -89,5 +102,5 @@ version-check: ## Verify version.go matches the latest CHANGELOG.md release head
 	fi; \
 	echo "version OK: $$code_ver"
 
-release-check: fmt-check vet lint test vuln examples version-check compat-guard ## Full pre-release gate
+release-check: tools-check fmt-check vet lint test vuln examples version-check compat-guard ## Full pre-release gate
 	@echo "release-check passed"

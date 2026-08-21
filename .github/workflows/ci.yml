@@ -184,6 +184,14 @@ jobs:
         # the only combination that proves this line still works. It caught the
         # single-resource {"data": ...} envelope that every canned httptest body
         # had been getting wrong.
+        env:
+          # Without this the test SKIPS when OCTONOMY_TEST_BASE_URL is absent,
+          # and a skip is a green job. The composite action checks only that the
+          # env file exists, not that the variables survived $GITHUB_ENV -- so a
+          # broken export would leave this line's ONLY real-server check
+          # reporting success without running a single assertion. Required mode
+          # turns that absence into a failure.
+          OCTONOMY_SMOKE_REQUIRED: "1"
         run: go test -tags=integration -run TestSmoke_RealServer -v ./...
       - name: Capture container logs
         if: failure()

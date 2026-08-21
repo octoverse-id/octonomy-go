@@ -44,12 +44,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Client.doData` now unwraps the envelope, and a 2xx body with no `data` key is an error instead of an
   empty struct. Found by the new integration smoke test on its first real run; the httptest suite had
   encoded the vendored spec's bare-object shape rather than the server's, which is why it passed.
+- **List responses had the same silent-zero trap one type further out.** Decoding straight into a
+  `*TagList` turned an empty body, a `{}`, or a response whose `data` key the server renamed into a
+  nil `Data` slice and `Count: 0` — indistinguishable from a genuine empty page. `Client.doList` now
+  asserts the envelope is present before decoding. A real empty page (`"data": []`) is still a
+  success, and `"data": null` is still accepted as a nil slice, since nil-versus-empty semantics are
+  an open question on the modern line rather than something this frozen line should settle.
+- **A 2xx with an empty body where a resource was expected is now an error.** `do` previously
+  returned nil in that case, so a truncated or misrouted 2xx produced a zero-valued struct. `Delete`
+  is unaffected: 204-with-no-body is its documented shape and stays lenient.
+
+  Transport is now one request path plus one decoder per response shape — `doRaw` performs the call;
+  `doData`, `doList`, and `do` decode a single resource, a list envelope, and nothing respectively.
+  Picking the wrong one is the mistake that started this entry, so `AGENTS.md`, `docs/architecture.md`,
+  and the resource recipe in `docs/roadmap.md` now say which to use.
 
 ### Added
 - **Integration smoke test** (`integration_test.go`, build tag `integration`, `make smoke`) — five
   assertions against a real server via the container harness: both response envelopes, both list
   endpoints, and one real error envelope. Gated on `OCTONOMY_TEST_BASE_URL`, so the default test run
-  stays hermetic.
+  stays hermetic. CI sets `OCTONOMY_SMOKE_REQUIRED=1`, which turns a missing base URL into a failure
+  rather than a skip — a skip is a green job, and this is the only real-server check the line has.
 - **CI for this line, which previously had none.** `ci.yml` fired only on `main`, so pushes to
   `support/go1.13` ran nothing and no tag triggered anything. Added: the branch to both trigger lists,
   a `v*` tag trigger, a **required** real `go1.13.15` job running `go test -race` (not merely
@@ -58,13 +73,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the go1.13 toolchain. The go1.13 jobs set `cache: false` — `actions/setup-go` derives its cache
   path from `go env GOMODCACHE`, which does not exist before Go 1.15.
 - **Release-line guard** (`scripts/compat-guard.sh`, `make compat-guard`, CI job), split by severity.
-  Blocking: `go.mod` on this line must keep declaring `go 1.13` — the one mistake with no toolchain
-  backstop, since a `v1.x` tag cut from a drifted `go.mod` keeps the same module path and resolves
-  fine, and `retract` (Go 1.16) cannot reach a Go 1.13 consumer. Advisory: module path, branch, tag,
-  and `version.go` consistency, which Go rejects itself. It runs on every PR into this line, which is
-  what puts it on the release PR — a tag-time-only check fires after the tag is already resolvable.
+  On a branch or PR, blocking on one thing: `go.mod` must keep declaring `go 1.13` — the mistake with
+  no toolchain backstop, since a `v1.x` tag cut from a drifted `go.mod` keeps the same module path and
+  resolves fine, and `retract` (Go 1.16) cannot reach a Go 1.13 consumer. Module-path and branch
+  consistency stay advisory there, because Go rejects a path mismatch itself. It runs on every PR into
+  this line, which is what puts it on the release PR.
+
+  **On a tag push those same checks are blocking**, because that is where permanence attaches and Go
+  rejecting a bad tag afterwards helps nobody: the tag is public and proxy-cached. A tag must be valid
+  SemVer, its major must match the module path, and it must equal `version.go` — which `make
+  version-check` has already tied to the CHANGELOG heading, so tag, code, and changelog agree or the
+  release stops. The guard also warns when the modern line is found carrying this line's module path
+  or `go` directive, the shape a cherry-pick that included `go.mod` would take.
 - `make test-go113` for the real-toolchain gate locally, with two documented ways to fetch a go1.13
   toolchain (`docs/development.md`).
+- `make tools-check`, now a prerequisite of `release-check`. `make lint` and `make vuln` skip silently
+  when their tool is absent, which is right day to day and wrong for a release gate that then prints
+  "release-check passed" having run neither.
 - Documented support policy for this line across `SECURITY.md`, `README.md`, `docs/versioning.md`,
   `docs/development.md`, `docs/release.md`, and `AGENTS.md`: security fixes only, **sunset
   2027-08-31** (12 months from the `v1.0.0` tag, owned by the SDK maintainer), the frozen scope, and

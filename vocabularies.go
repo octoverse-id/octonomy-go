@@ -109,7 +109,7 @@ func (s *VocabularyService) Get(ctx context.Context, id string, opts ...RequestO
 // List returns a page of vocabularies (GET /vocabularies).
 func (s *VocabularyService) List(ctx context.Context, params *VocabularyListParams, opts ...RequestOption) (*VocabularyList, error) {
 	var out VocabularyList
-	if err := s.client.do(ctx, http.MethodGet, "/vocabularies", params.query(), nil, &out, opts...); err != nil {
+	if err := s.client.doList(ctx, http.MethodGet, "/vocabularies", params.query(), &out, opts...); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -127,5 +127,5 @@ func (s *VocabularyService) Update(ctx context.Context, id string, in Vocabulary
 // Delete deactivates a vocabulary (DELETE /vocabularies/{id}). Octonomy treats
 // deletion as deactivation; the record and its history are retained.
 func (s *VocabularyService) Delete(ctx context.Context, id string, opts ...RequestOption) error {
-	return s.client.do(ctx, http.MethodDelete, "/vocabularies/"+url.PathEscape(id), nil, nil, nil, opts...)
+	return s.client.do(ctx, http.MethodDelete, "/vocabularies/"+url.PathEscape(id), nil, nil, opts...)
 }

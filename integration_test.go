@@ -39,11 +39,21 @@ import (
 // missing token or tenant with a base URL present is a broken harness, not an
 // absent one, so that fails rather than skips -- otherwise a misconfigured CI
 // job would report a vacuous pass.
+//
+// OCTONOMY_SMOKE_REQUIRED=1 removes the skip entirely, and CI sets it. Skipping
+// is right on a laptop with no Docker; in the required CI job it is the worst
+// possible outcome, because a credential export that silently broke would leave
+// the frozen line's ONLY real-server check reporting green without running. The
+// release in #29 cannot be recalled, so "green" has to mean "ran".
 func newSmokeClient(t *testing.T) *octonomy.Client {
 	t.Helper()
 
+	required := os.Getenv("OCTONOMY_SMOKE_REQUIRED") == "1"
 	baseURL := os.Getenv("OCTONOMY_TEST_BASE_URL")
 	if baseURL == "" {
+		if required {
+			t.Fatal("OCTONOMY_SMOKE_REQUIRED=1 but OCTONOMY_TEST_BASE_URL is empty: the harness did not export its credentials, so this test would have skipped and reported a vacuous pass")
+		}
 		t.Skip("OCTONOMY_TEST_BASE_URL is empty; run `make dev-server` and source .octonomy-harness.env")
 	}
 	token := os.Getenv("OCTONOMY_TEST_TOKEN")
@@ -142,8 +152,21 @@ func TestSmoke_RealServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Vocabularies.List: %v", err)
 	}
-	if len(vocabs.Data) == 0 || vocabs.Pagination.Limit != 50 {
-		t.Errorf("VocabularyList did not decode: data=%d pagination=%+v", len(vocabs.Data), vocabs.Pagination)
+	if vocabs.Pagination.Limit != 50 {
+		t.Errorf("VocabularyList pagination did not decode: %+v", vocabs.Pagination)
+	}
+	// Look for the row we created, not merely for a non-empty page. "some
+	// vocabulary came back" still passes if a tenancy, filter, or visibility
+	// regression is returning the wrong tenant's rows.
+	found := false
+	for _, v := range vocabs.Data {
+		if v.ID == vocab.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Vocabularies.List returned %d rows, none of them the created %s", len(vocabs.Data), vocab.ID)
 	}
 
 	// A real error envelope from the real server, not a canned httptest body.

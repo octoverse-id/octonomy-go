@@ -138,7 +138,7 @@ func (s *TagService) Get(ctx context.Context, id string, opts ...RequestOption) 
 // List returns a page of tags (GET /tags).
 func (s *TagService) List(ctx context.Context, params *TagListParams, opts ...RequestOption) (*TagList, error) {
 	var out TagList
-	if err := s.client.do(ctx, http.MethodGet, "/tags", params.query(), nil, &out, opts...); err != nil {
+	if err := s.client.doList(ctx, http.MethodGet, "/tags", params.query(), &out, opts...); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -156,5 +156,5 @@ func (s *TagService) Update(ctx context.Context, id string, in TagUpdate, opts .
 // Delete deactivates a tag (DELETE /tags/{id}). Octonomy treats deletion as
 // deactivation, which cascades to the tag's aliases.
 func (s *TagService) Delete(ctx context.Context, id string, opts ...RequestOption) error {
-	return s.client.do(ctx, http.MethodDelete, "/tags/"+url.PathEscape(id), nil, nil, nil, opts...)
+	return s.client.do(ctx, http.MethodDelete, "/tags/"+url.PathEscape(id), nil, nil, opts...)
 }
