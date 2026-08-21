@@ -1,24 +1,38 @@
 # Octonomy Go SDK
 
 [![CI](https://github.com/octoverse-id/octonomy-go/actions/workflows/ci.yml/badge.svg)](https://github.com/octoverse-id/octonomy-go/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/octoverse-id/octonomy-go.svg)](https://pkg.go.dev/github.com/octoverse-id/octonomy-go)
+[![Go Reference](https://pkg.go.dev/badge/github.com/octoverse-id/octonomy-go/v2.svg)](https://pkg.go.dev/github.com/octoverse-id/octonomy-go/v2)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 The official Go client for [Octonomy](https://github.com/octoverse-id/octonomy) — a multi-tenant,
 multi-application tag management and taxonomy service. This SDK is a hand-written, **dependency-free**
 (standard library only) client for the stable REST **v1** API.
 
-> **Status:** `0.1.0` — early. The transport, auth, error, and pagination foundation plus the
-> **Vocabularies** and **Tags** resources are implemented. The remaining resources are tracked in
-> [`docs/roadmap.md`](docs/roadmap.md).
+> **Status: nothing published yet.** No version of this SDK has ever been released — there are no
+> git tags and the module proxy has served no semantic version. The transport, auth, error, and
+> pagination foundation plus the **Vocabularies** and **Tags** resources are implemented; the
+> remaining resources are tracked in [`docs/roadmap.md`](docs/roadmap.md).
+>
+> The first two releases will be `v1.0.0` on the frozen Go 1.13 compat line and `v2.0.0-alpha.1` on
+> this line. See [versioning.md](docs/versioning.md).
 
 ## Install
 
 ```bash
-go get github.com/octoverse-id/octonomy-go
+go get github.com/octoverse-id/octonomy-go/v2
 ```
 
 Requires Go 1.24 or newer.
+
+> **On Go 1.13?** Use the frozen compatibility line instead — it lives at the **unsuffixed** module
+> path and never receives features:
+>
+> ```bash
+> go get github.com/octoverse-id/octonomy-go   # v1.x, Go 1.13, security fixes only
+> ```
+>
+> The two paths are different modules, so Go will not move you between them. See
+> [versioning.md](docs/versioning.md) for the support policy and the sunset date.
 
 ## Quickstart
 
@@ -30,7 +44,7 @@ import (
 	"fmt"
 	"log"
 
-	octonomy "github.com/octoverse-id/octonomy-go"
+	octonomy "github.com/octoverse-id/octonomy-go/v2"
 )
 
 func main() {

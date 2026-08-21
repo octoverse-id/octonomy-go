@@ -6,6 +6,22 @@
 // (server release 1.0.0) served under /api/v1. The bundled docs/openapi.yaml is
 // the contract this client is written against.
 //
+// # Module path and release lines
+//
+// Import this package as:
+//
+//	import octonomy "github.com/octoverse-id/octonomy-go/v2"
+//
+// The /v2 suffix is not decoration: this repository publishes two modules, and
+// the suffix is what makes them distinct to the go command.
+//
+//   - github.com/octoverse-id/octonomy-go      v1.x, Go 1.13, frozen, /api/v1 only
+//   - github.com/octoverse-id/octonomy-go/v2   v2.x, Go 1.24+, active development
+//
+// Because the paths differ, version selection cannot move a consumer between the
+// two lines. If you are on Go 1.13, use the unsuffixed path; it receives security
+// fixes only and has a published sunset date. See docs/versioning.md.
+//
 // # Quickstart
 //
 //	client, err := octonomy.New(octonomy.Config{
