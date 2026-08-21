@@ -82,7 +82,7 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
 
 1. **Confirm the line.** `git switch BASE && git pull`, then check you are where you think you are:
    ```bash
-   git branch --show-current && head -1 go.mod
+   git branch --show-current && head -n 1 go.mod
    ```
    The module line must match `MODULE`. If it does not, you are on the wrong branch; stop.
 2. **Branch:** `git switch -c release/TAG` off `BASE`
@@ -96,7 +96,7 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
 7. **Tag the merge commit on `BASE`:**
    ```bash
    git switch BASE && git pull
-   head -1 go.mod                       # last chance: must match MODULE
+   head -n 1 go.mod                       # last chance: must match MODULE
    git tag -a TAG -m TAG
    git push origin TAG
    gh release create TAG --title TAG --notes-from-tag

@@ -83,16 +83,19 @@ echo "--- ordinary branch and PR flows ---"
 fixture "$COMPAT" 1.13 0.1.0 0.1.0
 check "PR into the compat line" 0 "declares \`go 1.13\` as required" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=chore/4-x
-check "push to the compat line" 0 - \
+check "push to the compat line" 0 "branch=support/go1.13" \
 	GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/support/go1.13
-check "no event context (local run)" 0 - GITHUB_EVENT_NAME= GITHUB_REF=
+check "no event context (local run)" 0 "declares \`go 1.13\` as required" \
+	GITHUB_EVENT_NAME= GITHUB_REF=
 
 fixture "$COMPAT" 1.24 0.1.0 0.1.0
 check "BLOCK: go directive drifted off 1.13" 1 "must declare \`go 1.13\`" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=chore/4-x
 
 fixture "$MODERN" 1.24 2.0.0-alpha.1 2.0.0-alpha.1
-check "PR into main, correct modern tree" 0 - \
+# Asserts the parsed context rather than only rc=0: a clean exit here also
+# happens when the guard misreads go.mod and checks nothing.
+check "PR into main, correct modern tree" 0 "module=$MODERN go=1.24" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=main GITHUB_HEAD_REF=feature/x
 
 fixture "$COMPAT" 1.13 0.1.0 0.1.0
@@ -163,6 +166,33 @@ check "BLOCK: tag with an illegal /v1 suffix" 1 "needs module path" \
 fixture github.com/octoverse-id/octonomy-go/v3 1.24 2.0.0 2.0.0
 check "BLOCK: v2 release PR on a /v3 path" 1 "must carry module path" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=main GITHUB_HEAD_REF=release/v2.0.0
+
+echo "--- v0: no line publishes it, and /v0 is not a legal path ---"
+fixture "$COMPAT" 1.13 0.2.0 0.2.0
+check "BLOCK: v0 release PR" 1 "No line publishes v0" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v0.2.0
+check "BLOCK: v0 tag" 1 "publishes a v0 version" \
+	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v0.2.0
+
+fixture github.com/octoverse-id/octonomy-go/v0 1.24 0.2.0 0.2.0
+# Go forbids a /v0 suffix outright, so the expected path for major 0 is the
+# unsuffixed one -- this must be rejected on the path too, not accepted as "/v0
+# matches major 0".
+check "BLOCK: v0 release PR on an illegal /v0 path" 1 "must carry module path" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=main GITHUB_HEAD_REF=release/v0.2.0
+check "BLOCK: v0 tag on an illegal /v0 path" 1 "needs module path" \
+	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v0.2.0
+
+echo "--- missing or partial event context ---"
+fixture "$COMPAT" 1.13 1.0.0 1.0.0
+# A release PR with no base in context must still run every other release check
+# and say plainly that the target-branch comparison was skipped, rather than
+# quietly skipping the lot.
+check "release PR with no base ref: says what it skipped" 0 "target-branch check is skipped" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_HEAD_REF=release/v1.0.0
+fixture "$COMPAT" 1.13 0.1.0 0.1.0
+check "release PR with no base ref still checks version.go" 1 "version.go says 0.1.0" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_HEAD_REF=release/v1.0.0
 
 echo "--- tag pushes: detection after the ref exists ---"
 fixture "$COMPAT" 1.13 1.0.0 1.0.0

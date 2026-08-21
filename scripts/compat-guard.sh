@@ -29,8 +29,8 @@
 # Usage:
 #   scripts/compat-guard.sh          # infers the line from git or $GITHUB_*
 #
-# POSIX sh. Utilities used: git, sed, grep -E. Nothing newer than the era this
-# line targets, so it runs the same on an old box as on a current runner.
+# POSIX sh. Utilities used: git, sed, grep -E, head. Nothing newer than the era
+# this line targets, so it runs the same on an old box as on a current runner.
 
 set -eu
 
@@ -80,13 +80,15 @@ is_semver() {
 }
 
 # expected_module_path <major> echoes the one module path a release of that major
-# may carry. v1 is unsuffixed (a /v1 suffix is not a thing in Go); v2+ append /vN.
+# may carry. Go forbids BOTH /v0 and /v1 suffixes (golang.org/x/mod/module:
+# SplitPathVersion rejects them), so majors 0 and 1 are unsuffixed and 2+ append
+# /vN. Getting v0 wrong mattered: version.go still reads 0.1.0, so a v0.x release
+# branch is a plausible slip, and it would have been mapped to an illegal /v0.
 expected_module_path() {
-	if [ "$1" = "1" ]; then
-		printf '%s' "$COMPAT_MODULE"
-	else
-		printf '%s/v%s' "$COMPAT_MODULE" "$1"
-	fi
+	case "$1" in
+	0 | 1) printf '%s' "$COMPAT_MODULE" ;;
+	*) printf '%s/v%s' "$COMPAT_MODULE" "$1" ;;
+	esac
 }
 
 semver_major() {
@@ -148,6 +150,14 @@ esac
 # Everything asserted under is_release_pr is therefore a check that can still be
 # acted on, which is the entire point -- see the tag-time block for why the same
 # assertions arriving later are consolation and not a gate.
+# Locally there is no GITHUB_HEAD_REF, so fall back to the checked-out branch.
+# Without this, `make check` on a release branch silently skips every release
+# assertion -- the guard would be at its most lenient exactly where a developer
+# is most likely to be preparing the unrecallable thing.
+if [ -z "$head_branch" ] && [ -z "$tag" ]; then
+	head_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+fi
+
 release_version=""
 is_release_pr=0
 case "$head_branch" in
@@ -223,6 +233,9 @@ if [ "$is_release_pr" = "1" ]; then
 		# and accepts a `/v1` suffix that is not a legal Go module path at all --
 		# both publish something no consumer of this line can resolve, and both
 		# were passing with a warning.
+		if [ "$rel_major" = "0" ]; then
+			fail "release PR for v$release_version: this repository publishes v1.x on \`$COMPAT_BRANCH\` and v2.x on \`$MODERN_BRANCH\` (docs/versioning.md). No line publishes v0, and a v0 tag would claim the unstable-API contract both lines have moved past."
+		fi
 		rel_expected_module=$(expected_module_path "$rel_major")
 		if [ "$module" != "$rel_expected_module" ]; then
 			fail "release PR for v$release_version must carry module path \`$rel_expected_module\`, but go.mod says \`$module\`. Go resolves the module by path: a v$rel_major tag on this go.mod publishes something no consumer of this line can require."
@@ -234,7 +247,9 @@ if [ "$is_release_pr" = "1" ]; then
 		# "vs the target branch and version"; this is the target-branch half, and
 		# it is blocking on a release PR even though the same comparison is only
 		# advisory on an ordinary one.
-		if [ -n "$branch" ]; then
+		if [ -z "$branch" ]; then
+			note "no base branch in context (local run or a non-PR event), so the target-branch check is skipped; CI runs it on the PR"
+		else
 			case "$rel_major" in
 			1) expected_base="$COMPAT_BRANCH" ;;
 			*) expected_base="$MODERN_BRANCH" ;;
@@ -279,6 +294,9 @@ if [ "$is_tag" = "1" ]; then
 			else
 				tag_major=$(semver_major "$tag_version")
 
+				if [ "$tag_major" = "0" ]; then
+					fail "tag $tag publishes a v0 version, and no line here does: v1.x comes off \`$COMPAT_BRANCH\` and v2.x off \`$MODERN_BRANCH\` (docs/versioning.md). Delete the ref before anything fetches it."
+				fi
 				tag_expected_module=$(expected_module_path "$tag_major")
 				if [ "$module" != "$tag_expected_module" ]; then
 					fail "tag $tag needs module path \`$tag_expected_module\`, but go.mod says \`$module\` (path major v$path_major). Go refuses to resolve that combination, and the tag cannot be moved once pushed -- delete the ref before anything fetches it, then publish a corrected version."

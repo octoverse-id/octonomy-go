@@ -104,9 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `v[0-9]*.[0-9]*.[0-9]*` pattern accepts `v1.2.3foo`, `v1.02.3`, `v1.2.3-`, and `v1.2.3.4`, none of
   which Go can resolve.
 - **Tests for the guard** (`scripts/compat-guard-test.sh`, `make compat-guard-test`, run in CI and by
-  `make check`). 65 checks across ordinary PRs, release PRs to both lines, tag pushes, malformed tags,
-  wrong-module-path releases, `go.mod`/`version.go` parsing edge cases, and the SemVer grammar
-  exercised directly against the guard's own function. Every case asserts the *reason*, not just the
+  `make check`). 71 checks across ordinary PRs, release PRs to both lines, tag pushes, malformed tags,
+  wrong-module-path releases, `v0` (which no line publishes, and whose `/v0` suffix Go forbids),
+  partial event context, `go.mod`/`version.go` parsing edge cases, and the SemVer grammar exercised
+  directly against the guard's own function. Every case asserts the *reason*, not just the
   exit status — an rc-only assertion also passes when the code path never ran. Without these the
   release-PR block would first execute on the release PR itself: every ordinary run has
   `GITHUB_HEAD_REF=<type>/<issue>-…`, so that code path is never otherwise reached.
