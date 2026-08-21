@@ -22,6 +22,10 @@ go.work.sum
 .env
 .envrc
 
+# Container harness credentials (scripts/octonomy-harness.sh writes a real
+# service token here on every `make dev-server`)
+.octonomy-harness.env
+
 # Local code review pipeline artifacts (keep the tracked placeholder)
 code-review/*
 !code-review/.gitkeep
