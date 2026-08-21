@@ -95,6 +95,20 @@ semver_major() {
 	printf '%s' "$1" | sed -n 's/^\([0-9]\{1,\}\)\..*/\1/p'
 }
 
+semver_minor() {
+	printf '%s' "$1" | sed -n 's/^[0-9]\{1,\}\.\([0-9]\{1,\}\)\..*/\1/p'
+}
+
+# A compat-line release must be v1.0.x. docs/versioning.md is explicit: PATCH is
+# `v1.0.x (compat)` and MINOR is "modern only; the compat line takes no minors".
+# A minor means an API addition, and this line is frozen -- so a published v1.1.0
+# would be a permanently policy-invalid release, which is exactly the class of
+# mistake this guard exists to stop. Changing that means changing the policy in
+# docs/versioning.md first, then this check.
+compat_minor_violation() {
+	[ "$(semver_major "$1")" = "1" ] && [ "$(semver_minor "$1")" != "0" ]
+}
+
 # --- Read the tree -------------------------------------------------------------
 #
 # Leading whitespace is tolerated, and Version is read from both the single-line
@@ -133,6 +147,7 @@ esac
 
 tag=""
 branch=""
+local_branch=""
 head_branch="${GITHUB_HEAD_REF:-}"
 case "${GITHUB_EVENT_NAME:-}" in
 	pull_request | pull_request_target) branch="${GITHUB_BASE_REF:-}" ;;
@@ -140,7 +155,7 @@ case "${GITHUB_EVENT_NAME:-}" in
 		case "${GITHUB_REF:-}" in
 			refs/tags/*) tag="${GITHUB_REF#refs/tags/}" ;;
 			refs/heads/*) branch="${GITHUB_REF#refs/heads/}" ;;
-			*) branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "") ;;
+			*) local_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "") ;;
 		esac
 		;;
 esac
@@ -150,12 +165,27 @@ esac
 # Everything asserted under is_release_pr is therefore a check that can still be
 # acted on, which is the entire point -- see the tag-time block for why the same
 # assertions arriving later are consolation and not a gate.
-# Locally there is no GITHUB_HEAD_REF, so fall back to the checked-out branch.
-# Without this, `make check` on a release branch silently skips every release
-# assertion -- the guard would be at its most lenient exactly where a developer
-# is most likely to be preparing the unrecallable thing.
-if [ -z "$head_branch" ] && [ -z "$tag" ]; then
-	head_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+# Locally there is no GITHUB_HEAD_REF, so fall back to the checked-out branch --
+# otherwise `make check` on a release branch skips every release assertion, and
+# the guard would be at its most lenient exactly where someone is most likely
+# preparing the unrecallable thing.
+#
+# The checked-out branch is the HEAD, never the base. Assigning it to both is
+# wrong in a way that fails loudly and uselessly: a local run on release/v1.0.1
+# reported that the release "targets release/v1.0.1, but v1 releases are cut from
+# support/go1.13", so runbook step 5 (`make release-check` on the release branch)
+# could not pass at all. A local run simply has no base to compare, and the
+# release block says so.
+if [ -n "$local_branch" ]; then
+	if [ -z "$head_branch" ]; then
+		head_branch="$local_branch"
+	fi
+	case "$local_branch" in
+	release/*) : ;;
+	# Any other checked-out branch doubles as the line under test, which is what
+	# the compat/modern advisories key off.
+	*) [ -z "$branch" ] && branch="$local_branch" ;;
+	esac
 fi
 
 release_version=""
@@ -233,6 +263,9 @@ if [ "$is_release_pr" = "1" ]; then
 		# and accepts a `/v1` suffix that is not a legal Go module path at all --
 		# both publish something no consumer of this line can resolve, and both
 		# were passing with a warning.
+		if compat_minor_violation "$release_version"; then
+			fail "release PR for v$release_version: the compat line publishes v1.0.x only -- security fixes are patches, and a minor means an API addition to a frozen line (docs/versioning.md, the bump rules). If the policy has genuinely changed, change it there first."
+		fi
 		if [ "$rel_major" = "0" ]; then
 			fail "release PR for v$release_version: this repository publishes v1.x on \`$COMPAT_BRANCH\` and v2.x on \`$MODERN_BRANCH\` (docs/versioning.md). No line publishes v0, and a v0 tag would claim the unstable-API contract both lines have moved past."
 		fi
@@ -294,6 +327,9 @@ if [ "$is_tag" = "1" ]; then
 			else
 				tag_major=$(semver_major "$tag_version")
 
+				if compat_minor_violation "$tag_version"; then
+					fail "tag $tag: the compat line publishes v1.0.x only, no minors (docs/versioning.md). Delete the ref before anything fetches it."
+				fi
 				if [ "$tag_major" = "0" ]; then
 					fail "tag $tag publishes a v0 version, and no line here does: v1.x comes off \`$COMPAT_BRANCH\` and v2.x off \`$MODERN_BRANCH\` (docs/versioning.md). Delete the ref before anything fetches it."
 				fi

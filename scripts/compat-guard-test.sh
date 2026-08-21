@@ -46,6 +46,20 @@ fixture() {
 	fi
 }
 
+# git_fixture <branch> turns the current fixture into a git repo checked out on
+# <branch>, so the guard's no-event-context path (which asks git for the branch)
+# can be exercised. A commit is required: `git rev-parse --abbrev-ref HEAD` has
+# nothing to resolve in a repo with no commits.
+git_fixture() {
+	(
+		cd "$WORK/tree" || exit 1
+		git init -q .
+		git symbolic-ref HEAD "refs/heads/$1"
+		git add -A
+		git -c user.email=test@example.test -c user.name=test commit -q -m fixture
+	)
+}
+
 # check <description> <expected-rc> <expected-substring|-> <env>...
 check() {
 	desc=$1
@@ -193,6 +207,38 @@ check "release PR with no base ref: says what it skipped" 0 "target-branch check
 fixture "$COMPAT" 1.13 0.1.0 0.1.0
 check "release PR with no base ref still checks version.go" 1 "version.go says 0.1.0" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_HEAD_REF=release/v1.0.0
+
+echo "--- compat line publishes v1.0.x only ---"
+fixture "$COMPAT" 1.13 1.1.0 1.1.0
+check "BLOCK: v1 minor release PR" 1 "publishes v1.0.x only" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v1.1.0
+check "BLOCK: v1 minor tag" 1 "publishes v1.0.x only" \
+	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v1.1.0
+
+fixture "$COMPAT" 1.13 1.0.7 1.0.7
+check "a v1.0.x patch release is fine" 0 "all agree" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v1.0.7
+
+fixture "$MODERN" 1.24 2.1.0 2.1.0
+check "a v2 minor is fine (modern line takes them)" 0 "all agree" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=main GITHUB_HEAD_REF=release/v2.1.0
+
+echo "--- no event context: the checked-out branch is the HEAD, not the base ---"
+# Regression: assigning the checked-out branch to BOTH made a local run on a
+# release branch report that the release "targets release/v1.0.1, but v1 releases
+# are cut from support/go1.13" -- so runbook step 5 could not pass locally.
+fixture "$COMPAT" 1.13 1.0.1 1.0.1
+git_fixture release/v1.0.1
+check "local run on a release branch: no bogus base error" 0 "target-branch check is skipped" \
+	GITHUB_EVENT_NAME= GITHUB_REF= GITHUB_BASE_REF= GITHUB_HEAD_REF=
+fixture "$COMPAT" 1.13 0.1.0 0.1.0
+git_fixture release/v1.0.1
+check "local run on a release branch still checks version.go" 1 "version.go says 0.1.0" \
+	GITHUB_EVENT_NAME= GITHUB_REF= GITHUB_BASE_REF= GITHUB_HEAD_REF=
+fixture "$COMPAT" 1.24 0.1.0 0.1.0
+git_fixture support/go1.13
+check "local run on the line still sees the drifted directive" 1 "must declare \`go 1.13\`" \
+	GITHUB_EVENT_NAME= GITHUB_REF= GITHUB_BASE_REF= GITHUB_HEAD_REF=
 
 echo "--- tag pushes: detection after the ref exists ---"
 fixture "$COMPAT" 1.13 1.0.0 1.0.0
