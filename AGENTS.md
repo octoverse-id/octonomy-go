@@ -65,7 +65,13 @@ stays a faithful, ergonomic client.
 - Branch names must follow Conventional Branch naming from
   https://conventional-branch.github.io/.
 - Use `<type>/<description>` with lowercase alphanumerics, hyphens, and dots only where valid.
-- Allowed branch types are `feature`, `feat`, `bugfix`, `fix`, `hotfix`, `release`, and `chore`.
+- Allowed branch types are `feature`, `feat`, `bugfix`, `fix`, `hotfix`, `release`, `support`,
+  and `chore`.
+- `support/<description>` names a **long-lived** maintenance line that outlives any single issue
+  (for example `support/go1.13`, the frozen Go 1.13 client line). Because such a line closes no
+  issue, it is **exempt from the issue-number requirement below**. Work targeting a support line
+  still branches off it with a normal issue-numbered branch, and its version bumps and tags still
+  happen in a dedicated `release/<version>` PR.
 - Example branch names: `feature/tag-assignments`, `fix/pagination-decode`, and
   `chore/update-agent-rules`.
 - When the user explicitly asks to implement an approved development plan, such as

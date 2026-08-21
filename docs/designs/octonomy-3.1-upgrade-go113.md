@@ -60,38 +60,47 @@ already correct.
 **One line: the SDK never makes you think about Octonomy's internals, and never lets you be silently
 wrong.**
 
-## Architecture Decision: two version lines, one module path
+## Architecture Decision: two module paths (semantic import versioning)
 
-The SDK ships **one module path** (`github.com/octoverse-id/octonomy-go`) with a **version-range
-split**:
+The SDK ships **two module paths**. Go treats them as different modules, so version selection
+cannot cross between them:
 
 ```
-  v0.1.0 ──┬──▶ v0.2.0, v0.2.1, ...        branch: compat/go1.13
-           │    Go 1.13. NO generics. Vocabularies + Tags. /api/v1 only.
-           │    FROZEN: security fixes only. Sunset date published.
-           │
-           └──▶ v0.3.0, v0.4.0, ...        branch: main
-                Go 1.24+. KEEPS generics. All 8 resources. v1 + v2 + namespaces.
-                Webhooks, integration tests, drift gate, examples.
+  github.com/octoverse-id/octonomy-go          v1.x    branch: support/go1.13
+      Go 1.13. NO generics. Vocabularies + Tags. /api/v1 only.
+      FROZEN: security fixes only. Sunset published.
+
+  github.com/octoverse-id/octonomy-go/v2       v2.x    branch: main
+      Go 1.24+. KEEPS generics. All 8 resources. v1 + v2 + namespaces.
+      Webhooks, integration tests, drift gate, examples.
+      Versioned v2.0.0-alpha.N until API freeze.
 ```
 
-A Go 1.13 consumer is expected to pin `v0.2.x`. **This is NOT enforced by Go** — see Correction 13.
-Minimal version selection treats a `require` as a floor, not a ceiling, and Go 1.13 predates
-`-mod=readonly` as the default, so an old-toolchain consumer's first `go build` can auto-resolve to
-`@latest`. Enforcement is documentation plus a build-tag tripwire, and this plan says so plainly
-rather than pretending the toolchain handles it.
+**Go enforces this.** A tag whose `go.mod` declares a different path is rejected at resolution —
+verified against the proxy:
 
-**Why this beats one shared floor (rev 1's approach):** keeping generics on the main line dissolves
-two findings that both reviewers raised independently against rev 1 — `Each[T]` is once again a
-single tested abstraction rather than N per-resource walkers, and `DecodeMetadata[T]` can be a
-generic **function** instead of an impossible method on the `Metadata` type *alias*
-(`types.go:5` is `type Metadata = map[string]any`; aliases cannot have methods).
+```
+go: github.com/google/go-github@v50.0.0: invalid version:
+    go.mod has post-v50 module path "github.com/google/go-github/v50" at revision v50.0.0
+```
+
+So no transitive dependency, `go get -u`, or Dependabot bump can move a Go 1.13 consumer onto code
+they cannot compile. **No build-tag tripwire and no consumer-side pin are needed** — earlier
+revisions of this plan required both because they used a version-range split on one path, which Go
+does **not** enforce (minimal version selection treats `require` as a floor, and pre-1.16 Go
+auto-resolves `@latest` on a first build). See the Engineering Review section for the full history.
+
+**Why the split at all:** the two problems have opposite requirements. Keeping generics on the modern
+line also dissolves two findings raised independently by two reviewers against rev 1 — `Each[T]` is a
+single tested abstraction rather than N per-resource walkers, and `DecodeMetadata[T]` can be a generic
+**function** instead of an impossible method on the `Metadata` type *alias* (`types.go:5` is
+`type Metadata = map[string]any`; aliases cannot have methods).
 
 ## Scope Decisions
 
 | # | Proposal | Effort (CC / human) | Decision | Reasoning |
 |---|----------|---------------------|----------|-----------|
-| **S1** | Go 1.13 compat line: remove generics, `any`→`interface{}`, `io.ReadAll`→`ioutil.ReadAll`, **both** `t.Cleanup` sites, `go.mod` `go 1.13`, **CI triggers for the branch**, real go1.13 CI job (`cache: false`), mistag guard, `version.go`+CHANGELOG bump, `SECURITY.md`, compat policy on-branch | ~1 h / ~3 d | **ACCEPTED** | Unblocks the consuming team. Sole content of 0.2.0. **Estimate knowingly optimistic — see Revision 3 open items.** |
+| **S1** | Go 1.13 compat line: remove generics, `any`→`interface{}`, `io.ReadAll`→`ioutil.ReadAll`, **both** `t.Cleanup` sites, `go.mod` `go 1.13`, **CI triggers for the branch**, real go1.13 CI job (`cache: false`), mistag guard, `version.go`+CHANGELOG bump, `SECURITY.md`, compat policy on-branch | ~1 h / ~3 d | **ACCEPTED** | Unblocks the consuming team. Sole content of v1.0.0. **Estimate knowingly optimistic — see Revision 3 open items.** |
 | **C** | Modern line: v1+v2 surface, namespaces, all 8 resource groups | ~5 h / ~14 d | **ACCEPTED** | Chosen over compat-only and v2-without-resources. Both alternatives leave the SDK unable to assign a tag or resolve a slug — the core operations of a tagging service. |
 | **E1a** | Webhook `Verify` + signature test vectors | ~30 m / ~1 d | **ACCEPTED (narrowed)** | Narrowed in rev 3 per Correction 24 — the security-critical part only, correct regardless of payload evolution. Issue #16. |
 | **E1b** | Webhook typed events, snapshot types, `http.Handler` | ~1 h / ~3 d | **DEFERRED** | No deployment emits webhooks (`OUTBOX_TRANSPORT` defaults to `logging`). Same standard applied to E7. Issue #22. |
@@ -112,11 +121,11 @@ generic **function** instead of an impossible method on the `Metadata` type *ali
     E4  1.00   E5  0.50   E6  0.25   E8  1.00   S12 1.25   = 13.67 h
 
   OVERHEAD (18 issues, 3 release PRs, 3 release gates) — allocated, not dumped in one stage
-    0.2.0  1.00   (new toolchain job proven green, mistag guard, version+CHANGELOG, policy doc)
-    0.3.0  1.00   (11 issues, release PR + gate)
-    0.4.0  0.50   (4 issues, release PR + gate, Docker CI stabilisation)      = 2.50 h
+    v1.0.0          1.00   (new toolchain job proven green, mistag guard, version+CHANGELOG, policy doc)
+    v2.0.0-alpha.1  1.00   (11 issues, release PR + gate)
+    v2.0.0-alpha.2  0.50   (4 issues, release PR + gate, Docker CI stabilisation)   = 2.50 h
 
-  STAGE TOTALS      0.2.0  2.00      0.3.0  8.17      0.4.0  6.00   = 16.17 ≈ 16.2 h
+  STAGE TOTALS      v1.0.0 2.00   v2.0.0-alpha.1 8.17   v2.0.0-alpha.2 6.00  = 16.17 ≈ 16.2 h
   CHECK             13.67 item + 2.50 overhead = 16.17  ✓
 ```
 
@@ -138,7 +147,7 @@ tags list has zero occurrences and is byte-identical to the SDK's vendored copy.
 to `Tags.Resolve` in S6.**
 
 **Correction 2 — five documents assert facts this plan invalidates.** `AGENTS.md:39` mandates
-"Target Go **1.24+**", `AGENTS.md:3` mandates "the stable REST **v1** API", `AGENTS.md:29` mandates
+"Target Go **1.24+**", `AGENTS.md:5` mandates "the stable REST **v1** API", `AGENTS.md:29` mandates
 "List methods return `*List[T]`". `README.md:21` says "Requires Go 1.24 or newer." `doc.go` says
 "targets the stable v1 API (server release 1.0.0)". `docs/versioning.md` pins "currently **v1**,
 server `1.0.0`" **and states a server major "would be tracked by a corresponding major SDK effort"**
@@ -211,7 +220,7 @@ config-coherence guard opportunity.
 
 | Item | Now owned by |
 |---|---|
-| Sunset date — an actual date, an owner, and the rule deriving it | S1 (the policy ships with 0.2.0). **Rule: 12 months from the `v0.2.0` tag, owner = the SDK maintainer**, revisable only by agreement with the consuming team |
+| Sunset date — an actual date, an owner, and the rule deriving it | S1 (the policy ships with 0.2.0). **Rule: 12 months from the `v1.0.0` tag, owner = the SDK maintainer**, revisable only by agreement with the consuming team |
 | Go 1.13 README pointer | **Both** — a one-line note on `main`'s README lands with 0.2.0 so pkg.go.dev is correct the moment the compat line ships (rev 3 would have delivered it a release late), and the full treatment in S12 |
 | Header-assembly extraction out of `do()` | S4 |
 | `http.RoundTripper` extension-point documentation | S12 |
@@ -220,7 +229,7 @@ config-coherence guard opportunity.
 | `SECURITY.md` supported-versions table | S1 (compat branch) **and** S12 (main) |
 | `include_global` query-param plumbing | S4 |
 
-### Compat line (`compat/go1.13` branch, `v0.2.x`)
+### Compat line (`support/go1.13` line, `v1.x`)
 - Remove generics: `List[T]` → `TagList`, `VocabularyList`
 - `any` → `interface{}` at all five sites, plus every test file
 - `io.ReadAll` → `ioutil.ReadAll` at **all five** sites — 1 in the library, **4 in test files**
@@ -232,7 +241,11 @@ config-coherence guard opportunity.
 - `newTestClient` returns `(*Client, func())`; `defer cleanup()` at all 14 call sites
 - `go.mod`: `go 1.24` → `go 1.13`
 - CI: **a real go1.13 job (required check)** + keep modern jobs for lint/vuln
-- CI: **mistag guard** asserting the `go` directive matches the tag's version range
+- CI: **mistag guard, split by severity** (Correction 32 + eng review 5bA). The **blocking** half
+  gates the **release PR** and asserts that on `support/go1.13` the `go.mod` still declares
+  `go 1.13` — that assertion has no toolchain backstop. The path/branch half is **advisory only**,
+  because Go rejects a module-path mismatch itself. A tag-time-only check is too late: it fires after
+  the tag is already proxy-resolvable, and `retract` is inert for this audience
 - Scope frozen at Vocabularies + Tags, `/api/v1` only. No v2, no namespaces, no webhooks, ever.
 
 ### Modern line (`main`, `v0.3.0+`)
@@ -307,16 +320,18 @@ config-coherence guard opportunity.
 
 ## Release Staging
 
-### 0.2.0 — Go 1.13 unblock (~2.0 h CC: 1.0 item + 1.0 overhead) — branch `compat/go1.13`
+### v1.0.0 — Go 1.13 unblock (~2.0 h CC: 1.0 item + 1.0 overhead) — line `support/go1.13`
 
 | Issue | Title |
 |---|---|
-| S1 | Go 1.13 compat line: drop generics, stdlib swaps, test-helper signature, `go.mod`, go1.13 CI job, mistag guard |
+| **S0a** | **BLOCKING** — adopt `/v2` on `main`, correct the false release record, cut the first tags (issue #24) |
+| **S0b** | **BLOCKING** — reusable container harness, predecessor to both integration suites (issue #25) |
+| S1 | Go 1.13 compat line: drop generics, stdlib swaps, **both** `t.Cleanup` sites, five `io.ReadAll` sites, `go.mod`, CI triggers for the line, go1.13 CI job running `go test`, mistag guard (split by severity) |
 
 **S1 only.** Rev 1 also put S2 and S3 here; both were removed. S3's rationale was retracted
 (Correction 3) and S2 needed a design decision that does not belong in an unrecallable release.
 
-### 0.3.0 — Server 3.1.0 contract (~8.2 h CC: 7.17 item + 1.0 overhead) — branch `main`
+### v2.0.0-alpha.1 — Server 3.1.0 contract (~8.2 h CC: 7.17 item + 1.0 overhead) — branch `main` (`/v2`)
 
 | Issue | Title | Depends on |
 |---|---|---|
@@ -330,12 +345,12 @@ config-coherence guard opportunity.
 | S9 | Audit logs resource | S4 |
 | S10 | Health probes — separate credential-free constructor + unversioned transport | S4 |
 | S11 | Ergonomics: `Each[T]` walker + `DecodeMetadata[T]` | S4 |
-| S12 | Documentation truth pass — **nine files on `main`**: `AGENTS.md`, `README.md`, `doc.go`, `docs/versioning.md`, `docs/roadmap.md`, `CONTRIBUTING.md`, `docs/development.md`, `docs/api.md`, `docs/architecture.md`. Resolve the major-vs-minor contradiction, record the config-coherence exemption, publish the sunset date, add the Go 1.13 README pointer | S4-S11 |
+| S12 | Documentation truth pass — **eleven files on `main`**: `AGENTS.md`, `README.md`, `doc.go`, `docs/versioning.md`, `docs/roadmap.md`, `CONTRIBUTING.md`, `docs/development.md`, `docs/api.md`, `docs/architecture.md`, **`SECURITY.md`**, **`docs/release.md`**. The last two are also fixed on the compat line by S1; the ownership table assigns both to S12 as well, because the two-line policy has to be true on `main` too. Resolve the major-vs-minor contradiction, record the config-coherence exemption, publish the sunset date, add the Go 1.13 README pointer | S4-S11 |
 
 S4 is the gate: it must land before S5-S9 so each resource is written once against a v2-aware
 transport and a re-derived roadmap.
 
-### 0.4.0 — Integration surface (~6.0 h CC: 5.5 item + 0.5 overhead) — branch `main`
+### v2.0.0-alpha.2 — Integration surface (~6.0 h CC: 5.5 item + 0.5 overhead) — branch `main` (`/v2`)
 
 | Issue | Title | Depends on |
 |---|---|---|
@@ -376,8 +391,10 @@ replaced rather than patched.
 9. **Walker:** returns the reached offset alongside any error, so a mid-walk failure is resumable.
    Offset drift is documented, not solved — the server has no cursor.
 10. **`DecodeMetadata`:** a generic function, not a method. `Metadata` is an alias.
-11. **Module layout:** one module path, version-range split. No subdirectory module, no build-tag
-    split. An exported API that differs by toolchain is a support problem.
+11. **Module layout:** **two module paths via semantic import versioning** — bare path for the
+    compat line (`v1.x`), `/v2` suffix for the modern line. Go enforces the boundary itself, so no
+    build-tag split and no consumer-side pin. (Revisions 1-4 of this plan said the opposite; they
+    were wrong, and the reasoning is in the Engineering Review section.)
 12. **`X-Request-ID`:** send side only. Callers generate their own.
 
 ## Verified Findings (evidence, not assumption)
@@ -500,7 +517,8 @@ version-range split over a separate module path. Four mechanism problems:
    exported API that differs by toolchain is a support problem" — but the version-range split ships
    `TagList`/`VocabularyList` and `List[T]` at the **same import path**, which is exactly that problem.
 
-**Resolution (user decision R1b):** keep the version-range split for the DRY win, delete the false
+**Resolution (user decision R1b) — SUPERSEDED by the Engineering Review; recorded as history only.**
+At the time the call was: keep the version-range split for the DRY win, delete the false
 claim, and state that enforcement is documentation plus a **build-tag tripwire** — a file on the
 modern line guarded by `//go:build !go1.18` *and* `// +build !go1.18` (Go 1.13 only understands the
 latter) whose compile error names the fix. Ship a recommended `exclude` snippet for the consumer's
@@ -544,7 +562,7 @@ rev 3 then said "nine" without saying which branch (see Correction 30). The hone
 | Branch / release | Files |
 |---|---|
 | `main` (S12, 0.3.0) — **9** | `AGENTS.md:5,12,29,39`, `README.md:21`, `doc.go`, `docs/versioning.md:47-48`, `docs/roadmap.md`, `CONTRIBUTING.md:15`, `docs/development.md:12`, `docs/api.md:3,8,49`, `docs/architecture.md:3,12,14,22,28,30` (line 28 is the request-lifecycle ASCII diagram, which hardcodes `/api/v1`) |
-| `compat/go1.13` (S1, 0.2.0) — **2** | `SECURITY.md:5-10` (supported-versions table), `docs/release.md:3-4,30-39` (backport step) |
+| `support/go1.13` (S1, 0.2.0) — **2** | `SECURITY.md:5-10` (supported-versions table), `docs/release.md:3-4,30-39` (backport step) |
 | Also on `main` | `SECURITY.md` and `docs/release.md` again — the two-line policy must be true on both branches |
 
 **11 distinct files, 13 file-touches.** Rev 2 named 5 and priced on 5; rev 3 said 9 and left the
@@ -669,7 +687,9 @@ resolved, per the convergence guard:
    every count now names its sites so it is checkable at a glance. That is a mitigation, not a cure.
 3. **S1's estimate remains a floor, not a forecast** (unchanged from rev 3), now carrying `go test` on
    the go1.13 job as well.
-4. **Split enforcement is social, not mechanical** (accepted under R1b, unchanged).
+4. **Split enforcement is social, not mechanical** — ⚠️ **RESOLVED, not outstanding.** The
+   Engineering Review moved the modern line to a `/v2` module path, so Go enforces the boundary
+   mechanically and the tripwire was deleted.
 5. **`data: null` vs `data: []`** is decided for the modern line only; the compat line inherits
    whatever `encoding/json` does today.
 
@@ -678,8 +698,9 @@ resolved, per the convergence guard:
 - **S1's 1 h CC estimate is not credible** and is knowingly retained as a floor rather than a forecast.
   It now carries CI trigger changes, a cache workaround, two `t.Cleanup` fixes, a version and CHANGELOG
   bump, `SECURITY.md`, a policy document, and a required new toolchain job proven green.
-- **Enforcement of the two-line split is social, not mechanical.** Accepted deliberately (R1b) in
-  exchange for avoiding a duplicated client. The tripwire mitigates the symptom, not the cause.
+- **Enforcement of the two-line split is social, not mechanical.** ⚠️ **RESOLVED by the Engineering
+  Review** — the `/v2` module path makes Go enforce it, and the tripwire was deleted. Kept here only
+  as a record of what rev 3 accepted.
 - **`data: null` vs `data: []`** is decided for the modern line only; the compat line shares the wire
   behaviour and inherits whatever `encoding/json` does today.
 
@@ -732,7 +753,7 @@ Rev 5 supersedes the rev-1..4 staging numbers: **v1.0.0** (compat), **v2.0.0-alp
 | D1a | Two lines via `/v2` semantic import versioning | Adopted |
 | D2 | Complexity gate (18 issues, ~40 files) | Proceed — scope was settled deliberately in the CEO review |
 | 1A | Modern line uses prereleases until API freeze | Adopted. Gate is **API freeze + integration + docs + RC**, not endpoint count |
-| 2A | One blocking issue for the rename; tags split into `release/*` PRs per `AGENTS.md:81` | Adopted (#24) |
+| 2A | One blocking issue for the rename; tags split into `release/*` PRs per `AGENTS.md:89` | Adopted (#24) |
 | 3A | Actionable hint on an envelope-less 404 naming a likely `APIVersion` mismatch | Adopted |
 | 4A | Minimal scoped docs on the compat branch, main stays canonical | Adopted |
 | 5A/5bA | Mistag guard split: path check advisory, `go`-directive check **blocking** | Adopted |
@@ -755,8 +776,12 @@ extend the existing test to assert `Code`.
 - **`ci.yml` triggers only on `main`**, so the compat branch would have had zero CI. And the `go1.13`
   job must run **`go test`**, not just `go build ./...` — four of the five `io.ReadAll` sites and all
   18 test-file `any` occurrences live in `_test.go`, which a build-only job never compiles.
-- **`compat/go1.13` is an invalid branch name** under `AGENTS.md:65` (`compat` is not an allowed
-  type). Use `release/go1.13-compat`.
+- **The originally planned `compat/go1.13` was an invalid branch name** — `compat` is not an allowed
+  type under `AGENTS.md:68`. Resolved by adding a **`support/<description>`** category to `AGENTS.md`
+  for long-lived maintenance lines, explicitly exempt from the issue-number rule because such a line
+  closes no issue. The three branch roles are now distinct and each checkable against a written rule:
+  **`support/go1.13`** is the line, **`chore/<issue>-<desc>`** implements work onto it, and
+  **`release/vX.Y.Z`** cuts the tag (`AGENTS.md:89`).
 
 ## New issues
 
