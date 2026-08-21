@@ -88,22 +88,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **On a release PR** (`release/vX.Y.Z`), four more blocking checks — this is the last point where the
   answer is "push another commit": the branch must name a valid version, `version.go` must equal it,
-  the major must match the module path, and it must target the branch that major is cut from (a `v1`
-  release PR retargeted at `main` otherwise passes every other check). The latest `CHANGELOG.md`
+  the module path must be **exactly** the one that major publishes under (a matching major is not
+  enough: `example.test/wrong` and an illegal `/v1` suffix both carry a v1-shaped major), and it must
+  target the branch that major is cut from (a `v1` release PR retargeted at `main` otherwise passes
+  every other check). The latest `CHANGELOG.md`
   heading must agree too, and a release PR that deletes the changelog fails rather than skipping the
   check. That closes a real gap: `make version-check` ties `version.go` to the changelog, but nothing
   in CI ran it — only `release-check` does, and CI never calls `release-check`.
 
-  **On a tag push**, the same assertions run again as **detection, not prevention**. GitHub already
-  has the ref by then and a published version cannot be withdrawn for this audience; the value is
-  catching a tag pushed without a release PR early enough that deleting the ref may still beat the
-  first fetch. Tags are validated against the real SemVer grammar, not a shell glob — the obvious
+  **On a tag push**, a *subset* runs again as **detection, not prevention**: the tag's SemVer, its
+  module path, and `version.go`. Not the CHANGELOG heading and not the base branch — a tag push has no
+  base branch to compare. GitHub already has the ref by then and a published version cannot be
+  withdrawn for this audience; the value is catching a tag pushed without a release PR early enough
+  that deleting the ref may still beat the first fetch. Tags are validated against the real SemVer grammar, not a shell glob — the obvious
   `v[0-9]*.[0-9]*.[0-9]*` pattern accepts `v1.2.3foo`, `v1.02.3`, `v1.2.3-`, and `v1.2.3.4`, none of
   which Go can resolve.
 - **Tests for the guard** (`scripts/compat-guard-test.sh`, `make compat-guard-test`, run in CI and by
-  `make check`). 35 fixture cases across ordinary PRs, release PRs to both lines, tag pushes,
-  malformed tags, and `go.mod`/`version.go` parsing edge cases. Without them the release-PR block
-  would first execute on the release PR itself: every ordinary run has
+  `make check`). 65 checks across ordinary PRs, release PRs to both lines, tag pushes, malformed tags,
+  wrong-module-path releases, `go.mod`/`version.go` parsing edge cases, and the SemVer grammar
+  exercised directly against the guard's own function. Every case asserts the *reason*, not just the
+  exit status — an rc-only assertion also passes when the code path never ran. Without these the
+  release-PR block would first execute on the release PR itself: every ordinary run has
   `GITHUB_HEAD_REF=<type>/<issue>-…`, so that code path is never otherwise reached.
 - `make test-go113` for the real-toolchain gate locally, with two documented ways to fetch a go1.13
   toolchain (`docs/development.md`).

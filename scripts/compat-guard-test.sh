@@ -13,6 +13,9 @@
 # alone would pass a guard that fails for the wrong reason.
 #
 # Usage: scripts/compat-guard-test.sh   (or `make compat-guard-test`)
+#
+# POSIX sh plus mktemp, which is not in POSIX but is present everywhere this runs
+# (GNU coreutils, BSD, busybox) and is the only safe way to get a temp directory.
 
 set -eu
 
@@ -102,9 +105,12 @@ check "release/v1.0.0 into the compat line" 0 "base branch, version.go, module p
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v1.0.0
 check "BLOCK: v1 release PR retargeted at main" 1 "v1 releases are cut from" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=main GITHUB_HEAD_REF=release/v1.0.0
-check "release/1.0.0 without the v prefix" 0 - \
+# Both of these assert the reason, not just rc=0: a bare exit-status check would
+# also pass if the release block never ran, which is the exact bug being guarded
+# against.
+check "release/1.0.0 without the v prefix" 0 "release PR for v1.0.0" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/1.0.0
-check "pull_request_target is treated the same" 0 - \
+check "pull_request_target is treated the same" 0 "release PR for v1.0.0" \
 	GITHUB_EVENT_NAME=pull_request_target GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v1.0.0
 
 fixture "$COMPAT" 1.13 0.1.0 0.1.0
@@ -136,7 +142,26 @@ check "BLOCK: v2 release PR retargeted at the compat line" 1 "v2 releases are cu
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v2.0.0-alpha.1
 
 fixture "$COMPAT" 1.13 2.0.0 2.0.0
-check "BLOCK: v2 release cut from the compat module path" 1 "implies major v1" \
+check "BLOCK: v2 release cut from the compat module path" 1 "must carry module path" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=main GITHUB_HEAD_REF=release/v2.0.0
+
+echo "--- same major, wrong module path ---"
+# Majors matching is not enough: these all carry a v1-shaped major and a path no
+# consumer of this line can require.
+fixture example.test/wrong 1.13 1.0.0 1.0.0
+check "BLOCK: release PR, foreign module path" 1 "must carry module path" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v1.0.0
+check "BLOCK: tag on a foreign module path" 1 "needs module path" \
+	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v1.0.0
+
+fixture "$COMPAT/v1" 1.13 1.0.0 1.0.0
+check "BLOCK: release PR with an illegal /v1 suffix" 1 "must carry module path" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v1.0.0
+check "BLOCK: tag with an illegal /v1 suffix" 1 "needs module path" \
+	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v1.0.0
+
+fixture github.com/octoverse-id/octonomy-go/v3 1.24 2.0.0 2.0.0
+check "BLOCK: v2 release PR on a /v3 path" 1 "must carry module path" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=main GITHUB_HEAD_REF=release/v2.0.0
 
 echo "--- tag pushes: detection after the ref exists ---"
@@ -145,7 +170,7 @@ check "tag v1.0.0 matching version.go" 0 "matches version.go" \
 	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v1.0.0
 check "BLOCK: tag v1.0.1 against version.go 1.0.0" 1 "does not match version.go" \
 	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v1.0.1
-check "BLOCK: tag v2.0.0 on the compat module path" 1 "targets major v2 but go.mod's path implies major v1" \
+check "BLOCK: tag v2.0.0 on the compat module path" 1 "needs module path" \
 	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v2.0.0
 check "non-version tag is skipped" 0 "is not a version tag" \
 	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/release-candidate
@@ -174,6 +199,37 @@ check "leading whitespace, comments, toolchain line" 0 "matches version.go" \
 rm -rf "$WORK/tree" && mkdir -p "$WORK/tree"
 printf 'package octonomy\n' > "$WORK/tree/version.go"
 check "BLOCK: no go.mod at all" 1 "no go.mod" GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/support/go1.13
+
+echo "--- is_semver grammar, exercised directly ---"
+# Sourced from the guard rather than re-declared, so this cannot drift from the
+# implementation. It also reaches the multi-line case, which no git ref can carry
+# but version.go could.
+_NL='
+'
+eval "$(sed -n '/^is_semver()/,/^}/p' "$GUARD")"
+
+semver_case() {
+	want=$1
+	value=$2
+	if is_semver "$value"; then got=accept; else got=reject; fi
+	if [ "$got" = "$want" ]; then
+		printf 'ok    is_semver %-18s -> %s
+' "$(printf '%s' "$value" | tr '\n' '~')" "$got"
+		passed=$((passed + 1))
+	else
+		printf 'FAIL  is_semver %-18s -> %s, wanted %s
+' "$(printf '%s' "$value" | tr '\n' '~')" "$got" "$want"
+		failed=$((failed + 1))
+	fi
+}
+
+for good in 1.0.0 0.0.0 10.20.30 1.0.0-0 1.0.0-alpha 1.0.0-alpha.1 1.0.0-alpha.beta 2.0.0-rc.1 1.0.0-0a 100.0.0; do
+	semver_case accept "$good"
+done
+for bad in 1.0.0-01 1.0.0-alpha.01 01.0.0 1.02.3 1.0.0- 1.0.0.1 1.0 1 1.a.3 1.0.0+meta v1.0.0 "" " 1.0.0" "1.0.0 "; do
+	semver_case reject "$bad"
+done
+semver_case reject "1.0.0${_NL}junk"
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" = "0" ] || exit 1

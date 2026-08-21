@@ -29,8 +29,8 @@
 # Usage:
 #   scripts/compat-guard.sh          # infers the line from git or $GITHUB_*
 #
-# POSIX sh, no dependencies beyond git -- it runs on the go1.13 era as happily
-# as on a current runner.
+# POSIX sh. Utilities used: git, sed, grep -E. Nothing newer than the era this
+# line targets, so it runs the same on an old box as on a current runner.
 
 set -eu
 
@@ -79,6 +79,16 @@ is_semver() {
 	printf '%s' "$1" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
 }
 
+# expected_module_path <major> echoes the one module path a release of that major
+# may carry. v1 is unsuffixed (a /v1 suffix is not a thing in Go); v2+ append /vN.
+expected_module_path() {
+	if [ "$1" = "1" ]; then
+		printf '%s' "$COMPAT_MODULE"
+	else
+		printf '%s/v%s' "$COMPAT_MODULE" "$1"
+	fi
+}
+
 semver_major() {
 	printf '%s' "$1" | sed -n 's/^\([0-9]\{1,\}\)\..*/\1/p'
 }
@@ -91,9 +101,9 @@ semver_major() {
 
 test -f go.mod || { fail "no go.mod in $(pwd)"; exit 1; }
 
-module=$(sed -n 's/^[[:space:]]*module[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' go.mod | head -1)
-go_directive=$(sed -n 's/^[[:space:]]*go[[:space:]]\{1,\}\([0-9][0-9.]*\).*/\1/p' go.mod | head -1)
-version=$(sed -n 's/^[[:space:]]*const Version = "\([^"]*\)".*/\1/p;s/^[[:space:]]*Version = "\([^"]*\)".*/\1/p' version.go 2>/dev/null | head -1)
+module=$(sed -n 's/^[[:space:]]*module[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' go.mod | head -n 1)
+go_directive=$(sed -n 's/^[[:space:]]*go[[:space:]]\{1,\}\([0-9][0-9.]*\).*/\1/p' go.mod | head -n 1)
+version=$(sed -n 's/^[[:space:]]*const Version = "\([^"]*\)".*/\1/p;s/^[[:space:]]*Version = "\([^"]*\)".*/\1/p' version.go 2>/dev/null | head -n 1)
 
 test -n "$module" || { fail "could not read the module path from go.mod"; exit 1; }
 test -n "$go_directive" || { fail "could not read the go directive from go.mod"; exit 1; }
@@ -208,8 +218,14 @@ if [ "$is_release_pr" = "1" ]; then
 		elif [ "$version" != "$release_version" ]; then
 			fail "release PR for v$release_version but version.go says $version. Set Version to $release_version (docs/release.md step 3) -- once the tag is pushed this is no longer fixable."
 		fi
-		if [ "$rel_major" != "$path_major" ]; then
-			fail "release PR for v$release_version (major v$rel_major) but go.mod's path implies major v$path_major (\`$module\`). Go would refuse to resolve the tag. You are cutting this release from the wrong line."
+		# The EXACT path, not merely a matching major. Comparing majors alone
+		# accepts `module example.test/wrong` with `go 1.13` on a v1 release PR,
+		# and accepts a `/v1` suffix that is not a legal Go module path at all --
+		# both publish something no consumer of this line can resolve, and both
+		# were passing with a warning.
+		rel_expected_module=$(expected_module_path "$rel_major")
+		if [ "$module" != "$rel_expected_module" ]; then
+			fail "release PR for v$release_version must carry module path \`$rel_expected_module\`, but go.mod says \`$module\`. Go resolves the module by path: a v$rel_major tag on this go.mod publishes something no consumer of this line can require."
 		fi
 		# The base branch, not just the tree. A v1 release PR carrying this line's
 		# tree but TARGETING main passes every other check here -- same module
@@ -235,7 +251,7 @@ if [ "$is_release_pr" = "1" ]; then
 		if [ ! -f CHANGELOG.md ]; then
 			fail "release PR for v$release_version but there is no CHANGELOG.md. The release notes are part of the release (docs/release.md step 4), and \`make version-check\` -- which CI does not run -- is the only other thing that would have noticed."
 		else
-			log_version=$(sed -n 's/^## \[\([0-9][^]]*\)\].*/\1/p' CHANGELOG.md | head -1)
+			log_version=$(sed -n 's/^## \[\([0-9][^]]*\)\].*/\1/p' CHANGELOG.md | head -n 1)
 			if [ -z "$log_version" ]; then
 				fail "release PR for v$release_version but CHANGELOG.md has no released-version heading. Move the [Unreleased] items under ## [$release_version] (docs/release.md step 4)."
 			elif [ "$log_version" != "$release_version" ]; then
@@ -263,8 +279,9 @@ if [ "$is_tag" = "1" ]; then
 			else
 				tag_major=$(semver_major "$tag_version")
 
-				if [ "$tag_major" != "$path_major" ]; then
-					fail "tag $tag targets major v$tag_major but go.mod's path implies major v$path_major (\`$module\`). Go refuses to resolve this combination, and the tag cannot be moved once pushed -- delete it before it is fetched, then publish a corrected version."
+				tag_expected_module=$(expected_module_path "$tag_major")
+				if [ "$module" != "$tag_expected_module" ]; then
+					fail "tag $tag needs module path \`$tag_expected_module\`, but go.mod says \`$module\` (path major v$path_major). Go refuses to resolve that combination, and the tag cannot be moved once pushed -- delete the ref before anything fetches it, then publish a corrected version."
 				fi
 
 				# The check that was missing: the tag and version.go must agree.

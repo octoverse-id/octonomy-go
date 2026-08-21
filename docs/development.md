@@ -25,9 +25,11 @@ make lint           # golangci-lint (if installed)
 make test           # go test -race -cover ./...
 make cover          # prints total coverage
 make examples       # compile-check examples/
-make compat-guard   # assert go.mod still matches this release line
-make check          # fmt-check + vet + build + compat-guard (fast pre-push gate)
-make release-check  # the full modern-toolchain pre-release gate
+make compat-guard      # assert go.mod still matches this release line
+make compat-guard-test # the guard's own fixture tests (release-PR and tag paths)
+make tools-check       # fail unless golangci-lint and govulncheck are installed
+make check             # fmt-check + vet + build + guard + guard tests (pre-push)
+make release-check     # the full modern-toolchain pre-release gate
 make test-go113     # THE gate: build + vet + test -race on a real go1.13 toolchain
 make smoke          # integration smoke test against a booted server
 ```
@@ -69,8 +71,10 @@ What the floor rules out, and what to write instead:
 declared language version, and the deprecation postdates `go 1.13`), but golangci-lint's `govet`
 `inline` analyzer does object — it is disabled in `.golangci.yml` with that reasoning recorded.
 
-CI enforces the floor with a **required** real-`go1.13` job, and `scripts/compat-guard.sh` blocks a
-`go.mod` whose `go` directive drifts off `1.13` — the one mistake with no toolchain backstop, because
+CI enforces the floor with a real-`go1.13` job — **intended** as a required check, though branch
+protection for this branch does not exist yet, so nothing mechanically blocks a merge on it until the
+maintainer adds the context. `scripts/compat-guard.sh` blocks a `go.mod` whose `go` directive drifts
+off `1.13` — the one mistake with no toolchain backstop, because
 a `v1.x` tag cut from a drifted `go.mod` keeps the same module path and resolves fine.
 
 Optional local tools (CI installs them automatically):
@@ -115,9 +119,12 @@ make smoke        # sources the env file and runs the smoke test
 make dev-server-down
 ```
 
-CI runs it on the **go1.13** toolchain against the pinned container image, as a required check. That
-combination — the frozen client, on its own toolchain, against the current server — is the only one
-that proves this line still works, and it is what caught the single-resource envelope defect.
+CI runs it on the **go1.13** toolchain against the pinned container image, with
+`OCTONOMY_SMOKE_REQUIRED=1` so a missing base URL fails instead of skipping — a skip would be a green
+job that asserted nothing. Like the `go1.13` job it is *intended* as a required check and is not yet
+enforced by branch protection. That combination — the frozen client, on its own toolchain, against the
+current server — is the only one that proves this line still works, and it is what caught the
+single-resource envelope defect.
 
 ## Running against a real Octonomy
 

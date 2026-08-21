@@ -156,7 +156,7 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 
 ```bash
 make test         # go test -race -cover ./...
-make check        # gofmt check + go vet + build + release-line guard
+make check        # gofmt check + go vet + build + release-line guard + its tests
 make test-go113   # the same build and tests on a REAL go1.13 toolchain
 make smoke        # integration smoke test against a booted server (see make dev-server)
 make lint         # golangci-lint (if installed)

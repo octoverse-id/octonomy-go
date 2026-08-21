@@ -28,14 +28,18 @@ make dev-server && make smoke         # the smoke test against a real container
 make dev-server-down
 ```
 
+`release-check` itself now also runs `tools-check` (both optional gate tools must actually be
+installed, so `lint` and `vuln` cannot silently skip) and `compat-guard-test`.
+
 CI runs both (`go1.13` and `smoke`). Confirm they are green on the merge commit you are about to tag —
 not merely on the PR head — because a `v1.x` tag cannot be recalled: `retract` shipped in Go 1.16, so
 a Go 1.13 consumer's toolchain ignores it.
 
 **The release PR is the gate, not the tag push.** `compat-guard` blocks a `release/vX.Y.Z` PR whose
-branch name, `version.go`, CHANGELOG heading, module-path major, and base branch do not all agree. The
-same checks run again on the tag, but only as detection: by then the ref is public, and for the compat
-line that is final. If the tag job fails, delete the ref immediately — that only helps if nothing has
+branch name, `version.go`, CHANGELOG heading, exact module path, and base branch do not all agree. A
+*subset* runs again on the tag — SemVer, module path, `version.go`, but not the CHANGELOG or the base
+branch, which a tag push does not have — and only as detection: by then the ref is public, and for the
+compat line that is final. If the tag job fails, delete the ref immediately — that only helps if nothing has
 fetched it yet — and publish a corrected version.
 
 ## Two release lines — read this before starting

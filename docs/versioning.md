@@ -59,7 +59,8 @@ not a ceiling, and Go before 1.16 auto-resolves `@latest` on a first build.
   patch. See [release.md](release.md).
 - **`retract` does not help this audience.** The directive shipped in Go 1.16, so a Go 1.13 toolchain
   ignores it. A published `v1.x` cannot be recalled for the people it exists to serve, which is why
-  its releases are kept deliberately small and its CI runs a real `go1.13` job as a required check.
+  its releases are kept deliberately small and its CI runs a real `go1.13` job — intended as a
+  required check, and pending branch protection on this branch before it actually blocks a merge.
 
 ### Modern line pre-stability
 
