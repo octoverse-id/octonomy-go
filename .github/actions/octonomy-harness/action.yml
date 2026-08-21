@@ -1,0 +1,61 @@
+name: Octonomy container harness
+description: >-
+  Boot a real Octonomy server (Postgres + the pinned GHCR image), apply
+  migrations, mint a namespace-capable service token, and export the resulting
+  OCTONOMY_TEST_* credentials to the job environment.
+
+# Both SDK version lines call this action so neither grows a bootstrap of its
+# own. All the logic lives in scripts/octonomy-harness.sh -- this file is only
+# the CI adapter, so a developer running `make dev-server` locally and CI are
+# provably booting the same environment.
+#
+# Composite actions cannot register a `post:` step, so teardown and failure-time
+# log capture belong to the CALLING job:
+#
+#   - uses: ./.github/actions/octonomy-harness
+#   - run: go test -tags=integration ./...
+#   - if: failure()
+#     run: make dev-server-logs
+#   - if: always()
+#     run: make dev-server-down
+
+inputs:
+  image:
+    description: Octonomy image to boot. Must be an exact version or a digest, never a moving tag.
+    required: false
+    default: "ghcr.io/octoverse-id/octonomy:3.1.0"
+  port:
+    description: Host port to publish the server on.
+    required: false
+    default: "8000"
+
+runs:
+  using: composite
+  steps:
+    - name: Boot the Octonomy harness
+      shell: bash
+      env:
+        OCTONOMY_HARNESS_IMAGE: ${{ inputs.image }}
+        OCTONOMY_HARNESS_PORT: ${{ inputs.port }}
+      run: |
+        "$GITHUB_WORKSPACE/scripts/octonomy-harness.sh" up
+
+    - name: Export harness credentials
+      shell: bash
+      run: |
+        set -euo pipefail
+        env_file=.octonomy-harness.env
+        test -f "$env_file" || { echo "::error::the harness did not write $env_file"; exit 1; }
+        while IFS= read -r line; do
+          case "$line" in
+            ''|'#'*) continue ;;
+          esac
+          # Mask the bearer token before it can reach any later log line. The
+          # harness mints a real credential; an unmasked echo of it in a job log
+          # is a leak even though the server is ephemeral.
+          case "$line" in
+            OCTONOMY_TEST_TOKEN=*) echo "::add-mask::${line#OCTONOMY_TEST_TOKEN=}" ;;
+          esac
+          echo "$line" >> "$GITHUB_ENV"
+        done < "$env_file"
+        echo "harness credentials exported to the job environment"

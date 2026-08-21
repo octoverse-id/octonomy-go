@@ -1,9 +1,10 @@
 .DEFAULT_GOAL := help
-.PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check version-check
+.PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check version-check \
+	dev-server dev-server-down dev-server-logs
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 tidy: ## Tidy go.mod / go.sum
 	go mod tidy
@@ -49,6 +50,15 @@ examples: ## Compile-check the runnable examples (no binaries emitted)
 	done
 
 check: fmt-check vet build ## Fast pre-push gate (format, vet, build)
+
+dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and write .octonomy-harness.env
+	@scripts/octonomy-harness.sh up
+
+dev-server-down: ## Tear down the Octonomy container harness
+	@scripts/octonomy-harness.sh down
+
+dev-server-logs: ## Dump container logs from the Octonomy container harness
+	@scripts/octonomy-harness.sh logs
 
 version-check: ## Verify version.go matches the latest CHANGELOG.md release heading
 	@code_ver=$$(grep -E '^const Version = ' version.go | sed -E 's/.*"([^"]+)".*/\1/'); \

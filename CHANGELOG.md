@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Reusable Octonomy container harness (`scripts/octonomy-harness.sh`, `make dev-server`) that boots
+  Postgres plus the pinned `ghcr.io/octoverse-id/octonomy:3.1.0` image, applies migrations, mints a
+  namespace-capable service token, and writes `OCTONOMY_TEST_*` credentials to
+  `.octonomy-harness.env`. Both SDK version lines invoke it, so neither carries a bootstrap of its
+  own. Exposed to CI as the `.github/actions/octonomy-harness` composite action.
+
 ## [0.1.0] - 2026-06-08
 
 > **Never released.** No `v0.1.0` git tag was ever cut and the module proxy has never served this

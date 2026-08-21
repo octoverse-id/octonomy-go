@@ -74,3 +74,53 @@ jobs:
           # both -- the fetch then fails with `Duplicate header: "Authorization"`
           # and HTTP 400.
           repo-checkout: "false"
+
+  # The container harness's own regression test. It has no SDK code to exercise
+  # yet -- the compat smoke test (#4) and the full integration suite (#17) are
+  # its real consumers -- but running the bootstrap on every PR is what catches
+  # server-image drift, and this job is the exact wiring both consumers copy.
+  harness:
+    runs-on: ubuntu-latest
+    # Every job needs an explicit bound. The default is 360 minutes, and a hung
+    # readiness poll would otherwise sit on a runner for six hours. The script's
+    # own gates are bounded well inside this, so hitting it means Docker or the
+    # registry hung, not the server.
+    timeout-minutes: 15
+    # ADVISORY for its first release, deliberately. This is a new Docker job in
+    # a repo whose CI is its most-patched area, and a registry hiccup must not
+    # block an unrelated PR. Promote it to a required check (drop this line and
+    # add it to branch protection) once it has run green across a full release
+    # cycle -- and before #17 depends on it for real coverage.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Boot the Octonomy harness
+        uses: ./.github/actions/octonomy-harness
+      - name: Assert the exported credentials work from a separate step
+        # The point of this assertion is the step boundary. The harness proves
+        # the environment works from inside its own process; this proves the
+        # credentials survived the trip through $GITHUB_ENV, which is what every
+        # consumer job actually relies on. It reads back the namespaced row the
+        # harness wrote, so it covers auth, tenancy, and the namespace axis in
+        # one call.
+        run: |
+          set -euo pipefail
+          # Bounded like every other request the harness makes: an unbounded
+          # curl against a server that accepts but never answers would sit here
+          # until the job timeout, 15 minutes away.
+          body=$(curl -fsS --max-time 30 "${OCTONOMY_TEST_BASE_URL}/api/v2/vocabularies?application_id=${OCTONOMY_TEST_APPLICATION_ID}" \
+            -H "Authorization: Bearer ${OCTONOMY_TEST_TOKEN}" \
+            -H "X-Tenant-ID: ${OCTONOMY_TEST_TENANT_ID}" \
+            -H "X-Namespace-Type: ${OCTONOMY_TEST_NAMESPACE_TYPE}" \
+            -H "X-Namespace-ID: ${OCTONOMY_TEST_NAMESPACE_ID}")
+          echo "$body"
+          case "$body" in
+            *harness-probe*) echo "harness credentials verified across the step boundary" ;;
+            *) echo "::error::the namespaced read did not return the row the harness wrote"; exit 1 ;;
+          esac
+      - name: Capture container logs
+        if: failure()
+        run: make dev-server-logs
+      - name: Tear down the harness
+        if: always()
+        run: make dev-server-down

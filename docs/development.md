@@ -46,16 +46,74 @@ Tests use `net/http/httptest` to stand up a fake Octonomy and assert the wire co
 `newTestClient(t, handler)` in `octonomy_test.go` is the shared helper. Keep new code covered and run
 with `-race`.
 
-## Running against a local Octonomy
+## Running against a real Octonomy
 
-Start an Octonomy server (see that repo's README), create a service token, then run the example:
+`make dev-server` boots a complete, verified Octonomy in one command. It needs Docker and `curl`,
+and nothing else:
 
 ```bash
-OCTONOMY_BASE_URL=http://localhost:8000 \
-OCTONOMY_TOKEN=svc_... \
-OCTONOMY_TENANT_ID=acme \
+make dev-server        # boot, verify, write .octonomy-harness.env  (~40s)
+make dev-server-logs   # dump container logs
+make dev-server-down   # tear everything down
+```
+
+It starts Postgres 16 and the pinned `ghcr.io/octoverse-id/octonomy:3.1.0` image on a private Docker
+network, applies migrations, mints a service token, waits for `/health/ready`, and then **proves the
+environment actually works** before reporting success. Credentials land in `.octonomy-harness.env`
+(git-ignored, mode 600):
+
+| Variable | Meaning |
+|---|---|
+| `OCTONOMY_TEST_BASE_URL` | Server root. Integration suites gate on this — when it is empty they skip |
+| `OCTONOMY_TEST_TOKEN` | Bearer token with `tags:read`, `tags:write`, `audit:read` |
+| `OCTONOMY_TEST_TENANT_ID` | `X-Tenant-ID` for every request |
+| `OCTONOMY_TEST_APPLICATION_ID` | Parent application. Required on namespaced requests |
+| `OCTONOMY_TEST_NAMESPACE_TYPE` / `_ID` | The `X-Namespace-*` pair to scope v2 calls with |
+
+```bash
+make dev-server
+set -a; . ./.octonomy-harness.env; set +a
+
+OCTONOMY_BASE_URL="$OCTONOMY_TEST_BASE_URL" \
+OCTONOMY_TOKEN="$OCTONOMY_TEST_TOKEN" \
+OCTONOMY_TENANT_ID="$OCTONOMY_TEST_TENANT_ID" \
 go run ./examples/quickstart
 ```
+
+Everything is overridable — `OCTONOMY_HARNESS_PORT`, `OCTONOMY_HARNESS_PREFIX`,
+`OCTONOMY_HARNESS_IMAGE`, `OCTONOMY_HARNESS_ENV_FILE` and friends — so two harnesses can run side by
+side. See the header of [`scripts/octonomy-harness.sh`](../scripts/octonomy-harness.sh).
+
+### Why it is a script and not `docker run`
+
+`docker run` alone produces an environment that looks healthy and silently fails. Four things the
+harness does that a naive bootstrap does not:
+
+- **Migrations.** The image entrypoint runs `manage.py check`, never `migrate`. Without an explicit
+  migrate step the server boots and `/health/ready` returns 200 — that probe only opens a database
+  cursor — and the first real API call dies on a missing relation.
+- **`OCTONOMY_NAMESPACE_WRITE_ENABLED=true`.** It defaults to `false` on the server and is parsed
+  strictly. Left off, every namespaced write returns `403 namespaced_writes_disabled`, and a suite
+  that only checks for transport errors passes while testing nothing about the namespace axis.
+- **`--namespace-wildcard` on the token.** A token minted the ordinary way carries a global-only
+  grant, and *every* namespaced request 403s — including reads. This is the shape `seed_demo` mints,
+  so it is an easy trap to copy.
+- **A real write, asserted.** After readiness the harness POSTs a namespaced vocabulary and requires
+  a `201` whose response actually carries `namespace_type`/`namespace_id`. A 201 with null namespace
+  fields would mean the row persisted globally, and every downstream namespace assertion would be
+  testing global behaviour under a namespaced name.
+
+Both version lines call the same script, so the Go 1.13 compat line and the modern `/v2` line cannot
+drift apart on setup. CI reaches it through the `.github/actions/octonomy-harness` composite action.
+
+### Troubleshooting
+
+- `error getting credentials … docker-credential-desktop.exe: exec format error` — a Docker
+  Desktop-on-WSL config problem, not a harness one. The image is public, so point Docker at a
+  credential-free config for the run: `mkdir -p /tmp/dc && echo '{}' > /tmp/dc/config.json && export DOCKER_CONFIG=/tmp/dc`.
+- Port 8000 already taken: `OCTONOMY_HARNESS_PORT=8100 make dev-server`.
+- A failed boot prints container logs automatically and tears itself down. To inspect a *running*
+  harness, use `make dev-server-logs`.
 
 ## Keeping the contract current
 
