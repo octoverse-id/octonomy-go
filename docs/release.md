@@ -34,14 +34,31 @@ All must pass.
    The `v` prefix is required by Go modules.
 7. **Verify** the module is resolvable:
    ```bash
-   GOPROXY=proxy.golang.org go list -m github.com/octoverse-id/octonomy-go@v<version>
+   GOPROXY=proxy.golang.org go list -m github.com/octoverse-id/octonomy-go/v2@v<version>
    ```
 8. Close the milestone/issue and delete the release branch.
 
-## Major versions (v2+)
+## Two release lines
 
-A `v2.0.0` or later changes the module import path: append `/v2` to the module path in `go.mod` and to
-all import statements. Do this only for a deliberate breaking release — see [versioning.md](versioning.md).
+This repository publishes **two modules** from two branches. Which line you are releasing determines
+the module path, the branch, and the verify command.
+
+| Line | Module path | Branch | Versions | Policy |
+| ---- | ----------- | ------ | -------- | ------ |
+| Compat | `github.com/octoverse-id/octonomy-go` | `support/go1.13` | `v1.x` | Frozen. Security fixes only, published sunset |
+| Modern | `github.com/octoverse-id/octonomy-go/v2` | `main` | `v2.x` | Active development |
+
+Go treats the two paths as different modules, so version selection cannot cross between them. That is
+the whole point of the split: a Go 1.13 consumer cannot be dragged onto code they cannot compile.
+
+Substitute the right path in step 7's verify command for the line you are releasing.
+
+**Backporting to the compat line.** A security fix that applies to both lands on `main` first, then is
+cherry-picked onto `support/go1.13` and released as a `v1.x` patch through this same runbook. The
+compat line takes **security fixes only** — no features, no ordinary bug fixes.
+
+**A third major (`/v3`)** would append `/v3` to the module path in `go.mod` and to all import
+statements. Do that only for a deliberate breaking release — see [versioning.md](versioning.md).
 
 ## Server contract changes
 
