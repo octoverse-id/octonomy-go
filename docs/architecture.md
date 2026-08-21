@@ -31,11 +31,20 @@ existing resource file and changing the types and paths.
    empty struct with a nil error, and a caller cannot tell that from "no such tag" or "no tags".
 
 ```
-Caller ──▶ Service.Method ──▶ Client.do ──▶ net/http ──▶ Octonomy /api/v1
-                                  │
-                                  ├─ 2xx → unwrap {"data": ...} → *Model
-                                  │         (lists decode the whole body → *ModelList)
-                                  └─ !2xx → *APIError (Code, Message, Details, RequestID, StatusCode)
+                       ┌─ doData ─┐                                    2xx body
+Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶ net/http ──▶ Octonomy /api/v1
+                       └─ do ─────┘        │
+   pick by response shape:                 ├─ 2xx → raw body back to the caller above:
+     doData  single resource               │         doData → unwrap {"data":{…}}  → *Model
+     doList  list envelope                 │         doList → require {"data":[…], "pagination":{…}}
+     do      no payload (DELETE 204)       │                  → *ModelList
+                                           │         do     → nothing to decode
+                                           └─ !2xx → *APIError (Code, Message, Details,
+                                                     RequestID, StatusCode)
+
+   A 2xx that does not carry the envelope its caller expects is an ERROR, never a
+   zero-valued result: an empty struct with a nil error is indistinguishable from
+   "no such tag", and an empty page from "no tags".
 ```
 
 ## Conventions that keep it faithful

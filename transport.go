@@ -117,7 +117,7 @@ func (c *Client) doData(ctx context.Context, method, path string, query url.Valu
 	if err != nil {
 		return err
 	}
-	data, err := envelopeData(respBody)
+	data, _, err := decodeEnvelope(respBody)
 	if err != nil {
 		return err
 	}
@@ -140,6 +140,11 @@ func (c *Client) doData(ctx context.Context, method, path string, query url.Valu
 // Count == 0, and a caller cannot tell that from "this tenant has no tags". That
 // is the same silent failure doData exists to prevent, one type further out.
 //
+// BOTH keys are required, not just data. A missing or null pagination block
+// decodes to a zero-valued Pagination -- Count 0, Limit 0, nil Next -- and a
+// caller paging on Count reads that as "one page, nothing after it". Same
+// indistinguishable-empty-page failure, one field over.
+//
 // A present-but-null data ("data": null) is accepted and decodes to a nil slice.
 // The server sends [] for an empty page, and nil-versus-empty slice semantics are
 // a deliberate open question on the modern line rather than something this frozen
@@ -149,8 +154,12 @@ func (c *Client) doList(ctx context.Context, method, path string, query url.Valu
 	if err != nil {
 		return err
 	}
-	if _, err := envelopeData(respBody); err != nil {
+	_, pagination, err := decodeEnvelope(respBody)
+	if err != nil {
 		return err
+	}
+	if pagination == nil || string(pagination) == "null" {
+		return fmt.Errorf(`octonomy: list response has no "pagination" block`)
 	}
 	if err := json.Unmarshal(respBody, out); err != nil {
 		return fmt.Errorf("octonomy: decode response body: %w", err)
@@ -158,26 +167,28 @@ func (c *Client) doList(ctx context.Context, method, path string, query url.Valu
 	return nil
 }
 
-// envelopeData returns the raw bytes under the response's "data" key.
+// decodeEnvelope returns the raw bytes under the response's "data" and
+// "pagination" keys. pagination is nil for a single resource, which carries none.
 //
-// Both failure modes it reports are 2xx responses that would otherwise decode
-// into a zero value with a nil error: an empty body where a payload was expected,
-// and a body with no "data" key at all. Note "data": null is *present* -- callers
-// decide what null means for their shape.
-func envelopeData(body []byte) (json.RawMessage, error) {
+// The failures it reports are 2xx responses that would otherwise decode into a
+// zero value with a nil error: an empty body where a payload was expected, and a
+// body with no "data" key at all. Note "data": null is *present* -- each caller
+// decides what null means for its shape.
+func decodeEnvelope(body []byte) (data, pagination json.RawMessage, err error) {
 	if len(body) == 0 {
-		return nil, fmt.Errorf("octonomy: empty response body where a payload was expected")
+		return nil, nil, fmt.Errorf("octonomy: empty response body where a payload was expected")
 	}
 	var envelope struct {
-		Data json.RawMessage `json:"data"`
+		Data       json.RawMessage `json:"data"`
+		Pagination json.RawMessage `json:"pagination"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, fmt.Errorf("octonomy: decode response body: %w", err)
+		return nil, nil, fmt.Errorf("octonomy: decode response body: %w", err)
 	}
 	if envelope.Data == nil {
-		return nil, fmt.Errorf(`octonomy: response body has no "data" envelope`)
+		return nil, nil, fmt.Errorf(`octonomy: response body has no "data" envelope`)
 	}
-	return envelope.Data, nil
+	return envelope.Data, envelope.Pagination, nil
 }
 
 func (c *Client) resolveActor(rc requestConfig) string {

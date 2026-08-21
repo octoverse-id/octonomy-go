@@ -258,6 +258,10 @@ func TestDoList_RejectsBodiesThatWouldLookLikeAnEmptyPage(t *testing.T) {
 		{"empty object", `{}`},
 		{"pagination without data", `{"pagination":{"limit":50,"offset":0,"count":0}}`},
 		{"data key renamed", `{"items":[],"pagination":{"limit":50}}`},
+		// A zero-valued Pagination reads as "one page, nothing after it" to a
+		// caller looping on Count, so the block is required too.
+		{"data without pagination", `{"data":[]}`},
+		{"null pagination", `{"data":[],"pagination":null}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -47,9 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **List responses had the same silent-zero trap one type further out.** Decoding straight into a
   `*TagList` turned an empty body, a `{}`, or a response whose `data` key the server renamed into a
   nil `Data` slice and `Count: 0` — indistinguishable from a genuine empty page. `Client.doList` now
-  asserts the envelope is present before decoding. A real empty page (`"data": []`) is still a
-  success, and `"data": null` is still accepted as a nil slice, since nil-versus-empty semantics are
-  an open question on the modern line rather than something this frozen line should settle.
+  requires **both** envelope keys before decoding: a missing or null `pagination` block zeroes `Count`
+  and `Limit`, which a caller paging on `Count` reads as "one page, nothing after it". A real empty
+  page (`"data": []` with a pagination block) is still a success, and `"data": null` is still accepted
+  as a nil slice, since nil-versus-empty semantics are an open question on the modern line rather than
+  something this frozen line should settle.
 - **A 2xx with an empty body where a resource was expected is now an error.** `do` previously
   returned nil in that case, so a truncated or misrouted 2xx produced a zero-valued struct. `Delete`
   is unaffected: 204-with-no-body is its documented shape and stays lenient.
