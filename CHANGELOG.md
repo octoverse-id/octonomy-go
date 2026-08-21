@@ -71,22 +71,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `support/go1.13` ran nothing and no tag triggered anything. Added: the branch to both trigger lists,
   a `v*` tag trigger, a **required** real `go1.13.15` job running `go test -race` (not merely
   `go build`, since four of five `ioutil` sites and all 18 test-file `interface{}` sites live in
-  `_test.go`), and a **required** `smoke` job that boots the pinned container and runs the smoke test
-  on the go1.13 toolchain. The go1.13 jobs set `cache: false` — `actions/setup-go` derives its cache
+  `_test.go`), and a `smoke` job that boots the pinned container and runs the smoke test on the
+  go1.13 toolchain. Both are **intended as required checks and are not yet enforced as such**:
+  branch protection for `support/go1.13` does not exist, so until the maintainer adds these contexts
+  (the `gh api` call is in the PR description) "required" describes the intent, not the enforcement. The go1.13 jobs set `cache: false` — `actions/setup-go` derives its cache
   path from `go env GOMODCACHE`, which does not exist before Go 1.15.
-- **Release-line guard** (`scripts/compat-guard.sh`, `make compat-guard`, CI job), split by severity.
-  On a branch or PR, blocking on one thing: `go.mod` must keep declaring `go 1.13` — the mistake with
-  no toolchain backstop, since a `v1.x` tag cut from a drifted `go.mod` keeps the same module path and
-  resolves fine, and `retract` (Go 1.16) cannot reach a Go 1.13 consumer. Module-path and branch
-  consistency stay advisory there, because Go rejects a path mismatch itself. It runs on every PR into
-  this line, which is what puts it on the release PR.
+- **Release-line guard** (`scripts/compat-guard.sh`, `make compat-guard`, CI job) with three tiers,
+  chosen by how recoverable the mistake is at that moment:
 
-  **On a tag push those same checks are blocking**, because that is where permanence attaches and Go
-  rejecting a bad tag afterwards helps nobody: the tag is public and proxy-cached. A tag must be valid
-  SemVer, its major must match the module path, and it must equal `version.go` — which `make
-  version-check` has already tied to the CHANGELOG heading, so tag, code, and changelog agree or the
-  release stops. The guard also warns when the modern line is found carrying this line's module path
-  or `go` directive, the shape a cherry-pick that included `go.mod` would take.
+  **On an ordinary branch or PR**, one blocking check: `go.mod` must keep declaring `go 1.13`. That is
+  the mistake with no toolchain backstop — a `v1.x` tag cut from a drifted `go.mod` keeps the same
+  module path, so Go resolves it happily and `retract` (Go 1.16) cannot reach a Go 1.13 consumer.
+  Module-path and branch consistency only warn here, because Go rejects a path mismatch itself. The
+  guard also warns when `main` is found carrying this line's module path or `go` directive, the shape
+  a cherry-pick that included `go.mod` would take.
+
+  **On a release PR** (`release/vX.Y.Z`), four more blocking checks — this is the last point where the
+  answer is "push another commit": the branch must name a valid version, `version.go` must equal it,
+  the major must match the module path, and it must target the branch that major is cut from (a `v1`
+  release PR retargeted at `main` otherwise passes every other check). The latest `CHANGELOG.md`
+  heading must agree too, and a release PR that deletes the changelog fails rather than skipping the
+  check. That closes a real gap: `make version-check` ties `version.go` to the changelog, but nothing
+  in CI ran it — only `release-check` does, and CI never calls `release-check`.
+
+  **On a tag push**, the same assertions run again as **detection, not prevention**. GitHub already
+  has the ref by then and a published version cannot be withdrawn for this audience; the value is
+  catching a tag pushed without a release PR early enough that deleting the ref may still beat the
+  first fetch. Tags are validated against the real SemVer grammar, not a shell glob — the obvious
+  `v[0-9]*.[0-9]*.[0-9]*` pattern accepts `v1.2.3foo`, `v1.02.3`, `v1.2.3-`, and `v1.2.3.4`, none of
+  which Go can resolve.
+- **Tests for the guard** (`scripts/compat-guard-test.sh`, `make compat-guard-test`, run in CI and by
+  `make check`). 35 fixture cases across ordinary PRs, release PRs to both lines, tag pushes,
+  malformed tags, and `go.mod`/`version.go` parsing edge cases. Without them the release-PR block
+  would first execute on the release PR itself: every ordinary run has
+  `GITHUB_HEAD_REF=<type>/<issue>-…`, so that code path is never otherwise reached.
 - `make test-go113` for the real-toolchain gate locally, with two documented ways to fetch a go1.13
   toolchain (`docs/development.md`).
 - `make tools-check`, now a prerequisite of `release-check`. `make lint` and `make vuln` skip silently

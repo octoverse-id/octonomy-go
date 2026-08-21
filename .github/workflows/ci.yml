@@ -62,7 +62,10 @@ jobs:
       - name: Test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
 
-  # REQUIRED. The only gate on this line's stdlib floor.
+  # REQUIRED BY INTENT -- and not yet by branch protection, which does not exist
+  # for this branch. Until `support/go1.13` protection lists this job's context,
+  # a red run here does not block a merge. The only gate on this line's stdlib
+  # floor, so it should be the first context added.
   #
   # A modern toolchain enforces the *language* version from the `go` directive
   # but not the *stdlib* version: with `go 1.13` in go.mod, Go 1.25 rejects
@@ -127,6 +130,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: Assert the release line's go.mod invariants
         run: make compat-guard
+      - name: The guard's own tests
+        # Every run on an ordinary branch has GITHUB_HEAD_REF=<type>/<issue>-...,
+        # so CI never executes the release-PR block on the one PR where it
+        # matters most -- the release PR runs it for the first time. These
+        # fixtures exercise that path, and the tag paths, on every run.
+        run: make compat-guard-test
 
   vuln:
     runs-on: ubuntu-latest
@@ -147,7 +156,8 @@ jobs:
           # and HTTP 400.
           repo-checkout: "false"
 
-  # REQUIRED. The compat line's only check against a real server.
+  # REQUIRED BY INTENT, like the go113 job, and likewise not yet enforced by
+  # branch protection. The compat line's only check against a real server.
   #
   # It replaces main's bootstrap-only `harness` job: on this line the smoke test
   # IS the harness's consumer, so booting a container to assert only that the

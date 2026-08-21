@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check version-check \
-	dev-server dev-server-down dev-server-logs compat-guard smoke test-go113 tools-check
+	dev-server dev-server-down dev-server-logs compat-guard compat-guard-test smoke test-go113 tools-check
 
 # A real go1.13 toolchain, for the one gate a modern toolchain cannot provide.
 # Override with the path to any go1.13.x binary:
@@ -71,6 +71,9 @@ tools-check: ## Fail unless the optional gate tools are actually installed
 compat-guard: ## Assert go.mod still matches this release line (blocking on the go directive)
 	@scripts/compat-guard.sh
 
+compat-guard-test: ## Run the compat-guard fixture tests (release-PR and tag paths)
+	@scripts/compat-guard-test.sh
+
 smoke: ## Run the integration smoke test against a booted harness (see dev-server)
 	@if [ -f .octonomy-harness.env ]; then set -a; . ./.octonomy-harness.env; set +a; fi; \
 	go test -tags=integration -run TestSmoke_RealServer -v ./...
@@ -83,7 +86,7 @@ test-go113: ## Build, vet and test with a REAL go1.13 toolchain (override GO113=
 	GO111MODULE=on $(GO113) vet ./...
 	GO111MODULE=on $(GO113) test -race ./...
 
-check: fmt-check vet build compat-guard ## Fast pre-push gate (format, vet, build, line guard)
+check: fmt-check vet build compat-guard compat-guard-test ## Fast pre-push gate (format, vet, build, line guard)
 
 dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and write .octonomy-harness.env
 	@scripts/octonomy-harness.sh up
@@ -102,5 +105,5 @@ version-check: ## Verify version.go matches the latest CHANGELOG.md release head
 	fi; \
 	echo "version OK: $$code_ver"
 
-release-check: tools-check fmt-check vet lint test vuln examples version-check compat-guard ## Full pre-release gate
+release-check: tools-check fmt-check vet lint test vuln examples version-check compat-guard compat-guard-test ## Full pre-release gate
 	@echo "release-check passed"
