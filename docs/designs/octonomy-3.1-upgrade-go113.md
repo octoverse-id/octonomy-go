@@ -220,8 +220,8 @@ config-coherence guard opportunity.
 
 | Item | Now owned by |
 |---|---|
-| Sunset date — an actual date, an owner, and the rule deriving it | S1 (the policy ships with 0.2.0). **Rule: 12 months from the `v1.0.0` tag, owner = the SDK maintainer**, revisable only by agreement with the consuming team |
-| Go 1.13 README pointer | **Both** — a one-line note on `main`'s README lands with 0.2.0 so pkg.go.dev is correct the moment the compat line ships (rev 3 would have delivered it a release late), and the full treatment in S12 |
+| Sunset date — an actual date, an owner, and the rule deriving it | S1 (the policy ships with v1.0.0). **Rule: 12 months from the `v1.0.0` tag, owner = the SDK maintainer**, revisable only by agreement with the consuming team |
+| Go 1.13 README pointer | **Both** — a one-line note on `main`'s README lands with v1.0.0 so pkg.go.dev is correct the moment the compat line ships (rev 3 would have delivered it a release late), and the full treatment in S12 |
 | Header-assembly extraction out of `do()` | S4 |
 | `http.RoundTripper` extension-point documentation | S12 |
 | `MaxIdleConnsPerHost: 2` scaling note | S12 |
@@ -248,7 +248,7 @@ config-coherence guard opportunity.
   the tag is already proxy-resolvable, and `retract` is inert for this audience
 - Scope frozen at Vocabularies + Tags, `/api/v1` only. No v2, no namespaces, no webhooks, ever.
 
-### Modern line (`main`, `v0.3.0+`)
+### Modern line (`main`, module path `/v2`, `v2.x`)
 - Keep generics, `io.ReadAll`, `t.Cleanup`. Go 1.24+.
 - `Config.APIVersion` — **default v2** (see R9; user decision, risk accepted and documented)
 - Namespace scoping: **per-request only, no `Config` field** (Threat 3.5 mitigation). Atomic
@@ -308,14 +308,14 @@ config-coherence guard opportunity.
 
 ## Compat line support policy (write into `docs/versioning.md`)
 
-- `v0.2.x` receives **security fixes only**. No features, no bug fixes, no v2, no namespaces, no
+- `v1.x` receives **security fixes only**. No features, no bug fixes, no v2, no namespaces, no
   webhooks.
-- A **published sunset date** after which `v0.2.x` receives nothing. Gives the blocked team a date
+- A **published sunset date** after which `v1.x` receives nothing. Gives the blocked team a date
   to plan their toolchain upgrade against, which is the only real fix.
 - **`retract` is inert for this audience.** Verified: `retract` parses under `go 1.13` on a modern
   toolchain, but the directive shipped in Go 1.16, so a Go 1.13 consumer's toolchain will not honor
-  it. A published `v0.2.x` cannot be recalled for the people it exists to serve. **0.2.0 must be
-  right the first time** — which is why the go1.13 CI job is a required check and why 0.2.0 contains
+  it. A published `v1.x` cannot be recalled for the people it exists to serve. **v1.0.0 must be
+  right the first time** — which is why the go1.13 CI job is a required check and why v1.0.0 contains
   exactly one change.
 
 ## Release Staging
@@ -438,8 +438,8 @@ reviewer.
 | R5 | E3's Docker CI job lands in the repo's most fragile area | Bounded readiness poll (never `sleep`), explicit job timeout, advisory-first before required. |
 | R6 | E4's scheduled drift job becomes a nag people ignore | Report, don't block on PRs. Fail loudly only on a genuine schema/param delta. |
 | R7 | Examples must compile — but on which line? | Examples live on `main` only, at the modern floor. The compat line ships no new examples. |
-| R8 | **Mistagging** — `v0.3.0` off compat, or `v0.2.x` off main | **The guard must run on the release PR, not only on the tag** (Correction 32). A `push: tags:` job fires *after* the tag exists and is already proxy-resolvable, and `retract` is inert for the compat audience — so a tag-time check detects a mistag it cannot undo. Gate the release PR on `go.mod`'s directive vs the target branch and version; keep a tag-time job as belt-and-braces advisory. |
-| **R9** | **v2 default is a wire-level break.** A 0.1.x consumer on a pre-v2 server who upgrades to 0.3.0 silently retargets `/api/v2` and gets 404s everywhere. Compiles clean; no build-time warning | User accepted this risk knowingly. Mitigations: a prominent CHANGELOG **BREAKING** entry stating "set `Config.APIVersion = APIV1` if your server predates 3.0"; the same in the README upgrade section; flip is revisited at 1.0.0. |
+| R8 | **Mistagging** — a `v2.x` tag off the compat line, or a `v1.x` tag off `main`. **Note: Go now catches the module-path half itself** (verified), so the residual risk is a `v1.x` tag cut from the compat line after its `go` directive drifted — which has no toolchain backstop | **The guard must run on the release PR, not only on the tag** (Correction 32). A `push: tags:` job fires *after* the tag exists and is already proxy-resolvable, and `retract` is inert for the compat audience — so a tag-time check detects a mistag it cannot undo. Gate the release PR on `go.mod`'s directive vs the target branch and version; keep a tag-time job as belt-and-braces advisory. |
+| **R9** | **v2 default is a wire-level break, and the failure is SWALLOWED.** A consumer on a pre-v2 server who adopts `/v2` silently targets `/api/v2`; an unrouted 404 carries no envelope, so `codeFromStatus(404)` returns `CodeNotFound` and `IsNotFound(err)` is **true on every call** — the caller's ordinary not-found branch reads the taxonomy as empty with no error. Compiles clean; no build-time warning | Accepted **conditional on the fix**: an envelope-less non-2xx must not map to a semantic code (#7), plus an actionable hint naming a likely `APIVersion` mismatch. Also a CHANGELOG **BREAKING** entry ("set `Config.APIVersion = APIV1` if your server predates 3.0") and the README upgrade section. The default is revisited at `v2.0.0` proper. **Note: with nothing ever published, the affected population is anyone adopting fresh, not an existing 0.1.x user base.** |
 | R10 | Two branches drift; a security fix lands on one only | Compat line is security-fixes-only with a published sunset, which caps the surface. Document the backport step in `docs/release.md`. |
 | R11 | E1 is a bet — no deployment emits webhooks today | Accepted knowingly. Re-justified on "the contract is written and stable", not on a named consumer. |
 
