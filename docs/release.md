@@ -46,17 +46,25 @@ compat line takes **security fixes only** — no features, no ordinary bug fixes
 
 ## Cutting a release
 
-Substitute `BASE` and `MODULE` from the table above.
+Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` always carries the `v`.
 
-1. **Confirm the line.** `git switch BASE && git pull` — then check you are where you think you are:
+| Placeholder | Meaning | Compat example | Modern example |
+| ----------- | ------- | -------------- | -------------- |
+| `BASE` | base branch, PR target, tagged branch | `support/go1.13` | `main` |
+| `MODULE` | module path for this line | `github.com/octoverse-id/octonomy-go` | `github.com/octoverse-id/octonomy-go/v2` |
+| `VERSION` | SemVer, **no `v`** — goes in `version.go` and the CHANGELOG heading | `1.0.1` | `2.0.0-alpha.1` |
+| `TAG` | `v` + `VERSION` — the git tag and GitHub release name | `v1.0.1` | `v2.0.0-alpha.1` |
+
+1. **Confirm the line.** `git switch BASE && git pull`, then check you are where you think you are:
    ```bash
    git branch --show-current && head -1 go.mod
    ```
    The module line must match `MODULE`. If it does not, you are on the wrong branch; stop.
-2. **Branch:** `git switch -c release/<version>` off `BASE`
+2. **Branch:** `git switch -c release/TAG` off `BASE`
    (e.g. `release/v2.0.0-alpha.1` off `main`, or `release/v1.0.1` off `support/go1.13`).
-3. **Bump the version:** set `Version` in `version.go` to the new `X.Y.Z`.
-4. **Update the CHANGELOG:** move `[Unreleased]` items under a new `## [X.Y.Z] - <date>` heading and
+3. **Bump the version:** set `Version` in `version.go` to `VERSION` — **unprefixed**.
+4. **Update the CHANGELOG:** move `[Unreleased]` items under a new `## [VERSION] - <date>` heading —
+   also unprefixed, because `make version-check` compares it against `version.go` verbatim — and
    refresh the link definitions at the bottom.
 5. **Run the gate:** `make release-check`.
 6. **Open the release PR targeting `BASE`** — *not* necessarily `main`. Get it reviewed and merged.
@@ -64,14 +72,14 @@ Substitute `BASE` and `MODULE` from the table above.
    ```bash
    git switch BASE && git pull
    head -1 go.mod                       # last chance: must match MODULE
-   git tag -a v<version> -m "v<version>"
-   git push origin v<version>
-   gh release create v<version> --title "v<version>" --notes-from-tag
+   git tag -a TAG -m TAG
+   git push origin TAG
+   gh release create TAG --title TAG --notes-from-tag
    ```
-   The `v` prefix is required by Go modules.
+   Go modules require the `v` prefix on the tag, which is why `TAG` and `VERSION` are separate here.
 8. **Verify** the module is resolvable at the path for this line:
    ```bash
-   GOPROXY=proxy.golang.org go list -m MODULE@v<version>
+   GOPROXY=proxy.golang.org go list -m MODULE@TAG
    ```
    A path-mismatch error here means the tag landed on the wrong branch. It cannot be fixed by
    retagging — publish a corrected version instead.
