@@ -4,6 +4,10 @@ version: "2"
 
 run:
   timeout: 5m
+  # Without this the integration smoke test is invisible to the linter: it sits
+  # behind a build tag, and the tag is exactly where an unreviewed file hides.
+  build-tags:
+    - integration
 
 linters:
   enable:
@@ -16,6 +20,24 @@ linters:
     - revive
     - unconvert
     - bodyclose
+
+  settings:
+    govet:
+      disable:
+        # `inline` reports every ioutil.ReadAll call on this line:
+        #   inline: cannot inline call to ioutil.ReadAll (declared using
+        #   go1.25.4) into a file using go1.13
+        #
+        # It is a modernization suggestion -- rewrite the deprecated wrapper as
+        # io.ReadAll -- and on the compat line that rewrite is the exact thing
+        # that must not happen: io.ReadAll needs Go 1.16 and this line's floor
+        # is 1.13. The analyzer cannot know the constraint is deliberate, so five
+        # correct call sites report as five findings.
+        #
+        # Note staticcheck is silent here: SA1019 keys off the declared language
+        # version, and the ioutil deprecation postdates `go 1.13`. Only this
+        # analyzer objects, so only this analyzer is disabled.
+        - inline
 
 issues:
   max-issues-per-linter: 0

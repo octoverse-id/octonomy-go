@@ -1,38 +1,43 @@
 # Octonomy Go SDK
 
 [![CI](https://github.com/octoverse-id/octonomy-go/actions/workflows/ci.yml/badge.svg)](https://github.com/octoverse-id/octonomy-go/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/octoverse-id/octonomy-go/v2.svg)](https://pkg.go.dev/github.com/octoverse-id/octonomy-go/v2)
+[![Go Reference](https://pkg.go.dev/badge/github.com/octoverse-id/octonomy-go.svg)](https://pkg.go.dev/github.com/octoverse-id/octonomy-go)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 The official Go client for [Octonomy](https://github.com/octoverse-id/octonomy) — a multi-tenant,
 multi-application tag management and taxonomy service. This SDK is a hand-written, **dependency-free**
 (standard library only) client for the stable REST **v1** API.
 
-> **Status: nothing published yet.** No version of this SDK has ever been released — there are no
-> git tags and the module proxy has served no semantic version. The transport, auth, error, and
-> pagination foundation plus the **Vocabularies** and **Tags** resources are implemented; the
-> remaining resources are tracked in [`docs/roadmap.md`](docs/roadmap.md).
+> ## This is the frozen Go 1.13 line (`v1.x`)
 >
-> The first two releases will be `v1.0.0` on the frozen Go 1.13 compat line and `v2.0.0-alpha.1` on
-> this line. See [versioning.md](docs/versioning.md).
+> You are on branch `support/go1.13`. This line exists for one reason: to give a consumer pinned to
+> **Go 1.13** a client that compiles. It is **frozen**.
+>
+> - **Security fixes only.** No features, no ordinary bug fixes, no `/api/v2`, no namespaces, no
+>   webhooks — ever.
+> - **Sunset: 2027-08-31.** After that date this line receives nothing. See
+>   [SECURITY.md](SECURITY.md).
+> - **Scope: Vocabularies + Tags on `/api/v1`.** That is the whole surface, permanently.
+> - A published `v1.x` **cannot be recalled** for this audience: `retract` shipped in Go 1.16, so a
+>   Go 1.13 toolchain ignores it.
+>
+> **On Go 1.24 or newer?** Use the active line instead — different module path, different module:
+>
+> ```bash
+> go get github.com/octoverse-id/octonomy-go/v2   # v2.x, Go 1.24+, active development
+> ```
+>
+> It has the remaining resources, `/api/v2`, and namespace support on its roadmap. See
+> [versioning.md](docs/versioning.md) for both policies.
 
 ## Install
 
 ```bash
-go get github.com/octoverse-id/octonomy-go/v2
+go get github.com/octoverse-id/octonomy-go
 ```
 
-Requires Go 1.24 or newer.
-
-> **On Go 1.13?** Use the frozen compatibility line instead — it lives at the **unsuffixed** module
-> path and never receives features:
->
-> ```bash
-> go get github.com/octoverse-id/octonomy-go   # v1.x, Go 1.13, security fixes only
-> ```
->
-> The two paths are different modules, so Go will not move you between them. See
-> [versioning.md](docs/versioning.md) for the support policy and the sunset date.
+Requires Go **1.13** or newer. The two module paths are different modules to Go, so version
+selection, `go get -u`, and dependency bots cannot move you between the lines.
 
 ## Quickstart
 
@@ -44,7 +49,7 @@ import (
 	"fmt"
 	"log"
 
-	octonomy "github.com/octoverse-id/octonomy-go/v2"
+	octonomy "github.com/octoverse-id/octonomy-go"
 )
 
 func main() {
@@ -111,8 +116,8 @@ case octonomy.IsValidation(err):
 
 ## Pagination
 
-List methods return a `*octonomy.List[T]` with `Data` and `Pagination` (limit, offset, count, next,
-previous). Page with `ListOptions`:
+List methods return a per-resource envelope — `*octonomy.TagList` and `*octonomy.VocabularyList` —
+each with `Data` and `Pagination` (limit, offset, count, next, previous). Page with `ListOptions`:
 
 ```go
 page, err := client.Tags.List(ctx, &octonomy.TagListParams{
@@ -128,16 +133,39 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 | -------- | ------ |
 | Vocabularies (`client.Vocabularies`) | ✅ Create / Get / List / Update / Delete |
 | Tags (`client.Tags`) | ✅ Create / Get / List / Update / Delete |
-| Tag aliases, resolution, assignments (+bulk), resource tags, audit logs, health | 🚧 see [`docs/roadmap.md`](docs/roadmap.md) |
+| Tag aliases, resolution, assignments (+bulk), resource tags, audit logs, health | ⛔ never on this line — they live on [`/v2`](https://pkg.go.dev/github.com/octoverse-id/octonomy-go/v2) |
+
+### Differences from the `/v2` line you may hit
+
+- **No `List[T]`.** Type parameters need Go 1.18. `TagList` and `VocabularyList` replace it; the
+  fields are identical.
+- **No `CodeScopeImmutable` constant.** Server 3.1.0 added `409 scope_immutable` on tag, vocabulary,
+  and alias `PATCH` — the exact surface this line speaks to. The named constant and an `Is*` helper
+  are absent, but nothing is lost at runtime: `parseError` preserves whatever `code` the server
+  sends, so branch on the string directly.
+
+  ```go
+  if apiErr, ok := octonomy.AsAPIError(err); ok && apiErr.Code == "scope_immutable" {
+      // the tag's scope cannot be changed after creation
+  }
+  ```
+- **`Metadata` is `map[string]interface{}`**, not `map[string]any` — the same type, spelled the way
+  Go 1.13 spells it.
 
 ## Common commands
 
 ```bash
-make test    # go test -race -cover ./...
-make check   # gofmt check + go vet + build
-make lint    # golangci-lint (if installed)
-make help    # list all targets
+make test         # go test -race -cover ./...
+make check        # gofmt check + go vet + build + release-line guard
+make test-go113   # the same build and tests on a REAL go1.13 toolchain
+make smoke        # integration smoke test against a booted server (see make dev-server)
+make lint         # golangci-lint (if installed)
+make help         # list all targets
 ```
+
+`make test` on a modern toolchain is **not** the gate on this line: a modern Go enforces the language
+version from `go.mod` but not the stdlib version, so `io.ReadAll` (Go 1.16) compiles clean under
+`go 1.13`. Only `make test-go113` catches that. See [development.md](docs/development.md).
 
 ## Documentation
 
@@ -146,7 +174,7 @@ make help    # list all targets
 - [Development](docs/development.md) — setup, quality gates, testing.
 - [Versioning](docs/versioning.md) — SemVer policy and which server contract this SDK targets.
 - [Release](docs/release.md) — the release runbook.
-- [Roadmap](docs/roadmap.md) — the backlog of remaining resources.
+- [Roadmap](docs/roadmap.md) — what the `/v2` line is adding. **None of it comes to this line.**
 - [CHANGELOG](CHANGELOG.md)
 
 ## Contributing & security

@@ -1,8 +1,14 @@
 # Roadmap
 
+> **None of this ships on `support/go1.13`.** This branch is the frozen Go 1.13 line: Vocabularies and
+> Tags on `/api/v1`, security fixes only, sunset 2027-08-31 (see [versioning.md](versioning.md)). The
+> file is kept here so the two branches do not diverge gratuitously and so a reader on this line can
+> see what upgrading to the `/v2` module buys — every item below lands there, on `main`, and only
+> there.
+
 The foundation (transport, auth, errors, pagination) and the **Vocabularies** and **Tags** resources
-are implemented. The resources below are queued for future work. Each is a self-contained unit that
-follows the established pattern.
+are implemented. The resources below are queued for future work **on the `/v2` line**. Each is a
+self-contained unit that follows the established pattern.
 
 ## How to add a resource (the recipe)
 

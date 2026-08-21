@@ -9,9 +9,9 @@ existing resource file and changing the types and paths.
 | File | Responsibility |
 | ---- | -------------- |
 | `octonomy.go` | `Config`, `Client`, `New()` (validation + service wiring). |
-| `transport.go` | The single `do()` method: URL building under `/api/v1`, auth/tenant headers, JSON encode/decode, non-2xx → `*APIError`. Also `RequestOption` / `WithActor`. |
+| `transport.go` | `do()`: URL building under `/api/v1`, auth/tenant headers, JSON encode/decode, non-2xx → `*APIError`. Plus `doData()`, which unwraps the server's single-resource `{"data": ...}` envelope. Also `RequestOption` / `WithActor`. |
 | `errors.go` | `APIError`, error `Code*` constants, and `Is*` / `AsAPIError` helpers. |
-| `pagination.go` | `ListOptions`, `Pagination`, and the generic `List[T]` envelope. |
+| `pagination.go` | `ListOptions` and `Pagination`. The list envelope itself is per-resource on this line (`TagList`, `VocabularyList`) because `List[T]` needs Go 1.18. |
 | `types.go` | Shared `Metadata` alias and the `String`/`Bool`/`Int` pointer helpers. |
 | `version.go` | `Version` constant (single source of truth) and the default User-Agent. |
 | `<resource>.go` | One file per resource: the model, `*Create`/`*Update` write structs, `*ListParams`, and the `*Service` with CRUD methods. |
@@ -27,16 +27,20 @@ existing resource file and changing the types and paths.
 ```
 Caller ──▶ Service.Method ──▶ Client.do ──▶ net/http ──▶ Octonomy /api/v1
                                   │
-                                  ├─ 2xx → json.Unmarshal into *Model / *List[Model]
+                                  ├─ 2xx → unwrap {"data": ...} → *Model
+                                  │         (lists decode the whole body → *ModelList)
                                   └─ !2xx → *APIError (Code, Message, Details, RequestID, StatusCode)
 ```
 
 ## Conventions that keep it faithful
 
 - **Contract reference:** `docs/openapi.yaml` is vendored from the server. Types mirror it
-  field-for-field. The one deliberate divergence is the list envelope: the generated spec shows a
-  bare array, but the server wraps lists in `{data, pagination}` (see `octonomy/core/pagination.py`
-  upstream). The SDK follows the server; the divergence is noted in code.
+  field-for-field. The deliberate divergences are both response envelopes: the generated spec shows a
+  bare array for lists and a bare object for single resources, while the server wraps lists in
+  `{data, pagination}` (`octonomy/core/pagination.py`) and single resources in `{data}`
+  (`octonomy/core/responses.py`). The SDK follows the server; both divergences are noted in code.
+  Only an integration test against a real server can catch a regression here, which is what
+  `integration_test.go` is for.
 - **Pointers for optionality:** nullable server fields decode into `*string`; write structs use
   pointers + `omitempty` so PATCH only sends what the caller set.
 - **No hidden behavior:** the client never retries, panics, logs, or mutates global state. Retries,

@@ -1,3 +1,3 @@
-module github.com/octoverse-id/octonomy-go/v2
+module github.com/octoverse-id/octonomy-go
 
-go 1.24
+go 1.13

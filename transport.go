@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"net/url"
 )
@@ -30,7 +31,7 @@ func WithActor(actorID string) RequestOption {
 // do performs a single API call: it builds the URL under /api/v1, sets the auth
 // and tenant headers, JSON-encodes body (when non-nil), and decodes a 2xx
 // response into out (when non-nil). Non-2xx responses become *APIError.
-func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out any, opts ...RequestOption) error {
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out interface{}, opts ...RequestOption) error {
 	var rc requestConfig
 	for _, opt := range opts {
 		opt(&rc)
@@ -73,7 +74,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("octonomy: read response body: %w", err)
 	}
@@ -91,6 +92,36 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	return nil
 }
 
+// doData performs a call whose 2xx body is a SINGLE resource and unwraps the
+// server's {"data": {...}} envelope into out.
+//
+// The server wraps every payload under "data": lists as
+// {"data": [...], "pagination": {...}} and single resources as {"data": {...}}
+// (octonomy/core/responses.py data_response, present since the server's first
+// release). The vendored docs/openapi.yaml documents neither wrapper, so this is
+// the same spec-vs-server divergence as the list envelope, and the same rule
+// applies -- follow the server.
+//
+// A missing "data" key is an error rather than a zero-valued struct. Decoding a
+// wrapped body straight into a *Tag silently yields an empty struct with a nil
+// error, which is exactly how this went unnoticed until the compat line got a
+// smoke test against a real server.
+func (c *Client) doData(ctx context.Context, method, path string, query url.Values, body, out interface{}, opts ...RequestOption) error {
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := c.do(ctx, method, path, query, body, &envelope, opts...); err != nil {
+		return err
+	}
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return fmt.Errorf(`octonomy: response body has no "data" envelope`)
+	}
+	if err := json.Unmarshal(envelope.Data, out); err != nil {
+		return fmt.Errorf("octonomy: decode response data: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) resolveActor(rc requestConfig) string {
 	if rc.actorSet {
 		return rc.actorID
@@ -104,10 +135,10 @@ func (c *Client) resolveActor(rc requestConfig) string {
 func parseError(status int, body []byte) error {
 	var envelope struct {
 		Error struct {
-			Code      string         `json:"code"`
-			Message   string         `json:"message"`
-			Details   map[string]any `json:"details"`
-			RequestID string         `json:"request_id"`
+			Code      string                 `json:"code"`
+			Message   string                 `json:"message"`
+			Details   map[string]interface{} `json:"details"`
+			RequestID string                 `json:"request_id"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error.Code != "" {

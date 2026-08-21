@@ -8,19 +8,20 @@
 //
 // # Module path and release lines
 //
-// Import this package as:
+// This is the frozen Go 1.13 compatibility line. Import it as:
 //
-//	import octonomy "github.com/octoverse-id/octonomy-go/v2"
+//	import octonomy "github.com/octoverse-id/octonomy-go"
 //
-// The /v2 suffix is not decoration: this repository publishes two modules, and
-// the suffix is what makes them distinct to the go command.
+// This repository publishes two modules, and the /v2 path suffix is what makes
+// them distinct to the go command:
 //
 //   - github.com/octoverse-id/octonomy-go      v1.x, Go 1.13, frozen, /api/v1 only
 //   - github.com/octoverse-id/octonomy-go/v2   v2.x, Go 1.24+, active development
 //
 // Because the paths differ, version selection cannot move a consumer between the
-// two lines. If you are on Go 1.13, use the unsuffixed path; it receives security
-// fixes only and has a published sunset date. See docs/versioning.md.
+// two lines. This line receives security fixes only, takes no features, and has a
+// published sunset date; see docs/versioning.md. If your toolchain is Go 1.24 or
+// newer, use the /v2 path instead.
 //
 // # Quickstart
 //
@@ -62,7 +63,9 @@
 //
 // # List responses
 //
-// List methods return a *List[T] holding the Data slice and Pagination metadata
-// (limit, offset, count, next, previous). Page with ListOptions on each resource's
-// *ListParams.
+// List methods return a per-resource envelope holding the Data slice and
+// Pagination metadata (limit, offset, count, next, previous): *TagList from
+// Tags.List and *VocabularyList from Vocabularies.List. Page with ListOptions on
+// each resource's *ListParams. (The modern line expresses these as a generic
+// List[T], which needs Go 1.18.)
 package octonomy

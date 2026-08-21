@@ -14,8 +14,23 @@ See [versioning.md](versioning.md). `Version` in `version.go` is canonical and m
 make release-check
 ```
 
-This runs `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`, `examples`, and `version-check`.
-All must pass.
+This runs `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`, `examples`, `version-check`, and
+`compat-guard`. All must pass.
+
+**On the compat line (`support/go1.13`), `release-check` is not sufficient.** It runs on a modern
+toolchain, which cannot see a stdlib-floor violation, and it never talks to a real server. Two more
+gates are mandatory before a `v1.x` tag, both of which need something the runner has and your laptop
+may not:
+
+```bash
+make test-go113                       # a REAL go1.13 toolchain -- see development.md
+make dev-server && make smoke         # the smoke test against a real container
+make dev-server-down
+```
+
+CI runs both as required checks (`go1.13` and `smoke`). Confirm they are green on the merge commit you
+are about to tag — not merely on the PR head — because a `v1.x` tag cannot be recalled: `retract`
+shipped in Go 1.16, so a Go 1.13 consumer's toolchain ignores it.
 
 ## Two release lines — read this before starting
 

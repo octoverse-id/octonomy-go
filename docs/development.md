@@ -9,21 +9,69 @@ go build ./...
 make test
 ```
 
-Requires Go 1.24+. There are **no runtime dependencies** — keep `go.mod` free of a runtime `require`
-block.
+**This branch is the frozen Go 1.13 line** (`support/go1.13`, module
+`github.com/octoverse-id/octonomy-go`, `v1.x`). It takes security fixes only and nothing else — see
+[versioning.md](versioning.md). Day-to-day work uses whatever modern toolchain you have; the section
+below is the part that is not optional.
+
+There are **no runtime dependencies** — keep `go.mod` free of a runtime `require` block.
 
 ## Quality gates
 
 ```bash
-make fmt-check   # gofmt -l . (no output = clean)
-make vet         # go vet ./...
-make lint        # golangci-lint (if installed)
-make test        # go test -race -cover ./...
-make cover       # prints total coverage
-make examples    # go build ./examples/...
-make check       # fmt-check + vet + build (fast pre-push gate)
-make release-check  # the full pre-release gate
+make fmt-check      # gofmt -l . (no output = clean)
+make vet            # go vet ./...
+make lint           # golangci-lint (if installed)
+make test           # go test -race -cover ./...
+make cover          # prints total coverage
+make examples       # compile-check examples/
+make compat-guard   # assert go.mod still matches this release line
+make check          # fmt-check + vet + build + compat-guard (fast pre-push gate)
+make release-check  # the full modern-toolchain pre-release gate
+make test-go113     # THE gate: build + vet + test -race on a real go1.13 toolchain
+make smoke          # integration smoke test against a booted server
 ```
+
+## The Go 1.13 floor (read before touching code)
+
+A modern toolchain enforces the **language** version from `go.mod` but **not** the **stdlib**
+version. With `go 1.13` declared, Go 1.25 rejects generics — and happily compiles `io.ReadAll`, which
+needs Go 1.16. Verified: `go build`, `go vet`, `go vet -stdversion`, and `staticcheck` all pass a
+stdlib-floor violation. **`make test` passing means nothing about whether this line still works.**
+
+So: run `make test-go113` before you push. Get a real toolchain either way:
+
+```bash
+# option 1 -- the official version wrapper (matches the Makefile's default)
+go install golang.org/dl/go1.13.15@latest
+go1.13.15 download
+make test-go113
+
+# option 2 -- an unpacked tarball, no wrapper
+curl -sSLo /tmp/go1.13.15.tar.gz https://go.dev/dl/go1.13.15.linux-amd64.tar.gz
+tar -C /tmp -xzf /tmp/go1.13.15.tar.gz
+GO113=/tmp/go/bin/go make test-go113
+```
+
+What the floor rules out, and what to write instead:
+
+| Do not use | Needs | Use instead |
+| ---------- | ----- | ----------- |
+| generics (`List[T]`, type params) | 1.18 | a concrete type per resource (`TagList`, `VocabularyList`) |
+| `any` | 1.18 | `interface{}` |
+| `io.ReadAll` | 1.16 | `ioutil.ReadAll` (`io/ioutil`) |
+| `os.ReadFile`, `os.WriteFile` | 1.16 | `ioutil.ReadFile`, `ioutil.WriteFile` |
+| `t.Cleanup` | 1.14 | return a cleanup func and `defer` it at the call site |
+| `errors.Join`, `min`/`max`, `for range int`, `strings.CutPrefix` | 1.20+ | spell it out |
+| `//go:build` **alone** | 1.17 | keep a matching `// +build` line beneath it |
+
+`ioutil` is correct here and must not be "modernized". `staticcheck` stays silent (SA1019 keys off the
+declared language version, and the deprecation postdates `go 1.13`), but golangci-lint's `govet`
+`inline` analyzer does object — it is disabled in `.golangci.yml` with that reasoning recorded.
+
+CI enforces the floor with a **required** real-`go1.13` job, and `scripts/compat-guard.sh` blocks a
+`go.mod` whose `go` directive drifts off `1.13` — the one mistake with no toolchain backstop, because
+a `v1.x` tag cut from a drifted `go.mod` keeps the same module path and resolves fine.
 
 Optional local tools (CI installs them automatically):
 
@@ -43,8 +91,33 @@ Tests use `net/http/httptest` to stand up a fake Octonomy and assert the wire co
 - **Client side** (in the test goroutine): the decoded return value, the `{data, pagination}` envelope,
   and error decoding via `IsNotFound`/`IsConflict`/`IsValidation`.
 
-`newTestClient(t, handler)` in `octonomy_test.go` is the shared helper. Keep new code covered and run
-with `-race`.
+`newTestClient(t, handler)` in `octonomy_test.go` is the shared helper. It returns
+`(*Client, func())` and the caller **must** `defer cleanup()` — `t.Cleanup` needs Go 1.14, and a
+`defer srv.Close()` inside the helper would close the server before the test ever used it. Keep new
+code covered and run with `-race`.
+
+Canned single-resource responses go through `writeData`, which wraps the body in the server's
+`{"data": {...}}` envelope. Handlers that returned the bare object matched the vendored spec rather
+than the server, and that mismatch hid a real defect: every `Create`/`Get`/`Update` decoded to a
+zero-valued struct with a nil error against a real server. Use `writeJSON` only for bodies you mean
+to send verbatim — list envelopes and error envelopes.
+
+### Integration smoke test
+
+`integration_test.go` (build tag `integration`) is the only test that talks to a real server. It is
+five assertions, deliberately: the `{data, pagination}` list envelope, the single-resource `{data}`
+envelope via a create/read round-trip, both list endpoints, and one real error envelope. It gates on
+`OCTONOMY_TEST_BASE_URL` and skips when that is empty, so `go test ./...` stays hermetic.
+
+```bash
+make dev-server   # boots a real Octonomy, writes .octonomy-harness.env
+make smoke        # sources the env file and runs the smoke test
+make dev-server-down
+```
+
+CI runs it on the **go1.13** toolchain against the pinned container image, as a required check. That
+combination — the frozen client, on its own toolchain, against the current server — is the only one
+that proves this line still works, and it is what caught the single-resource envelope defect.
 
 ## Running against a real Octonomy
 
@@ -105,6 +178,10 @@ harness does that a naive bootstrap does not:
 
 Both version lines call the same script, so the Go 1.13 compat line and the modern `/v2` line cannot
 drift apart on setup. CI reaches it through the `.github/actions/octonomy-harness` composite action.
+
+The harness boots server **3.1.0**, which is newer than the `1.0.0` contract this line was written
+against. That is deliberate: the frozen client's remaining job is to keep working against the server
+people actually run.
 
 ### Troubleshooting
 

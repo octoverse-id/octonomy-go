@@ -3,7 +3,7 @@ package octonomy
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"io/ioutil"
 	"net/http"
 	"testing"
 	"time"
@@ -11,12 +11,12 @@ import (
 
 func TestTags_Create(t *testing.T) {
 	created := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/tags" {
 			t.Errorf("got %s %s, want POST /api/v1/tags", r.Method, r.URL.Path)
 		}
-		body, _ := io.ReadAll(r.Body)
-		var in map[string]any
+		body, _ := ioutil.ReadAll(r.Body)
+		var in map[string]interface{}
 		if err := json.Unmarshal(body, &in); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
@@ -26,11 +26,12 @@ func TestTags_Create(t *testing.T) {
 		if _, ok := in["parent_id"]; ok {
 			t.Errorf("nil parent_id should be omitted, got: %v", in)
 		}
-		writeJSON(t, w, http.StatusCreated, Tag{
+		writeData(t, w, http.StatusCreated, Tag{
 			ID: "tag_1", Name: "Featured", Slug: "featured", Type: "label",
 			IsActive: true, UsageCount: 0, CreatedAt: created, UpdatedAt: created,
 		})
 	})
+	defer cleanup()
 
 	tag, err := c.Tags.Create(context.Background(), TagCreate{Name: "Featured", Slug: "featured", Type: "label"})
 	if err != nil {
@@ -42,11 +43,12 @@ func TestTags_Create(t *testing.T) {
 }
 
 func TestTags_CreateConflict(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(t, w, http.StatusConflict, map[string]any{
-			"error": map[string]any{"code": CodeConflict, "message": "duplicate slug", "request_id": "req_9"},
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, http.StatusConflict, map[string]interface{}{
+			"error": map[string]interface{}{"code": CodeConflict, "message": "duplicate slug", "request_id": "req_9"},
 		})
 	})
+	defer cleanup()
 
 	_, err := c.Tags.Create(context.Background(), TagCreate{Name: "Featured", Slug: "featured", Type: "label"})
 	if !IsConflict(err) {
@@ -55,7 +57,7 @@ func TestTags_CreateConflict(t *testing.T) {
 }
 
 func TestTags_List_AllParams(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/tags" {
 			t.Errorf("path = %q, want /api/v1/tags", r.URL.Path)
 		}
@@ -77,11 +79,12 @@ func TestTags_List_AllParams(t *testing.T) {
 				t.Errorf("query[%s] = %q, want %q", k, got, v)
 			}
 		}
-		writeJSON(t, w, http.StatusOK, map[string]any{
+		writeJSON(t, w, http.StatusOK, map[string]interface{}{
 			"data":       []Tag{{ID: "tag_1"}},
-			"pagination": map[string]any{"limit": 25, "offset": 50, "count": 1},
+			"pagination": map[string]interface{}{"limit": 25, "offset": 50, "count": 1},
 		})
 	})
+	defer cleanup()
 
 	page, err := c.Tags.List(context.Background(), &TagListParams{
 		ListOptions:   ListOptions{Limit: 25, Offset: 50},
@@ -103,15 +106,16 @@ func TestTags_List_AllParams(t *testing.T) {
 }
 
 func TestTags_List_NilParams(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.RawQuery != "" {
 			t.Errorf("expected no query params, got %q", r.URL.RawQuery)
 		}
-		writeJSON(t, w, http.StatusOK, map[string]any{
+		writeJSON(t, w, http.StatusOK, map[string]interface{}{
 			"data":       []Tag{},
-			"pagination": map[string]any{"limit": 50, "offset": 0, "count": 0},
+			"pagination": map[string]interface{}{"limit": 50, "offset": 0, "count": 0},
 		})
 	})
+	defer cleanup()
 
 	page, err := c.Tags.List(context.Background(), nil)
 	if err != nil {
@@ -123,11 +127,12 @@ func TestTags_List_NilParams(t *testing.T) {
 }
 
 func TestTags_GetNotFound(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(t, w, http.StatusNotFound, map[string]any{
-			"error": map[string]any{"code": CodeNotFound, "message": "Resource not found."},
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, http.StatusNotFound, map[string]interface{}{
+			"error": map[string]interface{}{"code": CodeNotFound, "message": "Resource not found."},
 		})
 	})
+	defer cleanup()
 
 	_, err := c.Tags.Get(context.Background(), "missing")
 	if !IsNotFound(err) {
@@ -136,12 +141,12 @@ func TestTags_GetNotFound(t *testing.T) {
 }
 
 func TestTags_Update(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch || r.URL.Path != "/api/v1/tags/tag_1" {
 			t.Errorf("got %s %s, want PATCH /api/v1/tags/tag_1", r.Method, r.URL.Path)
 		}
-		body, _ := io.ReadAll(r.Body)
-		var in map[string]any
+		body, _ := ioutil.ReadAll(r.Body)
+		var in map[string]interface{}
 		_ = json.Unmarshal(body, &in)
 		if in["is_active"] != false {
 			t.Errorf("is_active = %v, want false", in["is_active"])
@@ -149,8 +154,9 @@ func TestTags_Update(t *testing.T) {
 		if _, ok := in["name"]; ok {
 			t.Errorf("nil name should be omitted, got: %v", in)
 		}
-		writeJSON(t, w, http.StatusOK, Tag{ID: "tag_1", IsActive: false})
+		writeData(t, w, http.StatusOK, Tag{ID: "tag_1", IsActive: false})
 	})
+	defer cleanup()
 
 	tag, err := c.Tags.Update(context.Background(), "tag_1", TagUpdate{IsActive: Bool(false)})
 	if err != nil {
@@ -162,12 +168,13 @@ func TestTags_Update(t *testing.T) {
 }
 
 func TestTags_Delete(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/v1/tags/tag_1" {
 			t.Errorf("got %s %s, want DELETE /api/v1/tags/tag_1", r.Method, r.URL.Path)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	defer cleanup()
 
 	if err := c.Tags.Delete(context.Background(), "tag_1"); err != nil {
 		t.Fatalf("Delete: %v", err)

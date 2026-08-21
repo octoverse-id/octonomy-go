@@ -3,13 +3,13 @@ package octonomy
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"io/ioutil"
 	"net/http"
 	"testing"
 )
 
 func TestVocabularies_Create(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %q, want POST", r.Method)
 		}
@@ -19,16 +19,17 @@ func TestVocabularies_Create(t *testing.T) {
 		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("Content-Type = %q, want application/json", ct)
 		}
-		body, _ := io.ReadAll(r.Body)
-		var in map[string]any
+		body, _ := ioutil.ReadAll(r.Body)
+		var in map[string]interface{}
 		if err := json.Unmarshal(body, &in); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
 		if in["name"] != "Labels" || in["slug"] != "labels" {
 			t.Errorf("unexpected body: %v", in)
 		}
-		writeJSON(t, w, http.StatusCreated, Vocabulary{ID: "voc_1", Name: "Labels", Slug: "labels", IsActive: true})
+		writeData(t, w, http.StatusCreated, Vocabulary{ID: "voc_1", Name: "Labels", Slug: "labels", IsActive: true})
 	})
+	defer cleanup()
 
 	voc, err := c.Vocabularies.Create(context.Background(), VocabularyCreate{Name: "Labels", Slug: "labels"})
 	if err != nil {
@@ -40,7 +41,7 @@ func TestVocabularies_Create(t *testing.T) {
 }
 
 func TestVocabularies_List(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/vocabularies" {
 			t.Errorf("path = %q, want /api/v1/vocabularies", r.URL.Path)
 		}
@@ -51,13 +52,14 @@ func TestVocabularies_List(t *testing.T) {
 		if q.Get("include_shared") != "true" {
 			t.Errorf("include_shared = %q, want true", q.Get("include_shared"))
 		}
-		writeJSON(t, w, http.StatusOK, map[string]any{
+		writeJSON(t, w, http.StatusOK, map[string]interface{}{
 			"data": []Vocabulary{{ID: "voc_1"}, {ID: "voc_2"}},
-			"pagination": map[string]any{
+			"pagination": map[string]interface{}{
 				"limit": 10, "offset": 20, "count": 2, "next": nil, "previous": nil,
 			},
 		})
 	})
+	defer cleanup()
 
 	page, err := c.Vocabularies.List(context.Background(), &VocabularyListParams{
 		ListOptions:   ListOptions{Limit: 10, Offset: 20},
@@ -75,15 +77,15 @@ func TestVocabularies_List(t *testing.T) {
 }
 
 func TestVocabularies_Update(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {
 			t.Errorf("method = %q, want PATCH", r.Method)
 		}
 		if r.URL.Path != "/api/v1/vocabularies/voc_1" {
 			t.Errorf("path = %q, want /api/v1/vocabularies/voc_1", r.URL.Path)
 		}
-		body, _ := io.ReadAll(r.Body)
-		var in map[string]any
+		body, _ := ioutil.ReadAll(r.Body)
+		var in map[string]interface{}
 		_ = json.Unmarshal(body, &in)
 		if _, ok := in["slug"]; ok {
 			t.Errorf("nil fields should be omitted, got slug in body: %v", in)
@@ -91,8 +93,9 @@ func TestVocabularies_Update(t *testing.T) {
 		if in["name"] != "Renamed" {
 			t.Errorf("name = %v, want Renamed", in["name"])
 		}
-		writeJSON(t, w, http.StatusOK, Vocabulary{ID: "voc_1", Name: "Renamed"})
+		writeData(t, w, http.StatusOK, Vocabulary{ID: "voc_1", Name: "Renamed"})
 	})
+	defer cleanup()
 
 	voc, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{Name: String("Renamed")})
 	if err != nil {
@@ -104,7 +107,7 @@ func TestVocabularies_Update(t *testing.T) {
 }
 
 func TestVocabularies_Delete(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			t.Errorf("method = %q, want DELETE", r.Method)
 		}
@@ -113,6 +116,7 @@ func TestVocabularies_Delete(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	defer cleanup()
 
 	if err := c.Vocabularies.Delete(context.Background(), "voc_1"); err != nil {
 		t.Fatalf("Delete: %v", err)

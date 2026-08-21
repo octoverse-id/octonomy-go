@@ -1,10 +1,16 @@
 name: CI
 
+# The compat line had ZERO CI before this: the lists below named only `main`, so
+# nothing ran on `support/go1.13` and the guard job could never fire. The tag
+# trigger matters for the same reason -- a release tag is cut on this branch, and
+# GitHub resolves workflows for a tag push from the tagged commit, which is this
+# file.
 on:
   push:
-    branches: [main]
+    branches: [main, support/go1.13]
+    tags: ["v*"]
   pull_request:
-    branches: [main]
+    branches: [main, support/go1.13]
 
 permissions:
   contents: read
@@ -56,6 +62,72 @@ jobs:
       - name: Test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
 
+  # REQUIRED. The only gate on this line's stdlib floor.
+  #
+  # A modern toolchain enforces the *language* version from the `go` directive
+  # but not the *stdlib* version: with `go 1.13` in go.mod, Go 1.25 rejects
+  # generics and compiles `io.ReadAll` (Go 1.16) clean -- as do `go vet`,
+  # `go vet -stdversion`, and staticcheck. Only a real go1.13 toolchain catches
+  # it, which is why this job is required rather than advisory.
+  go113:
+    name: go1.13
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go 1.13
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.13.15"
+          # MUST stay false. setup-go derives its cache path from
+          # `go env GOMODCACHE`, and that variable does not exist before Go
+          # 1.15 -- with caching on, this job fails for a reason that has
+          # nothing to do with the code under test.
+          cache: false
+      - name: Build
+        run: go build ./...
+      - name: Build examples
+        run: make examples
+      - name: go vet
+        run: go vet ./...
+      # Deliberately NOT gofmt: Go 1.19 changed how gofmt formats doc comments,
+      # so a 1.13 gofmt reports diffs against a tree the modern lint job
+      # formatted. Formatting is that job's business; this one owns the floor.
+      - name: Lower ASLR entropy for the 2020-era race runtime
+        # `go test -race` links the race runtime that shipped with Go 1.13, and
+        # sanitizer runtimes of that era abort with "unexpected memory mapping"
+        # when the kernel hands out 32 bits of mmap randomness (Ubuntu 24.04's
+        # default; 22.04 used 28). Lowering it back is the standard workaround
+        # and is scoped to this ephemeral runner. Tolerated if the knob is
+        # absent -- older images do not need it.
+        run: sudo sysctl -w vm.mmap_rnd_bits=28 || echo "::notice::vm.mmap_rnd_bits not settable; continuing"
+      - name: Test (race)
+        run: go test -race ./...
+
+  # The mistag guard, split by severity (the two halves have different backstops).
+  #
+  # BLOCKING half -- the `go` directive on the compat line. Nothing else catches
+  # it: a v1.x tag cut from this branch after the directive drifted carries the
+  # same module path, so Go resolves it happily, a Go 1.13 consumer pulls it
+  # inside their normal version range, and it does not compile. `retract` cannot
+  # reach them (the directive shipped in Go 1.16), so the mistake is permanent.
+  #
+  # ADVISORY half -- path/branch/version consistency. Go rejects a module-path
+  # mismatch itself ("go.mod has post-v1 module path ... at revision v1.0.0"),
+  # so this is an early signal, not the gate.
+  #
+  # It runs on every push and PR for this line, which is what puts it on the
+  # RELEASE PR. A tag-push-only check fires after the tag is already
+  # proxy-resolvable -- it would report a mistake it cannot undo.
+  compat-guard:
+    name: compat guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assert the release line's go.mod invariants
+        run: make compat-guard
+
   vuln:
     runs-on: ubuntu-latest
     steps:
@@ -75,49 +147,44 @@ jobs:
           # and HTTP 400.
           repo-checkout: "false"
 
-  # The container harness's own regression test. It has no SDK code to exercise
-  # yet -- the compat smoke test (#4) and the full integration suite (#17) are
-  # its real consumers -- but running the bootstrap on every PR is what catches
-  # server-image drift, and this job is the exact wiring both consumers copy.
-  harness:
+  # REQUIRED. The compat line's only check against a real server.
+  #
+  # It replaces main's bootstrap-only `harness` job: on this line the smoke test
+  # IS the harness's consumer, so booting a container to assert only that the
+  # container booted would be a second Docker job for no added coverage. The
+  # credentials still cross a step boundary (the harness exports them, the test
+  # step reads them), which is what main's job was proving.
+  #
+  # Required rather than advisory, unlike main's. Main keeps its harness job
+  # advisory so a registry hiccup cannot block an unrelated PR; that reasoning
+  # does not transfer here. This line takes security fixes only, so a PR is rare
+  # and a flake costs a re-run -- while an unverified v1.x tag cannot be recalled
+  # at all (`retract` shipped in Go 1.16, after this line's floor). #29 makes a
+  # green smoke test a precondition for cutting the tag, and a `continue-on-error`
+  # job cannot satisfy a precondition.
+  smoke:
+    name: go1.13 smoke test
     runs-on: ubuntu-latest
-    # Every job needs an explicit bound. The default is 360 minutes, and a hung
-    # readiness poll would otherwise sit on a runner for six hours. The script's
-    # own gates are bounded well inside this, so hitting it means Docker or the
-    # registry hung, not the server.
-    timeout-minutes: 15
-    # ADVISORY for its first release, deliberately. This is a new Docker job in
-    # a repo whose CI is its most-patched area, and a registry hiccup must not
-    # block an unrelated PR. Promote it to a required check (drop this line and
-    # add it to branch protection) once it has run green across a full release
-    # cycle -- and before #17 depends on it for real coverage.
-    continue-on-error: true
+    # Docker pull + migrations + readiness, then a sub-second test. The
+    # harness's own gates are bounded well inside this; hitting it means Docker
+    # or the registry hung.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - name: Set up Go 1.13
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.13.15"
+          # See the go113 job: GOMODCACHE does not exist before Go 1.15.
+          cache: false
       - name: Boot the Octonomy harness
         uses: ./.github/actions/octonomy-harness
-      - name: Assert the exported credentials work from a separate step
-        # The point of this assertion is the step boundary. The harness proves
-        # the environment works from inside its own process; this proves the
-        # credentials survived the trip through $GITHUB_ENV, which is what every
-        # consumer job actually relies on. It reads back the namespaced row the
-        # harness wrote, so it covers auth, tenancy, and the namespace axis in
-        # one call.
-        run: |
-          set -euo pipefail
-          # Bounded like every other request the harness makes: an unbounded
-          # curl against a server that accepts but never answers would sit here
-          # until the job timeout, 15 minutes away.
-          body=$(curl -fsS --max-time 30 "${OCTONOMY_TEST_BASE_URL}/api/v2/vocabularies?application_id=${OCTONOMY_TEST_APPLICATION_ID}" \
-            -H "Authorization: Bearer ${OCTONOMY_TEST_TOKEN}" \
-            -H "X-Tenant-ID: ${OCTONOMY_TEST_TENANT_ID}" \
-            -H "X-Namespace-Type: ${OCTONOMY_TEST_NAMESPACE_TYPE}" \
-            -H "X-Namespace-ID: ${OCTONOMY_TEST_NAMESPACE_ID}")
-          echo "$body"
-          case "$body" in
-            *harness-probe*) echo "harness credentials verified across the step boundary" ;;
-            *) echo "::error::the namespaced read did not return the row the harness wrote"; exit 1 ;;
-          esac
+      - name: Smoke test against the real server
+        # The frozen client on its own toolchain against the current server --
+        # the only combination that proves this line still works. It caught the
+        # single-resource {"data": ...} envelope that every canned httptest body
+        # had been getting wrong.
+        run: go test -tags=integration -run TestSmoke_RealServer -v ./...
       - name: Capture container logs
         if: failure()
         run: make dev-server-logs
