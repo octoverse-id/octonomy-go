@@ -111,7 +111,7 @@ single tested abstraction rather than N per-resource walkers, and `DecodeMetadat
 | **E6** | `DecodeMetadata[T]` generic function | ~15 m / ~3 h | **ACCEPTED** | Generic function, **not** a method — `Metadata` is an alias. |
 | **E7** | Client-side tag tree assembly helper | ~15 m / ~4 h | **DEFERRED** | Only proposal with no grounding in a server contract. Tree shape (orphan handling, inactive pruning) is an application concern. Revisit when a consumer defines the semantics. |
 | **E8** | One runnable example per resource group + `make dev-server` | ~1 h / ~3 d | **ACCEPTED** | Re-estimated up: rides E3's harness but the harness itself is bigger than rev 1 assumed. |
-| **S12** | Documentation truth pass (**9 files**) | ~1.25 h / ~3 d | **ACCEPTED** | Rev 2 said 5 files and priced on 5. Nine assert facts this plan makes false — see Correction 18. |
+| **S12** | Documentation truth pass (**11 files on `main`**) | ~1.5 h / ~3.5 d | **ACCEPTED** | Rev 2 said 5 and priced on 5; rev 6 said 9. Eleven assert facts this plan makes false — the nine of Correction 18 plus `SECURITY.md` and `docs/release.md`, which the ownership table assigns to S12-on-`main` as well as to S1 on the compat line. |
 
 **Total: ~16.2 h CC / ~42 human days.** Derived, not asserted (Correction 31):
 
@@ -326,10 +326,15 @@ config-coherence guard opportunity.
 |---|---|
 | **S0a** | **BLOCKING** — adopt `/v2` on `main`, correct the false release record, cut the first tags (issue #24) |
 | **S0b** | **BLOCKING** — reusable container harness, predecessor to both integration suites (issue #25) |
-| S1 | Go 1.13 compat line: drop generics, stdlib swaps, **both** `t.Cleanup` sites, five `io.ReadAll` sites, `go.mod`, CI triggers for the line, go1.13 CI job running `go test`, mistag guard (split by severity) |
+| S1 | Go 1.13 compat line: drop generics, stdlib swaps, **both** `t.Cleanup` sites, five `io.ReadAll` sites, `go.mod`, CI triggers for the line, go1.13 CI job running `go test`, mistag guard (split by severity), `version.go`+CHANGELOG, `SECURITY.md`, on-line support policy |
+| S1b | **Minimal integration smoke test on the compat line** — ~5 assertions against the real container (envelope decode, list tags, list vocabularies, one error envelope). Adopted as decision 6A; consumes the S0b harness. Without this row the release can complete every deliverable with an **unused** harness and ship the frozen line unverified against a real server |
 
-**S1 only.** Rev 1 also put S2 and S3 here; both were removed. S3's rationale was retracted
-(Correction 3) and S2 needed a design decision that does not belong in an unrecallable release.
+**No feature work in this stage.** Rev 1 also put S2 and S3 here; both were removed — S3's rationale
+was retracted (Correction 3) and S2 needed a design decision that does not belong in an unrecallable
+release. What remains is the two blocking prerequisites, the compat conversion, and its smoke test.
+
+**Order:** S0a → (S0b ∥ S1) → S1b. S0a must land before any tag, because the module rename is what
+makes the line split enforceable at all.
 
 ### v2.0.0-alpha.1 — Server 3.1.0 contract (~8.2 h CC: 7.17 item + 1.0 overhead) — branch `main` (`/v2`)
 
