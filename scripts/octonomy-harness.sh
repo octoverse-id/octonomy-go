@@ -42,11 +42,33 @@ BASE_URL="http://127.0.0.1:${PORT}"
 
 ENV_FILE="${OCTONOMY_HARNESS_ENV_FILE:-.octonomy-harness.env}"
 
-# Bounded readiness. Wall-clock ceiling = ATTEMPTS * INTERVAL seconds per gate.
-# The poll interval is a sleep *between probes*; the readiness gate itself is
-# never a blind `sleep N && assume up`.
-READY_ATTEMPTS="${OCTONOMY_HARNESS_READY_ATTEMPTS:-60}"
+# Bounded readiness, in two parts. Both are needed for the ceiling to be real.
+#
+# READY_TIMEOUT is a true wall-clock ceiling per gate: the loops below run
+# against a deadline, not an attempt count, so a slow probe eats into the budget
+# instead of silently extending it. (An attempt-based loop advertising
+# ATTEMPTS*INTERVAL is wrong the moment a probe takes longer than the interval.)
+# Each probe and each inter-probe sleep is clamped to the remaining budget, so
+# the gate cannot overshoot by a trailing probe either.
+#
+# PROBE_TIMEOUT bounds each individual probe. Without it a single request can
+# block forever and the deadline is never re-evaluated -- a server that accepts
+# the TCP connection but never completes the response does exactly that (a
+# wedged gunicorn worker, or a stalled cursor inside /health/ready, which is all
+# that view does). Verified: an unbounded `curl` against such a socket was still
+# waiting when killed, while `--max-time` returns exit 28 on schedule. Note the
+# ordinary startup window is NOT this case -- Docker's published port resets the
+# connection until the app binds, so the loop advances normally.
+#
+# The poll interval is a sleep *between* probes; no gate is ever a blind
+# `sleep N && assume up`.
+READY_TIMEOUT="${OCTONOMY_HARNESS_READY_TIMEOUT:-120}"
 READY_INTERVAL="${OCTONOMY_HARNESS_READY_INTERVAL:-2}"
+PROBE_TIMEOUT="${OCTONOMY_HARNESS_PROBE_TIMEOUT:-5}"
+
+# Bound for the real API calls below. Larger than a probe: a namespaced create
+# also writes an audit row and an outbox event.
+REQUEST_TIMEOUT="${OCTONOMY_HARNESS_REQUEST_TIMEOUT:-30}"
 
 # Real values, not placeholders. config/settings.py:49 and :352 refuse to boot
 # when DJANGO_DEBUG=false (the image default) and either the secret key or the
@@ -124,34 +146,60 @@ dump_logs() {
 
 # --- Bounded gates -------------------------------------------------------------
 
+# Seconds left before $1 (an epoch deadline). Negative once it has passed.
+budget_until() { echo $(($1 - $(date +%s))); }
+
+# The smaller of two integers.
+min_int() {
+    if [ "$1" -lt "$2" ]; then echo "$1"; else echo "$2"; fi
+}
+
+# Sleep at most $2 seconds, and never past the deadline in $1. Keeps the poll
+# interval from being the thing that overshoots the ceiling.
+sleep_within() {
+    _left="$(budget_until "$1")"
+    [ "$_left" -gt 0 ] || return 0
+    sleep "$(min_int "$2" "$_left")"
+}
+
 wait_for_postgres() {
-    log "waiting for Postgres (bound: $((READY_ATTEMPTS * READY_INTERVAL))s)"
-    i=0
-    while [ "$i" -lt "$READY_ATTEMPTS" ]; do
+    log "waiting for Postgres (bound: ${READY_TIMEOUT}s)"
+    deadline=$(($(date +%s) + READY_TIMEOUT))
+    while :; do
         container_running "$DB" || fail "the Postgres container exited during startup"
-        if docker exec "$DB" pg_isready -U "$PG_USER" -d "$PG_DB" >/dev/null 2>&1; then
+        # Clamp the probe to the budget that is actually left. A fixed probe
+        # timeout started just inside the deadline would overshoot the ceiling
+        # this function just advertised. Also keeps the value >= 1: `pg_isready
+        # -t 0` means wait forever, which is the bug being fixed.
+        left="$(budget_until "$deadline")"
+        [ "$left" -gt 0 ] || break
+        if docker exec "$DB" pg_isready -U "$PG_USER" -d "$PG_DB" \
+            -t "$(min_int "$PROBE_TIMEOUT" "$left")" >/dev/null 2>&1; then
             log "Postgres accepting connections"
             return 0
         fi
-        i=$((i + 1))
-        sleep "$READY_INTERVAL"
+        sleep_within "$deadline" "$READY_INTERVAL"
     done
-    fail "Postgres did not become ready within $((READY_ATTEMPTS * READY_INTERVAL))s"
+    fail "Postgres did not become ready within ${READY_TIMEOUT}s"
 }
 
 wait_for_ready() {
-    log "waiting for /health/ready (bound: $((READY_ATTEMPTS * READY_INTERVAL))s)"
-    i=0
-    while [ "$i" -lt "$READY_ATTEMPTS" ]; do
+    log "waiting for /health/ready (bound: ${READY_TIMEOUT}s)"
+    deadline=$(($(date +%s) + READY_TIMEOUT))
+    while :; do
         container_running "$APP" || fail "the Octonomy container exited during startup"
-        if curl -fsS "${BASE_URL}/health/ready" >/dev/null 2>&1; then
+        # Same clamp as above, and for the same reason: `curl --max-time 0`
+        # also means no limit at all.
+        left="$(budget_until "$deadline")"
+        [ "$left" -gt 0 ] || break
+        if curl -fsS --max-time "$(min_int "$PROBE_TIMEOUT" "$left")" \
+            "${BASE_URL}/health/ready" >/dev/null 2>&1; then
             log "Octonomy reports ready"
             return 0
         fi
-        i=$((i + 1))
-        sleep "$READY_INTERVAL"
+        sleep_within "$deadline" "$READY_INTERVAL"
     done
-    fail "/health/ready did not return 200 within $((READY_ATTEMPTS * READY_INTERVAL))s"
+    fail "/health/ready did not return 200 within ${READY_TIMEOUT}s"
 }
 
 # --- The assertion that makes the harness worth having -------------------------
@@ -183,6 +231,7 @@ assert_namespaced_write() {
     body_file="$(mktemp)"
     code="$(
         curl -sS -o "$body_file" -w '%{http_code}' \
+            --max-time "$REQUEST_TIMEOUT" \
             -X POST "${BASE_URL}/api/v2/vocabularies" \
             -H "Authorization: Bearer ${SERVICE_TOKEN}" \
             -H "X-Tenant-ID: ${TENANT_ID}" \
@@ -196,6 +245,9 @@ assert_namespaced_write() {
 
     if [ "$code" != "201" ]; then
         log "expected 201, got ${code}: ${payload}"
+        if [ "$code" = "000" ]; then
+            fail "the namespaced write probe got no response within ${REQUEST_TIMEOUT}s"
+        fi
         case "$payload" in
             *namespaced_writes_disabled*)
                 fail "namespaced writes are disabled -- OCTONOMY_NAMESPACE_WRITE_ENABLED did not reach the container"

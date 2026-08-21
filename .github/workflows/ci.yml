@@ -105,7 +105,10 @@ jobs:
         # one call.
         run: |
           set -euo pipefail
-          body=$(curl -fsS "${OCTONOMY_TEST_BASE_URL}/api/v2/vocabularies?application_id=${OCTONOMY_TEST_APPLICATION_ID}" \
+          # Bounded like every other request the harness makes: an unbounded
+          # curl against a server that accepts but never answers would sit here
+          # until the job timeout, 15 minutes away.
+          body=$(curl -fsS --max-time 30 "${OCTONOMY_TEST_BASE_URL}/api/v2/vocabularies?application_id=${OCTONOMY_TEST_APPLICATION_ID}" \
             -H "Authorization: Bearer ${OCTONOMY_TEST_TOKEN}" \
             -H "X-Tenant-ID: ${OCTONOMY_TEST_TENANT_ID}" \
             -H "X-Namespace-Type: ${OCTONOMY_TEST_NAMESPACE_TYPE}" \
