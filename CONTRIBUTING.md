@@ -12,8 +12,20 @@ go build ./...
 make test
 ```
 
-Requires Go 1.24+. The SDK has **no runtime dependencies** — `go.mod` must stay free of a `require`
-block for runtime packages. Dev tools (`golangci-lint`, `govulncheck`) are installed separately.
+**This branch is the frozen Go 1.13 compat line** (`support/go1.13`, module
+`github.com/octoverse-id/octonomy-go`, `v1.x`). It takes **security fixes only** — no features, no
+new resources, no `/api/v2` — and has a published sunset date; see [SECURITY.md](SECURITY.md) and
+[docs/versioning.md](docs/versioning.md). Anything else belongs on `main`, which is the `/v2` module
+at Go 1.24+.
+
+Requires Go **1.13**. Note what that means in practice: a modern toolchain enforces the language
+version from `go.mod` but **not** the stdlib version, so `go build` passing tells you nothing here.
+Run `make test-go113` against a real go1.13 toolchain before pushing —
+[docs/development.md](docs/development.md) has the floor table (no generics, no `any`, no
+`io.ReadAll`, no `t.Cleanup`) and two ways to fetch the toolchain.
+
+The SDK has **no runtime dependencies** — `go.mod` must stay free of a `require` block for runtime
+packages. Dev tools (`golangci-lint`, `govulncheck`) are installed separately.
 
 ## Quality gates
 
@@ -37,7 +49,11 @@ These mirror [AGENTS.md](AGENTS.md):
 - **One file per resource** (`tags.go`, `vocabularies.go`, …), each exposing a `*Service` reached
   from a field on `Client`.
 - Methods take `context.Context` first and `...RequestOption` last.
-- List methods return `*List[T]` and decode the `{data, pagination}` envelope.
+- List methods return a per-resource envelope (`*TagList`, `*VocabularyList`) and decode
+  `{data, pagination}`. This line has no `List[T]` — type parameters need Go 1.18.
+- Pick the transport helper by response shape: `client.doData` for a single resource (the server
+  wraps it in `{"data": {...}}`), `client.doList` for a list, `client.do` where there is no payload
+  (DELETE's 204). The wrong one compiles and returns a zero-valued struct with a nil error.
 - Non-2xx responses become `*APIError`; add `Is<Code>` helpers for common codes.
 - Write structs use pointer fields with `omitempty` so PATCH sends only what is set; server
   read-only fields are decode-only.

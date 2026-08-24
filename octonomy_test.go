@@ -5,15 +5,20 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
 // newTestClient starts an httptest server with handler and returns a Client
-// pointed at it. The server is closed automatically when the test ends.
-func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
+// pointed at it plus a cleanup func the caller must defer.
+//
+// The cleanup func is returned rather than registered with t.Cleanup because
+// t.Cleanup needs Go 1.14 and this line targets Go 1.13. A `defer srv.Close()`
+// inside this helper is not a substitute: the helper returns, so the deferred
+// close would run before the caller ever issued a request.
+func newTestClient(t *testing.T, handler http.HandlerFunc) (*Client, func()) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
 
 	c, err := New(Config{
 		BaseURL:  srv.URL,
@@ -21,13 +26,14 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 		TenantID: "tenant-1",
 	})
 	if err != nil {
+		srv.Close()
 		t.Fatalf("New: %v", err)
 	}
-	return c
+	return c, srv.Close
 }
 
 // writeJSON is a handler helper for canned responses.
-func writeJSON(t *testing.T, w http.ResponseWriter, status int, body any) {
+func writeJSON(t *testing.T, w http.ResponseWriter, status int, body interface{}) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -37,6 +43,16 @@ func writeJSON(t *testing.T, w http.ResponseWriter, status int, body any) {
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		t.Errorf("encode response: %v", err)
 	}
+}
+
+// writeData wraps body in the server's single-resource envelope,
+// {"data": {...}}, and writes it. Every Octonomy 2xx that carries a resource
+// looks like this -- DELETE is the exception, answering 204 with no body at all.
+// Canned handlers that returned the bare object are what let the missing unwrap
+// in doData go unnoticed.
+func writeData(t *testing.T, w http.ResponseWriter, status int, body interface{}) {
+	t.Helper()
+	writeJSON(t, w, status, map[string]interface{}{"data": body})
 }
 
 func TestNew_Validation(t *testing.T) {
@@ -72,7 +88,7 @@ func TestNew_Validation(t *testing.T) {
 }
 
 func TestDo_SetsHeadersAndPath(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
 			t.Errorf("Authorization = %q, want %q", got, "Bearer test-token")
 		}
@@ -91,8 +107,9 @@ func TestDo_SetsHeadersAndPath(t *testing.T) {
 		if r.URL.Path != "/api/v1/tags/abc" {
 			t.Errorf("path = %q, want /api/v1/tags/abc", r.URL.Path)
 		}
-		writeJSON(t, w, http.StatusOK, Tag{ID: "abc"})
+		writeData(t, w, http.StatusOK, Tag{ID: "abc"})
 	})
+	defer cleanup()
 
 	tag, err := c.Tags.Get(context.Background(), "abc")
 	if err != nil {
@@ -121,9 +138,9 @@ func TestDo_ActorHeader(t *testing.T) {
 				if got := r.Header.Get("X-Actor-ID"); got != tt.want {
 					t.Errorf("X-Actor-ID = %q, want %q", got, tt.want)
 				}
-				writeJSON(t, w, http.StatusOK, Tag{ID: "abc"})
+				writeData(t, w, http.StatusOK, Tag{ID: "abc"})
 			}))
-			t.Cleanup(srv.Close)
+			defer srv.Close()
 
 			cfg := Config{BaseURL: srv.URL, Token: "t", TenantID: "acme"}
 			tt.configure(&cfg)
@@ -153,16 +170,17 @@ func TestDo_ErrorEnvelope(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-				writeJSON(t, w, tt.status, map[string]any{
-					"error": map[string]any{
+			c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, tt.status, map[string]interface{}{
+					"error": map[string]interface{}{
 						"code":       tt.code,
 						"message":    "boom",
-						"details":    map[string]any{"field": "slug"},
+						"details":    map[string]interface{}{"field": "slug"},
 						"request_id": "req_123",
 					},
 				})
 			})
+			defer cleanup()
 
 			_, err := c.Tags.Get(context.Background(), "missing")
 			if err == nil {
@@ -191,11 +209,133 @@ func TestDo_ErrorEnvelope(t *testing.T) {
 	}
 }
 
+// A 2xx single-resource body WITHOUT the "data" envelope must be an error, not a
+// zero-valued struct returned with a nil error. That silent shape is what made
+// this defect invisible: the server has always wrapped single resources, the
+// vendored spec does not say so, and every canned test body matched the spec
+// rather than the server.
+func TestDoData_MissingEnvelopeIsAnError(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		// The bare object the vendored spec describes.
+		writeJSON(t, w, http.StatusOK, Tag{ID: "abc", Name: "Featured"})
+	})
+	defer cleanup()
+
+	tag, err := c.Tags.Get(context.Background(), "abc")
+	if err == nil {
+		t.Fatalf("expected an error for an unwrapped body, got tag %+v", tag)
+	}
+	if tag != nil {
+		t.Errorf("tag = %+v, want nil alongside the error", tag)
+	}
+	if !strings.Contains(err.Error(), `"data"`) {
+		t.Errorf("error should name the missing envelope, got: %v", err)
+	}
+}
+
+// An explicit JSON null under "data" is the same failure as an absent key.
+func TestDoData_NullEnvelopeIsAnError(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, http.StatusOK, map[string]interface{}{"data": nil})
+	})
+	defer cleanup()
+
+	if _, err := c.Tags.Get(context.Background(), "abc"); err == nil {
+		t.Fatal("expected an error for a null data envelope")
+	}
+}
+
+// The list path has the same silent-zero trap as the single-resource path, one
+// type further out: decoding straight into a *TagList turns an empty body, a {},
+// or a renamed data key into "this tenant has no tags" with a nil error. A caller
+// cannot tell that from a real empty page, so each shape must be an error.
+func TestDoList_RejectsBodiesThatWouldLookLikeAnEmptyPage(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"empty body", ""},
+		{"empty object", `{}`},
+		{"pagination without data", `{"pagination":{"limit":50,"offset":0,"count":0}}`},
+		{"data key renamed", `{"items":[],"pagination":{"limit":50}}`},
+		// A zero-valued Pagination reads as "one page, nothing after it" to a
+		// caller looping on Count, so the block is required too.
+		{"data without pagination", `{"data":[]}`},
+		{"null pagination", `{"data":[],"pagination":null}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := tt.body
+			c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(body))
+			})
+			defer cleanup()
+
+			page, err := c.Tags.List(context.Background(), nil)
+			if err == nil {
+				t.Fatalf("expected an error, got page %+v", page)
+			}
+			if page != nil {
+				t.Errorf("page = %+v, want nil alongside the error", page)
+			}
+		})
+	}
+}
+
+// The converse: a real empty page must still succeed. An over-eager envelope
+// check that rejected "data": [] would break every caller paging past the end.
+func TestDoList_EmptyPageIsNotAnError(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, http.StatusOK, map[string]interface{}{
+			"data":       []Tag{},
+			"pagination": map[string]interface{}{"limit": 50, "offset": 0, "count": 0},
+		})
+	})
+	defer cleanup()
+
+	page, err := c.Tags.List(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if page == nil || len(page.Data) != 0 || page.Pagination.Limit != 50 {
+		t.Errorf("unexpected page: %+v", page)
+	}
+}
+
+// A 2xx with no body at all, where a resource was expected, is an error too --
+// the same class as the missing envelope, and previously a silent nil return.
+func TestDoData_EmptyBodyIsAnError(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	defer cleanup()
+
+	if _, err := c.Tags.Get(context.Background(), "abc"); err == nil {
+		t.Fatal("expected an error for an empty 2xx body")
+	}
+}
+
+// DELETE is the one path that legitimately answers 204 with no body, so it must
+// stay lenient while the decoding paths tightened around it.
+func TestDo_DeleteAcceptsEmpty204(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer cleanup()
+
+	if err := c.Tags.Delete(context.Background(), "tag_1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+}
+
 func TestDo_ErrorFallbackNonEnvelope(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("upstream down"))
 	})
+	defer cleanup()
 
 	_, err := c.Tags.Get(context.Background(), "abc")
 	apiErr, ok := AsAPIError(err)

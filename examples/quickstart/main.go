@@ -16,7 +16,7 @@ import (
 	"os"
 	"time"
 
-	octonomy "github.com/octoverse-id/octonomy-go/v2"
+	octonomy "github.com/octoverse-id/octonomy-go"
 )
 
 func main() {

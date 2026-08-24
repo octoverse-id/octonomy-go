@@ -9,34 +9,53 @@ existing resource file and changing the types and paths.
 | File | Responsibility |
 | ---- | -------------- |
 | `octonomy.go` | `Config`, `Client`, `New()` (validation + service wiring). |
-| `transport.go` | The single `do()` method: URL building under `/api/v1`, auth/tenant headers, JSON encode/decode, non-2xx → `*APIError`. Also `RequestOption` / `WithActor`. |
+| `transport.go` | `doRaw()`: URL building under `/api/v1`, auth/tenant headers, JSON encoding, non-2xx → `*APIError`. Then one decoder per response shape: `doData()` (single resource, unwraps `{"data": ...}`), `doList()` (list envelope), `do()` (no payload, e.g. DELETE's 204). Also `RequestOption` / `WithActor`. |
 | `errors.go` | `APIError`, error `Code*` constants, and `Is*` / `AsAPIError` helpers. |
-| `pagination.go` | `ListOptions`, `Pagination`, and the generic `List[T]` envelope. |
+| `pagination.go` | `ListOptions` and `Pagination`. The list envelope itself is per-resource on this line (`TagList`, `VocabularyList`) because `List[T]` needs Go 1.18. |
 | `types.go` | Shared `Metadata` alias and the `String`/`Bool`/`Int` pointer helpers. |
 | `version.go` | `Version` constant (single source of truth) and the default User-Agent. |
 | `<resource>.go` | One file per resource: the model, `*Create`/`*Update` write structs, `*ListParams`, and the `*Service` with CRUD methods. |
 
 ## Request lifecycle
 
-1. A service method (e.g. `TagService.Create`) calls `client.do(ctx, method, path, query, body, out, opts...)`.
-2. `do` builds `BaseURL + /api/v1 + path`, attaches headers, and JSON-encodes the body.
-3. On a 2xx it decodes the response into `out`; on anything else it calls `parseError`, which decodes
-   the `{error:{...}}` envelope into an `*APIError` (falling back to the raw body + a status-derived
-   code when the envelope is absent).
+1. A service method picks the transport helper that matches the response shape it expects:
+   `doData` for a single resource (`Create`/`Get`/`Update`), `doList` for a list, plain `do` for a
+   call with no payload to decode (`Delete`). All four funnel into `doRaw`.
+2. `doRaw` builds `BaseURL + /api/v1 + path`, attaches headers, JSON-encodes the body, and returns
+   the raw 2xx body. On a non-2xx it calls `parseError`, which decodes the `{error:{...}}` envelope
+   into an `*APIError` (falling back to the raw body + a status-derived code when the envelope is
+   absent).
+3. The caller decodes: `doData` unwraps `{"data": {...}}`, `doList` asserts the envelope then decodes
+   `{data, pagination}` whole. Either way a 2xx whose body does not carry `data` is an **error**, not
+   a zero-valued result — decoding a wrapped body straight into a `*Tag` or a `*TagList` produces an
+   empty struct with a nil error, and a caller cannot tell that from "no such tag" or "no tags".
 
 ```
-Caller ──▶ Service.Method ──▶ Client.do ──▶ net/http ──▶ Octonomy /api/v1
-                                  │
-                                  ├─ 2xx → json.Unmarshal into *Model / *List[Model]
-                                  └─ !2xx → *APIError (Code, Message, Details, RequestID, StatusCode)
+                       ┌─ doData ─┐                                    2xx body
+Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶ net/http ──▶ Octonomy /api/v1
+                       └─ do ─────┘        │
+   pick by response shape:                 ├─ 2xx → raw body back to the caller above:
+     doData  single resource               │         doData → unwrap {"data":{…}}  → *Model
+     doList  list envelope                 │         doList → require {"data":[…], "pagination":{…}}
+     do      no payload (DELETE 204)       │                  → *ModelList
+                                           │         do     → nothing to decode
+                                           └─ !2xx → *APIError (Code, Message, Details,
+                                                     RequestID, StatusCode)
+
+   A 2xx that does not carry the envelope its caller expects is an ERROR, never a
+   zero-valued result: an empty struct with a nil error is indistinguishable from
+   "no such tag", and an empty page from "no tags".
 ```
 
 ## Conventions that keep it faithful
 
 - **Contract reference:** `docs/openapi.yaml` is vendored from the server. Types mirror it
-  field-for-field. The one deliberate divergence is the list envelope: the generated spec shows a
-  bare array, but the server wraps lists in `{data, pagination}` (see `octonomy/core/pagination.py`
-  upstream). The SDK follows the server; the divergence is noted in code.
+  field-for-field. The deliberate divergences are both response envelopes: the generated spec shows a
+  bare array for lists and a bare object for single resources, while the server wraps lists in
+  `{data, pagination}` (`octonomy/core/pagination.py`) and single resources in `{data}`
+  (`octonomy/core/responses.py`). The SDK follows the server; both divergences are noted in code.
+  Only an integration test against a real server can catch a regression here, which is what
+  `integration_test.go` is for.
 - **Pointers for optionality:** nullable server fields decode into `*string`; write structs use
   pointers + `omitempty` so PATCH only sends what the caller set.
 - **No hidden behavior:** the client never retries, panics, logs, or mutates global state. Retries,
@@ -54,8 +73,10 @@ To add a resource, follow `tags.go`:
 
 1. Define the model, `*Create`/`*Update`, and `*ListParams` (with a `query()` method) from the
    matching `docs/openapi.yaml` schema.
-2. Add a `*Service` with `context.Context`-first, `...RequestOption`-last methods delegating to
-   `client.do`.
+2. Add a `*Service` with `context.Context`-first, `...RequestOption`-last methods delegating to the
+   helper that matches each response shape: `client.doData` for a single resource, `client.doList`
+   for a list, `client.do` where there is no payload (DELETE). Reaching for `do` when the response
+   carries a resource compiles and returns a zero-valued struct with a nil error.
 3. Wire the service onto `Client` in `New()`.
 4. Add table-driven `httptest` tests and a CHANGELOG entry.
 

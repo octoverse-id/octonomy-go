@@ -73,6 +73,15 @@ func (p *VocabularyListParams) query() url.Values {
 	return q
 }
 
+// VocabularyList is the envelope GET /vocabularies returns: {"data": [...],
+// "pagination": {...}}. It is the Vocabulary instantiation of what the modern
+// line expresses as List[Vocabulary]; see pagination.go for why this line spells
+// it out per resource.
+type VocabularyList struct {
+	Data       []Vocabulary `json:"data"`
+	Pagination Pagination   `json:"pagination"`
+}
+
 // VocabularyService accesses the /vocabularies endpoints. Reach it via
 // Client.Vocabularies.
 type VocabularyService struct {
@@ -82,7 +91,7 @@ type VocabularyService struct {
 // Create creates a vocabulary (POST /vocabularies).
 func (s *VocabularyService) Create(ctx context.Context, in VocabularyCreate, opts ...RequestOption) (*Vocabulary, error) {
 	var out Vocabulary
-	if err := s.client.do(ctx, http.MethodPost, "/vocabularies", nil, in, &out, opts...); err != nil {
+	if err := s.client.doData(ctx, http.MethodPost, "/vocabularies", nil, in, &out, opts...); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -91,16 +100,16 @@ func (s *VocabularyService) Create(ctx context.Context, in VocabularyCreate, opt
 // Get retrieves a vocabulary by ID (GET /vocabularies/{id}).
 func (s *VocabularyService) Get(ctx context.Context, id string, opts ...RequestOption) (*Vocabulary, error) {
 	var out Vocabulary
-	if err := s.client.do(ctx, http.MethodGet, "/vocabularies/"+url.PathEscape(id), nil, nil, &out, opts...); err != nil {
+	if err := s.client.doData(ctx, http.MethodGet, "/vocabularies/"+url.PathEscape(id), nil, nil, &out, opts...); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
 // List returns a page of vocabularies (GET /vocabularies).
-func (s *VocabularyService) List(ctx context.Context, params *VocabularyListParams, opts ...RequestOption) (*List[Vocabulary], error) {
-	var out List[Vocabulary]
-	if err := s.client.do(ctx, http.MethodGet, "/vocabularies", params.query(), nil, &out, opts...); err != nil {
+func (s *VocabularyService) List(ctx context.Context, params *VocabularyListParams, opts ...RequestOption) (*VocabularyList, error) {
+	var out VocabularyList
+	if err := s.client.doList(ctx, http.MethodGet, "/vocabularies", params.query(), &out, opts...); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -109,7 +118,7 @@ func (s *VocabularyService) List(ctx context.Context, params *VocabularyListPara
 // Update partially updates a vocabulary (PATCH /vocabularies/{id}).
 func (s *VocabularyService) Update(ctx context.Context, id string, in VocabularyUpdate, opts ...RequestOption) (*Vocabulary, error) {
 	var out Vocabulary
-	if err := s.client.do(ctx, http.MethodPatch, "/vocabularies/"+url.PathEscape(id), nil, in, &out, opts...); err != nil {
+	if err := s.client.doData(ctx, http.MethodPatch, "/vocabularies/"+url.PathEscape(id), nil, in, &out, opts...); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -118,5 +127,5 @@ func (s *VocabularyService) Update(ctx context.Context, id string, in Vocabulary
 // Delete deactivates a vocabulary (DELETE /vocabularies/{id}). Octonomy treats
 // deletion as deactivation; the record and its history are retained.
 func (s *VocabularyService) Delete(ctx context.Context, id string, opts ...RequestOption) error {
-	return s.client.do(ctx, http.MethodDelete, "/vocabularies/"+url.PathEscape(id), nil, nil, nil, opts...)
+	return s.client.do(ctx, http.MethodDelete, "/vocabularies/"+url.PathEscape(id), nil, nil, opts...)
 }

@@ -32,9 +32,10 @@ type Pagination struct {
 	Previous *string `json:"previous"`
 }
 
-// List is the generic envelope every Octonomy list endpoint returns:
-// {"data": [...], "pagination": {...}}.
-type List[T any] struct {
-	Data       []T        `json:"data"`
-	Pagination Pagination `json:"pagination"`
-}
+// The list envelope every Octonomy endpoint returns -- {"data": [...],
+// "pagination": {...}} -- is declared once per resource on this line, as TagList
+// (tags.go) and VocabularyList (vocabularies.go), instead of the generic List[T]
+// the modern line uses. Type parameters need Go 1.18 and this line targets Go
+// 1.13, so a new resource repeats the two-field struct rather than instantiating
+// a shared one. Pagination and ListOptions above stay shared and identical
+// across both lines.

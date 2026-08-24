@@ -26,7 +26,7 @@ type APIError struct {
 	StatusCode int
 	Code       string
 	Message    string
-	Details    map[string]any
+	Details    map[string]interface{}
 	RequestID  string
 }
 

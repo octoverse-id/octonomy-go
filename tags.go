@@ -103,6 +103,14 @@ func (p *TagListParams) query() url.Values {
 	return q
 }
 
+// TagList is the envelope GET /tags returns: {"data": [...], "pagination": {...}}.
+// It is the Tag instantiation of what the modern line expresses as List[Tag]; see
+// pagination.go for why this line spells it out per resource.
+type TagList struct {
+	Data       []Tag      `json:"data"`
+	Pagination Pagination `json:"pagination"`
+}
+
 // TagService accesses the /tags endpoints. Reach it via Client.Tags.
 type TagService struct {
 	client *Client
@@ -112,7 +120,7 @@ type TagService struct {
 // returns an *APIError for which IsConflict reports true.
 func (s *TagService) Create(ctx context.Context, in TagCreate, opts ...RequestOption) (*Tag, error) {
 	var out Tag
-	if err := s.client.do(ctx, http.MethodPost, "/tags", nil, in, &out, opts...); err != nil {
+	if err := s.client.doData(ctx, http.MethodPost, "/tags", nil, in, &out, opts...); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -121,16 +129,16 @@ func (s *TagService) Create(ctx context.Context, in TagCreate, opts ...RequestOp
 // Get retrieves a tag by ID (GET /tags/{id}).
 func (s *TagService) Get(ctx context.Context, id string, opts ...RequestOption) (*Tag, error) {
 	var out Tag
-	if err := s.client.do(ctx, http.MethodGet, "/tags/"+url.PathEscape(id), nil, nil, &out, opts...); err != nil {
+	if err := s.client.doData(ctx, http.MethodGet, "/tags/"+url.PathEscape(id), nil, nil, &out, opts...); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
 // List returns a page of tags (GET /tags).
-func (s *TagService) List(ctx context.Context, params *TagListParams, opts ...RequestOption) (*List[Tag], error) {
-	var out List[Tag]
-	if err := s.client.do(ctx, http.MethodGet, "/tags", params.query(), nil, &out, opts...); err != nil {
+func (s *TagService) List(ctx context.Context, params *TagListParams, opts ...RequestOption) (*TagList, error) {
+	var out TagList
+	if err := s.client.doList(ctx, http.MethodGet, "/tags", params.query(), &out, opts...); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -139,7 +147,7 @@ func (s *TagService) List(ctx context.Context, params *TagListParams, opts ...Re
 // Update partially updates a tag (PATCH /tags/{id}).
 func (s *TagService) Update(ctx context.Context, id string, in TagUpdate, opts ...RequestOption) (*Tag, error) {
 	var out Tag
-	if err := s.client.do(ctx, http.MethodPatch, "/tags/"+url.PathEscape(id), nil, in, &out, opts...); err != nil {
+	if err := s.client.doData(ctx, http.MethodPatch, "/tags/"+url.PathEscape(id), nil, in, &out, opts...); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -148,5 +156,5 @@ func (s *TagService) Update(ctx context.Context, id string, in TagUpdate, opts .
 // Delete deactivates a tag (DELETE /tags/{id}). Octonomy treats deletion as
 // deactivation, which cascades to the tag's aliases.
 func (s *TagService) Delete(ctx context.Context, id string, opts ...RequestOption) error {
-	return s.client.do(ctx, http.MethodDelete, "/tags/"+url.PathEscape(id), nil, nil, nil, opts...)
+	return s.client.do(ctx, http.MethodDelete, "/tags/"+url.PathEscape(id), nil, nil, opts...)
 }

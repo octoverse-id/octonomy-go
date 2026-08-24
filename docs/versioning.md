@@ -3,6 +3,12 @@
 `octonomy-go` follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). This document is the
 source of truth for how a change maps to a version bump.
 
+> **You are reading the copy on `support/go1.13`.** This branch *is* the compat line, so the policy
+> below is written for it and its support terms are binding here. `main` carries the canonical copy
+> for the `/v2` line; where the two disagree about the modern line, `main` wins. The compat line's
+> own terms — security fixes only, the sunset date, no features ever — are settled and are repeated in
+> [`../SECURITY.md`](../SECURITY.md).
+
 ## Version surfaces
 
 | Surface | Where | Meaning |
@@ -40,13 +46,21 @@ not a ceiling, and Go before 1.16 auto-resolves `@latest` on a first build.
 ### Compat line support policy
 
 - **Security fixes only.** No features, no ordinary bug fixes, no `/api/v2`, no namespaces, no webhooks.
-- A **published sunset date**, after which the line receives nothing. The rule is **12 months from the
-  `v1.0.0` tag**, owned by the SDK maintainer, revisable only by agreement with the consuming team.
+- **Sunset: 2027-08-31.** After that date this line receives nothing at all, including security fixes.
+  Owner: the SDK maintainer ([`.github/CODEOWNERS`](../.github/CODEOWNERS)), revisable only by
+  agreement with the consuming team. The rule is **12 months from the `v1.0.0` tag**, published to the
+  end of the twelfth month so the commitment is a fixed date rather than a function of when the tag
+  was pushed — rounding to the month's end can only give the consuming team more time, never less.
+- **The one change that is not a "fix": the `go` directive.** `go.mod` must keep declaring `go 1.13`.
+  Bumping it is what makes a `v1.x` release uninstallable for the audience this line exists for, and
+  Go cannot catch it (same module path, so the tag resolves). `scripts/compat-guard.sh` blocks it in
+  CI; see the guard job in `.github/workflows/ci.yml`.
 - Fixes land on `main` first, then are cherry-picked onto `support/go1.13` and released as a `v1.x`
   patch. See [release.md](release.md).
 - **`retract` does not help this audience.** The directive shipped in Go 1.16, so a Go 1.13 toolchain
   ignores it. A published `v1.x` cannot be recalled for the people it exists to serve, which is why
-  its releases are kept deliberately small and its CI runs a real `go1.13` job as a required check.
+  its releases are kept deliberately small and its CI runs a real `go1.13` job — intended as a
+  required check, and pending branch protection on this branch before it actually blocks a merge.
 
 ### Modern line pre-stability
 
@@ -57,6 +71,17 @@ current, and one release candidate validated.
 
 Because no stable `v2` exists yet, `go get github.com/octoverse-id/octonomy-go/v2` resolves the highest
 prerelease, so adoption works normally.
+
+### What "frozen" costs, concretely
+
+The frozen scope is a real trade, not a formality. On this line:
+
+| Missing | Why | Workaround |
+| ------- | --- | ---------- |
+| `List[T]` | Type parameters need Go 1.18 | `TagList`, `VocabularyList` — same fields |
+| `CodeScopeImmutable` + `Is*` helper | Server 3.1.0 added `409 scope_immutable` on tag/vocabulary/alias PATCH after this line was scoped | `apiErr.Code == "scope_immutable"` — `parseError` preserves any code the server sends |
+| Six resource groups, `/api/v2`, namespaces, webhooks | Frozen scope | Upgrade to Go 1.24+ and the `/v2` module |
+| `t.Cleanup` in tests | Needs Go 1.14 | `newTestClient` returns a cleanup func the caller defers |
 
 ## Nothing has been released yet
 

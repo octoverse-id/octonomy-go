@@ -1,6 +1,12 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check version-check \
-	dev-server dev-server-down dev-server-logs
+	dev-server dev-server-down dev-server-logs compat-guard compat-guard-test smoke test-go113 tools-check
+
+# A real go1.13 toolchain, for the one gate a modern toolchain cannot provide.
+# Override with the path to any go1.13.x binary:
+#   GO113=/tmp/go1.13.15/bin/go make test-go113
+# See docs/development.md for how to fetch one.
+GO113 ?= go1.13.15
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -49,7 +55,38 @@ examples: ## Compile-check the runnable examples (no binaries emitted)
 		echo "build ./$$dir"; go build -o /dev/null "./$$dir" || exit 1; \
 	done
 
-check: fmt-check vet build ## Fast pre-push gate (format, vet, build)
+tools-check: ## Fail unless the optional gate tools are actually installed
+	@missing=""; \
+	command -v golangci-lint >/dev/null 2>&1 || missing="$$missing golangci-lint"; \
+	command -v govulncheck   >/dev/null 2>&1 || missing="$$missing govulncheck"; \
+	if [ -n "$$missing" ]; then \
+		echo "release gate tools missing:$$missing"; \
+		echo "\`make lint\` and \`make vuln\` SKIP when their tool is absent, which is fine"; \
+		echo "day to day and wrong for a release: release-check would print 'passed'"; \
+		echo "having run neither. Install them (see docs/development.md) and re-run."; \
+		exit 1; \
+	fi; \
+	echo "release gate tools present"
+
+compat-guard: ## Assert go.mod still matches this release line (blocking on the go directive)
+	@scripts/compat-guard.sh
+
+compat-guard-test: ## Run the compat-guard fixture tests (release-PR and tag paths)
+	@scripts/compat-guard-test.sh
+
+smoke: ## Run the integration smoke test against a booted harness (see dev-server)
+	@if [ -f .octonomy-harness.env ]; then set -a; . ./.octonomy-harness.env; set +a; fi; \
+	go test -tags=integration -run TestSmoke_RealServer -v ./...
+
+test-go113: ## Build, vet and test with a REAL go1.13 toolchain (override GO113=<path>)
+	@command -v $(GO113) >/dev/null 2>&1 || { \
+		echo "$(GO113) not found. Fetch a real go1.13 toolchain -- see docs/development.md"; exit 1; }
+	@echo "using $$($(GO113) version)"
+	GO111MODULE=on $(GO113) build ./...
+	GO111MODULE=on $(GO113) vet ./...
+	GO111MODULE=on $(GO113) test -race ./...
+
+check: fmt-check vet build compat-guard compat-guard-test ## Fast pre-push gate (format, vet, build, line guard)
 
 dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and write .octonomy-harness.env
 	@scripts/octonomy-harness.sh up
@@ -68,5 +105,5 @@ version-check: ## Verify version.go matches the latest CHANGELOG.md release head
 	fi; \
 	echo "version OK: $$code_ver"
 
-release-check: fmt-check vet lint test vuln examples version-check ## Full pre-release gate
+release-check: tools-check fmt-check vet lint test vuln examples version-check compat-guard compat-guard-test ## Full pre-release gate
 	@echo "release-check passed"

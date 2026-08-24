@@ -45,9 +45,15 @@ paging.
 
 ## Responses
 
-- **Single resource:** the resource object (e.g. `Tag`).
-- **List:** `List[T]` = `{ "data": [...], "pagination": { "limit", "offset", "count", "next", "previous" } }`.
-- **Delete:** no body (deactivation on the server).
+Every Octonomy payload arrives under a `data` key. The vendored `openapi.yaml` documents neither
+wrapper — it shows bare objects and bare arrays — so both are deliberate spec-vs-server divergences,
+and the SDK follows the server (`octonomy/core/responses.py`, `octonomy/core/pagination.py` upstream).
+
+- **Single resource:** `{ "data": { ... } }` → unwrapped by `Client.doData` into e.g. `*Tag`. A 2xx
+  body with no `data` key is an error, not an empty struct.
+- **List:** `{ "data": [...], "pagination": { "limit", "offset", "count", "next", "previous" } }` →
+  `*TagList` / `*VocabularyList` (this line has no `List[T]`; type parameters need Go 1.18).
+- **Delete:** `204`, no body (deactivation on the server).
 - **Errors:** `{ "error": { "code", "message", "details", "request_id" } }` → `*APIError`.
 
 ## Error codes
@@ -56,6 +62,10 @@ paging.
 `conflict` (409), `tenant_mismatch` (400), `application_mismatch` (400), `inactive_tag` (400). Each
 has a `Code*` constant; `IsNotFound`/`IsConflict`/`IsValidation`/`IsAuthError`/`IsForbidden` cover the
 common branches.
+
+Server 3.1.0 also returns `scope_immutable` (409) on tag, vocabulary, and alias `PATCH`. This line
+ships **no** constant or helper for it — a frozen-scope decision, not an oversight — but the code
+string survives decoding, so `apiErr.Code == "scope_immutable"` works today.
 
 ## Not yet implemented
 

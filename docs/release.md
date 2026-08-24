@@ -14,8 +14,33 @@ See [versioning.md](versioning.md). `Version` in `version.go` is canonical and m
 make release-check
 ```
 
-This runs `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`, `examples`, and `version-check`.
-All must pass.
+This runs `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`, `examples`, `version-check`, and
+`compat-guard`. All must pass.
+
+**On the compat line (`support/go1.13`), `release-check` is not sufficient.** It runs on a modern
+toolchain, which cannot see a stdlib-floor violation, and it never talks to a real server. Two more
+gates are mandatory before a `v1.x` tag, both of which need something the runner has and your laptop
+may not:
+
+```bash
+make test-go113                       # a REAL go1.13 toolchain -- see development.md
+make dev-server && make smoke         # the smoke test against a real container
+make dev-server-down
+```
+
+`release-check` itself now also runs `tools-check` (both optional gate tools must actually be
+installed, so `lint` and `vuln` cannot silently skip) and `compat-guard-test`.
+
+CI runs both (`go1.13` and `smoke`). Confirm they are green on the merge commit you are about to tag —
+not merely on the PR head — because a `v1.x` tag cannot be recalled: `retract` shipped in Go 1.16, so
+a Go 1.13 consumer's toolchain ignores it.
+
+**The release PR is the gate, not the tag push.** `compat-guard` blocks a `release/vX.Y.Z` PR whose
+branch name, `version.go`, CHANGELOG heading, exact module path, and base branch do not all agree. A
+*subset* runs again on the tag — SemVer, module path, `version.go`, but not the CHANGELOG or the base
+branch, which a tag push does not have — and only as detection: by then the ref is public, and for the
+compat line that is final. If the tag job fails, delete the ref immediately — that only helps if nothing has
+fetched it yet — and publish a corrected version.
 
 ## Two release lines — read this before starting
 
@@ -57,7 +82,7 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
 
 1. **Confirm the line.** `git switch BASE && git pull`, then check you are where you think you are:
    ```bash
-   git branch --show-current && head -1 go.mod
+   git branch --show-current && head -n 1 go.mod
    ```
    The module line must match `MODULE`. If it does not, you are on the wrong branch; stop.
 2. **Branch:** `git switch -c release/TAG` off `BASE`
@@ -71,7 +96,7 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
 7. **Tag the merge commit on `BASE`:**
    ```bash
    git switch BASE && git pull
-   head -1 go.mod                       # last chance: must match MODULE
+   head -n 1 go.mod                       # last chance: must match MODULE
    git tag -a TAG -m TAG
    git push origin TAG
    gh release create TAG --title TAG --notes-from-tag
