@@ -83,12 +83,22 @@ The frozen scope is a real trade, not a formality. On this line:
 | Six resource groups, `/api/v2`, namespaces, webhooks | Frozen scope | Upgrade to Go 1.24+ and the `/v2` module |
 | `t.Cleanup` in tests | Needs Go 1.14 | `newTestClient` returns a cleanup func the caller defers |
 
-## Nothing has been released yet
+## Release state
 
-At the time of writing this repository has **no git tags** and the module proxy has served **no**
-semantic version. `CHANGELOG.md` carries a `## [0.1.0]` heading describing the current tree, but that
-release was never cut — see the note under that heading. The first two real releases will be `v1.0.0`
-(compat) and `v2.0.0-alpha.1` (modern), each in its own `release/<version>` PR.
+**`v1.0.0` is the first version this repository ever published**, and it is this line. Before it there
+were no git tags at all and the module proxy had served nothing; `CHANGELOG.md` carried a `## [0.1.0]`
+heading for a release that was never cut, and that label is corrected in the `1.0.0` entry rather than
+left implying an installable version that never existed.
+
+| Line | First release | State |
+| ---- | ------------- | ----- |
+| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` | Released. Frozen — security fixes only, sunset 2027-08-31 |
+| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.1` | Not yet cut; tracked in the release issue |
+
+Nothing about `v1.0.0` can be withdrawn: `retract` shipped in Go 1.16, so a Go 1.13 consumer's
+toolchain ignores it, and `GOPROXY` caches tags permanently. That is why this line's CI runs a real
+`go1.13` job and a real-server smoke test, and why `scripts/compat-guard.sh` blocks a release PR whose
+version, module path, base branch, and CHANGELOG heading do not all agree.
 
 ## Bump rules
 

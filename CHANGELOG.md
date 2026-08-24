@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-> **This branch is the frozen Go 1.13 compat line** (`support/go1.13`, module
-> `github.com/octoverse-id/octonomy-go`, `v1.x`). Entries below ship as **`v1.0.0`**, cut in its own
-> `release/v1.0.0` PR (#29) — `AGENTS.md` keeps version bumps and tags out of chore PRs, so
-> `version.go` still reads `0.1.0` here.
+## [1.0.0] - 2026-08-24
+
+**The first published release of this SDK**, and the whole of the frozen Go 1.13 compatibility line
+(`support/go1.13`, module `github.com/octoverse-id/octonomy-go`).
+
+No `0.x` version was ever released — no tag was cut and the module proxy served nothing — so this
+entry covers both the original client and the Go 1.13 conversion that made it installable on the
+toolchain this line exists for. The `### Changed` and `### Fixed` sections below describe deltas
+against the unreleased tree and against the `/v2` line on `main`; they are written for a reader
+arriving from `main`, since no consumer can have been running an earlier version of *this* module.
+
+**This release cannot be recalled.** `retract` shipped in Go 1.16, so a Go 1.13 consumer's toolchain
+ignores it, and `GOPROXY` caches tags permanently.
 
 ### Changed
 - **The client now compiles and tests on real Go 1.13** (#4). `go.mod` declares `go 1.13` and the
@@ -138,31 +147,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.octonomy-harness.env`. Both SDK version lines invoke it, so neither carries a bootstrap of its
   own. Exposed to CI as the `.github/actions/octonomy-harness` composite action.
 
-## [0.1.0] - 2026-06-08
+### Added (the original client, carried in from the never-released tree)
 
-> **Never released.** No `v0.1.0` git tag was ever cut and the module proxy has never served this
-> version, so nothing below was ever installable. The entry is kept because it accurately describes
-> the code in the tree; the version label is corrected when the first real releases are cut
-> (`v1.0.0` on the compat line, `v2.0.0-alpha.1` here) in their dedicated release PRs.
+Targets the stable Octonomy REST **v1** API, served under `/api/v1`. Dependency-free — standard
+library only. This section was previously filed under a `## [0.1.0] - 2026-06-08` heading describing
+a release that was never cut; the label is corrected here, per #24 and #29, rather than left implying
+an installable version that never existed.
 
-Initial contents of the Octonomy Go SDK. Targets the stable Octonomy REST **v1** API
-(server release `1.0.0`, served under `/api/v1`). Dependency-free (standard library only).
-
-### Added
 - Client foundation: `New(Config)` with `BaseURL`/`Token`/`TenantID` validation, a configurable
   `*http.Client`, and a shared transport that sets `Authorization`, `X-Tenant-ID`, optional
   `X-Actor-ID`, `Accept`, and `User-Agent` headers.
 - Typed error handling: `*APIError` decoded from the `{error:{code,message,details,request_id}}`
   envelope, error `Code*` constants, and `IsNotFound`/`IsConflict`/`IsValidation`/`IsAuthError`/
   `IsForbidden`/`AsAPIError` helpers.
-- Pagination: generic `List[T]` decoding the `{data, pagination}` envelope, plus `ListOptions`.
+- Pagination: the `{data, pagination}` envelope plus `ListOptions`. (Originally a generic `List[T]`;
+  see the type mapping under **Changed** for what this line ships instead.)
 - `Vocabularies` service: Create, Get, List, Update, Delete.
 - `Tags` service: Create, Get, List (full filter set), Update, Delete.
 - `WithActor` per-request option, and `String`/`Bool`/`Int` pointer helpers for optional fields.
 - Runnable `examples/quickstart` program and a vendored `docs/openapi.yaml` contract reference.
 
-[Unreleased]: https://github.com/octoverse-id/octonomy-go/commits/main
+[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v1.0.0...support/go1.13
+[1.0.0]: https://github.com/octoverse-id/octonomy-go/releases/tag/v1.0.0
 
-<!-- No [0.1.0] link definition: that tag does not exist. Both this and the former
-     compare/v0.1.0...HEAD link returned 404 because they referenced a release never cut.
-     Real link definitions land with the first release PRs. -->
+<!-- Both links point at THIS line. `main` is a different module (/v2) with its own
+     versions, so an [Unreleased] link to main's commits would compare a consumer of
+     v1.0.0 against code they cannot install. -->
