@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-08-24
+## [1.0.0] - 2026-08-26
 
 **The first published release of this SDK**, and the whole of the frozen Go 1.13 compatibility line
 (`support/go1.13`, module `github.com/octoverse-id/octonomy-go`).
