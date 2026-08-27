@@ -4,6 +4,10 @@ version: "2"
 
 run:
   timeout: 5m
+  # Without this the integration smoke test is invisible to the linter: it sits
+  # behind a build tag, and the tag is exactly where an unreviewed file hides.
+  build-tags:
+    - integration
 
 linters:
   enable:

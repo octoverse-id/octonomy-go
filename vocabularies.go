@@ -81,42 +81,26 @@ type VocabularyService struct {
 
 // Create creates a vocabulary (POST /vocabularies).
 func (s *VocabularyService) Create(ctx context.Context, in VocabularyCreate, opts ...RequestOption) (*Vocabulary, error) {
-	var out Vocabulary
-	if err := s.client.do(ctx, http.MethodPost, "/vocabularies", nil, in, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return doData[Vocabulary](ctx, s.client, http.MethodPost, "/vocabularies", nil, in, opts...)
 }
 
 // Get retrieves a vocabulary by ID (GET /vocabularies/{id}).
 func (s *VocabularyService) Get(ctx context.Context, id string, opts ...RequestOption) (*Vocabulary, error) {
-	var out Vocabulary
-	if err := s.client.do(ctx, http.MethodGet, "/vocabularies/"+url.PathEscape(id), nil, nil, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return doData[Vocabulary](ctx, s.client, http.MethodGet, "/vocabularies/"+url.PathEscape(id), nil, nil, opts...)
 }
 
 // List returns a page of vocabularies (GET /vocabularies).
 func (s *VocabularyService) List(ctx context.Context, params *VocabularyListParams, opts ...RequestOption) (*List[Vocabulary], error) {
-	var out List[Vocabulary]
-	if err := s.client.do(ctx, http.MethodGet, "/vocabularies", params.query(), nil, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return doList[Vocabulary](ctx, s.client, http.MethodGet, "/vocabularies", params.query(), opts...)
 }
 
 // Update partially updates a vocabulary (PATCH /vocabularies/{id}).
 func (s *VocabularyService) Update(ctx context.Context, id string, in VocabularyUpdate, opts ...RequestOption) (*Vocabulary, error) {
-	var out Vocabulary
-	if err := s.client.do(ctx, http.MethodPatch, "/vocabularies/"+url.PathEscape(id), nil, in, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return doData[Vocabulary](ctx, s.client, http.MethodPatch, "/vocabularies/"+url.PathEscape(id), nil, in, opts...)
 }
 
 // Delete deactivates a vocabulary (DELETE /vocabularies/{id}). Octonomy treats
 // deletion as deactivation; the record and its history are retained.
 func (s *VocabularyService) Delete(ctx context.Context, id string, opts ...RequestOption) error {
-	return s.client.do(ctx, http.MethodDelete, "/vocabularies/"+url.PathEscape(id), nil, nil, nil, opts...)
+	return s.client.do(ctx, http.MethodDelete, "/vocabularies/"+url.PathEscape(id), nil, nil, opts...)
 }

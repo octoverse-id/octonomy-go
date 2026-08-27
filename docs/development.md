@@ -21,6 +21,7 @@ make lint        # golangci-lint (if installed)
 make test        # go test -race -cover ./...
 make cover       # prints total coverage
 make examples    # go build ./examples/...
+make smoke       # integration smoke test against a booted server (see below)
 make check       # fmt-check + vet + build (fast pre-push gate)
 make release-check  # the full pre-release gate
 ```
@@ -45,6 +46,42 @@ Tests use `net/http/httptest` to stand up a fake Octonomy and assert the wire co
 
 `newTestClient(t, handler)` in `octonomy_test.go` is the shared helper. Keep new code covered and run
 with `-race`.
+
+Canned single-resource responses go through `writeData`, which wraps the body in the server's
+`{"data": {...}}` envelope. Handlers that returned the bare object matched the vendored spec rather
+than the server, and that mismatch hid a real defect for the life of the SDK: every
+`Create`/`Get`/`Update` decoded to a zero-valued struct with a nil error against a real server
+([#32](https://github.com/octoverse-id/octonomy-go/issues/32)). Use `writeJSON` only for bodies you
+mean to send verbatim — list envelopes and error envelopes.
+
+That is also the structural limit of this suite, and worth internalizing before adding a resource:
+**a unit test cannot catch a fixture-versus-server divergence**, because it asserts the client
+against the fixtures it ships with. Both sides can be wrong together and stay green. Anything that
+depends on the server's real response shape needs the smoke test below.
+
+### Integration smoke test
+
+`integration_test.go` (build tag `integration`) is the only test that talks to a real server. It is
+six assertions, deliberately — the full suite is
+[#17](https://github.com/octoverse-id/octonomy-go/issues/17): the single-resource `{data}` envelope
+on a write and on a read, an update, the `{data, pagination}` list envelope on both resources, and
+one real error envelope. It gates on `OCTONOMY_TEST_BASE_URL` and skips when that is empty, so
+`go test ./...` stays hermetic.
+
+```bash
+make dev-server   # boots a real Octonomy, writes .octonomy-harness.env
+make smoke        # sources the env file and runs the smoke test
+make dev-server-down
+```
+
+CI runs it in the `smoke` job against the pinned container image, with `OCTONOMY_SMOKE_REQUIRED=1` so
+a missing base URL fails instead of skipping — a skip would be a green job that asserted nothing. The
+job runs `make smoke`, so CI and your laptop execute identical logic, guard included.
+
+The job is no longer advisory: it fails the PR. It does not yet *block the merge* — that needs its
+check context, **`integration smoke test`** (the job's display name, not the `smoke` job id), added
+to main's branch-protection required contexts, which currently list `lint`, `test (1.24)`,
+`test (1.25)`, and `vuln`.
 
 ## Running against a real Octonomy
 
