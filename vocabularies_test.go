@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestVocabularies_Create(t *testing.T) {
@@ -27,7 +28,7 @@ func TestVocabularies_Create(t *testing.T) {
 		if in["name"] != "Labels" || in["slug"] != "labels" {
 			t.Errorf("unexpected body: %v", in)
 		}
-		writeJSON(t, w, http.StatusCreated, Vocabulary{ID: "voc_1", Name: "Labels", Slug: "labels", IsActive: true})
+		writeData(t, w, http.StatusCreated, Vocabulary{ID: "voc_1", Name: "Labels", Slug: "labels", IsActive: true})
 	})
 
 	voc, err := c.Vocabularies.Create(context.Background(), VocabularyCreate{Name: "Labels", Slug: "labels"})
@@ -74,6 +75,49 @@ func TestVocabularies_List(t *testing.T) {
 	}
 }
 
+// The other previously untested doData route -- see TestTags_Get.
+func TestVocabularies_Get(t *testing.T) {
+	created := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/vocabularies/voc_1" {
+			t.Errorf("got %s %s, want GET /api/v1/vocabularies/voc_1", r.Method, r.URL.Path)
+		}
+		writeData(t, w, http.StatusOK, Vocabulary{
+			ID:          "voc_1",
+			TenantID:    "tenant-1",
+			Name:        "Labels",
+			Slug:        "labels",
+			Description: String("Shared label vocabulary"),
+			Metadata:    Metadata{"owner": "platform"},
+			IsActive:    true,
+			CreatedAt:   created,
+			UpdatedAt:   created,
+		})
+	})
+
+	voc, err := c.Vocabularies.Get(context.Background(), "voc_1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if voc.ID != "voc_1" || voc.TenantID != "tenant-1" || voc.Name != "Labels" || voc.Slug != "labels" {
+		t.Errorf("scalar fields did not round-trip: %+v", voc)
+	}
+	// A nil ApplicationID means "shared across the tenant", so the distinction
+	// between nil and "" is load-bearing here.
+	if voc.ApplicationID != nil {
+		t.Errorf("ApplicationID = %v, want nil (shared)", voc.ApplicationID)
+	}
+	if voc.Description == nil || *voc.Description != "Shared label vocabulary" {
+		t.Errorf("Description = %v, want the shared-vocabulary text", voc.Description)
+	}
+	if voc.Metadata["owner"] != "platform" {
+		t.Errorf("Metadata[owner] = %v, want platform", voc.Metadata["owner"])
+	}
+	if !voc.IsActive || !voc.CreatedAt.Equal(created) {
+		t.Errorf("IsActive/CreatedAt did not round-trip: %+v", voc)
+	}
+}
+
 func TestVocabularies_Update(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {
@@ -91,7 +135,7 @@ func TestVocabularies_Update(t *testing.T) {
 		if in["name"] != "Renamed" {
 			t.Errorf("name = %v, want Renamed", in["name"])
 		}
-		writeJSON(t, w, http.StatusOK, Vocabulary{ID: "voc_1", Name: "Renamed"})
+		writeData(t, w, http.StatusOK, Vocabulary{ID: "voc_1", Name: "Renamed"})
 	})
 
 	voc, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{Name: String("Renamed")})

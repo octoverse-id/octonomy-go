@@ -111,42 +111,26 @@ type TagService struct {
 // Create creates a tag (POST /tags). A duplicate (type, slug) for the tenant
 // returns an *APIError for which IsConflict reports true.
 func (s *TagService) Create(ctx context.Context, in TagCreate, opts ...RequestOption) (*Tag, error) {
-	var out Tag
-	if err := s.client.do(ctx, http.MethodPost, "/tags", nil, in, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return doData[Tag](ctx, s.client, http.MethodPost, "/tags", nil, in, opts...)
 }
 
 // Get retrieves a tag by ID (GET /tags/{id}).
 func (s *TagService) Get(ctx context.Context, id string, opts ...RequestOption) (*Tag, error) {
-	var out Tag
-	if err := s.client.do(ctx, http.MethodGet, "/tags/"+url.PathEscape(id), nil, nil, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return doData[Tag](ctx, s.client, http.MethodGet, "/tags/"+url.PathEscape(id), nil, nil, opts...)
 }
 
 // List returns a page of tags (GET /tags).
 func (s *TagService) List(ctx context.Context, params *TagListParams, opts ...RequestOption) (*List[Tag], error) {
-	var out List[Tag]
-	if err := s.client.do(ctx, http.MethodGet, "/tags", params.query(), nil, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return doList[Tag](ctx, s.client, http.MethodGet, "/tags", params.query(), opts...)
 }
 
 // Update partially updates a tag (PATCH /tags/{id}).
 func (s *TagService) Update(ctx context.Context, id string, in TagUpdate, opts ...RequestOption) (*Tag, error) {
-	var out Tag
-	if err := s.client.do(ctx, http.MethodPatch, "/tags/"+url.PathEscape(id), nil, in, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return doData[Tag](ctx, s.client, http.MethodPatch, "/tags/"+url.PathEscape(id), nil, in, opts...)
 }
 
 // Delete deactivates a tag (DELETE /tags/{id}). Octonomy treats deletion as
 // deactivation, which cascades to the tag's aliases.
 func (s *TagService) Delete(ctx context.Context, id string, opts ...RequestOption) error {
-	return s.client.do(ctx, http.MethodDelete, "/tags/"+url.PathEscape(id), nil, nil, nil, opts...)
+	return s.client.do(ctx, http.MethodDelete, "/tags/"+url.PathEscape(id), nil, nil, opts...)
 }

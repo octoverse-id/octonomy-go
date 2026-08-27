@@ -60,6 +60,13 @@
 // envelope (Code, Message, Details, RequestID) plus the HTTP StatusCode. Use the
 // IsNotFound, IsConflict, and IsValidation helpers to branch on common cases.
 //
+// A 2xx whose body does not match the expected shape is an error too. The server
+// wraps single resources in {"data": {...}} and lists in
+// {"data": [...], "pagination": {...}}; a body missing that envelope would
+// otherwise decode into a zero-valued struct, or an empty-looking page, with no
+// error at all. A genuinely empty page is not an error and yields an empty
+// non-nil Data slice.
+//
 // # List responses
 //
 // List methods return a *List[T] holding the Data slice and Pagination metadata

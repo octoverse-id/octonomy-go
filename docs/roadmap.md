@@ -11,7 +11,10 @@ Copy `tags.go` and `tags_test.go` as the template, then:
 1. Read the matching schema(s) in [`openapi.yaml`](openapi.yaml).
 2. Create `<resource>.go` with: the model struct, `*Create`/`*Update` write structs (pointer +
    `omitempty`), `*ListParams` with a `query()` method, and a `*Service` whose methods take
-   `context.Context` first and `...RequestOption` last and delegate to `client.do`.
+   `context.Context` first and `...RequestOption` last and delegate to the transport helper matching
+   each method's **response shape**: `doData[T]` for a single resource (including a composite
+   payload), `doList[T]` for a paginated list, `client.do` for a 204 with no body. See the routing
+   diagram at the top of `transport.go`.
 3. Wire the service onto `Client` in `New()` (`octonomy.go`).
 4. Add table-driven `httptest` tests (assert method/path/headers/query/body server-side; assert decoded
    values client-side; cover the error envelope).

@@ -18,8 +18,10 @@ stays a faithful, ergonomic client.
 - Tag aliases are alternate identifiers that resolve to canonical tags and follow tenant/application
   compatibility rules.
 - Keep the SDK faithful to `docs/openapi.yaml`, the bundled contract reference. Where the live server
-  diverges from the generated spec — notably the `{data, pagination}` list envelope the spec omits —
-  trust the server's real behavior and document the divergence in a comment.
+  diverges from the generated spec — notably the **two response envelopes** the spec omits:
+  `{data, pagination}` on lists and `{data}` on single resources — trust the server's real behavior
+  and document the divergence in a comment. Both were verified against a running server, not read
+  off the spec; only one of the two was known before #32.
 
 ## API Client Rules
 
@@ -28,6 +30,44 @@ stays a faithful, ergonomic client.
 - Methods take `context.Context` first and accept variadic `...RequestOption` last.
 - List methods return `*List[T]` and decode the `{data, pagination}` envelope; embed `ListOptions`
   in each resource's `*ListParams`.
+- **Pick the transport helper by response shape, and never by convenience.** `doData[T]` for a call
+  returning a single resource (it unwraps the server's `{"data": {...}}`), `doList[T]` for a list
+  envelope, `client.do` for a call with no payload to decode — DELETE's 204. `doRaw` is the shared
+  request path; resource files must not call it directly.
+- **Every method that decodes a payload goes through `doData[T]` or `doList[T]`.** Never a bare
+  `json.Unmarshal` into the resource type: that is #32 exactly, and it does not fail loudly — it
+  returns a zero-valued struct, or an empty-looking page, with a nil error. That is how the defect
+  survived a complete unit suite. A canned fixture must carry the envelope (`writeData` in the test
+  helpers), because a fixture written against the vendored spec passes against a client that is
+  wrong.
+- **The queued groups are not all CRUD, and `docs/openapi.yaml` will mislead you about two of
+  them.** Shapes verified live against server 3.1.0, not read off the spec:
+
+  | Group | Endpoints | Helper |
+  | ----- | --------- | ------ |
+  | Tag aliases (#8) | full CRUD | `doData`/`doList`/`do` — the `tags.go` template applies as-is |
+  | Tag resolution (#9) | `GET /tag-resolution` only | `doData` — one specialized read, no list, no writes |
+  | Assignments (#10) | `POST`/`DELETE /tag-assignments`, plus `bulk-assign`/`bulk-remove` | `doData` + `do`; see the composite note below |
+  | Resource tags (#11) | `GET` list + `POST` composite replace | `doList` + `doData` (composite) |
+  | Audit logs (#12) | `GET` only, three list routes | `doList` — **list-only**, there is no `Get` |
+  | Health (#13) | `/health/live`, `/health/ready` | neither — see below |
+
+  - **Bulk and replace return a composite object under `data`**, e.g.
+    `{"data": {"created": 1, "existing": 0, "skipped": 0, "assignments": [...]}}`. The spec is no
+    guide here: it claims a bare array (`type: array`) for `bulk-assign` and the resource-tag
+    replace, and documents **no response schema at all** for `bulk-remove` (which really returns
+    `{"data": {"removed": N}}`). The bare-array claim is a third divergence in the same family as
+    the two above, and the one most likely to reproduce #32 — a bare-array decoder against this
+    body yields an empty slice and a nil error. It still fits `doData[T]`; `T` is a composite result
+    struct, not the resource. Do **not** relax `doList`'s pagination requirement to accept these:
+    they carry no pagination block because they are not pages.
+  - **Health is outside the API surface in three ways at once.** It is rooted outside `/api/v1`
+    (the prefix is unconditional in `doRaw`), its body is a bare `{"status": "ok"}` with **no `data`
+    envelope**, and it is **unauthenticated** — while `New` requires both `Token` and `TenantID`, so
+    the tenant-scoping rule above does not apply to it. #13 needs its own request path, its own
+    decoder, and the credential-free constructor its title names. Do **not** loosen `doData`'s
+    envelope requirement or `New`'s validation to make health fit: that would re-open #32, and the
+    tenant guarantee, for every other resource.
 - Non-2xx responses become `*APIError` carrying the `{error:{code,message,details,request_id}}`
   envelope. Add `Is<Code>` helpers for common error codes.
 - Server read-only fields are decode-only; write structs (`*Create`/`*Update`) use pointer fields
@@ -49,8 +89,13 @@ stays a faithful, ergonomic client.
 - Table-driven tests using `net/http/httptest`. Assert the request method, path, auth headers
   (`Authorization`, `X-Tenant-ID`), query params, and body on the server side; assert decoded values
   on the client side. (Use `t.Errorf` inside handlers — they run on a separate goroutine.)
-- Cover success paths, the `{data, pagination}` list envelope, and error decoding
-  (404 → `IsNotFound`, 409 → `IsConflict`, 400 → `IsValidation`).
+- Cover success paths, both response envelopes, and error decoding (404 → `IsNotFound`,
+  409 → `IsConflict`, 400 → `IsValidation`).
+- Single-resource fixtures go through `writeData`, which wraps the body in `{"data": {...}}`. Use
+  `writeJSON` only for bodies meant to go out verbatim — list envelopes and error envelopes.
+- A unit suite cannot see a fixture-versus-server divergence: it asserts the client against the
+  fixtures it ships with. New response shapes need an assertion in `integration_test.go`
+  (`make smoke`) as well.
 - Run tests with `-race`. Keep new code covered.
 
 ## Local Development

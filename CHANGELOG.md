@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Single-resource responses decoded to zero-valued structs.** The server wraps every payload under
+  `data` — single resources as `{"data": {...}}`, not only lists — so `Tags.Create`/`Get`/`Update`
+  and the three `Vocabularies` equivalents returned an **empty struct with a nil error** against a
+  real server. The vendored `docs/openapi.yaml` documents bare objects, every canned test body
+  encoded the spec rather than the server, and so a complete unit suite stayed green throughout.
+  Found by the compat line's smoke test on its first run against a container
+  ([#32](https://github.com/octoverse-id/octonomy-go/issues/32)).
+
+### Changed
+- The transport is now one request path (`doRaw`) and three decoders chosen by response shape:
+  `doData[T]` unwraps the single-resource envelope, `doList[T]` decodes the list envelope, and
+  `Client.do` handles a call with no payload. Every shape that would previously have decoded to a
+  zero value with a nil error is an error instead: a 2xx with no `data` key, a null `data` where a
+  resource was expected, an empty body, a list response with no usable `pagination` block, and a
+  non-204 answer to `Delete`. A present-but-null `"data"` on a list normalizes to an empty non-nil
+  slice, identical to `"data": []`.
+
 ### Added
+- `integration_test.go` (build tag `integration`, `make smoke`): a six-assertion smoke test against
+  a real server, covering both response envelopes on both resources. Wired into CI as a
+  non-advisory `smoke` job running `make smoke` with `OCTONOMY_SMOKE_REQUIRED=1`, so neither a
+  harness that failed to export its credentials nor a test that no longer runs can report a vacuous
+  green. It replaces the advisory bootstrap-only `harness` job, keeping that job's cross-step
+  credential assertion as a step. Making it block the *merge* additionally needs its check context
+  added to branch protection.
 - Reusable Octonomy container harness (`scripts/octonomy-harness.sh`, `make dev-server`) that boots
   Postgres plus the pinned `ghcr.io/octoverse-id/octonomy:3.1.0` image, applies migrations, mints a
   namespace-capable service token, and writes `OCTONOMY_TEST_*` credentials to
