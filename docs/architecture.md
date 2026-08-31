@@ -1,6 +1,7 @@
 # Architecture
 
-`octonomy-go` is a thin, hand-written client for the Octonomy REST **v1** API. It depends only on the
+`octonomy-go` is a thin, hand-written client for the Octonomy REST API — `/api/v2` by default,
+`/api/v1` by configuration. It depends only on the
 Go standard library. The design goal is that an agent (or human) can add a new resource by copying an
 existing resource file and changing the types and paths.
 
@@ -9,7 +10,7 @@ existing resource file and changing the types and paths.
 | File | Responsibility |
 | ---- | -------------- |
 | `octonomy.go` | `Config`, `Client`, `New()` (validation + service wiring). |
-| `transport.go` | `doRaw` (URL building under `/api/v1`, auth/tenant headers, request encoding, non-2xx → `*APIError`) plus the three decoders that sit on it: `do`, `doData[T]`, `doList[T]`. Also `RequestOption` / `WithActor`. |
+| `transport.go` | `doRaw` (URL building under `/api/<version>`, header assembly, option-contributed query params, the scope-coherence guard, bounded response reads, non-2xx → `*APIError`) plus the three decoders that sit on it: `do`, `doData[T]`, `doList[T]`. Also `RequestOption` and the options: `WithActor`, `WithNamespace`, `WithGlobalNamespace`, `WithApplication`, `WithIncludeGlobal`. |
 | `errors.go` | `APIError`, error `Code*` constants, and `Is*` / `AsAPIError` helpers. |
 | `pagination.go` | `ListOptions`, `Pagination`, and the generic `List[T]` envelope. |
 | `types.go` | Shared `Metadata` alias and the `String`/`Bool`/`Int` pointer helpers. |
@@ -21,7 +22,7 @@ existing resource file and changing the types and paths.
 1. A service method (e.g. `TagService.Create`) calls the helper matching its **response shape**:
    `doData[T]` for a single resource, `doList[T]` for a list, `client.do` for a call with no payload
    (DELETE).
-2. All three go through `doRaw`, which builds `BaseURL + /api/v1 + path`, attaches headers,
+2. All three go through `doRaw`, which builds `BaseURL + /api/<version> + path`, attaches headers,
    JSON-encodes the body, and returns the status plus the raw 2xx body. On a non-2xx it calls
    `parseError`, which decodes the `{error:{...}}` envelope into an `*APIError` (falling back to the
    raw body + a status-derived code when the envelope is absent).
@@ -29,7 +30,7 @@ existing resource file and changing the types and paths.
    `{"data": [...], "pagination": {...}}` into a `*List[T]`, and `do` asserts a 204 with no body.
 
 ```
-Caller ──▶ Service.Method ──▶ doData[T] / doList[T] / do ──▶ doRaw ──▶ net/http ──▶ Octonomy /api/v1
+Caller ──▶ Service.Method ──▶ doData[T] / doList[T] / do ──▶ doRaw ──▶ net/http ──▶ Octonomy /api/<version>
                                        │                        │
                                        │                        └─ !2xx → *APIError (Code, Message,
                                        │                                  Details, RequestID, Status)

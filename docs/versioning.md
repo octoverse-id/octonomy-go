@@ -9,7 +9,7 @@ source of truth for how a change maps to a version bump.
 | ------- | ----- | ------- |
 | **Module path** | `module` line in `go.mod` | Which release line you are on. The `/v2` suffix is what makes the two lines *different modules* to Go. |
 | **SDK version** | `Version` in `version.go` + git tag `vX.Y.Z` | Canonical SemVer for the SDK and CHANGELOG. Go modules resolve versions from git tags. |
-| **Targeted server contract** | this document + the vendored `docs/openapi.yaml` | Which Octonomy REST contract the SDK is written against (currently **v1**, server `1.0.0`). |
+| **Targeted server contract** | this document + the vendored `docs/openapi-v2.yaml` / `docs/openapi.yaml` | Which Octonomy REST contract the SDK is written against. **`/api/v2` at server `3.1.1`** is the default surface; `/api/v1` is selectable via `Config.APIVersion` and is still vendored at server `1.0.0` pending #6. |
 
 The SDK versions **independently** of the Octonomy server. A new SDK release does not require a new
 server release, and vice versa. `make version-check` asserts `version.go` matches the latest
@@ -23,7 +23,7 @@ a client that keeps growing, the other is pinned to Go 1.13 and needs one that n
 | Line | Module path | Branch | Versions | Go | Scope |
 | ---- | ----------- | ------ | -------- | -- | ----- |
 | **Compat** | `github.com/octoverse-id/octonomy-go` | `support/go1.13` | `v1.x` | 1.13 | Vocabularies + Tags, `/api/v1` only. **Frozen.** |
-| **Modern** | `github.com/octoverse-id/octonomy-go/v2` | `main` | `v2.x` | 1.24+ | Active development. `/api/v1` today; `/api/v2`, namespaces, and the remaining resources are the roadmap. |
+| **Modern** | `github.com/octoverse-id/octonomy-go/v2` | `main` | `v2.x` | 1.24+ | Active development. `/api/v1` **and** `/api/v2` with namespace scoping; the remaining resources are the roadmap. |
 
 **Go enforces the separation.** The two paths are different modules, so minimal version selection,
 `go get -u`, and dependency bots cannot move a consumer from one line to the other. A tag whose
@@ -102,11 +102,11 @@ exactly what the modern line is. Adding `/api/v2` support is why this repository
 compatibility, not the server's REST version. A future server `/api/v3` would not automatically force
 an SDK `/v3` — only a break in the SDK's own exported Go API would.
 
-> **Current state, to be exact:** *both* lines speak `/api/v1` only. `apiPrefix` is a hardcoded
-> constant (`octonomy.go:14`) and `Config` has no API-version selector yet. Adding `/api/v2` support —
-> the selector, the namespace axis, and the six remaining resource groups — is what the modern line is
-> *for*, and it is why this repository took the `/v2` module path now rather than after the fact. But
-> it has not landed. Do not adopt the `/v2` module expecting to reach REST v2 endpoints today.
+> **Current state, to be exact:** the modern line speaks **both** surfaces. `Config.APIVersion`
+> selects one and defaults to `APIV2`, and the namespace axis is per-request (`WithNamespace`). The
+> compat line remains `/api/v1` only, permanently — that is its policy, not a gap. What has *not*
+> landed on the modern line is the six remaining resource groups; `Vocabularies` and `Tags` are the
+> two that exist, on either surface. See [`roadmap.md`](roadmap.md).
 
 ## Where this shows up
 

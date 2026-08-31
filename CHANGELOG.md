@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING
+- **The default REST surface is now `/api/v2`.** `Config.APIVersion` selects it and defaults to
+  `APIV2`, the server's primary advertised surface; the client previously targeted `/api/v1`
+  unconditionally. **If your Octonomy server predates 3.0, set `Config.APIVersion = APIV1`** — such a
+  deployment has no `/api/v2` route and answers every call with an unrouted 404. The SDK cannot
+  detect this in advance (there is no version handshake), so this is a wire-level change that
+  compiles clean. It does not fail silently: see the error-mapping entry below, which is what makes
+  the misconfiguration loud, and which was a condition of making v2 the default at all.
+- **An envelope-less non-2xx no longer gets a semantic error code.** A response that did not carry
+  Octonomy's `{"error": {...}}` envelope now yields `CodeUnexpectedStatus` (`IsUnexpectedStatus`)
+  instead of a code derived from its HTTP status. **`IsNotFound(err)` no longer reports true for a
+  bare 404** from a proxy, a gateway, or a server with no route for the requested API version — only
+  for a real Octonomy `not_found`. This changes behavior for existing v1 callers who branch on
+  `IsNotFound` for a bare 404, independently of the version default above.
+
+  The old mapping is what made the v2 default unsafe: an unrouted 404 became `CodeNotFound`, so a
+  caller's ordinary "that tag doesn't exist" branch read a missing `/api/v2` as an empty taxonomy
+  with no error at all. Codes that *do* arrive in an envelope are preserved verbatim, including ones
+  this SDK has no constant for, so a `503 namespace_api_disabled` stays distinguishable from an
+  infrastructure 503.
+
+### Added
+- **`/api/v2` and namespace scoping** ([#7](https://github.com/octoverse-id/octonomy-go/issues/7)).
+  `APIVersion` (`APIV1`, `APIV2`), `Config.APIVersion`, and `Client.APIVersion()`. Namespace
+  (merchant / sub-tenant) scoping is per-request via `WithNamespace(nsType, nsID)` and
+  `WithGlobalNamespace()`, which set or clear the `X-Namespace-Type` / `X-Namespace-ID` pair. There
+  is deliberately **no** `Config` namespace field: omitting the headers is a legal request that
+  returns the *global* namespace with a 200, so a client-level default would silently mis-scope every
+  read at call sites that still look correct.
+- `WithApplication(applicationID)` contributes the `application_id` query parameter, which reads take
+  their application scope from and which a namespaced request must carry. Without it the SDK could
+  not construct a valid namespaced detail read at all.
+- `WithIncludeGlobal()` asks a namespaced read to also return the global rows the caller is
+  authorized for (`include_global`, a query parameter — fail-closed on the server). It is refused on
+  writes, where the server ignores it, rather than being sent to do nothing.
+- `NamespaceType` / `NamespaceID` on `Tag` and `Vocabulary` — decode-only, nil on a global row and on
+  every `/api/v1` response. The five remaining v2 schemas that carry them arrive with their resources
+  (see [`docs/roadmap.md`](docs/roadmap.md)).
+- Error codes and helpers for the namespace surface: `namespace_not_supported`, `namespace_invalid`,
+  `namespaced_writes_disabled`, `namespace_api_disabled`, `ambiguous_resolution`, each with an `Is*`
+  helper. `namespaced_writes_disabled` and `namespace_api_disabled` are **operator** states — rollout
+  flags, not caller errors — and their doc comments say so.
+- `IsTenantMismatch`, `IsApplicationMismatch`, and `IsInactiveTag`: the constants shipped without
+  helpers, and the latter two are what assignment writes raise.
+- Response bodies are bounded at 32 MiB, reported as `ErrResponseTooLarge`. A caller cannot express a
+  size ceiling through `*http.Client` — its `Timeout` bounds duration, not bytes — so the limit lives
+  at the one chokepoint every method shares.
+- `docs/openapi-v2.yaml`, vendored from server 3.1.1.
+
+### Changed
+- `docs/roadmap.md` is re-derived from `openapi-v2.yaml` rather than edited. It had been written
+  against server 1.0.0 and had drifted: `Tags.Resolve` was documented as taking `slug` +
+  `application_id` when the endpoint takes four parameters including `scope`. Since #8–#13 delegate
+  to that file, the drift would have been copied into six resources.
+- Header assembly moved out of `doRaw` into `Client.headers`, which had grown past the point where
+  the branches read clearly inline.
+
 ### Fixed
 - **Single-resource responses decoded to zero-valued structs.** The server wraps every payload under
   `data` — single resources as `{"data": {...}}`, not only lists — so `Tags.Create`/`Get`/`Update`

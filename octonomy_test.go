@@ -100,8 +100,8 @@ func TestDo_SetsHeadersAndPath(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("method = %q, want GET", r.Method)
 		}
-		if r.URL.Path != "/api/v1/tags/abc" {
-			t.Errorf("path = %q, want /api/v1/tags/abc", r.URL.Path)
+		if r.URL.Path != "/api/v2/tags/abc" {
+			t.Errorf("path = %q, want /api/v2/tags/abc", r.URL.Path)
 		}
 		writeData(t, w, http.StatusOK, Tag{ID: "abc"})
 	})
@@ -227,6 +227,13 @@ func TestDo_ErrorFallbackNonEnvelope(t *testing.T) {
 	}
 	if apiErr.Message != "upstream down" {
 		t.Errorf("Message = %q, want %q", apiErr.Message, "upstream down")
+	}
+	// Asserting Code closes the hole that hid the 404 trap: this test existed
+	// throughout, but checked only StatusCode and Message, so the status-derived
+	// semantic code it was producing went unobserved. errors_test.go covers the
+	// rule; this line stops the original blind spot from reopening.
+	if apiErr.Code != CodeUnexpectedStatus {
+		t.Errorf("Code = %q, want %q", apiErr.Code, CodeUnexpectedStatus)
 	}
 }
 

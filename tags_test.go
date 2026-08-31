@@ -12,8 +12,8 @@ import (
 func TestTags_Create(t *testing.T) {
 	created := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/tags" {
-			t.Errorf("got %s %s, want POST /api/v1/tags", r.Method, r.URL.Path)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v2/tags" {
+			t.Errorf("got %s %s, want POST /api/v2/tags", r.Method, r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
 		var in map[string]any
@@ -56,8 +56,8 @@ func TestTags_CreateConflict(t *testing.T) {
 
 func TestTags_List_AllParams(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/tags" {
-			t.Errorf("path = %q, want /api/v1/tags", r.URL.Path)
+		if r.URL.Path != "/api/v2/tags" {
+			t.Errorf("path = %q, want /api/v2/tags", r.URL.Path)
 		}
 		q := r.URL.Query()
 		want := map[string]string{
@@ -130,8 +130,8 @@ func TestTags_Get(t *testing.T) {
 	created := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
 	updated := created.Add(48 * time.Hour)
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/tags/tag_1" {
-			t.Errorf("got %s %s, want GET /api/v1/tags/tag_1", r.Method, r.URL.Path)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v2/tags/tag_1" {
+			t.Errorf("got %s %s, want GET /api/v2/tags/tag_1", r.Method, r.URL.Path)
 		}
 		writeData(t, w, http.StatusOK, Tag{
 			ID:            "tag_1",
@@ -193,8 +193,8 @@ func TestTags_GetNotFound(t *testing.T) {
 
 func TestTags_Update(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch || r.URL.Path != "/api/v1/tags/tag_1" {
-			t.Errorf("got %s %s, want PATCH /api/v1/tags/tag_1", r.Method, r.URL.Path)
+		if r.Method != http.MethodPatch || r.URL.Path != "/api/v2/tags/tag_1" {
+			t.Errorf("got %s %s, want PATCH /api/v2/tags/tag_1", r.Method, r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
 		var in map[string]any
@@ -226,8 +226,8 @@ func TestTags_Update(t *testing.T) {
 
 func TestTags_Delete(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete || r.URL.Path != "/api/v1/tags/tag_1" {
-			t.Errorf("got %s %s, want DELETE /api/v1/tags/tag_1", r.Method, r.URL.Path)
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/v2/tags/tag_1" {
+			t.Errorf("got %s %s, want DELETE /api/v2/tags/tag_1", r.Method, r.URL.Path)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
