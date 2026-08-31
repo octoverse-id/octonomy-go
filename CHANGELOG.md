@@ -36,9 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is deliberately **no** `Config` namespace field: omitting the headers is a legal request that
   returns the *global* namespace with a 200, so a client-level default would silently mis-scope every
   read at call sites that still look correct.
-- `WithApplication(applicationID)` contributes the `application_id` query parameter, which reads take
-  their application scope from and which a namespaced request must carry. Without it the SDK could
-  not construct a valid namespaced detail read at all.
+- `WithApplication(applicationID)` contributes the `application_id` query parameter on **bodyless**
+  requests (`GET`, `HEAD`, `DELETE`), which take their application scope from the query and must
+  carry one when namespaced. Without it the SDK could not construct a valid namespaced detail read at
+  all. It is refused on a `POST`/`PATCH`, where the body's `ApplicationID` is authoritative: the
+  server drops the query value on a global create, so honoring the option there would silently create
+  a tenant-shared row for a caller who asked for application scope.
 - `WithIncludeGlobal()` asks a namespaced read to also return the global rows the caller is
   authorized for (`include_global`, a query parameter — fail-closed on the server). It is refused on
   writes, where the server ignores it, rather than being sent to do nothing.

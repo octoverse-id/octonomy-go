@@ -139,18 +139,21 @@ func WithGlobalNamespace() RequestOption {
 // WithApplication scopes one request to an application via the application_id
 // query parameter.
 //
-// Reads take application scope from the query string only, so this is the only
-// way to apply it to a Get or a Delete, which have no params struct -- and it is
-// required on a namespaced read. Setting a value that contradicts one already in
-// the request is an error rather than a silent overwrite.
+// BODYLESS REQUESTS ONLY -- Get, Delete, and any List. Those take application
+// scope from the query string alone, so this is the only way to supply it, and
+// it is required on a namespaced one. Setting a value that contradicts one
+// already in the request is an error rather than a silent overwrite.
 //
-// Writes may carry application scope EITHER here or as the ApplicationID field
-// of the request body, and both persist. That is not an inference from the
-// spec's parameter lists: a namespaced POST carrying application_id in the query
-// alone was probed against 3.1.0 and returned 201 with the application persisted
-// on the row (the server folds it in via create_payload_with_scope). Carrying it
-// in neither place is a 403 naming the namespace grant, so the omission is loud
-// -- which is why checkScopeCoherence does not try to inspect write bodies.
+// On a POST or PATCH it is REFUSED, because the query is not authoritative
+// there. Probed against 3.1.0, the query value persists on a namespaced create
+// but is DROPPED on a global one (core/selectors.py create_payload_with_scope
+// returns early for global scope: "NULL = shared is valid there"), and a body
+// application_id beats the query in both. So on a body-carrying write this
+// option would be honored, ignored, or overridden depending on request scope --
+// and the ignored case is the dangerous one: a caller asking for application
+// scope silently gets a tenant-SHARED row. Write bodies name their own
+// application through the ApplicationID field, which is authoritative in every
+// case.
 func WithApplication(applicationID string) RequestOption {
 	return func(rc *requestConfig) {
 		if strings.TrimSpace(applicationID) == "" {
@@ -389,6 +392,16 @@ func (c *Client) checkScopeCoherence(method string, rc requestConfig, query url.
 		return fmt.Errorf("octonomy: WithNamespace requires the v2 API surface, but this client targets %s: set Config.APIVersion = APIV2", c.apiVersion)
 	}
 
+	// Application scope on a body-carrying write belongs to the body. The query
+	// value is not authoritative there: the server drops it on a global create
+	// and lets a body value beat it, so honoring this option would sometimes
+	// scope the row, sometimes silently leave it tenant-shared. Same family as
+	// WithIncludeGlobal below -- an option the server may quietly ignore is
+	// refused here rather than sent to do nothing.
+	if rc.applicationSet && hasBody {
+		return fmt.Errorf("octonomy: WithApplication does not apply to a %s, which carries a body: set the ApplicationID field of the request body instead, because the server takes a write's application scope from the body and may ignore the query parameter entirely", method)
+	}
+
 	if rc.includeGlobal {
 		if c.apiVersion != APIV2 {
 			return fmt.Errorf("octonomy: WithIncludeGlobal requires the v2 API surface, but this client targets %s: %s is meaningful only where a namespace axis exists", c.apiVersion, includeGlobalParam)
@@ -409,14 +422,14 @@ func (c *Client) checkScopeCoherence(method string, rc requestConfig, query url.
 	// DELETE is precisely the case where the query is all there is and
 	// Tags.Delete offers no other way to supply an application.
 	//
-	// Body-carrying writes are deliberately left to the server. They may name
-	// their application in the query or in the body (the server unions both, and
-	// persists either -- probed), and the body is an arbitrary caller type:
-	// reaching into it would mean reflecting over every write struct, or an
-	// interface each future resource must remember to implement, where
-	// forgetting silently disables the guard. A guard that fails open by
-	// omission is worse than no guard, and the server's rejection here is an
-	// unambiguous 403 naming the namespace grant.
+	// Body-carrying writes are deliberately left to the server. Their
+	// application lives in the body -- WithApplication is refused on them above,
+	// precisely because the query is not authoritative there -- and the body is
+	// an arbitrary caller type: reaching into it would mean reflecting over
+	// every write struct, or an interface each future resource must remember to
+	// implement, where forgetting silently disables the guard. A guard that
+	// fails open by omission is worse than no guard, and the server's rejection
+	// here is an unambiguous 403 naming the namespace grant (probed).
 	//
 	// Non-blank, not merely present: the two application checks in this file ask
 	// different questions and must not share a test. The contradiction check in

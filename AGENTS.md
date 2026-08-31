@@ -43,9 +43,11 @@ stays a faithful, ergonomic client.
   `WithApplication`, and `WithIncludeGlobal` apply to any method and are enforced at the chokepoint,
   so a new resource inherits them by doing nothing. Do not add a namespace field to `Config`, a
   per-resource namespace parameter, or a duplicate of a guard that already lives in
-  `checkScopeCoherence`. `application_id` reaches the wire as a **query** parameter on reads and as
-  either a query parameter or a body field on writes; `include_global` is a **query** parameter and
-  is meaningless on writes.
+  `checkScopeCoherence`. **Application scope follows the body:** on a bodyless request the query is
+  authoritative (`WithApplication`), and on a `POST`/`PATCH` the body's `ApplicationID` is — the
+  server drops the query value on a global create, so the option is refused there rather than
+  silently producing a tenant-shared row. `include_global` is a **query** parameter and is
+  meaningless on writes.
 - **A scope option that contradicts one already on the request is an error, never last-wins.** This
   holds option-versus-params and option-versus-itself. Last-wins on a scope axis is a silent
   wrong-tenant read, and on `Get`/`Delete` — which have no params struct — option-versus-option is

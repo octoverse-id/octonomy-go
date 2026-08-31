@@ -132,7 +132,7 @@ page, err := client.Tags.List(ctx, params,
 | ------ | ----- | ----- |
 | `WithNamespace(type, id)` | `X-Namespace-Type` / `X-Namespace-ID` | v2 only. `global` is a reserved type |
 | `WithGlobalNamespace()` | *nothing* | The tenant-shared namespace is selected by sending no headers |
-| `WithApplication(id)` | `?application_id=` | Required on a namespaced read |
+| `WithApplication(id)` | `?application_id=` | Bodyless requests only; required on a namespaced one. Writes use the body's `ApplicationID` |
 | `WithIncludeGlobal()` | `?include_global=true` | Reads only; fail-closed on the server |
 
 **Why no `Config.Namespace`.** Omitting the headers is not an error — the server returns the

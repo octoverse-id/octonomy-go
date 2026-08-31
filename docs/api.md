@@ -42,12 +42,18 @@ so a client-level default would silently mis-scope reads rather than fail.
 | ------ | ----------- | ---------- |
 | `WithNamespace(type, id)` | `X-Namespace-Type` + `X-Namespace-ID` headers | v2 only; `global` is a reserved type |
 | `WithGlobalNamespace()` | nothing (absence selects global) | any |
-| `WithApplication(id)` | `application_id` query param | any; **required** on a namespaced `GET`/`DELETE` |
+| `WithApplication(id)` | `application_id` query param | **bodyless requests only**; required on a namespaced one |
 | `WithIncludeGlobal()` | `include_global=true` query param | v2 reads only |
 
-`application_id` is a **query** parameter on reads and may be either a query parameter or a body
-field on writes — the server unions both. `include_global` is a **query** parameter, not a header,
-and the server ignores it on writes; the SDK refuses it there rather than sending a no-op.
+**Application scope follows the body.** On a bodyless request (`GET`, `HEAD`, `DELETE`) the query
+string is authoritative, so `WithApplication` is how you set it. On a `POST` or `PATCH` the **body**
+is authoritative and `WithApplication` is refused: probed against 3.1.0, the query value persists on
+a namespaced create but is **dropped** on a global one, and a body `application_id` beats the query
+in both. Honoring the option there would silently produce a tenant-shared row for a caller who asked
+for application scope. Write bodies carry `ApplicationID`, which is authoritative in every case.
+
+`include_global` is a **query** parameter, not a header, and the server ignores it on writes; the SDK
+refuses it there for the same reason.
 
 ### Rejected before the request is sent
 

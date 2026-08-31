@@ -2,6 +2,7 @@ package octonomy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -258,6 +259,29 @@ func TestScopeGuards_RejectBeforeSendingAnything(t *testing.T) {
 				return c.Tags.Delete(context.Background(), "abc", WithNamespace("merchant", "m1"))
 			},
 			wantIn: "WithApplication",
+		},
+		{
+			// The query application_id is not authoritative on a write: probed
+			// against 3.1.0, it persists on a namespaced create and is DROPPED
+			// on a global one, so honoring this option would silently produce a
+			// tenant-shared row for a caller who asked for application scope.
+			// Found by Codex review of #7 (its only P1).
+			name:    "WithApplication on a create",
+			version: APIV2,
+			call: func(c *Client) error {
+				_, err := c.Tags.Create(context.Background(), TagCreate{Name: "N", Slug: "n", Type: "topic"}, WithApplication("shop"))
+				return err
+			},
+			wantIn: "ApplicationID field of the request body",
+		},
+		{
+			name:    "WithApplication on an update",
+			version: APIV2,
+			call: func(c *Client) error {
+				_, err := c.Tags.Update(context.Background(), "abc", TagUpdate{Name: String("N")}, WithApplication("shop"))
+				return err
+			},
+			wantIn: "ApplicationID field of the request body",
 		},
 		{
 			name:    "include_global on a write",
@@ -679,4 +703,72 @@ func TestMergeQuery_EmptyParamsApplicationStillContradicts(t *testing.T) {
 	if !strings.Contains(err.Error(), "contradicts") {
 		t.Errorf("error should name the contradiction, got: %v", err)
 	}
+}
+
+// WithApplication's domain is exactly the bodyless requests -- the same hasBody
+// axis the missing-application guard uses. One concept, two consequences:
+// where the query is the whole request the option is the way to scope it, and
+// where a body exists the body is authoritative and the option is refused.
+func TestWithApplication_AppliesToBodylessRequestsOnly(t *testing.T) {
+	t.Run("delete accepts it", func(t *testing.T) {
+		c := newVersionedTestClient(t, APIV2, func(w http.ResponseWriter, r *http.Request) {
+			if got := r.URL.Query().Get(applicationIDParam); got != "shop" {
+				t.Errorf("%s = %q, want shop", applicationIDParam, got)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+		if err := c.Tags.Delete(context.Background(), "abc", WithApplication("shop")); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+	})
+
+	t.Run("list accepts it", func(t *testing.T) {
+		c := newVersionedTestClient(t, APIV2, func(w http.ResponseWriter, r *http.Request) {
+			if got := r.URL.Query().Get(applicationIDParam); got != "shop" {
+				t.Errorf("%s = %q, want shop", applicationIDParam, got)
+			}
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"data": []Tag{}, "pagination": map[string]any{"limit": 50},
+			})
+		})
+		if _, err := c.Tags.List(context.Background(), nil, WithApplication("shop")); err != nil {
+			t.Fatalf("List: %v", err)
+		}
+	})
+
+	t.Run("create refuses it and names the body field", func(t *testing.T) {
+		c := newUnreachableClient(t, APIV2)
+		_, err := c.Vocabularies.Create(context.Background(),
+			VocabularyCreate{Name: "N", Slug: "n"}, WithApplication("shop"))
+		if err == nil {
+			t.Fatal("expected a client-side error")
+		}
+		if !strings.Contains(err.Error(), "ApplicationID") {
+			t.Errorf("error must name the field that actually works, got: %v", err)
+		}
+	})
+
+	// The body field is untouched by any of this and remains the way to scope a
+	// write -- including a namespaced one.
+	t.Run("the body field still scopes a create", func(t *testing.T) {
+		c := newVersionedTestClient(t, APIV2, func(w http.ResponseWriter, r *http.Request) {
+			var got TagCreate
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			if got.ApplicationID == nil || *got.ApplicationID != "shop" {
+				t.Errorf("body application_id = %v, want shop", got.ApplicationID)
+			}
+			writeData(t, w, http.StatusCreated, Tag{ID: "abc", ApplicationID: String("shop")})
+		})
+		tag, err := c.Tags.Create(context.Background(), TagCreate{
+			Name: "N", Slug: "n", Type: "topic", ApplicationID: String("shop"),
+		}, WithNamespace("merchant", "m1"))
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if tag.ApplicationID == nil || *tag.ApplicationID != "shop" {
+			t.Errorf("tag.ApplicationID = %v, want shop", tag.ApplicationID)
+		}
+	})
 }
