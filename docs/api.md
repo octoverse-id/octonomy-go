@@ -42,7 +42,7 @@ so a client-level default would silently mis-scope reads rather than fail.
 | ------ | ----------- | ---------- |
 | `WithNamespace(type, id)` | `X-Namespace-Type` + `X-Namespace-ID` headers | v2 only; `global` is a reserved type |
 | `WithGlobalNamespace()` | nothing (absence selects global) | any |
-| `WithApplication(id)` | `application_id` query param | any; **required** on a namespaced read |
+| `WithApplication(id)` | `application_id` query param | any; **required** on a namespaced `GET`/`DELETE` |
 | `WithIncludeGlobal()` | `include_global=true` query param | v2 reads only |
 
 `application_id` is a **query** parameter on reads and may be either a query parameter or a body
@@ -53,7 +53,12 @@ and the server ignores it on writes; the SDK refuses it there rather than sendin
 
 The transport refuses these locally, with an error naming the SDK-level fix and no HTTP round trip:
 a namespace on a v1 client, a half-set or reserved (`global`) namespace pair, a blank application id,
-a namespaced read with no application, and `WithIncludeGlobal` on a write.
+a namespaced **bodyless** request with no application, and `WithIncludeGlobal` on a write.
+
+"Bodyless" is the real criterion for that last one, not "read": on a GET, HEAD, or DELETE the query
+string is the whole request, so the check is complete. A namespaced `POST`/`PATCH` is still sent —
+its application may be a body field the transport cannot see without reflection, and the server
+answers `403` naming the namespace grant if it truly is missing.
 
 **Contradictory scope is refused, never resolved by precedence.** That covers `WithApplication`
 against a `*ListParams` field, and either scope option against a second call to itself with a

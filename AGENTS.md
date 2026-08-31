@@ -14,8 +14,8 @@ stays a faithful, ergonomic client.
 - The SDK adds ergonomics, not behavior. Do not encode server-side validation or invariants here.
   **One recorded exemption: `checkScopeCoherence` in `transport.go`** (#7). It rejects a request
   whose own scoping options contradict each other or the client's configured API version — a
-  namespace on a v1 client, a half-set or reserved namespace pair, a namespaced read with no
-  application, `WithIncludeGlobal` on a write. None of those consults resource state or can disagree
+  namespace on a v1 client, a half-set or reserved namespace pair, a namespaced bodyless request
+  (GET/HEAD/DELETE) with no application, `WithIncludeGlobal` on a write. None of those consults resource state or can disagree
   with the server about a row; they are about the coherence of the caller's own configuration, and
   each names an SDK symbol in its remediation. **A check that could only cite a server rule does not
   belong there.** The server rejects all of them by name too, so the guard buys a round trip and a

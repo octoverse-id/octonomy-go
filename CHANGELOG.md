@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WithApplication` or `WithNamespace` naming a different value. Last-wins on a scope axis is a
   silent cross-merchant read, and on `Get`/`Delete` (no params struct) option-versus-option is the
   only way the value can be set. `WithGlobalNamespace` stays the one explicit override.
+- The missing-application guard on a namespaced request keys on whether the request carries a **body**
+  rather than on whether it is a read. A bodyless `DELETE` is exactly the case where the query string
+  is the whole request and `WithApplication` is the only way to supply an application, so it is now
+  checked locally instead of being sent to a certain `403`.
 - `docs/openapi-v2.yaml`, vendored from server 3.1.1.
 
 ### Changed

@@ -237,7 +237,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 	if err != nil {
 		return 0, nil, err
 	}
-	if err := c.checkScopeCoherence(method, rc, query); err != nil {
+	if err := c.checkScopeCoherence(method, rc, query, body != nil); err != nil {
 		return 0, nil, err
 	}
 
@@ -340,7 +340,10 @@ func (rc *requestConfig) mergeQuery(query url.Values) (url.Values, error) {
 		// mistake in the call, not a precedence question: silently picking either
 		// one would scope the request to an application the caller did not
 		// unambiguously ask for.
-		if existing := merged.Get(applicationIDParam); existing != "" && existing != rc.applicationID {
+		// Has, not Get() != "": a params field explicitly set to "" is PRESENT,
+		// and comparing against the empty string reads that as absent -- so the
+		// option would overwrite it instead of reporting the contradiction.
+		if existing := merged.Get(applicationIDParam); merged.Has(applicationIDParam) && existing != rc.applicationID {
 			return nil, fmt.Errorf("octonomy: WithApplication(%q) contradicts the %s already set on this request (%q); set it in one place", rc.applicationID, applicationIDParam, existing)
 		}
 		merged.Set(applicationIDParam, rc.applicationID)
@@ -377,7 +380,7 @@ func (rc *requestConfig) mergeQuery(query url.Values) (url.Values, error) {
 // The one exception is WithIncludeGlobal on a write, which the server does not
 // reject -- it ignores it. Silence is exactly the failure mode this SDK refuses
 // elsewhere (#32), so the SDK makes it loud.
-func (c *Client) checkScopeCoherence(method string, rc requestConfig, query url.Values) error {
+func (c *Client) checkScopeCoherence(method string, rc requestConfig, query url.Values, hasBody bool) error {
 	if rc.err != nil {
 		return rc.err
 	}
@@ -396,19 +399,26 @@ func (c *Client) checkScopeCoherence(method string, rc requestConfig, query url.
 	}
 
 	// Namespace isolation sits below application on the server, so a namespaced
-	// request that names no application is refused. Reads take application scope
-	// from the query string ALONE, which the transport can see in full -- so the
-	// check is exact here and is made.
+	// request that names no application is refused.
 	//
-	// Writes are deliberately left to the server. They may carry application_id
-	// in the query or in the body (the server unions both), and the body is an
-	// arbitrary caller type: reaching into it would mean either reflecting over
-	// every write struct or an interface each future resource must remember to
-	// implement, where forgetting silently disables the guard. A guard that can
-	// fail open by omission is worse than no guard, and the server's rejection is
-	// unambiguous, so this one stops at the query string.
-	if rc.namespaceSet && isReadMethod(method) && query.Get(applicationIDParam) == "" {
-		return fmt.Errorf("octonomy: a namespaced read must also name its application: add WithApplication(...), because namespace isolation sits below application on the server")
+	// The criterion for checking it here is whether the transport can see ALL of
+	// the request's application scope, which is exactly "this request carries no
+	// body": then the query string is the whole story and the check is complete.
+	// That covers GET and HEAD, and it covers DELETE -- which an earlier
+	// "reads only" version of this guard let through, even though a bodyless
+	// DELETE is precisely the case where the query is all there is and
+	// Tags.Delete offers no other way to supply an application.
+	//
+	// Body-carrying writes are deliberately left to the server. They may name
+	// their application in the query or in the body (the server unions both, and
+	// persists either -- probed), and the body is an arbitrary caller type:
+	// reaching into it would mean reflecting over every write struct, or an
+	// interface each future resource must remember to implement, where
+	// forgetting silently disables the guard. A guard that fails open by
+	// omission is worse than no guard, and the server's rejection here is an
+	// unambiguous 403 naming the namespace grant.
+	if rc.namespaceSet && !hasBody && !query.Has(applicationIDParam) {
+		return fmt.Errorf("octonomy: a namespaced %s must also name its application: add WithApplication(...), because namespace isolation sits below application on the server", method)
 	}
 
 	// scope=merchant (tag resolution) asks the server to resolve within the
@@ -423,8 +433,10 @@ func (c *Client) checkScopeCoherence(method string, rc requestConfig, query url.
 	return nil
 }
 
-// isReadMethod reports whether method is safe, i.e. carries no state change and
-// takes all of its scoping from the URL.
+// isReadMethod reports whether method is safe. It gates include_global, which
+// the server reads from the query only on safe methods -- a narrower question
+// than "can the transport see the whole request", which the application guard
+// above answers with hasBody instead.
 func isReadMethod(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead
 }

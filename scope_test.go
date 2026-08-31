@@ -247,6 +247,19 @@ func TestScopeGuards_RejectBeforeSendingAnything(t *testing.T) {
 			wantIn: "WithApplication",
 		},
 		{
+			// A bodyless DELETE is the case where the query string is the WHOLE
+			// request: Tags.Delete has no params struct and no body, so
+			// WithApplication is the only way to name an application. An earlier
+			// version of this guard keyed on "is it a read" and let this through
+			// to a server 403 -- found by Codex review of #7.
+			name:    "namespaced delete without an application",
+			version: APIV2,
+			call: func(c *Client) error {
+				return c.Tags.Delete(context.Background(), "abc", WithNamespace("merchant", "m1"))
+			},
+			wantIn: "WithApplication",
+		},
+		{
 			name:    "include_global on a write",
 			version: APIV2,
 			call: func(c *Client) error {
@@ -572,5 +585,71 @@ func TestRepeatedScopeOptions_IdempotentAndCancelStillWork(t *testing.T) {
 				t.Fatalf("Get: %v", err)
 			}
 		})
+	}
+}
+
+// The guard's boundary is "can the transport see the whole request", not "is it
+// a read". These are the two sides of that line, and getting either wrong is a
+// user-visible bug: too narrow sends a request the server will refuse, too wide
+// blocks a legal call the server would accept.
+func TestNamespacedApplicationGuard_BoundaryIsTheBody(t *testing.T) {
+	t.Run("bodyless methods are checked locally", func(t *testing.T) {
+		// GET and DELETE both carry their application scope in the query alone.
+		c := newUnreachableClient(t, APIV2)
+		if _, err := c.Tags.Get(context.Background(), "abc", WithNamespace("merchant", "m1")); err == nil {
+			t.Error("namespaced Get without an application was not refused")
+		}
+		if err := c.Tags.Delete(context.Background(), "abc", WithNamespace("merchant", "m1")); err == nil {
+			t.Error("namespaced Delete without an application was not refused")
+		}
+	})
+
+	t.Run("body-carrying writes are left to the server", func(t *testing.T) {
+		// TagCreate.ApplicationID is a body field the transport cannot see
+		// without reflection, so a namespaced create must still be SENT -- the
+		// server answers 403 if the application really is missing. Refusing it
+		// here would break every correct namespaced create.
+		reached := false
+		c := newVersionedTestClient(t, APIV2, func(w http.ResponseWriter, _ *http.Request) {
+			reached = true
+			writeData(t, w, http.StatusCreated, Tag{ID: "abc"})
+		})
+		_, err := c.Tags.Create(context.Background(), TagCreate{
+			Name: "N", Slug: "n", Type: "topic", ApplicationID: String("shop"),
+		}, WithNamespace("merchant", "m1"))
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if !reached {
+			t.Error("a namespaced create with a body application was refused locally; the transport cannot see the body and must not guess")
+		}
+	})
+
+	t.Run("a supplied application satisfies the guard on a delete", func(t *testing.T) {
+		c := newVersionedTestClient(t, APIV2, func(w http.ResponseWriter, r *http.Request) {
+			if got := r.URL.Query().Get(applicationIDParam); got != "shop" {
+				t.Errorf("%s = %q, want shop", applicationIDParam, got)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+		if err := c.Tags.Delete(context.Background(), "abc",
+			WithNamespace("merchant", "m1"), WithApplication("shop")); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+	})
+}
+
+// An application_id explicitly set to "" is PRESENT, not absent. Comparing the
+// merged value against the empty string read it as absent and let the option
+// overwrite it -- found by Codex review of #7.
+func TestMergeQuery_EmptyParamsApplicationStillContradicts(t *testing.T) {
+	c := newUnreachableClient(t, APIV2)
+	_, err := c.Tags.List(context.Background(),
+		&TagListParams{ApplicationID: String("")}, WithApplication("shop"))
+	if err == nil {
+		t.Fatal("expected a contradiction error")
+	}
+	if !strings.Contains(err.Error(), "contradicts") {
+		t.Errorf("error should name the contradiction, got: %v", err)
 	}
 }
