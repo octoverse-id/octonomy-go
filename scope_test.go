@@ -482,3 +482,95 @@ func mustQuery(pairs ...string) url.Values {
 	}
 	return q
 }
+
+// --- Repeated scope options ----------------------------------------------
+//
+// Codex review of #7 caught this: WithApplication documented that a
+// contradictory scope is refused, but only enforced it against a *ListParams
+// field. Option-versus-option fell through to last-wins -- and on Get and
+// Delete, which have no params struct, that was the ONLY way to set application
+// scope, so the documented promise held nowhere those methods could reach.
+//
+// The namespace axis had the same hole and is the one that matters more: a
+// silent last-wins there is a cross-merchant read, which is the exact failure
+// the no-Config-namespace design exists to prevent.
+
+func TestRepeatedScopeOptions_ContradictionIsAnError(t *testing.T) {
+	tests := []struct {
+		name   string
+		opts   []RequestOption
+		wantIn string
+	}{
+		{
+			name:   "two different applications",
+			opts:   []RequestOption{WithApplication("catalog"), WithApplication("billing")},
+			wantIn: "contradicts the application already set",
+		},
+		{
+			name:   "two different namespace ids",
+			opts:   []RequestOption{WithNamespace("merchant", "acme"), WithNamespace("merchant", "globex")},
+			wantIn: "contradicts the namespace already set",
+		},
+		{
+			name:   "two different namespace types",
+			opts:   []RequestOption{WithNamespace("merchant", "acme"), WithNamespace("reseller", "acme")},
+			wantIn: "contradicts the namespace already set",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newUnreachableClient(t, APIV2)
+			_, err := c.Tags.Get(context.Background(), "abc", tt.opts...)
+			if err == nil {
+				t.Fatal("expected a client-side error")
+			}
+			if !strings.Contains(err.Error(), tt.wantIn) {
+				t.Errorf("error should mention %q, got: %v", tt.wantIn, err)
+			}
+		})
+	}
+}
+
+// ...but a repeat of the SAME value is not a contradiction, and clearing then
+// setting is the documented way to change a namespace. Neither may be caught by
+// the rule above: a shared []RequestOption that repeats itself is harmless, and
+// breaking WithGlobalNamespace's cancel would remove the only legitimate
+// override.
+func TestRepeatedScopeOptions_IdempotentAndCancelStillWork(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    []RequestOption
+		wantNS  string
+		wantApp string
+	}{
+		{
+			name:    "identical repeats",
+			opts:    []RequestOption{WithNamespace("merchant", "acme"), WithNamespace("merchant", "acme"), WithApplication("shop"), WithApplication("shop")},
+			wantNS:  "acme",
+			wantApp: "shop",
+		},
+		{
+			name:    "cancel then set a different namespace",
+			opts:    []RequestOption{WithNamespace("merchant", "acme"), WithGlobalNamespace(), WithNamespace("merchant", "globex"), WithApplication("shop")},
+			wantNS:  "globex",
+			wantApp: "shop",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wantNS, wantApp := tt.wantNS, tt.wantApp
+			c := newVersionedTestClient(t, APIV2, func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get(namespaceIDHeader); got != wantNS {
+					t.Errorf("%s = %q, want %q", namespaceIDHeader, got, wantNS)
+				}
+				if got := r.URL.Query().Get(applicationIDParam); got != wantApp {
+					t.Errorf("%s = %q, want %q", applicationIDParam, got, wantApp)
+				}
+				writeData(t, w, http.StatusOK, Tag{ID: "abc"})
+			})
+			if _, err := c.Tags.Get(context.Background(), "abc", tt.opts...); err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+		})
+	}
+}

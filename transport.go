@@ -103,6 +103,14 @@ func WithNamespace(nsType, nsID string) RequestOption {
 			rc.fail(fmt.Errorf("octonomy: WithNamespace: namespace id is required whenever a namespace type is set"))
 		case nsType == reservedNamespaceTypeGlobal:
 			rc.fail(fmt.Errorf("octonomy: WithNamespace: %q is a reserved namespace type; use WithGlobalNamespace, or omit the option, for the tenant-shared namespace", reservedNamespaceTypeGlobal))
+		case rc.namespaceSet && (rc.namespaceType != nsType || rc.namespaceID != nsID):
+			// Two different namespaces on one request is a contradiction, not a
+			// precedence question. Last-wins would silently send whichever the
+			// caller wrote second -- and on THIS axis that is a cross-merchant
+			// read, the exact failure the no-Config-field design exists to
+			// prevent. WithGlobalNamespace still clears: an explicit cancel is a
+			// different act from naming two merchants and hoping.
+			rc.fail(fmt.Errorf("octonomy: WithNamespace(%q, %q) contradicts the namespace already set on this request (%q, %q); set it in one place, or clear it with WithGlobalNamespace first", nsType, nsID, rc.namespaceType, rc.namespaceID))
 		default:
 			rc.namespaceType, rc.namespaceID, rc.namespaceSet = nsType, nsID, true
 		}
@@ -115,7 +123,13 @@ func WithNamespace(nsType, nsID string) RequestOption {
 // Since a Client holds no namespace default, this changes nothing on its own --
 // it exists to make "global, deliberately" readable at a call site, and to
 // cancel a WithNamespace held in a shared []RequestOption. Options apply in
-// order, so the last of the two wins.
+// order, so a WithGlobalNamespace after a WithNamespace clears it, and a
+// WithNamespace after a WithGlobalNamespace sets it.
+//
+// This is the ONE way to change an already-set namespace. Naming a second,
+// different namespace with WithNamespace is an error rather than an override --
+// cancelling deliberately and contradicting yourself are different acts, and
+// only the first is legible at the call site.
 func WithGlobalNamespace() RequestOption {
 	return func(rc *requestConfig) {
 		rc.namespaceType, rc.namespaceID, rc.namespaceSet = "", "", false
@@ -141,6 +155,14 @@ func WithApplication(applicationID string) RequestOption {
 	return func(rc *requestConfig) {
 		if strings.TrimSpace(applicationID) == "" {
 			rc.fail(fmt.Errorf("octonomy: WithApplication: application id is required; omit the option for a tenant-wide request"))
+			return
+		}
+		// Same rule as the *ListParams conflict in mergeQuery, which this used to
+		// leave half-enforced: a method with no params struct (Get, Delete) has no
+		// query value to contradict, so option-versus-option was the only
+		// remaining way to change application scope silently.
+		if rc.applicationSet && rc.applicationID != applicationID {
+			rc.fail(fmt.Errorf("octonomy: WithApplication(%q) contradicts the application already set on this request (%q); set it in one place", applicationID, rc.applicationID))
 			return
 		}
 		rc.applicationID, rc.applicationSet = applicationID, true
@@ -248,6 +270,20 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 
 	respBody, err := readBounded(resp.Body, c.maxResponseBytes)
 	if err != nil {
+		// A non-2xx whose body could not be read is still a non-2xx, and the
+		// status is the part the caller branches on. Returning a bare read error
+		// here would drop an entire class of failures out of *APIError -- a 503
+		// behind a proxy that dumps a 40 MiB error page would stop satisfying
+		// AsAPIError and IsUnexpectedStatus, silently, while every other 503 kept
+		// working. The read failure is not lost: it is wrapped, so errors.Is
+		// still finds ErrResponseTooLarge.
+		//
+		// A 2xx is different and stays a plain read error: there is no status
+		// classification worth preserving when the status said success and the
+		// payload is the thing that failed.
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return resp.StatusCode, nil, unreadableBodyError(resp.StatusCode, err)
+		}
 		return resp.StatusCode, nil, fmt.Errorf("octonomy: read response body: %w", err)
 	}
 
@@ -603,6 +639,22 @@ func parseError(status int, body []byte, version APIVersion) error {
 		StatusCode: status,
 		Code:       CodeUnexpectedStatus,
 		Message:    message + versionHint(status, version),
+	}
+}
+
+// unreadableBodyError builds the *APIError for a non-2xx whose body could not be
+// read to completion.
+//
+// The code is CodeUnexpectedStatus by the same rule parseError applies: no
+// envelope was decoded, so no semantic code was established. That is not a
+// fallback here but the accurate answer -- an unread body cannot have carried a
+// code, and guessing one from the status is precisely what this change removed.
+func unreadableBodyError(status int, cause error) error {
+	return &APIError{
+		StatusCode: status,
+		Code:       CodeUnexpectedStatus,
+		Message:    fmt.Sprintf("%s (response body could not be read: %v)", http.StatusText(status), cause),
+		err:        cause,
 	}
 }
 

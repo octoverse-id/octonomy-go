@@ -46,6 +46,10 @@ stays a faithful, ergonomic client.
   `checkScopeCoherence`. `application_id` reaches the wire as a **query** parameter on reads and as
   either a query parameter or a body field on writes; `include_global` is a **query** parameter and
   is meaningless on writes.
+- **A scope option that contradicts one already on the request is an error, never last-wins.** This
+  holds option-versus-params and option-versus-itself. Last-wins on a scope axis is a silent
+  wrong-tenant read, and on `Get`/`Delete` — which have no params struct — option-versus-option is
+  the only way the value can be set at all. `WithGlobalNamespace` remains the one explicit override.
 - Response models for the seven v2 schemas that carry namespace identity get `NamespaceType` /
   `NamespaceID` as `*string`, **decode-only**. The server sets them from the `X-Namespace-*` headers
   and never from a request body, so they must not appear on `*Create` / `*Update` — see
@@ -92,6 +96,10 @@ stays a faithful, ergonomic client.
     tenant guarantee, for every other resource.
 - Non-2xx responses become `*APIError` carrying the `{error:{code,message,details,request_id}}`
   envelope. Add `Is<Code>` helpers for common error codes.
+- **Every non-2xx becomes an `*APIError`, including one whose body could not be read.** An
+  oversized or truncated error body must not downgrade to a bare read error: that removes exactly
+  the large failures from `AsAPIError` / `IsUnexpectedStatus` while identical smaller ones keep
+  working. Wrap the cause so `errors.Is` still finds it.
 - **A non-2xx with no envelope gets `CodeUnexpectedStatus`, never a semantic code.** Do not
   reintroduce a status-to-code mapping: deriving `not_found` from a bare 404 is what made an unrouted
   `/api/v2` satisfy `IsNotFound`, so a caller's not-found branch read a missing route as an empty

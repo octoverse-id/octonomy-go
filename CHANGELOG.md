@@ -53,7 +53,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   helpers, and the latter two are what assignment writes raise.
 - Response bodies are bounded at 32 MiB, reported as `ErrResponseTooLarge`. A caller cannot express a
   size ceiling through `*http.Client` — its `Timeout` bounds duration, not bytes — so the limit lives
-  at the one chokepoint every method shares.
+  at the one chokepoint every method shares. A non-2xx that trips the ceiling still returns an
+  `*APIError` with its status and `CodeUnexpectedStatus`, wrapping the cause so `errors.Is` reaches
+  it; otherwise the large failures would silently fall out of `AsAPIError` while identical smaller
+  ones kept working. `APIError` gained `Unwrap` for this.
+- Contradictory scope options are refused rather than resolved by precedence — including a second
+  `WithApplication` or `WithNamespace` naming a different value. Last-wins on a scope axis is a
+  silent cross-merchant read, and on `Get`/`Delete` (no params struct) option-versus-option is the
+  only way the value can be set. `WithGlobalNamespace` stays the one explicit override.
 - `docs/openapi-v2.yaml`, vendored from server 3.1.1.
 
 ### Changed

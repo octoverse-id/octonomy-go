@@ -53,8 +53,14 @@ and the server ignores it on writes; the SDK refuses it there rather than sendin
 
 The transport refuses these locally, with an error naming the SDK-level fix and no HTTP round trip:
 a namespace on a v1 client, a half-set or reserved (`global`) namespace pair, a blank application id,
-a contradiction between `WithApplication` and a `*ListParams` field, a namespaced read with no
-application, and `WithIncludeGlobal` on a write.
+a namespaced read with no application, and `WithIncludeGlobal` on a write.
+
+**Contradictory scope is refused, never resolved by precedence.** That covers `WithApplication`
+against a `*ListParams` field, and either scope option against a second call to itself with a
+different value — `WithApplication("a"), WithApplication("b")` is an error, not "b wins". Repeating
+the same value is fine. The one legitimate override is `WithGlobalNamespace()`, which clears the
+namespace so a later `WithNamespace` can set a new one; cancelling deliberately and contradicting
+yourself are different acts.
 
 The server rejects all but the last of those by name too, so these are ergonomics rather than
 correctness — except `include_global` on a write, which the server silently ignores.
@@ -147,6 +153,13 @@ envelope is preserved verbatim, including one this SDK has no constant for, whic
 `503 namespace_api_disabled` distinguishable from an infrastructure 503.
 
 Response bodies are read with a 32 MiB ceiling; exceeding it returns `ErrResponseTooLarge`.
+
+A **non-2xx** whose body exceeds the ceiling still comes back as an `*APIError` carrying the status
+and `CodeUnexpectedStatus`, wrapping `ErrResponseTooLarge` so `errors.Is` still reaches it. Dropping
+it to a bare read error would take a whole class of failures — the large ones — out of `AsAPIError`
+and `IsUnexpectedStatus` while every other response of the same status kept working. A **2xx** read
+failure stays a plain read error: a success status with an unusable payload has no classification
+worth preserving.
 
 ## Not yet implemented
 

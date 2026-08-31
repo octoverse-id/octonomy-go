@@ -53,6 +53,12 @@ type APIError struct {
 	Message    string
 	Details    map[string]any
 	RequestID  string
+
+	// err is an underlying cause, set when the failure was detected before the
+	// error envelope could be read -- today, only a response body the SDK
+	// refused to read to completion. It keeps errors.Is working for that cause
+	// without adding a second error type callers would have to know about.
+	err error
 }
 
 func (e *APIError) Error() string {
@@ -62,6 +68,10 @@ func (e *APIError) Error() string {
 	}
 	return fmt.Sprintf("octonomy: %s (code=%s, status=%d)", e.Message, e.Code, e.StatusCode)
 }
+
+// Unwrap returns the underlying cause, if any, so errors.Is reaches it. Most
+// *APIError values wrap nothing: a decoded error envelope IS the error.
+func (e *APIError) Unwrap() error { return e.err }
 
 // AsAPIError reports whether err wraps an *APIError and returns it when it does.
 func AsAPIError(err error) (*APIError, bool) {

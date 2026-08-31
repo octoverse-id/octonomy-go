@@ -324,3 +324,64 @@ func TestParseError_EnvelopedVersionRejectIsStillANotFound(t *testing.T) {
 		t.Error("IsUnexpectedStatus reported true for an enveloped response")
 	}
 }
+
+// A non-2xx whose body cannot be read is still a non-2xx.
+//
+// Codex review of #7 caught this: the read-error branch returned before
+// parseError, so an oversized error body dropped the response out of *APIError
+// entirely. A caller branching on IsUnexpectedStatus or reading StatusCode would
+// see nothing -- silently, and only for the failures big enough to trip the
+// limit, which is the worst possible distribution for a bug.
+func TestDoRaw_OversizedNon2xxKeepsItsAPIErrorClassification(t *testing.T) {
+	c := newVersionedTestClient(t, APIV2, func(w http.ResponseWriter, _ *http.Request) {
+		// A proxy dumping a large HTML error page over a real 503.
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(strings.Repeat("x", 512)))
+	})
+	c.maxResponseBytes = 32
+
+	_, err := c.Tags.Get(context.Background(), "abc")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	apiErr, ok := AsAPIError(err)
+	if !ok {
+		t.Fatalf("a non-2xx must stay an *APIError even when its body is unreadable: %v", err)
+	}
+	if apiErr.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("StatusCode = %d, want 503", apiErr.StatusCode)
+	}
+	if apiErr.Code != CodeUnexpectedStatus {
+		t.Errorf("Code = %q, want %q: no envelope was read, so no semantic code was established", apiErr.Code, CodeUnexpectedStatus)
+	}
+	if !IsUnexpectedStatus(err) {
+		t.Error("IsUnexpectedStatus = false")
+	}
+	// The cause survives the wrap, so a caller can still tell "too big" from
+	// "connection died mid-body".
+	if !errors.Is(err, ErrResponseTooLarge) {
+		t.Errorf("errors.Is(err, ErrResponseTooLarge) = false: %v", err)
+	}
+	if !strings.Contains(apiErr.Message, "could not be read") {
+		t.Errorf("Message should say why the body is missing: %q", apiErr.Message)
+	}
+}
+
+// The 2xx side is deliberately NOT symmetric: a success status with an unusable
+// payload has no classification worth preserving, so it stays a plain read
+// error rather than being dressed up as an API error.
+func TestDoRaw_Oversized2xxStaysAPlainReadError(t *testing.T) {
+	c := newVersionedTestClient(t, APIV2, func(w http.ResponseWriter, _ *http.Request) {
+		writeData(t, w, http.StatusOK, Tag{ID: "abc", Name: strings.Repeat("x", 512)})
+	})
+	c.maxResponseBytes = 32
+
+	_, err := c.Tags.Get(context.Background(), "abc")
+	if !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("err = %v, want ErrResponseTooLarge", err)
+	}
+	if apiErr, ok := AsAPIError(err); ok {
+		t.Errorf("a 2xx read failure became an *APIError (%v); there is no status classification to preserve", apiErr)
+	}
+}
