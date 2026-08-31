@@ -182,6 +182,14 @@ func TestParseError_VersionHint(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected an error")
 			}
+			// The cutoff is a fact about the SERVER's history, and it was wrong
+			// once: /api/v2 shipped in server 2.0.0 (commit bd7bc62, first tag
+			// v2.0.0), not 3.0.0. Naming 3.0 told every 2.x operator to disable
+			// a namespace surface their server actually has. Pin it.
+			if strings.Contains(err.Error(), "predates Octonomy") &&
+				!strings.Contains(err.Error(), "predates Octonomy 2.0") {
+				t.Errorf("version hint names the wrong cutoff; /api/v2 shipped in server 2.0.0: %v", err)
+			}
 			gotHint := strings.Contains(err.Error(), "Config.APIVersion = APIV1")
 			if gotHint != tt.wantHint {
 				t.Errorf("hint present = %v, want %v: %v", gotHint, tt.wantHint, err)

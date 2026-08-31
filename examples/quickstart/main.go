@@ -26,7 +26,7 @@ func main() {
 		TenantID: env("OCTONOMY_TENANT_ID", "acme"),
 		ActorID:  "quickstart-example",
 		// APIVersion is unset, so this targets /api/v2 -- the server's primary
-		// surface. Set octonomy.APIV1 for an Octonomy older than 3.0, which has
+		// surface. Set octonomy.APIV1 for an Octonomy older than 2.0, which has
 		// no /api/v2 route at all.
 	})
 	if err != nil {

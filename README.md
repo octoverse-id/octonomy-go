@@ -19,7 +19,7 @@ option.
 
 > [!IMPORTANT]
 > **Upgrading from `0.1.x`: the default REST surface is now `/api/v2`.** If your Octonomy server
-> predates **3.0**, set `Config.APIVersion = octonomy.APIV1` — such a deployment has no `/api/v2`
+> predates **2.0**, set `Config.APIVersion = octonomy.APIV1` — such a deployment has no `/api/v2`
 > route and answers every call with an unrouted 404. This is a wire-level change that compiles
 > clean, and there is no version handshake for the SDK to detect it with.
 >
@@ -113,7 +113,7 @@ client, err := octonomy.New(octonomy.Config{
 	BaseURL:    "https://octonomy.example.com",
 	Token:      "svc_live_...",
 	TenantID:   "acme",
-	APIVersion: octonomy.APIV1, // for an Octonomy server older than 3.0
+	APIVersion: octonomy.APIV1, // for an Octonomy server older than 2.0
 })
 ```
 

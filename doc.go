@@ -29,7 +29,7 @@
 //		BaseURL:  "https://octonomy.example.com",
 //		Token:    "svc_live_...", // service token -> Authorization: Bearer
 //		TenantID: "acme",         // -> X-Tenant-ID
-//		// APIVersion defaults to APIV2; set APIV1 for a server older than 3.0.
+//		// APIVersion defaults to APIV2; set APIV1 for a server older than 2.0.
 //	})
 //	if err != nil {
 //		log.Fatal(err)
@@ -55,7 +55,7 @@
 // primary advertised one. Both surfaces are live and neither is deprecated; what
 // separates them is the namespace axis below, which exists only on v2.
 //
-// If your Octonomy server predates 3.0 it has no /api/v2 route at all and will
+// If your Octonomy server predates 2.0 it has no /api/v2 route at all and will
 // answer every call with an unrouted 404. Set Config.APIVersion = APIV1 for such
 // a deployment. There is no version handshake, so the SDK cannot detect this in
 // advance -- but the failure is loud: an unrouted 404 carries no Octonomy error

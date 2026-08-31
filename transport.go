@@ -718,5 +718,5 @@ func versionHint(status int, version APIVersion) string {
 	if status != http.StatusNotFound || version != APIV2 {
 		return ""
 	}
-	return fmt.Sprintf(" [octonomy-go: this response carried no Octonomy error envelope, which is what a server that does not serve %s returns for every call; if this deployment predates Octonomy 3.0, set Config.APIVersion = APIV1]", APIV2.prefix())
+	return fmt.Sprintf(" [octonomy-go: this response carried no Octonomy error envelope, which is what a server that does not serve %s returns for every call; if this deployment predates Octonomy 2.0, set Config.APIVersion = APIV1]", APIV2.prefix())
 }

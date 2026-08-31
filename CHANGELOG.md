@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### BREAKING
 - **The default REST surface is now `/api/v2`.** `Config.APIVersion` selects it and defaults to
   `APIV2`, the server's primary advertised surface; the client previously targeted `/api/v1`
-  unconditionally. **If your Octonomy server predates 3.0, set `Config.APIVersion = APIV1`** — such a
+  unconditionally. **If your Octonomy server predates 2.0, set `Config.APIVersion = APIV1`** — such a
   deployment has no `/api/v2` route and answers every call with an unrouted 404. The SDK cannot
   detect this in advance (there is no version handshake), so this is a wire-level change that
   compiles clean. It does not fail silently: see the error-mapping entry below, which is what makes

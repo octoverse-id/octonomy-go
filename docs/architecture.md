@@ -23,9 +23,13 @@ existing resource file and changing the types and paths.
    `doData[T]` for a single resource, `doList[T]` for a list, `client.do` for a call with no payload
    (DELETE).
 2. All three go through `doRaw`, which builds `BaseURL + /api/<version> + path`, attaches headers,
-   JSON-encodes the body, and returns the status plus the raw 2xx body. On a non-2xx it calls
-   `parseError`, which decodes the `{error:{...}}` envelope into an `*APIError` (falling back to the
-   raw body + a status-derived code when the envelope is absent).
+   JSON-encodes the body, and returns the status plus the raw 2xx body. Before sending it runs
+   `checkScopeCoherence`, which refuses a request whose own scoping options contradict each other or
+   the client's API version, and it bounds the response read at 32 MiB. On a non-2xx it calls
+   `parseError`, which decodes the `{error:{...}}` envelope into an `*APIError`, preserving the
+   server's code verbatim. **A non-2xx carrying no envelope gets `CodeUnexpectedStatus`, never a
+   code derived from its HTTP status** — that mapping is what made an unrouted 404 satisfy
+   `IsNotFound`, so a missing `/api/v2` read as an empty taxonomy with no error. Do not restore it.
 3. The helper decodes: `doData` unwraps `{"data": {...}}` into a `*T`, `doList` decodes
    `{"data": [...], "pagination": {...}}` into a `*List[T]`, and `do` asserts a 204 with no body.
 

@@ -28,11 +28,18 @@ const (
 // DefaultAPIVersion is the surface New selects when Config.APIVersion is empty.
 //
 // BREAKING: this used to be an unconditional /api/v1. A client pointed at an
-// Octonomy older than 3.0 must now set Config.APIVersion = APIV1 explicitly --
+// Octonomy older than 2.0 must now set Config.APIVersion = APIV1 explicitly --
 // such a server has no /api/v2 route at all, so every call returns an unrouted
 // 404. That failure is loud rather than silent (see errors.go,
 // CodeUnexpectedStatus), but it is still a failure, and no version handshake
 // exists to detect it in advance. See the README upgrade note.
+//
+// 2.0 is the real cutoff, not 3.0: the server's version shim landed in commit
+// bd7bc62, and `git tag --contains bd7bc62` names v2.0.0 as its first release
+// (server CHANGELOG 2.0.0, 2026-07-29, "Added: /api/v2 API surface via a
+// version shim"). An earlier revision of this SDK said 3.0 -- inferred from the
+// 3.1.x contract this client targets rather than checked -- which would have
+// told every 2.x operator to turn off a namespace surface their server has.
 //
 // The default is deliberately set here rather than left to the zero value, and
 // it is due a review at v2.0.0: a major version is where a wire-level default
@@ -61,7 +68,8 @@ type Config struct {
 	TenantID string
 
 	// APIVersion selects the REST surface. Empty means DefaultAPIVersion, which
-	// is APIV2. Set APIV1 for an Octonomy server older than 3.0.
+	// is APIV2. Set APIV1 for an Octonomy server older than 2.0, which has no
+	// /api/v2 route.
 	APIVersion APIVersion
 
 	// ActorID, when set, is sent as X-Actor-ID to attribute mutations in audit
