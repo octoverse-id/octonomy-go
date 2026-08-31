@@ -639,6 +639,33 @@ func TestNamespacedApplicationGuard_BoundaryIsTheBody(t *testing.T) {
 	})
 }
 
+// The two application checks ask different questions, so they need different
+// tests: presence for the contradiction check, usability for the missing-
+// application guard. Sharing one test broke the other -- found by Codex review
+// of #7, as fallout from the previous round's fix.
+func TestNamespacedApplicationGuard_BlankIsNotAnApplication(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"empty string", ""},
+		{"whitespace only", "   "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newUnreachableClient(t, APIV2)
+			_, err := c.Tags.List(context.Background(),
+				&TagListParams{ApplicationID: String(tt.value)}, WithNamespace("merchant", "m1"))
+			if err == nil {
+				t.Fatal("a blank application did not satisfy the guard, but the request was sent anyway")
+			}
+			if !strings.Contains(err.Error(), "WithApplication") {
+				t.Errorf("error should name the fix, got: %v", err)
+			}
+		})
+	}
+}
+
 // An application_id explicitly set to "" is PRESENT, not absent. Comparing the
 // merged value against the empty string read it as absent and let the option
 // overwrite it -- found by Codex review of #7.

@@ -417,7 +417,15 @@ func (c *Client) checkScopeCoherence(method string, rc requestConfig, query url.
 	// forgetting silently disables the guard. A guard that fails open by
 	// omission is worse than no guard, and the server's rejection here is an
 	// unambiguous 403 naming the namespace grant.
-	if rc.namespaceSet && !hasBody && !query.Has(applicationIDParam) {
+	//
+	// Non-blank, not merely present: the two application checks in this file ask
+	// different questions and must not share a test. The contradiction check in
+	// mergeQuery asks "was a value SET?", so key presence is exactly right there
+	// -- a params field set to "" is a value the caller chose. This one asks "did
+	// the caller name a usable application?", and "" or "   " names none. Keying
+	// it on Has accepted a request the server is certain to refuse, and made the
+	// guard disagree with WithApplication, which rejects a blank id outright.
+	if rc.namespaceSet && !hasBody && strings.TrimSpace(query.Get(applicationIDParam)) == "" {
 		return fmt.Errorf("octonomy: a namespaced %s must also name its application: add WithApplication(...), because namespace isolation sits below application on the server", method)
 	}
 
