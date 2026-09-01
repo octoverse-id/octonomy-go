@@ -121,6 +121,7 @@ methods need `tags:read`; mutating methods need `tags:write`.
 | `Aliases.List` | GET | `/tag-aliases` |
 | `Aliases.Update` | PATCH | `/tag-aliases/{id}` |
 | `Aliases.Delete` | DELETE | `/tag-aliases/{id}` |
+| `Tags.Resolve` | GET | `/tag-resolution` |
 
 ### List parameters
 
@@ -133,6 +134,26 @@ paging. `TagAliasListParams` exposes `application_id`, `include_shared`, `is_act
 **`is_active` absent means active rows only.** The server applies that default on the tag, vocabulary,
 and alias lists alike, so a nil `IsActive` is not "every row". Since `Delete` is deactivation,
 `IsActive: octonomy.Bool(false)` is how you find deleted ones.
+
+### Resolution parameters
+
+`Tags.Resolve` is not a list, so `TagResolveParams` embeds no `ListOptions`. It carries
+`ApplicationID`, `Type`, and `Scope`; the required `slug` is a positional argument. `ApplicationID`
+both filters and **orders** — with it set, a row in that application outranks a tenant-shared one
+carrying the same slug.
+
+`Scope` is typed (`ResolutionScopeGlobal`, `ResolutionScopeMerchant`), not a free string: the spec
+describes it as a bare `string` while the server accepts exactly two values. An unset `Scope` is
+omitted rather than sent empty.
+
+**`global` is legal here and reserved elsewhere.** As a *scope* it pins the tenant-shared namespace;
+as an `X-Namespace-Type` it is refused (see `WithNamespace`). `ResolutionScopeMerchant` resolves
+inside the request's own namespace, so the SDK refuses it locally on a request that has none —
+`checkScopeCoherence` already carried that guard, and this endpoint is the first to reach it from a
+resource method. `ResolutionScopeGlobal` needs no namespace, and from a namespaced request it does
+not need `WithIncludeGlobal` either: the server adds the global namespace to the authorized set for
+**this route only** when it sees `scope=global`, deliberately not treating the parameter as a general
+alias for `include_global`.
 
 **The two alias list routes take different parameter sets, on purpose.** `Aliases.List` takes
 `TagAliasListParams` (eight filters); `Tags.ListAliases` takes `TagListAliasesParams`, which carries
@@ -150,6 +171,7 @@ wire column is what the server actually sends.
 | Call | On the wire | You get |
 | ---- | ----------- | ------- |
 | Single resource (`Create`/`Get`/`Update`) | `{"data": {...}}` | `*Tag`, `*Vocabulary`, `*TagAlias` |
+| Composite (`Tags.Resolve`) | `{"data": {...}}` | `*TagResolution` — a payload, not a resource |
 | List | `{"data": [...], "pagination": {...}}` | `*List[T]` |
 | Delete | `204`, no body | `error` only (deactivation on the server) |
 | Error | `{"error": {"code", "message", "details", "request_id"}}` | `*APIError` |
@@ -184,6 +206,26 @@ decodes to an empty non-nil slice either way.
 the deployment has `NAMESPACE_WRITE_ENABLED` or `NAMESPACE_V2_API_ENABLED` off. Retrying or changing
 the payload will not help.
 
+### Resolution does not use 404, and splits its ambiguity across two codes
+
+`Tags.Resolve` answers an **unmatched slug with a `400 validation_error`**, not a `404`. The branch
+that means "nothing is called that" is `IsValidation`, and `IsNotFound` reports false. A
+`ResolutionScopeGlobal` request from a caller without the authority to see global rows returns that
+same error, indistinguishable on purpose: distinguishing them would disclose the existence of rows
+the caller may not read.
+
+Two matches of equal specificity are refused rather than broken arbitrarily, and the axis that
+disambiguates them arrives in `Details` — under **two different codes**, so a caller handling only
+one misses half the cases:
+
+| Tie | Code | Helper | `Details` key | Fix |
+| --- | ---- | ------ | ------------- | --- |
+| Rows in different applications | `ambiguous_resolution` | `IsAmbiguousResolution` | `application_id` | set `TagResolveParams.ApplicationID` |
+| Canonical tags of different types | `validation_error` | `IsValidation` | `type` | set `TagResolveParams.Type` |
+
+Both were verified against a running 3.1.0 server rather than read off the spec, which describes
+neither.
+
 ### Responses with no error envelope
 
 A non-2xx that did not carry `{"error": {...}}` gets `CodeUnexpectedStatus` (`IsUnexpectedStatus`)
@@ -207,5 +249,5 @@ worth preserving.
 
 ## Not yet implemented
 
-Tag resolution, tag assignments (incl. bulk), resource tags, audit logs, and health — see
+Tag assignments (incl. bulk), resource tags, audit logs, and health — see
 [roadmap.md](roadmap.md).

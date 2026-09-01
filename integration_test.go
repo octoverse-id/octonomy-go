@@ -9,11 +9,11 @@
 // complete unit suite stayed green through it, because the fixtures encoded the
 // vendored spec rather than the running server.
 //
-// Eight assertions cover the shapes: the single-resource {"data": {...}} envelope
+// Nine assertions cover the shapes: the single-resource {"data": {...}} envelope
 // on both a write and a read, the {data, pagination} list envelope, all three
-// resources, one real error envelope, and a namespaced round trip on /api/v2 --
-// the last of these being the only place the namespace response fields meet a
-// server that actually populates them.
+// resources, the composite resolution payload, one real error envelope, and a
+// namespaced round trip on /api/v2 -- the last of these being the only place the
+// namespace response fields meet a server that actually populates them.
 //
 // Run it against the container harness:
 //
@@ -430,5 +430,61 @@ func TestSmoke_RealServer(t *testing.T) {
 	}
 	if nsAlias.NamespaceID == nil || *nsAlias.NamespaceID != nsID {
 		t.Errorf("created namespaced alias: NamespaceID = %v, want %q", nsAlias.NamespaceID, nsID)
+	}
+	// 9. Tag resolution: a composite payload rather than a resource, and the
+	// only response in this SDK that nests one model inside another. A fixture
+	// proves nothing about which of the two tags the server puts in `tag` --
+	// only a real alias resolving to a real canonical tag does.
+	resolvedTag, err := client.Tags.Resolve(ctx, tagSlug, nil)
+	if err != nil {
+		t.Fatalf("Tags.Resolve (canonical): %v", err)
+	}
+	if resolvedTag.MatchedType != octonomy.MatchedTypeTag {
+		t.Errorf("MatchedType = %q, want %q", resolvedTag.MatchedType, octonomy.MatchedTypeTag)
+	}
+	if resolvedTag.MatchedAlias != nil {
+		t.Errorf("a canonical match carried an alias: %+v", resolvedTag.MatchedAlias)
+	}
+	if resolvedTag.Tag.ID != tag.ID {
+		t.Errorf("resolved tag = %s, want the created tag %s", resolvedTag.Tag.ID, tag.ID)
+	}
+
+	// The alias branch, resolving the alias slug created in step 8. `tag` must
+	// be the CANONICAL tag, not the alias's own row -- the assertion a canned
+	// fixture cannot make honestly, because it would be asserting a value the
+	// test itself chose.
+	resolvedAlias, err := client.Tags.Resolve(ctx, aliasSlug, nil)
+	if err != nil {
+		t.Fatalf("Tags.Resolve (via alias): %v", err)
+	}
+	if resolvedAlias.MatchedType != octonomy.MatchedTypeAlias {
+		t.Errorf("MatchedType = %q, want %q", resolvedAlias.MatchedType, octonomy.MatchedTypeAlias)
+	}
+	if resolvedAlias.MatchedAlias == nil {
+		t.Fatal("MatchedAlias = nil on an alias match")
+	}
+	if resolvedAlias.MatchedAlias.ID != alias.ID {
+		t.Errorf("MatchedAlias = %s, want the created alias %s", resolvedAlias.MatchedAlias.ID, alias.ID)
+	}
+	if resolvedAlias.Tag.ID != tag.ID {
+		t.Errorf("alias resolved to tag %s, want the canonical %s", resolvedAlias.Tag.ID, tag.ID)
+	}
+	if resolvedAlias.Tag.Slug != tagSlug {
+		t.Errorf("resolved tag slug = %q, want the canonical %q (not the alias slug)", resolvedAlias.Tag.Slug, tagSlug)
+	}
+
+	// An unmatched slug is a 400 validation_error, NOT a 404 -- the one piece of
+	// this endpoint's contract a caller is most likely to get wrong, and the one
+	// most worth pinning against the real server rather than a fixture that
+	// simply restates the claim.
+	_, err = client.Tags.Resolve(ctx, uniqueSlug("smoke-no-such"), nil)
+	if err == nil {
+		t.Fatal("Tags.Resolve on an unmatched slug: expected an error")
+	}
+	if !octonomy.IsValidation(err) {
+		t.Errorf("Tags.Resolve on an unmatched slug: IsValidation = false, err = %v", err)
+	}
+	if octonomy.IsNotFound(err) {
+		t.Error("Tags.Resolve on an unmatched slug reported not_found: the server answers 400, and the SDK documents IsValidation as the branch")
 	}
 }

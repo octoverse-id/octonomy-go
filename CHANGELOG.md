@@ -130,6 +130,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absent. Since `Delete` is deactivation, `IsActive: octonomy.Bool(false)` is how deleted aliases are
   found.
 
+### Added
+- **Tag resolution** ([#9](https://github.com/octoverse-id/octonomy-go/issues/9)).
+  `client.Tags.Resolve(ctx, slug, params, opts...)` resolves a slug to a tag, possibly by way of an
+  alias, returning `*TagResolution` (`{MatchedType, MatchedAlias, Tag}`). One specialized read — the
+  group has no list form and no writes. Works on both surfaces; `/api/v1` and `/api/v2` document the
+  same four parameters, and only the namespace headers and `include_global` are v2-only.
+- `ResolutionScope` (`ResolutionScopeGlobal`, `ResolutionScopeMerchant`) types the `scope` parameter
+  the spec describes as a bare string. The server accepts exactly these two values.
+  `ResolutionScopeMerchant` resolves within the request's own namespace, so the SDK refuses it
+  locally on a request that has none. `ResolutionScopeGlobal` is a legal explicit pin — the one place
+  in this SDK where the literal `global` is accepted, as against the reserved `X-Namespace-Type` — and
+  from a namespaced request it is *also* the authorization opt-in, so it does not need
+  `WithIncludeGlobal` beside it: the server widens the authorized set for this route only when it
+  sees `scope=global`.
+- `MatchedType` (`MatchedTypeTag`, `MatchedTypeAlias`) types the response's `matched_type`.
+  `MatchedAlias` is non-nil exactly when the match came through an alias, and `Tag` is the canonical
+  tag either way.
+- **An unmatched slug is a `400 validation_error`, not a `404`.** `IsValidation` is the branch that
+  means "nothing is called that"; `IsNotFound` reports false. A `scope=global` resolution by a caller
+  without the authority to see global rows returns that same error, indistinguishable on purpose, so
+  the response cannot disclose the existence of rows the caller may not read.
+- **The two ambiguity axes arrive under different codes**, so handling only one misses half the
+  cases: rows differing by *application* are `ambiguous_resolution` (`IsAmbiguousResolution`) with
+  `Details["application_id"]`, while canonical tags differing by *type* are a plain
+  `validation_error` (`IsValidation`) with `Details["type"]`. Both verified against a running 3.1.0
+  server, not read off the spec.
+
 ## [0.1.0] - 2026-06-08
 
 > **Never released.** No `v0.1.0` git tag was ever cut and the module proxy has never served this
