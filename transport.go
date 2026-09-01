@@ -183,6 +183,12 @@ func WithApplication(applicationID string) RequestOption {
 // Reads only. The server takes include_global from the query string on safe
 // methods and ignores it entirely on writes, so applying it to a create or an
 // update is refused here rather than being sent and quietly doing nothing.
+//
+// It is refused for the same reason alongside TagResolveParams.Scope set to
+// ResolutionScopeMerchant, which pins resolution to the request's namespace and
+// makes the server discard include_global outright. Pairing it with
+// ResolutionScopeGlobal is allowed but redundant: that scope is itself the
+// authorization opt-in on the resolution route.
 func WithIncludeGlobal() RequestOption {
 	return func(rc *requestConfig) { rc.includeGlobal = true }
 }
@@ -459,6 +465,22 @@ func (c *Client) checkScopeCoherence(method string, rc requestConfig, query url.
 	// A flat "reject global everywhere" rule would break a valid call.
 	if query.Get(scopeParam) == scopeMerchantValue && !rc.namespaceSet {
 		return fmt.Errorf("octonomy: %s=%s resolves within the request's namespace, but this request has none: add WithNamespace(...), or use %s=global to pin the tenant-shared namespace", scopeParam, scopeMerchantValue, scopeParam)
+	}
+
+	// scope=merchant and WithIncludeGlobal ask for opposite things: one pins
+	// resolution to the request's namespace, the other widens it to the global
+	// rows too. The server does not report the contradiction -- it resolves it
+	// silently in favor of the scope, discarding include_global outright
+	// (effective_resolution_scope returns include_global False on the merchant
+	// branch, whatever the query said). So a caller who wrote WithIncludeGlobal
+	// gets merchant-only results and no indication the option did nothing.
+	//
+	// Same rule and same reason as WithIncludeGlobal on a write, above: an
+	// option the server quietly ignores is refused here rather than sent to do
+	// nothing. Ordered AFTER the namespace check so a request missing both gets
+	// told about the more fundamental problem first.
+	if rc.includeGlobal && query.Get(scopeParam) == scopeMerchantValue {
+		return fmt.Errorf("octonomy: WithIncludeGlobal contradicts %s=%s, which resolves within the request's namespace and excludes global rows by definition: the server would drop the option silently, so drop one of the two -- omit WithIncludeGlobal to stay inside the namespace, or omit the merchant scope to let global rows back in", scopeParam, scopeMerchantValue)
 	}
 
 	return nil

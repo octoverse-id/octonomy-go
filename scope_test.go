@@ -194,6 +194,21 @@ func TestScopeGuards_RejectBeforeSendingAnything(t *testing.T) {
 			wantIn: "Config.APIVersion = APIV2",
 		},
 		{
+			// The scope param's own contradiction. It lives with the other guards
+			// rather than only in resolution_test.go because checkScopeCoherence
+			// owns it, and because the server resolves this one silently in favor
+			// of the scope instead of rejecting it.
+			name:    "include_global alongside scope=merchant",
+			version: APIV2,
+			call: func(c *Client) error {
+				_, err := c.Tags.Resolve(context.Background(), "sale",
+					&TagResolveParams{Scope: ResolutionScopeMerchant, ApplicationID: String("shop")},
+					WithNamespace("merchant", "m1"), WithIncludeGlobal())
+				return err
+			},
+			wantIn: "contradicts scope=merchant",
+		},
+		{
 			name:    "reserved global namespace type",
 			version: APIV2,
 			call: func(c *Client) error {

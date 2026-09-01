@@ -59,7 +59,8 @@ refuses it there for the same reason.
 
 The transport refuses these locally, with an error naming the SDK-level fix and no HTTP round trip:
 a namespace on a v1 client, a half-set or reserved (`global`) namespace pair, a blank application id,
-a namespaced **bodyless** request with no application, and `WithIncludeGlobal` on a write.
+a namespaced **bodyless** request with no application, `WithIncludeGlobal` on a write, and
+`WithIncludeGlobal` alongside `scope=merchant`.
 
 "Bodyless" is the real criterion for that last one, not "read": on a GET, HEAD, or DELETE the query
 string is the whole request, so the check is complete. A namespaced `POST`/`PATCH` is still sent —
@@ -73,8 +74,12 @@ the same value is fine. The one legitimate override is `WithGlobalNamespace()`, 
 namespace so a later `WithNamespace` can set a new one; cancelling deliberately and contradicting
 yourself are different acts.
 
-The server rejects all but the last of those by name too, so these are ergonomics rather than
-correctness — except `include_global` on a write, which the server silently ignores.
+The server rejects all but the last two by name too, so most of these are ergonomics rather than
+correctness. The exceptions are the two `include_global` refusals, which the server does **not**
+report: on a write it ignores the parameter, and on a `scope=merchant` resolution it discards it in
+favor of the scope (`effective_resolution_scope` returns `include_global` false on that branch,
+whatever the query said). Either way the caller asked for global rows, did not get them, and would
+see no sign the option did nothing — so the SDK makes it loud.
 
 ### Response fields
 
@@ -121,6 +126,7 @@ methods need `tags:read`; mutating methods need `tags:write`.
 | `Aliases.List` | GET | `/tag-aliases` |
 | `Aliases.Update` | PATCH | `/tag-aliases/{id}` |
 | `Aliases.Delete` | DELETE | `/tag-aliases/{id}` |
+| `Tags.Resolve` | GET | `/tag-resolution` |
 
 ### List parameters
 
@@ -133,6 +139,41 @@ paging. `TagAliasListParams` exposes `application_id`, `include_shared`, `is_act
 **`is_active` absent means active rows only.** The server applies that default on the tag, vocabulary,
 and alias lists alike, so a nil `IsActive` is not "every row". Since `Delete` is deactivation,
 `IsActive: octonomy.Bool(false)` is how you find deleted ones.
+
+### Resolution parameters
+
+`Tags.Resolve` is not a list, so `TagResolveParams` embeds no `ListOptions`. It carries
+`ApplicationID`, `Type`, and `Scope`; the required `slug` is a positional argument. `ApplicationID`
+both filters and **orders** — with it set, a row in that application outranks a tenant-shared one
+carrying the same slug.
+
+`Scope` is typed (`ResolutionScopeGlobal`, `ResolutionScopeMerchant`), not a free string: the spec
+describes it as a bare `string` while the server accepts exactly two values. An unset `Scope` is
+omitted rather than sent empty.
+
+**`Scope` is absent from the vendored v1 contract, and is still sent on v1.** `openapi.yaml` is
+pinned at server `1.0.0`, which predates the parameter (#6 re-vendors it at `3.1.1`). The running
+server carries it on *both* surfaces: probed against 3.1.0, `GET /api/v1/tag-resolution` validates it
+by name, rejecting `scope=merchant` on a global request and an unknown value with
+`Use 'global' or 'merchant'`. Where the vendored spec is stale rather than divergent the server wins,
+and gating the parameter to `APIV2` would refuse a call every current deployment supports — the SDK
+has no version handshake, so it cannot tell a 1.0-era v1 server from a 3.1 one. Against a server old
+enough to predate the parameter it is dropped like any unknown query parameter, which is the exposure
+every post-`1.0.0` addition shares.
+
+**`global` is legal here and reserved elsewhere.** As a *scope* it pins the tenant-shared namespace;
+as an `X-Namespace-Type` it is refused (see `WithNamespace`). `ResolutionScopeMerchant` resolves
+inside the request's own namespace, so the SDK refuses it locally on a request that has none —
+`checkScopeCoherence` already carried that guard, and this endpoint is the first to reach it from a
+resource method. `ResolutionScopeGlobal` needs no namespace, and from a namespaced request it does
+not need `WithIncludeGlobal` either: the server adds the global namespace to the authorized set for
+**this route only** when it sees `scope=global`, deliberately not treating the parameter as a general
+alias for `include_global`. Passing both anyway is redundant, not contradictory, and is allowed.
+
+**`WithIncludeGlobal` with `ResolutionScopeMerchant` is refused**, though — they ask for opposite
+things, and the server resolves the conflict silently in favor of the scope rather than reporting it.
+Drop one: omit the option to stay inside the namespace, or omit the merchant scope to let global rows
+back in.
 
 **The two alias list routes take different parameter sets, on purpose.** `Aliases.List` takes
 `TagAliasListParams` (eight filters); `Tags.ListAliases` takes `TagListAliasesParams`, which carries
@@ -150,6 +191,7 @@ wire column is what the server actually sends.
 | Call | On the wire | You get |
 | ---- | ----------- | ------- |
 | Single resource (`Create`/`Get`/`Update`) | `{"data": {...}}` | `*Tag`, `*Vocabulary`, `*TagAlias` |
+| Composite (`Tags.Resolve`) | `{"data": {...}}` | `*TagResolution` — a payload, not a resource |
 | List | `{"data": [...], "pagination": {...}}` | `*List[T]` |
 | Delete | `204`, no body | `error` only (deactivation on the server) |
 | Error | `{"error": {"code", "message", "details", "request_id"}}` | `*APIError` |
@@ -184,6 +226,26 @@ decodes to an empty non-nil slice either way.
 the deployment has `NAMESPACE_WRITE_ENABLED` or `NAMESPACE_V2_API_ENABLED` off. Retrying or changing
 the payload will not help.
 
+### Resolution does not use 404, and splits its ambiguity across two codes
+
+`Tags.Resolve` answers an **unmatched slug with a `400 validation_error`**, not a `404`. The branch
+that means "nothing is called that" is `IsValidation`, and `IsNotFound` reports false. A
+`ResolutionScopeGlobal` request from a caller without the authority to see global rows returns that
+same error, indistinguishable on purpose: distinguishing them would disclose the existence of rows
+the caller may not read.
+
+Two matches of equal specificity are refused rather than broken arbitrarily, and the axis that
+disambiguates them arrives in `Details` — under **two different codes**, so a caller handling only
+one misses half the cases:
+
+| Tie | Code | Helper | `Details` key | Fix |
+| --- | ---- | ------ | ------------- | --- |
+| Rows in different applications | `ambiguous_resolution` | `IsAmbiguousResolution` | `application_id` | set `TagResolveParams.ApplicationID` |
+| Canonical tags of different types | `validation_error` | `IsValidation` | `type` | set `TagResolveParams.Type` |
+
+Both were verified against a running 3.1.0 server rather than read off the spec, which describes
+neither.
+
 ### Responses with no error envelope
 
 A non-2xx that did not carry `{"error": {...}}` gets `CodeUnexpectedStatus` (`IsUnexpectedStatus`)
@@ -207,5 +269,5 @@ worth preserving.
 
 ## Not yet implemented
 
-Tag resolution, tag assignments (incl. bulk), resource tags, audit logs, and health — see
+Tag assignments (incl. bulk), resource tags, audit logs, and health — see
 [roadmap.md](roadmap.md).

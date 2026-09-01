@@ -130,6 +130,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absent. Since `Delete` is deactivation, `IsActive: octonomy.Bool(false)` is how deleted aliases are
   found.
 
+### Added
+- **Tag resolution** ([#9](https://github.com/octoverse-id/octonomy-go/issues/9)).
+  `client.Tags.Resolve(ctx, slug, params, opts...)` resolves a slug to a tag, possibly by way of an
+  alias, returning `*TagResolution` (`{MatchedType, MatchedAlias, Tag}`). One specialized read — the
+  group has no list form and no writes. It works on both surfaces, with one caveat on `Scope` below;
+  the namespace headers and `include_global` are v2-only.
+- `ResolutionScope` (`ResolutionScopeGlobal`, `ResolutionScopeMerchant`) types the `scope` parameter
+  the spec describes as a bare string. The server accepts exactly these two values.
+  `ResolutionScopeMerchant` resolves within the request's own namespace, so the SDK refuses it
+  locally on a request that has none.
+
+  **`Scope` is not in the vendored v1 contract.** `docs/openapi.yaml` is still at server `1.0.0`,
+  which predates the parameter; the running server adds it to *both* surfaces, verified against a
+  3.1.0 container, where `/api/v1/tag-resolution` validates it by name — `scope=merchant` on a global
+  request is rejected with "Merchant scope requires a namespaced request", and an unknown value with
+  "Use 'global' or 'merchant'". So it is sent on v1 rather than gated to v2: the running server is
+  the authority where the vendored spec is merely stale, and the SDK has no version handshake with
+  which to gate it honestly. Against a v1 deployment older than the release that added it, the
+  parameter is silently dropped like any unknown query parameter — the same exposure every other
+  post-1.0.0 addition carries, and what #6 closes by re-vendoring the v1 contract at 3.1.1. `ResolutionScopeGlobal` is a legal explicit pin — the one place
+  in this SDK where the literal `global` is accepted, as against the reserved `X-Namespace-Type` — and
+  from a namespaced request it is *also* the authorization opt-in, so it does not need
+  `WithIncludeGlobal` beside it: the server widens the authorized set for this route only when it
+  sees `scope=global`.
+- `MatchedType` (`MatchedTypeTag`, `MatchedTypeAlias`) types the response's `matched_type`.
+  `MatchedAlias` is non-nil exactly when the match came through an alias, and `Tag` is the canonical
+  tag either way.
+- **An unmatched slug is a `400 validation_error`, not a `404`.** `IsValidation` is the branch that
+  means "nothing is called that"; `IsNotFound` reports false. A `scope=global` resolution by a caller
+  without the authority to see global rows returns that same error, indistinguishable on purpose, so
+  the response cannot disclose the existence of rows the caller may not read.
+- `WithIncludeGlobal` is now refused alongside `ResolutionScopeMerchant`, which is the second place
+  the server silently discards that option rather than reporting it: merchant scope pins resolution
+  to the request's namespace and `effective_resolution_scope` returns `include_global` false on that
+  branch, whatever the query said. A caller who asked for global rows would have got merchant-only
+  results with no sign the option did nothing — the same reason the option is already refused on
+  writes. Pairing it with `ResolutionScopeGlobal` stays legal: redundant is not contradictory.
+- **The two ambiguity axes arrive under different codes**, so handling only one misses half the
+  cases: rows differing by *application* are `ambiguous_resolution` (`IsAmbiguousResolution`) with
+  `Details["application_id"]`, while canonical tags differing by *type* are a plain
+  `validation_error` (`IsValidation`) with `Details["type"]`. Both verified against a running 3.1.0
+  server, not read off the spec.
+
 ## [0.1.0] - 2026-06-08
 
 > **Never released.** No `v0.1.0` git tag was ever cut and the module proxy has never served this

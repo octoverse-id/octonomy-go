@@ -1,8 +1,8 @@
 # Roadmap
 
 The foundation (transport, auth, errors, pagination, API version selection, namespace scoping) and
-the **Vocabularies**, **Tags**, and **Tag aliases** resources are implemented. The resources below
-are queued. Each is a self-contained unit that follows the established pattern.
+the **Vocabularies**, **Tags**, **Tag aliases**, and **Tag resolution** resources are implemented.
+The resources below are queued. Each is a self-contained unit that follows the established pattern.
 
 **Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint,
 parameter, and response shape below was enumerated from the vendored v2 spec. The previous revision
@@ -56,24 +56,6 @@ arrive with their resource:
 
 Six mark both fields `required`; `Assignment` carries them without. A drift check that keys on
 `required` will therefore see six, not seven — the runtime emits them on all seven.
-
-## Tag resolution
-
-Resolve a slug (optionally within an application and scope) to a tag, possibly via an alias. Schema:
-`TagResolution`.
-
-- `Tags.Resolve` → `GET /tag-resolution` → `200 TagResolution` (`{matched_type, matched_alias, tag}`)
-  - query: `slug`, `application_id`, `type`, **`scope`**
-
-`matched_alias` is a nullable `TagAlias`, which `aliases.go` already defines — reuse the type rather
-than declaring a second shape for the same schema.
-
-`scope` is the parameter v2 added here, and it is the one place in the SDK where the literal `global`
-is **legal**: `scope=global` explicitly pins the tenant-shared namespace, while `global` as an
-`X-Namespace-Type` is reserved and rejected. `scope=merchant` requires a namespaced request; the
-transport already refuses the combination locally, so the resource layer does not repeat the check.
-Note the server types `scope` as a bare string in the spec while treating it as an enum
-(`global` | `merchant`).
 
 ## Tag assignments
 
