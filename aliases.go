@@ -69,12 +69,20 @@ type TagAliasCreate struct {
 // server's patch schema carries it, but changing it is a 409 scope_immutable --
 // see AliasService.Update.
 type TagAliasUpdate struct {
-	ApplicationID *string  `json:"application_id,omitempty"`
-	TagID         *string  `json:"tag_id,omitempty"`
-	Name          *string  `json:"name,omitempty"`
-	Slug          *string  `json:"slug,omitempty"`
-	Metadata      Metadata `json:"metadata,omitempty"`
-	IsActive      *bool    `json:"is_active,omitempty"`
+	ApplicationID *string `json:"application_id,omitempty"`
+	TagID         *string `json:"tag_id,omitempty"`
+	Name          *string `json:"name,omitempty"`
+	Slug          *string `json:"slug,omitempty"`
+
+	// Metadata REPLACES the stored object; it does not merge. It cannot express
+	// "clear it", though: a map is its own optional type, so encoding/json omits
+	// an empty one under omitempty and Metadata{} sends nothing rather than {}.
+	// Set a sentinel key, or clear the object server-side, until that is fixed
+	// -- and it is the same shape on TagUpdate and VocabularyUpdate, so the fix
+	// belongs to all three at once (#37) rather than making this field the one
+	// pointer-typed outlier.
+	Metadata Metadata `json:"metadata,omitempty"`
+	IsActive *bool    `json:"is_active,omitempty"`
 }
 
 // TagAliasListParams filters and pages the alias list. A nil *params lists with
