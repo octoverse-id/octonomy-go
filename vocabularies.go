@@ -12,9 +12,18 @@ import (
 // ApplicationID is shared across all applications in the tenant; otherwise it is
 // scoped to a single application.
 type Vocabulary struct {
-	ID            string    `json:"id"`
-	TenantID      string    `json:"tenant_id"`
-	ApplicationID *string   `json:"application_id"`
+	ID            string  `json:"id"`
+	TenantID      string  `json:"tenant_id"`
+	ApplicationID *string `json:"application_id"`
+
+	// NamespaceType and NamespaceID identify the merchant or sub-tenant namespace
+	// that owns this row; both are nil for a global (tenant-shared) row. They are
+	// decode-only and appear on the v2 surface: the server sets them from the
+	// X-Namespace-* headers at creation and never from the request body, and they
+	// are fixed for the row's lifetime (attempting to change them is a 409
+	// scope_immutable). /api/v1 responses omit them, so they decode to nil there.
+	NamespaceType *string   `json:"namespace_type"`
+	NamespaceID   *string   `json:"namespace_id"`
 	Name          string    `json:"name"`
 	Slug          string    `json:"slug"`
 	Description   *string   `json:"description"`

@@ -14,8 +14,8 @@ func TestVocabularies_Create(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %q, want POST", r.Method)
 		}
-		if r.URL.Path != "/api/v1/vocabularies" {
-			t.Errorf("path = %q, want /api/v1/vocabularies", r.URL.Path)
+		if r.URL.Path != "/api/v2/vocabularies" {
+			t.Errorf("path = %q, want /api/v2/vocabularies", r.URL.Path)
 		}
 		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("Content-Type = %q, want application/json", ct)
@@ -42,8 +42,8 @@ func TestVocabularies_Create(t *testing.T) {
 
 func TestVocabularies_List(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/vocabularies" {
-			t.Errorf("path = %q, want /api/v1/vocabularies", r.URL.Path)
+		if r.URL.Path != "/api/v2/vocabularies" {
+			t.Errorf("path = %q, want /api/v2/vocabularies", r.URL.Path)
 		}
 		q := r.URL.Query()
 		if q.Get("limit") != "10" || q.Get("offset") != "20" {
@@ -79,8 +79,8 @@ func TestVocabularies_List(t *testing.T) {
 func TestVocabularies_Get(t *testing.T) {
 	created := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/vocabularies/voc_1" {
-			t.Errorf("got %s %s, want GET /api/v1/vocabularies/voc_1", r.Method, r.URL.Path)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v2/vocabularies/voc_1" {
+			t.Errorf("got %s %s, want GET /api/v2/vocabularies/voc_1", r.Method, r.URL.Path)
 		}
 		writeData(t, w, http.StatusOK, Vocabulary{
 			ID:          "voc_1",
@@ -123,8 +123,8 @@ func TestVocabularies_Update(t *testing.T) {
 		if r.Method != http.MethodPatch {
 			t.Errorf("method = %q, want PATCH", r.Method)
 		}
-		if r.URL.Path != "/api/v1/vocabularies/voc_1" {
-			t.Errorf("path = %q, want /api/v1/vocabularies/voc_1", r.URL.Path)
+		if r.URL.Path != "/api/v2/vocabularies/voc_1" {
+			t.Errorf("path = %q, want /api/v2/vocabularies/voc_1", r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
 		var in map[string]any
@@ -152,8 +152,8 @@ func TestVocabularies_Delete(t *testing.T) {
 		if r.Method != http.MethodDelete {
 			t.Errorf("method = %q, want DELETE", r.Method)
 		}
-		if r.URL.Path != "/api/v1/vocabularies/voc_1" {
-			t.Errorf("path = %q, want /api/v1/vocabularies/voc_1", r.URL.Path)
+		if r.URL.Path != "/api/v2/vocabularies/voc_1" {
+			t.Errorf("path = %q, want /api/v2/vocabularies/voc_1", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

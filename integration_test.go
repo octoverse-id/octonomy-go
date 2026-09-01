@@ -9,9 +9,11 @@
 // complete unit suite stayed green through it, because the fixtures encoded the
 // vendored spec rather than the running server.
 //
-// Six assertions cover the shapes: the single-resource {"data": {...}} envelope
+// Seven assertions cover the shapes: the single-resource {"data": {...}} envelope
 // on both a write and a read, the {data, pagination} list envelope, both
-// resources, and one real error envelope.
+// resources, one real error envelope, and a namespaced round trip on /api/v2 --
+// the last of these being the only place the namespace response fields meet a
+// server that actually populates them.
 //
 // Run it against the container harness:
 //
@@ -221,5 +223,98 @@ func TestSmoke_RealServer(t *testing.T) {
 	}
 	if apiErr.StatusCode != 404 || apiErr.Code != octonomy.CodeNotFound {
 		t.Errorf("APIError = {status:%d code:%q}, want {404 %q}", apiErr.StatusCode, apiErr.Code, octonomy.CodeNotFound)
+	}
+
+	// 7. The namespace axis, which exists only on /api/v2.
+	//
+	// A unit test cannot reach this: the namespace response fields are populated
+	// by the server from the request headers, so a canned fixture asserts only
+	// that the SDK can echo a value it wrote itself. Here the round trip is real
+	// -- headers out, persisted scope back -- which is the same class of gap that
+	// hid #32.
+	//
+	// The client above targets APIV2 by default, so this needs no second client.
+	nsType := os.Getenv("OCTONOMY_TEST_NAMESPACE_TYPE")
+	nsID := os.Getenv("OCTONOMY_TEST_NAMESPACE_ID")
+	appID := os.Getenv("OCTONOMY_TEST_APPLICATION_ID")
+	if nsType == "" || nsID == "" || appID == "" {
+		// Not a skip: the harness exports all three, so their absence means it
+		// booted differently than this test assumes rather than "no namespace
+		// support here".
+		t.Fatal("OCTONOMY_TEST_NAMESPACE_TYPE/_NAMESPACE_ID/_APPLICATION_ID are not all set: the harness env is incomplete for the namespace assertions")
+	}
+
+	// The global rows created above must report no namespace. This is the
+	// assertion that would fail if the SDK ever grew a client-level namespace
+	// default and started scoping every call.
+	if tag.NamespaceType != nil || tag.NamespaceID != nil {
+		t.Errorf("a global tag reported a namespace: type=%v id=%v", tag.NamespaceType, tag.NamespaceID)
+	}
+
+	nsSlug := uniqueSlug("smoke-ns-tag")
+	nsTag, err := client.Tags.Create(ctx, octonomy.TagCreate{
+		Name:          "v2 smoke namespaced",
+		Slug:          nsSlug,
+		Type:          "label",
+		ApplicationID: octonomy.String(appID),
+	}, octonomy.WithNamespace(nsType, nsID))
+	if err != nil {
+		// A 403 namespaced_writes_disabled here means the harness did not pass
+		// OCTONOMY_NAMESPACE_WRITE_ENABLED=true through to the container, which
+		// is a harness fault rather than an SDK one -- say which.
+		if octonomy.IsNamespacedWritesDisabled(err) {
+			t.Fatalf("namespaced writes are disabled on this deployment: the harness must set OCTONOMY_NAMESPACE_WRITE_ENABLED=true (server default is false): %v", err)
+		}
+		t.Fatalf("Tags.Create (namespaced): %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cleanupCancel()
+		if err := client.Tags.Delete(cleanupCtx, nsTag.ID,
+			octonomy.WithNamespace(nsType, nsID), octonomy.WithApplication(appID)); err != nil {
+			t.Errorf("Tags.Delete (namespaced): %v", err)
+		}
+	})
+	if nsTag.NamespaceType == nil || *nsTag.NamespaceType != nsType {
+		t.Errorf("created namespaced tag: NamespaceType = %v, want %q", nsTag.NamespaceType, nsType)
+	}
+	if nsTag.NamespaceID == nil || *nsTag.NamespaceID != nsID {
+		t.Errorf("created namespaced tag: NamespaceID = %v, want %q", nsTag.NamespaceID, nsID)
+	}
+
+	// The read path carries the headers too, and the persisted scope survives it.
+	nsFetched, err := client.Tags.Get(ctx, nsTag.ID,
+		octonomy.WithNamespace(nsType, nsID), octonomy.WithApplication(appID))
+	if err != nil {
+		t.Fatalf("Tags.Get (namespaced): %v", err)
+	}
+	if nsFetched.NamespaceID == nil || *nsFetched.NamespaceID != nsID {
+		t.Errorf("fetched namespaced tag: NamespaceID = %v, want %q", nsFetched.NamespaceID, nsID)
+	}
+
+	// A namespaced list excludes global rows by default, and the tag created in
+	// step 3 is global -- so it must not appear here. This is the assertion that
+	// proves the headers actually reached the server: without them the server
+	// serves the global namespace with a 200 and this list would contain it.
+	nsList, err := client.Tags.List(ctx, &octonomy.TagListParams{
+		ListOptions: octonomy.ListOptions{Limit: 100},
+	}, octonomy.WithNamespace(nsType, nsID), octonomy.WithApplication(appID))
+	if err != nil {
+		t.Fatalf("Tags.List (namespaced): %v", err)
+	}
+	sawNamespaced, sawGlobal := false, false
+	for _, row := range nsList.Data {
+		switch row.ID {
+		case nsTag.ID:
+			sawNamespaced = true
+		case tag.ID:
+			sawGlobal = true
+		}
+	}
+	if !sawNamespaced {
+		t.Errorf("namespaced list did not return the namespaced tag %s", nsTag.ID)
+	}
+	if sawGlobal {
+		t.Errorf("namespaced list returned the GLOBAL tag %s: a namespaced read must exclude global rows unless include_global is set", tag.ID)
 	}
 }

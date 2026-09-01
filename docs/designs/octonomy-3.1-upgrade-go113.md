@@ -700,6 +700,36 @@ resolved, per the convergence guard:
 5. **`data: null` vs `data: []`** is decided for the modern line only; the compat line inherits
    whatever `encoding/json` does today.
 
+## Correction 36 — the APIV1 fallback cutoff is server 2.0, not 3.0
+
+Found during implementation of #7 by an independent Codex review of the diff, then verified against
+the server repo.
+
+R9 in the risk table below, and the CHANGELOG text it prescribes, say a consumer should set
+`Config.APIVersion = APIV1` **"if your server predates 3.0"**. That is wrong. `/api/v2` shipped in
+server **2.0.0**:
+
+```
+$ git tag --contains bd7bc62      # bd7bc62 = "feat(api): add /api/v2 namespace surface via version shim"
+v2.0.0
+v3.0.0
+...
+```
+
+Server CHANGELOG `## [2.0.0] - 2026-07-29`, under Added: *"`/api/v2` API surface via a version shim
+(`NamespaceURLPathVersioning`), adding the merchant/sub-tenant namespace axis."* 3.0.0 is where v2
+became the **primary advertised** surface, which is a different event and is the one this plan's
+"primary surface" language tracks.
+
+The error direction matters: naming 3.0 tells every **2.x** operator to select `APIV1`, which
+disables namespace support their server actually has and makes `WithNamespace` fail locally against
+a server that would have accepted it. Shipped code, docs, and the runtime `versionHint` string all
+say 2.0 as of #7, and a test pins the string so it cannot drift back.
+
+The root cause is worth naming because it recurs in this plan's history: the cutoff was inferred
+from the 3.1.x contract the SDK targets, not checked against the server's release history. Same
+failure mode as Corrections 1 and 33 — a plausible number written without a probe behind it.
+
 ## Revision 3 open items (accepted, not resolved)
 
 - **S1's 1 h CC estimate is not credible** and is knowingly retained as a floor rather than a forecast.

@@ -29,3 +29,8 @@ go.work.sum
 # Local code review pipeline artifacts (keep the tracked placeholder)
 code-review/*
 !code-review/.gitkeep
+
+# gstack scratch: codex stderr/response captures land here (a single review
+# transcript is ~500 KiB of local session metadata, and one reached a commit
+# before this rule existed)
+.gstack/

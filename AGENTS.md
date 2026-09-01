@@ -2,7 +2,9 @@
 
 `octonomy-go` is the official Go client SDK for [Octonomy](https://github.com/octoverse-id/octonomy),
 a multi-tenant, multi-application tag management / taxonomy service. The SDK is a hand-written,
-dependency-free client for the stable REST **v1** API (`/api/v1`).
+dependency-free client for the REST API. `Config.APIVersion` selects the surface and defaults to
+**v2** (`/api/v2`), the server's primary advertised one; `/api/v1` remains fully supported and is
+selected with `APIV1`.
 
 ## Product Rules
 
@@ -10,6 +12,15 @@ These mirror server semantics the client must respect — business rules live on
 stays a faithful, ergonomic client.
 
 - The SDK adds ergonomics, not behavior. Do not encode server-side validation or invariants here.
+  **One recorded exemption: `checkScopeCoherence` in `transport.go`** (#7). It rejects a request
+  whose own scoping options contradict each other or the client's configured API version — a
+  namespace on a v1 client, a half-set or reserved namespace pair, a namespaced bodyless request
+  (GET/HEAD/DELETE) with no application, `WithIncludeGlobal` on a write. None of those consults resource state or can disagree
+  with the server about a row; they are about the coherence of the caller's own configuration, and
+  each names an SDK symbol in its remediation. **A check that could only cite a server rule does not
+  belong there.** The server rejects all of them by name too, so the guard buys a round trip and a
+  better-targeted error — except `include_global` on a write, which the server silently ignores, and
+  silence is the failure mode this SDK refuses.
 - Every request is tenant-scoped via the `X-Tenant-ID` header; `Config.TenantID` is required.
 - `application_id` is optional on tags and vocabularies (`nil` = shared across the tenant) and is
   required for assignments.
@@ -28,6 +39,23 @@ stays a faithful, ergonomic client.
 - One file per resource (`tags.go`, `vocabularies.go`, …). Each defines a `*Service` reached from a
   field on `Client`.
 - Methods take `context.Context` first and accept variadic `...RequestOption` last.
+- **Scoping is the transport's job, not each resource's.** `WithNamespace`, `WithGlobalNamespace`,
+  `WithApplication`, and `WithIncludeGlobal` apply to any method and are enforced at the chokepoint,
+  so a new resource inherits them by doing nothing. Do not add a namespace field to `Config`, a
+  per-resource namespace parameter, or a duplicate of a guard that already lives in
+  `checkScopeCoherence`. **Application scope follows the body:** on a bodyless request the query is
+  authoritative (`WithApplication`), and on a `POST`/`PATCH` the body's `ApplicationID` is — the
+  server drops the query value on a global create, so the option is refused there rather than
+  silently producing a tenant-shared row. `include_global` is a **query** parameter and is
+  meaningless on writes.
+- **A scope option that contradicts one already on the request is an error, never last-wins.** This
+  holds option-versus-params and option-versus-itself. Last-wins on a scope axis is a silent
+  wrong-tenant read, and on `Get`/`Delete` — which have no params struct — option-versus-option is
+  the only way the value can be set at all. `WithGlobalNamespace` remains the one explicit override.
+- Response models for the seven v2 schemas that carry namespace identity get `NamespaceType` /
+  `NamespaceID` as `*string`, **decode-only**. The server sets them from the `X-Namespace-*` headers
+  and never from a request body, so they must not appear on `*Create` / `*Update` — see
+  `docs/roadmap.md` for the list and which issue owns each.
 - List methods return `*List[T]` and decode the `{data, pagination}` envelope; embed `ListOptions`
   in each resource's `*ListParams`.
 - **Pick the transport helper by response shape, and never by convenience.** `doData[T]` for a call
@@ -61,7 +89,7 @@ stays a faithful, ergonomic client.
     body yields an empty slice and a nil error. It still fits `doData[T]`; `T` is a composite result
     struct, not the resource. Do **not** relax `doList`'s pagination requirement to accept these:
     they carry no pagination block because they are not pages.
-  - **Health is outside the API surface in three ways at once.** It is rooted outside `/api/v1`
+  - **Health is outside the API surface in three ways at once.** It is rooted outside `/api/<version>`
     (the prefix is unconditional in `doRaw`), its body is a bare `{"status": "ok"}` with **no `data`
     envelope**, and it is **unauthenticated** — while `New` requires both `Token` and `TenantID`, so
     the tenant-scoping rule above does not apply to it. #13 needs its own request path, its own
@@ -70,6 +98,15 @@ stays a faithful, ergonomic client.
     tenant guarantee, for every other resource.
 - Non-2xx responses become `*APIError` carrying the `{error:{code,message,details,request_id}}`
   envelope. Add `Is<Code>` helpers for common error codes.
+- **Every non-2xx becomes an `*APIError`, including one whose body could not be read.** An
+  oversized or truncated error body must not downgrade to a bare read error: that removes exactly
+  the large failures from `AsAPIError` / `IsUnexpectedStatus` while identical smaller ones keep
+  working. Wrap the cause so `errors.Is` still finds it.
+- **A non-2xx with no envelope gets `CodeUnexpectedStatus`, never a semantic code.** Do not
+  reintroduce a status-to-code mapping: deriving `not_found` from a bare 404 is what made an unrouted
+  `/api/v2` satisfy `IsNotFound`, so a caller's not-found branch read a missing route as an empty
+  taxonomy with no error (#7). A code that arrives *in* an envelope is preserved verbatim, including
+  one this SDK has no constant for.
 - Server read-only fields are decode-only; write structs (`*Create`/`*Update`) use pointer fields
   with `omitempty` so PATCH sends only what the caller set.
 - No new exported surface without doc comments and tests.
@@ -102,8 +139,9 @@ stays a faithful, ergonomic client.
 
 - Run `make check` before pushing and `make release-check` before a release.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
-- Refresh the vendored `docs/openapi.yaml` from the Octonomy server when targeting a new contract,
-  and record the server version it tracks in `docs/versioning.md`.
+- Refresh the vendored `docs/openapi.yaml` (v1) and `docs/openapi-v2.yaml` (v2) from the Octonomy
+  server when targeting a new contract, and record the server version each tracks in
+  `docs/versioning.md`. They are generated by `make openapi` on the server, one per `--api-version`.
 
 ## Development Pipeline
 
