@@ -9,8 +9,8 @@
 // complete unit suite stayed green through it, because the fixtures encoded the
 // vendored spec rather than the running server.
 //
-// Seven assertions cover the shapes: the single-resource {"data": {...}} envelope
-// on both a write and a read, the {data, pagination} list envelope, both
+// Eight assertions cover the shapes: the single-resource {"data": {...}} envelope
+// on both a write and a read, the {data, pagination} list envelope, all three
 // resources, one real error envelope, and a namespaced round trip on /api/v2 --
 // the last of these being the only place the namespace response fields meet a
 // server that actually populates them.
@@ -316,5 +316,119 @@ func TestSmoke_RealServer(t *testing.T) {
 	}
 	if sawGlobal {
 		t.Errorf("namespaced list returned the GLOBAL tag %s: a namespaced read must exclude global rows unless include_global is set", tag.ID)
+	}
+	// 8. Tag aliases: a third response shape, and the third schema carrying
+	// namespace identity. AGENTS.md requires a new shape to be asserted here and
+	// not only against handcrafted fixtures, for the reason the file's header
+	// gives -- a fixture written from the vendored spec passes against a client
+	// that is wrong, which is exactly how #32 survived a full unit suite. The
+	// spec describes both alias list routes as bare arrays.
+	aliasSlug := uniqueSlug("smoke-alias")
+	alias, err := client.Aliases.Create(ctx, octonomy.TagAliasCreate{
+		TagID:    tag.ID,
+		Name:     "v2 smoke alias",
+		Slug:     aliasSlug,
+		Metadata: octonomy.Metadata{"source": "v2-smoke"},
+	})
+	if err != nil {
+		t.Fatalf("Aliases.Create: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cleanupCancel()
+		if err := client.Aliases.Delete(cleanupCtx, alias.ID); err != nil {
+			t.Errorf("Aliases.Delete: %v", err)
+		}
+	})
+	if alias.ID == "" || alias.Slug != aliasSlug || alias.TagID != tag.ID {
+		t.Fatalf("created alias did not round-trip: %+v", alias)
+	}
+	if got := alias.Metadata["source"]; got != "v2-smoke" {
+		t.Errorf("alias.Metadata[source] = %v, want v2-smoke", got)
+	}
+	// A global alias reports no namespace, the same invariant asserted for the
+	// global tag in step 7.
+	if alias.NamespaceType != nil || alias.NamespaceID != nil {
+		t.Errorf("a global alias reported a namespace: type=%v id=%v", alias.NamespaceType, alias.NamespaceID)
+	}
+
+	aliasFetched, err := client.Aliases.Get(ctx, alias.ID)
+	if err != nil {
+		t.Fatalf("Aliases.Get: %v", err)
+	}
+	if aliasFetched.ID != alias.ID || aliasFetched.TagID != tag.ID {
+		t.Fatalf("fetched alias did not round-trip: %+v", aliasFetched)
+	}
+
+	aliasRenamed, err := client.Aliases.Update(ctx, alias.ID, octonomy.TagAliasUpdate{
+		Name: octonomy.String("v2 smoke alias renamed"),
+	})
+	if err != nil {
+		t.Fatalf("Aliases.Update: %v", err)
+	}
+	if aliasRenamed.Name != "v2 smoke alias renamed" || aliasRenamed.ID != alias.ID {
+		t.Fatalf("updated alias did not round-trip: %+v", aliasRenamed)
+	}
+
+	// Both list routes, because they are separate doList call sites reaching
+	// different server views of the same rows.
+	aliasPage, err := client.Aliases.List(ctx, &octonomy.TagAliasListParams{
+		TagID:       octonomy.String(tag.ID),
+		ListOptions: octonomy.ListOptions{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("Aliases.List: %v", err)
+	}
+	if len(aliasPage.Data) != 1 || aliasPage.Data[0].ID != alias.ID {
+		t.Fatalf("Aliases.List did not return the created alias: %+v", aliasPage.Data)
+	}
+	if aliasPage.Pagination.Limit != 10 || aliasPage.Pagination.Count < 1 {
+		t.Errorf("alias pagination block did not decode: %+v", aliasPage.Pagination)
+	}
+
+	nested, err := client.Tags.ListAliases(ctx, tag.ID, &octonomy.TagListAliasesParams{
+		ListOptions: octonomy.ListOptions{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("Tags.ListAliases: %v", err)
+	}
+	nestedFound := false
+	for _, row := range nested.Data {
+		if row.ID == alias.ID {
+			nestedFound = true
+			break
+		}
+	}
+	if !nestedFound {
+		t.Errorf("Tags.ListAliases returned %d rows, none of them the created alias %s", len(nested.Data), alias.ID)
+	}
+
+	// The namespace fields on TagAlias are server-set from the request headers,
+	// so only a real server can populate them -- a fixture would assert that the
+	// SDK echoes a value it wrote itself. The target is the namespaced tag from
+	// step 7, because a namespaced alias may only point at a global or
+	// same-namespace tag.
+	nsAlias, err := client.Aliases.Create(ctx, octonomy.TagAliasCreate{
+		TagID:         nsTag.ID,
+		Name:          "v2 smoke alias namespaced",
+		Slug:          uniqueSlug("smoke-ns-alias"),
+		ApplicationID: octonomy.String(appID),
+	}, octonomy.WithNamespace(nsType, nsID))
+	if err != nil {
+		t.Fatalf("Aliases.Create (namespaced): %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cleanupCancel()
+		if err := client.Aliases.Delete(cleanupCtx, nsAlias.ID,
+			octonomy.WithNamespace(nsType, nsID), octonomy.WithApplication(appID)); err != nil {
+			t.Errorf("Aliases.Delete (namespaced): %v", err)
+		}
+	})
+	if nsAlias.NamespaceType == nil || *nsAlias.NamespaceType != nsType {
+		t.Errorf("created namespaced alias: NamespaceType = %v, want %q", nsAlias.NamespaceType, nsType)
+	}
+	if nsAlias.NamespaceID == nil || *nsAlias.NamespaceID != nsID {
+		t.Errorf("created namespaced alias: NamespaceID = %v, want %q", nsAlias.NamespaceID, nsID)
 	}
 }
