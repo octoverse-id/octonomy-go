@@ -110,6 +110,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.octonomy-harness.env`. Both SDK version lines invoke it, so neither carries a bootstrap of its
   own. Exposed to CI as the `.github/actions/octonomy-harness` composite action.
 
+### Added
+- **Tag aliases** ([#8](https://github.com/octoverse-id/octonomy-go/issues/8)). `client.Aliases`
+  covers the full CRUD surface — `Create`, `Get`, `List`, `Update`, `Delete` on `/tag-aliases` — plus
+  `client.Tags.ListAliases` for `GET /tags/{tag_id}/aliases`. `TagAlias` carries `NamespaceType` /
+  `NamespaceID` (decode-only), which makes it the third of the seven v2 schemas that do.
+- `TagAliasUpdate.TagID` re-points an alias at a different tag. That is a normal edit, not the scope
+  change `PATCH` refuses: moving the alias itself between scopes is a `409` carrying the code
+  `scope_immutable`, which reaches callers verbatim as `APIError.Code` and deliberately does **not**
+  satisfy `IsConflict` — reading a fixed-scope refusal as a duplicate slug would send a caller down a
+  retry path that cannot work.
+- `TagAliasListParams` exposes the full documented filter set for the collection route
+  (`application_id`, `include_shared`, `is_active`, `q` as `Query`, `slug`, `tag_id`, plus paging).
+  `TagListAliasesParams` is a separate, narrower type for the nested route, which the contract
+  documents with five parameters. One server function backs both routes, so `q` and `slug` would be
+  honored on the nested one too; exposing them would put the SDK ahead of the published contract on a
+  route the server is free to narrow.
+- Note for callers filtering aliases: the server lists **active rows only** when `is_active` is
+  absent. Since `Delete` is deactivation, `IsActive: octonomy.Bool(false)` is how deleted aliases are
+  found.
+
 ## [0.1.0] - 2026-06-08
 
 > **Never released.** No `v0.1.0` git tag was ever cut and the module proxy has never served this

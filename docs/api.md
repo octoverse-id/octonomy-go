@@ -78,9 +78,23 @@ correctness — except `include_global` on a write, which the server silently ig
 
 ### Response fields
 
-`Tag` and `Vocabulary` carry `NamespaceType` and `NamespaceID` (`*string`, decode-only). Both are
-nil for a global row, and on every `/api/v1` response. Scope is fixed at creation: changing
-`application_id`, `namespace_type`, or `namespace_id` on a PATCH is a `409 scope_immutable`.
+`Tag`, `Vocabulary`, and `TagAlias` carry `NamespaceType` and `NamespaceID` (`*string`,
+decode-only). Both are nil for a global row, and on every `/api/v1` response. Scope is fixed at
+creation: changing `application_id`, `namespace_type`, or `namespace_id` on a PATCH is a
+`409 scope_immutable`.
+
+That code has no constant in this package yet (it arrives with the v1 contract refresh, #6), which
+costs a caller nothing: a code the server sends in the envelope is preserved verbatim, so
+`APIError.Code == "scope_immutable"` works today. It is deliberately **not** matched by `IsConflict`,
+which keys on `conflict` — a fixed-scope refusal read as a duplicate slug sends a caller down a retry
+path that cannot succeed. Re-create the row in the target scope instead.
+
+`TagAlias.TagID` is decode-only on the response but is not immutable: `TagAliasUpdate.TagID`
+re-points an alias at a different tag, which is an ordinary edit rather than a scope change. The new
+target must satisfy the same rules a create does — active, same tenant, and scope-compatible (an
+application-specific tag takes aliases only in its own application, else `application_mismatch`; a
+namespaced alias may target only a global or same-namespace tag). An inactive target is a plain
+`validation_error`, not `inactive_tag`, which the server reserves for assignment.
 
 ## Scopes
 
@@ -101,13 +115,32 @@ methods need `tags:read`; mutating methods need `tags:write`.
 | `Tags.List` | GET | `/tags` |
 | `Tags.Update` | PATCH | `/tags/{id}` |
 | `Tags.Delete` | DELETE | `/tags/{id}` |
+| `Tags.ListAliases` | GET | `/tags/{tag_id}/aliases` |
+| `Aliases.Create` | POST | `/tag-aliases` |
+| `Aliases.Get` | GET | `/tag-aliases/{id}` |
+| `Aliases.List` | GET | `/tag-aliases` |
+| `Aliases.Update` | PATCH | `/tag-aliases/{id}` |
+| `Aliases.Delete` | DELETE | `/tag-aliases/{id}` |
 
 ### List parameters
 
 `TagListParams` exposes the full server filter set: `application_id`, `include_shared`, `is_active`,
 `parent_id`, `q` (as `Query`), `slug`, `type`, `vocabulary_id`, plus `Limit`/`Offset` from the embedded
 `ListOptions`. `VocabularyListParams` exposes `application_id`, `include_shared`, `is_active`, and
-paging.
+paging. `TagAliasListParams` exposes `application_id`, `include_shared`, `is_active`, `q` (as
+`Query`), `slug`, `tag_id`, and paging.
+
+**`is_active` absent means active rows only.** The server applies that default on the tag, vocabulary,
+and alias lists alike, so a nil `IsActive` is not "every row". Since `Delete` is deactivation,
+`IsActive: octonomy.Bool(false)` is how you find deleted ones.
+
+**The two alias list routes take different parameter sets, on purpose.** `Aliases.List` takes
+`TagAliasListParams` (eight filters); `Tags.ListAliases` takes `TagListAliasesParams`, which carries
+only the five the contract documents for `GET /tags/{tag_id}/aliases` — `application_id`,
+`include_shared`, `is_active`, and paging. One server function backs both routes, so `q` and `slug`
+would in fact be honored on the nested one; exposing them would put this SDK ahead of the published
+contract on a route the server is free to narrow, and is the kind of divergence the drift gate (#18)
+exists to catch. `tag_id` has no meaning there at all — the path names the tag.
 
 ## Responses
 
@@ -116,7 +149,7 @@ wire column is what the server actually sends.
 
 | Call | On the wire | You get |
 | ---- | ----------- | ------- |
-| Single resource (`Create`/`Get`/`Update`) | `{"data": {...}}` | `*Tag`, `*Vocabulary` |
+| Single resource (`Create`/`Get`/`Update`) | `{"data": {...}}` | `*Tag`, `*Vocabulary`, `*TagAlias` |
 | List | `{"data": [...], "pagination": {...}}` | `*List[T]` |
 | Delete | `204`, no body | `error` only (deactivation on the server) |
 | Error | `{"error": {"code", "message", "details", "request_id"}}` | `*APIError` |
@@ -174,5 +207,5 @@ worth preserving.
 
 ## Not yet implemented
 
-Tag aliases, tag resolution, tag assignments (incl. bulk), resource tags, audit logs, and health — see
+Tag resolution, tag assignments (incl. bulk), resource tags, audit logs, and health — see
 [roadmap.md](roadmap.md).
