@@ -236,6 +236,16 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		opt(&rc)
 	}
 
+	// An option that failed to construct is reported before anything derived
+	// from the options is used. Order matters: mergeQuery can raise a
+	// contradiction of its own, and running it first would report THAT while the
+	// caller's actual first mistake -- the one requestConfig recorded and
+	// promises to surface -- stayed hidden, pointing the remediation at the wrong
+	// argument.
+	if rc.err != nil {
+		return 0, nil, rc.err
+	}
+
 	query, err := rc.mergeQuery(query)
 	if err != nil {
 		return 0, nil, err
@@ -383,11 +393,11 @@ func (rc *requestConfig) mergeQuery(query url.Values) (url.Values, error) {
 // The one exception is WithIncludeGlobal on a write, which the server does not
 // reject -- it ignores it. Silence is exactly the failure mode this SDK refuses
 // elsewhere (#32), so the SDK makes it loud.
+//
+// Option-construction failures (rc.err) are NOT checked here: doRaw reports them
+// before it calls mergeQuery, because a merge-time contradiction would otherwise
+// mask the earlier one. By the time this runs, rc holds no recorded failure.
 func (c *Client) checkScopeCoherence(method string, rc requestConfig, query url.Values, hasBody bool) error {
-	if rc.err != nil {
-		return rc.err
-	}
-
 	if rc.namespaceSet && c.apiVersion != APIV2 {
 		return fmt.Errorf("octonomy: WithNamespace requires the v2 API surface, but this client targets %s: set Config.APIVersion = APIV2", c.apiVersion)
 	}

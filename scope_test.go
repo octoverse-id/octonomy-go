@@ -354,6 +354,25 @@ func TestScopeGuards_ReportTheFirstFailure(t *testing.T) {
 	}
 }
 
+// ...and a LATER stage cannot mask it either. mergeQuery raises contradictions
+// of its own, and running before the recorded failure was reported meant the
+// caller got remediation aimed at the wrong argument: here, "B contradicts A"
+// instead of "the blank id is not an application". Found by Codex review of #7.
+func TestScopeGuards_MergeContradictionDoesNotMaskAnOptionFailure(t *testing.T) {
+	c := newUnreachableClient(t, APIV2)
+	_, err := c.Tags.List(context.Background(),
+		&TagListParams{ApplicationID: String("A")},
+		WithApplication(""),  // first failure: a blank id is not an application
+		WithApplication("B"), // valid, and contradicts the params value at merge time
+	)
+	if err == nil {
+		t.Fatal("expected a client-side error")
+	}
+	if !strings.Contains(err.Error(), "application id is required") {
+		t.Errorf("want the first recorded failure, got the merge-stage one: %v", err)
+	}
+}
+
 func TestWithIncludeGlobal_ReachesTheQueryString(t *testing.T) {
 	// The server documents include_global on every safe method, detail reads
 	// included -- which is why it is a RequestOption rather than a *ListParams
