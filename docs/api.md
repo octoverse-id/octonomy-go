@@ -151,6 +151,16 @@ carrying the same slug.
 describes it as a bare `string` while the server accepts exactly two values. An unset `Scope` is
 omitted rather than sent empty.
 
+**`Scope` is absent from the vendored v1 contract, and is still sent on v1.** `openapi.yaml` is
+pinned at server `1.0.0`, which predates the parameter (#6 re-vendors it at `3.1.1`). The running
+server carries it on *both* surfaces: probed against 3.1.0, `GET /api/v1/tag-resolution` validates it
+by name, rejecting `scope=merchant` on a global request and an unknown value with
+`Use 'global' or 'merchant'`. Where the vendored spec is stale rather than divergent the server wins,
+and gating the parameter to `APIV2` would refuse a call every current deployment supports — the SDK
+has no version handshake, so it cannot tell a 1.0-era v1 server from a 3.1 one. Against a server old
+enough to predate the parameter it is dropped like any unknown query parameter, which is the exposure
+every post-`1.0.0` addition shares.
+
 **`global` is legal here and reserved elsewhere.** As a *scope* it pins the tenant-shared namespace;
 as an `X-Namespace-Type` it is refused (see `WithNamespace`). `ResolutionScopeMerchant` resolves
 inside the request's own namespace, so the SDK refuses it locally on a request that has none —

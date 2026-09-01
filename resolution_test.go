@@ -365,8 +365,12 @@ func TestTags_Resolve_UnwrappedBodyIsAnError(t *testing.T) {
 	}
 }
 
-// Resolution exists on both surfaces with the same four parameters; only the
-// namespace headers and include_global are v2-only.
+// Resolution exists on both surfaces, and scope is deliberately sent on v1: the
+// vendored v1 spec omits it only because that file is pinned at server 1.0.0,
+// while the running server validates it on /api/v1 by name (probed against
+// 3.1.0). Only the namespace headers and include_global are genuinely v2-only.
+// This asserts the deliberate choice, so a future decision to gate scope to v2
+// has to come here and say so rather than happening by accident.
 func TestTags_Resolve_OnV1(t *testing.T) {
 	c := newVersionedTestClient(t, APIV1, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/tag-resolution" {

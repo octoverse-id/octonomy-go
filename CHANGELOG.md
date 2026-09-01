@@ -134,12 +134,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tag resolution** ([#9](https://github.com/octoverse-id/octonomy-go/issues/9)).
   `client.Tags.Resolve(ctx, slug, params, opts...)` resolves a slug to a tag, possibly by way of an
   alias, returning `*TagResolution` (`{MatchedType, MatchedAlias, Tag}`). One specialized read — the
-  group has no list form and no writes. Works on both surfaces; `/api/v1` and `/api/v2` document the
-  same four parameters, and only the namespace headers and `include_global` are v2-only.
+  group has no list form and no writes. It works on both surfaces, with one caveat on `Scope` below;
+  the namespace headers and `include_global` are v2-only.
 - `ResolutionScope` (`ResolutionScopeGlobal`, `ResolutionScopeMerchant`) types the `scope` parameter
   the spec describes as a bare string. The server accepts exactly these two values.
   `ResolutionScopeMerchant` resolves within the request's own namespace, so the SDK refuses it
-  locally on a request that has none. `ResolutionScopeGlobal` is a legal explicit pin — the one place
+  locally on a request that has none.
+
+  **`Scope` is not in the vendored v1 contract.** `docs/openapi.yaml` is still at server `1.0.0`,
+  which predates the parameter; the running server adds it to *both* surfaces, verified against a
+  3.1.0 container, where `/api/v1/tag-resolution` validates it by name — `scope=merchant` on a global
+  request is rejected with "Merchant scope requires a namespaced request", and an unknown value with
+  "Use 'global' or 'merchant'". So it is sent on v1 rather than gated to v2: the running server is
+  the authority where the vendored spec is merely stale, and the SDK has no version handshake with
+  which to gate it honestly. Against a v1 deployment older than the release that added it, the
+  parameter is silently dropped like any unknown query parameter — the same exposure every other
+  post-1.0.0 addition carries, and what #6 closes by re-vendoring the v1 contract at 3.1.1. `ResolutionScopeGlobal` is a legal explicit pin — the one place
   in this SDK where the literal `global` is accepted, as against the reserved `X-Namespace-Type` — and
   from a namespaced request it is *also* the authorization opt-in, so it does not need
   `WithIncludeGlobal` beside it: the server widens the authorized set for this route only when it

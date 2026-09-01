@@ -10,6 +10,16 @@ import (
 // place in this SDK where the literal "global" is a legal value: as a SCOPE it
 // names the tenant-shared namespace explicitly, while as an X-Namespace-Type it
 // is reserved and rejected (see WithNamespace).
+//
+// It is sent on BOTH surfaces, and the vendored docs/openapi.yaml will suggest
+// otherwise: that file is pinned at server 1.0.0, which predates the parameter.
+// The running server carries it on /api/v1 too -- probed against 3.1.0, where
+// GET /api/v1/tag-resolution validates it by name rather than ignoring it -- so
+// the stale spec loses to the server, as it does for the response envelopes.
+// Gating this to APIV2 would refuse a call every current deployment answers, and
+// the SDK has no version handshake with which to tell an old v1 server from a
+// current one. Against a server predating the parameter it is dropped like any
+// unknown query parameter.
 type ResolutionScope string
 
 const (
