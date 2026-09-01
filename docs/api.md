@@ -59,7 +59,8 @@ refuses it there for the same reason.
 
 The transport refuses these locally, with an error naming the SDK-level fix and no HTTP round trip:
 a namespace on a v1 client, a half-set or reserved (`global`) namespace pair, a blank application id,
-a namespaced **bodyless** request with no application, and `WithIncludeGlobal` on a write.
+a namespaced **bodyless** request with no application, `WithIncludeGlobal` on a write, and
+`WithIncludeGlobal` alongside `scope=merchant`.
 
 "Bodyless" is the real criterion for that last one, not "read": on a GET, HEAD, or DELETE the query
 string is the whole request, so the check is complete. A namespaced `POST`/`PATCH` is still sent —
@@ -73,8 +74,12 @@ the same value is fine. The one legitimate override is `WithGlobalNamespace()`, 
 namespace so a later `WithNamespace` can set a new one; cancelling deliberately and contradicting
 yourself are different acts.
 
-The server rejects all but the last of those by name too, so these are ergonomics rather than
-correctness — except `include_global` on a write, which the server silently ignores.
+The server rejects all but the last two by name too, so most of these are ergonomics rather than
+correctness. The exceptions are the two `include_global` refusals, which the server does **not**
+report: on a write it ignores the parameter, and on a `scope=merchant` resolution it discards it in
+favor of the scope (`effective_resolution_scope` returns `include_global` false on that branch,
+whatever the query said). Either way the caller asked for global rows, did not get them, and would
+see no sign the option did nothing — so the SDK makes it loud.
 
 ### Response fields
 
@@ -153,7 +158,12 @@ inside the request's own namespace, so the SDK refuses it locally on a request t
 resource method. `ResolutionScopeGlobal` needs no namespace, and from a namespaced request it does
 not need `WithIncludeGlobal` either: the server adds the global namespace to the authorized set for
 **this route only** when it sees `scope=global`, deliberately not treating the parameter as a general
-alias for `include_global`.
+alias for `include_global`. Passing both anyway is redundant, not contradictory, and is allowed.
+
+**`WithIncludeGlobal` with `ResolutionScopeMerchant` is refused**, though — they ask for opposite
+things, and the server resolves the conflict silently in favor of the scope rather than reporting it.
+Drop one: omit the option to stay inside the namespace, or omit the merchant scope to let global rows
+back in.
 
 **The two alias list routes take different parameter sets, on purpose.** `Aliases.List` takes
 `TagAliasListParams` (eight filters); `Tags.ListAliases` takes `TagListAliasesParams`, which carries

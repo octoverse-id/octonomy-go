@@ -151,6 +151,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   means "nothing is called that"; `IsNotFound` reports false. A `scope=global` resolution by a caller
   without the authority to see global rows returns that same error, indistinguishable on purpose, so
   the response cannot disclose the existence of rows the caller may not read.
+- `WithIncludeGlobal` is now refused alongside `ResolutionScopeMerchant`, which is the second place
+  the server silently discards that option rather than reporting it: merchant scope pins resolution
+  to the request's namespace and `effective_resolution_scope` returns `include_global` false on that
+  branch, whatever the query said. A caller who asked for global rows would have got merchant-only
+  results with no sign the option did nothing — the same reason the option is already refused on
+  writes. Pairing it with `ResolutionScopeGlobal` stays legal: redundant is not contradictory.
 - **The two ambiguity axes arrive under different codes**, so handling only one misses half the
   cases: rows differing by *application* are `ambiguous_resolution` (`IsAmbiguousResolution`) with
   `Details["application_id"]`, while canonical tags differing by *type* are a plain

@@ -281,17 +281,58 @@ func TestTags_Resolve_MerchantScopeWithANamespace(t *testing.T) {
 		if q.Get("scope") != "merchant" || q.Get("application_id") != "commerce" {
 			t.Errorf("unexpected query: %v", q)
 		}
-		if q.Get("include_global") != "true" {
-			t.Errorf("include_global = %q, want true", q.Get("include_global"))
+		// Merchant scope excludes global rows by definition, so nothing should
+		// be asking for them here.
+		if q.Has("include_global") {
+			t.Errorf("include_global should be absent, got query %q", r.URL.RawQuery)
 		}
 		writeData(t, w, http.StatusOK, TagResolution{MatchedType: MatchedTypeTag, Tag: Tag{ID: "tag_1"}})
 	})
 
 	_, err := c.Tags.Resolve(context.Background(), "on-sale",
 		&TagResolveParams{Scope: ResolutionScopeMerchant, ApplicationID: String("commerce")},
-		WithNamespace("merchant", "m-42"), WithIncludeGlobal())
+		WithNamespace("merchant", "m-42"))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
+	}
+}
+
+// Merchant scope and WithIncludeGlobal ask for opposite things, and the server
+// does not report the contradiction -- effective_resolution_scope discards
+// include_global outright on the merchant branch, so the caller would get
+// merchant-only results with no sign the option did nothing. Refused locally,
+// the same rule as WithIncludeGlobal on a write.
+func TestTags_Resolve_MerchantScopeRefusesIncludeGlobal(t *testing.T) {
+	c := newUnreachableClient(t, APIV2)
+
+	_, err := c.Tags.Resolve(context.Background(), "on-sale",
+		&TagResolveParams{Scope: ResolutionScopeMerchant, ApplicationID: String("commerce")},
+		WithNamespace("merchant", "m-42"), WithIncludeGlobal())
+	if err == nil {
+		t.Fatal("expected a local error for WithIncludeGlobal alongside merchant scope")
+	}
+	if !strings.Contains(err.Error(), "WithIncludeGlobal") || !strings.Contains(err.Error(), "merchant") {
+		t.Errorf("error should name both halves of the contradiction, got: %v", err)
+	}
+}
+
+// The global scope does NOT collide with it: the pairing is redundant, since
+// scope=global is itself the authorization opt-in on this route, but redundant
+// is not contradictory and the SDK does not refuse it.
+func TestTags_Resolve_GlobalScopeAllowsIncludeGlobal(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("scope") != "global" || q.Get("include_global") != "true" {
+			t.Errorf("unexpected query: %v", q)
+		}
+		writeData(t, w, http.StatusOK, TagResolution{MatchedType: MatchedTypeTag, Tag: Tag{ID: "tag_1"}})
+	})
+
+	_, err := c.Tags.Resolve(context.Background(), "on-sale",
+		&TagResolveParams{Scope: ResolutionScopeGlobal, ApplicationID: String("commerce")},
+		WithNamespace("merchant", "m-42"), WithIncludeGlobal())
+	if err != nil {
+		t.Fatalf("scope=global with WithIncludeGlobal must be accepted: %v", err)
 	}
 }
 
