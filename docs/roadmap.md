@@ -1,8 +1,8 @@
 # Roadmap
 
 The foundation (transport, auth, errors, pagination, API version selection, namespace scoping) and
-the **Vocabularies** and **Tags** resources are implemented. The resources below are queued. Each is
-a self-contained unit that follows the established pattern.
+the **Vocabularies**, **Tags**, and **Tag aliases** resources are implemented. The resources below
+are queued. Each is a self-contained unit that follows the established pattern.
 
 **Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint,
 parameter, and response shape below was enumerated from the vendored v2 spec. The previous revision
@@ -13,7 +13,9 @@ than edit if you suspect it has aged again.
 
 ## How to add a resource (the recipe)
 
-Copy `tags.go` and `tags_test.go` as the template, then:
+Copy `tags.go` and `tags_test.go` as the template — or `aliases.go` and `aliases_test.go`, which
+were written against the v2-aware transport and cover a nested list route (`Tags.ListAliases`) as
+well as the collection — then:
 
 1. Read the matching schema(s) in [`openapi-v2.yaml`](openapi-v2.yaml). Read the **v2** spec, not
    [`openapi.yaml`](openapi.yaml): v1 is still vendored at server 1.0.0 until #6 refreshes it.
@@ -46,7 +48,7 @@ arrive with their resource:
 | ------ | ----- | ------ |
 | `Tag` | implemented | ✅ `tags.go` |
 | `Vocabulary` | implemented | ✅ `vocabularies.go` |
-| `TagAlias` | #8 | pending |
+| `TagAlias` | implemented | ✅ `aliases.go` |
 | `Assignment` | #10 | pending |
 | `TagResource` | #10 / #11 | pending |
 | `ResourceTag` | #11 | pending |
@@ -55,20 +57,6 @@ arrive with their resource:
 Six mark both fields `required`; `Assignment` carries them without. A drift check that keys on
 `required` will therefore see six, not seven — the runtime emits them on all seven.
 
-## Tag aliases
-
-Alternate identifiers that resolve to a canonical tag. Schemas: `TagAlias`, `TagAliasWrite`,
-`PatchedTagAliasPatch`.
-
-- `Aliases.Create` → `POST /tag-aliases` — body `TagAliasWrite` → `201 TagAlias`
-- `Aliases.Get` → `GET /tag-aliases/{alias_id}` → `200 TagAlias`
-- `Aliases.List` → `GET /tag-aliases` → `200` list of `TagAlias`
-  - query: `application_id`, `include_shared`, `is_active`, `limit`, `offset`, `q`, `slug`, `tag_id`
-- `Aliases.Update` → `PATCH /tag-aliases/{alias_id}` — body `PatchedTagAliasPatch` → `200 TagAlias`
-- `Aliases.Delete` → `DELETE /tag-aliases/{alias_id}` → `204`
-- `Tags.ListAliases` → `GET /tags/{tag_id}/aliases` → `200` list of `TagAlias`
-  - query: `application_id`, `include_shared`, `is_active`, `limit`, `offset`
-
 ## Tag resolution
 
 Resolve a slug (optionally within an application and scope) to a tag, possibly via an alias. Schema:
@@ -76,6 +64,9 @@ Resolve a slug (optionally within an application and scope) to a tag, possibly v
 
 - `Tags.Resolve` → `GET /tag-resolution` → `200 TagResolution` (`{matched_type, matched_alias, tag}`)
   - query: `slug`, `application_id`, `type`, **`scope`**
+
+`matched_alias` is a nullable `TagAlias`, which `aliases.go` already defines — reuse the type rather
+than declaring a second shape for the same schema.
 
 `scope` is the parameter v2 added here, and it is the one place in the SDK where the literal `global`
 is **legal**: `scope=global` explicitly pins the tenant-shared namespace, while `global` as an

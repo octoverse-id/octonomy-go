@@ -11,8 +11,8 @@ option.
 
 > **Status: nothing published yet.** No version of this SDK has ever been released — there are no
 > git tags and the module proxy has served no semantic version. The transport, auth, error, and
-> pagination foundation plus the **Vocabularies** and **Tags** resources are implemented; the
-> remaining resources are tracked in [`docs/roadmap.md`](docs/roadmap.md).
+> pagination foundation plus the **Vocabularies**, **Tags**, and **Tag aliases** resources are
+> implemented; the remaining resources are tracked in [`docs/roadmap.md`](docs/roadmap.md).
 >
 > The first two releases will be `v1.0.0` on the frozen Go 1.13 compat line and `v2.0.0-alpha.1` on
 > this line. See [versioning.md](docs/versioning.md).
@@ -193,11 +193,15 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 | Resource | Status |
 | -------- | ------ |
 | Vocabularies (`client.Vocabularies`) | ✅ Create / Get / List / Update / Delete |
-| Tags (`client.Tags`) | ✅ Create / Get / List / Update / Delete |
-| Tag aliases, resolution, assignments (+bulk), resource tags, audit logs, health | 🚧 see [`docs/roadmap.md`](docs/roadmap.md) |
+| Tags (`client.Tags`) | ✅ Create / Get / List / Update / Delete / ListAliases |
+| Tag aliases (`client.Aliases`) | ✅ Create / Get / List / Update / Delete |
+| Tag resolution, assignments (+bulk), resource tags, audit logs, health | 🚧 see [`docs/roadmap.md`](docs/roadmap.md) |
 
-Both implemented resources work on either surface. `Tag` and `Vocabulary` carry `NamespaceType` /
-`NamespaceID`, which are nil for a global row and on every `/api/v1` response.
+Every implemented resource works on either surface. `Tag`, `Vocabulary`, and `TagAlias` carry
+`NamespaceType` / `NamespaceID`, which are nil for a global row and on every `/api/v1` response.
+
+`Delete` is deactivation on all three, and the alias lists filter to active rows when `IsActive` is
+unset — so `IsActive: octonomy.Bool(false)` is how you find deleted ones.
 
 ## Common commands
 
