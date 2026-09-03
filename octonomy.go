@@ -121,6 +121,8 @@ type Client struct {
 	Tags *TagService
 	// Aliases manages the alternate identifiers that resolve to canonical tags.
 	Aliases *AliasService
+	// Assignments links tags to external resources.
+	Assignments *AssignmentService
 }
 
 // New validates cfg and returns a ready Client.
@@ -174,6 +176,7 @@ func New(cfg Config) (*Client, error) {
 	c.Vocabularies = &VocabularyService{client: c}
 	c.Tags = &TagService{client: c}
 	c.Aliases = &AliasService{client: c}
+	c.Assignments = &AssignmentService{client: c}
 	return c, nil
 }
 

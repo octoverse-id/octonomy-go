@@ -1,8 +1,8 @@
 # Roadmap
 
 The foundation (transport, auth, errors, pagination, API version selection, namespace scoping) and
-the **Vocabularies**, **Tags**, **Tag aliases**, and **Tag resolution** resources are implemented.
-The resources below are queued. Each is a self-contained unit that follows the established pattern.
+the **Vocabularies**, **Tags**, **Tag aliases**, **Tag resolution**, and **Tag assignments**
+resources are implemented. The resources below are queued. Each is a self-contained unit that follows the established pattern.
 
 **Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint,
 parameter, and response shape below was enumerated from the vendored v2 spec. The previous revision
@@ -49,32 +49,13 @@ arrive with their resource:
 | `Tag` | implemented | ✅ `tags.go` |
 | `Vocabulary` | implemented | ✅ `vocabularies.go` |
 | `TagAlias` | implemented | ✅ `aliases.go` |
-| `Assignment` | #10 | pending |
+| `Assignment` | implemented | ✅ `assignments.go` |
 | `TagResource` | #10 / #11 | pending |
 | `ResourceTag` | #11 | pending |
 | `AuditLog` | #12 | pending |
 
 Six mark both fields `required`; `Assignment` carries them without. A drift check that keys on
 `required` will therefore see six, not seven — the runtime emits them on all seven.
-
-## Tag assignments
-
-Link tags to external resources; idempotent writes (re-assigning returns 200, not 201). Schemas:
-`Assignment`, `AssignmentWrite`, `BulkAssign`, `BulkRemove`.
-
-- `Assignments.Create` → `POST /tag-assignments` — body `AssignmentWrite` → `200 Assignment`
-- `Assignments.Remove` → `DELETE /tag-assignments` → `204`
-- `Assignments.BulkAssign` → `POST /tag-assignments/bulk-assign` — body `BulkAssign`
-- `Assignments.BulkRemove` → `POST /tag-assignments/bulk-remove` — body `BulkRemove`
-
-Assignment writes accept `tag_id`, `alias_id`, or `alias_slug`. Watch for `application_mismatch` and
-`inactive_tag` (`IsApplicationMismatch`, `IsInactiveTag`).
-
-**The bulk responses are the spec's least trustworthy corner.** The spec claims a bare array for
-`bulk-assign` and documents no response schema at all for `bulk-remove`. The server really returns a
-composite under `data`: `{"data": {"created": N, "existing": N, "skipped": N, "assignments": [...]}}`
-and `{"data": {"removed": N}}`. Use `doData[T]` with a composite result struct — a bare-array decoder
-against that body yields an empty slice and a nil error, which is #32 again.
 
 ## Resource tags
 

@@ -9,11 +9,18 @@
 // complete unit suite stayed green through it, because the fixtures encoded the
 // vendored spec rather than the running server.
 //
-// Nine assertions cover the shapes: the single-resource {"data": {...}} envelope
-// on both a write and a read, the {data, pagination} list envelope, all three
-// resources, the composite resolution payload, one real error envelope, and a
-// namespaced round trip on /api/v2 -- the last of these being the only place the
-// namespace response fields meet a server that actually populates them.
+// Ten assertions cover the shapes: the single-resource {"data": {...}} envelope
+// on both a write and a read, the {data, pagination} list envelope, all four
+// resources, the composite resolution and bulk payloads, one real error
+// envelope, and a namespaced round trip on /api/v2 -- the last of these being the
+// only place the namespace response fields meet a server that actually populates
+// them.
+//
+// The bulk assertions matter most of the set. docs/openapi-v2.yaml claims
+// bulk-assign returns a bare array and documents no schema at all for
+// bulk-remove; the server returns composites under `data` for both. A client
+// written from the spec decodes an empty slice and a nil error, and only a real
+// server can tell you which of the two is true.
 //
 // Run it against the container harness:
 //
@@ -486,5 +493,109 @@ func TestSmoke_RealServer(t *testing.T) {
 	}
 	if octonomy.IsNotFound(err) {
 		t.Error("Tags.Resolve on an unmatched slug reported not_found: the server answers 400, and the SDK documents IsValidation as the branch")
+	}
+	// 10. Tag assignments, the resource whose documented response shapes are
+	// furthest from the server's. Assignments are always application-scoped, so
+	// these use the harness application; the tag from step 3 is global, which is
+	// assignable in any application.
+	resourceID := uniqueSlug("smoke-order")
+	assignment, err := client.Assignments.Create(ctx, octonomy.AssignmentCreate{
+		ApplicationID: appID,
+		TagID:         octonomy.String(tag.ID),
+		ResourceType:  "order",
+		ResourceID:    resourceID,
+		AssignedBy:    octonomy.String("v2-smoke"),
+	})
+	if err != nil {
+		t.Fatalf("Assignments.Create: %v", err)
+	}
+	if assignment.ID == "" || assignment.TagID != tag.ID || assignment.ResourceID != resourceID {
+		t.Fatalf("created assignment did not round-trip: %+v", assignment)
+	}
+	if assignment.ApplicationID != appID {
+		t.Errorf("ApplicationID = %q, want %q", assignment.ApplicationID, appID)
+	}
+	if assignment.AssignedBy == nil || *assignment.AssignedBy != "v2-smoke" {
+		t.Errorf("AssignedBy = %v, want v2-smoke", assignment.AssignedBy)
+	}
+	if assignment.AssignedAt.IsZero() {
+		t.Error("AssignedAt did not decode")
+	}
+
+	// Idempotent: the same assignment again returns the SAME row rather than a
+	// duplicate or an error. Asserting the id is stronger than asserting the
+	// status, which the SDK deliberately does not surface.
+	again, err := client.Assignments.Create(ctx, octonomy.AssignmentCreate{
+		ApplicationID: appID,
+		TagID:         octonomy.String(tag.ID),
+		ResourceType:  "order",
+		ResourceID:    resourceID,
+	})
+	if err != nil {
+		t.Fatalf("Assignments.Create (repeat): %v", err)
+	}
+	if again.ID != assignment.ID {
+		t.Errorf("re-assigning produced a new row %s, want the existing %s", again.ID, assignment.ID)
+	}
+
+	// The alias form resolves to the canonical tag, which is the assertion a
+	// fixture cannot make: the server does the resolving.
+	viaAlias, err := client.Assignments.Create(ctx, octonomy.AssignmentCreate{
+		ApplicationID: appID,
+		AliasSlug:     octonomy.String(aliasSlug),
+		ResourceType:  "order",
+		ResourceID:    resourceID,
+	})
+	if err != nil {
+		t.Fatalf("Assignments.Create (by alias slug): %v", err)
+	}
+	if viaAlias.TagID != tag.ID {
+		t.Errorf("alias slug assigned tag %s, want the canonical %s", viaAlias.TagID, tag.ID)
+	}
+
+	// BULK ASSIGN: the composite the spec calls a bare array. A []Assignment
+	// decoder against this body yields an empty slice and a nil error, so this
+	// is the assertion that says which shape the server really sends.
+	bulk, err := client.Assignments.BulkAssign(ctx, octonomy.BulkAssign{
+		ApplicationID: appID,
+		ResourceType:  "order",
+		ResourceID:    resourceID,
+		TagIDs:        []string{tag.ID},
+	})
+	if err != nil {
+		t.Fatalf("Assignments.BulkAssign: %v", err)
+	}
+	// The tag is already assigned from the calls above, so this must count as
+	// existing rather than created -- which also proves the counts are real and
+	// not zero-valued.
+	if bulk.Existing != 1 || bulk.Created != 0 {
+		t.Errorf("bulk counts = created:%d existing:%d, want created:0 existing:1", bulk.Created, bulk.Existing)
+	}
+	if len(bulk.Assignments) != 1 || bulk.Assignments[0].TagID != tag.ID {
+		t.Errorf("bulk assignments did not round-trip: %+v", bulk.Assignments)
+	}
+
+	// BULK REMOVE: the shape the spec does not describe at all.
+	removed, err := client.Assignments.BulkRemove(ctx, octonomy.BulkRemove{
+		ApplicationID: appID,
+		ResourceType:  "order",
+		ResourceID:    resourceID,
+		TagIDs:        []string{tag.ID},
+	})
+	if err != nil {
+		t.Fatalf("Assignments.BulkRemove: %v", err)
+	}
+	if removed.Removed != 1 {
+		t.Errorf("Removed = %d, want 1", removed.Removed)
+	}
+
+	// Removing what is no longer there is a 204, not a 404.
+	if err := client.Assignments.Remove(ctx, octonomy.AssignmentRemove{
+		ApplicationID: appID,
+		TagID:         tag.ID,
+		ResourceType:  "order",
+		ResourceID:    resourceID,
+	}); err != nil {
+		t.Fatalf("Assignments.Remove on an already-removed assignment: %v", err)
 	}
 }
