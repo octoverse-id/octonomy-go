@@ -11,8 +11,8 @@ option.
 
 > **Status: nothing published yet.** No version of this SDK has ever been released — there are no
 > git tags and the module proxy has served no semantic version. The transport, auth, error, and
-> pagination foundation plus the **Vocabularies**, **Tags**, **Tag aliases**, and **Tag resolution**
-> resources are implemented; the remaining resources are tracked in
+> pagination foundation plus the **Vocabularies**, **Tags**, **Tag aliases**, **Tag resolution**, and
+> **Tag assignments** resources are implemented; the remaining resources are tracked in
 > [`docs/roadmap.md`](docs/roadmap.md).
 >
 > The first two releases will be `v1.0.0` on the frozen Go 1.13 compat line and `v2.0.0-alpha.1` on
@@ -196,7 +196,8 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 | Vocabularies (`client.Vocabularies`) | ✅ Create / Get / List / Update / Delete |
 | Tags (`client.Tags`) | ✅ Create / Get / List / Update / Delete / ListAliases / Resolve |
 | Tag aliases (`client.Aliases`) | ✅ Create / Get / List / Update / Delete |
-| Tag assignments (+bulk), resource tags, audit logs, health | 🚧 see [`docs/roadmap.md`](docs/roadmap.md) |
+| Tag assignments (`client.Assignments`) | ✅ Create / Remove / BulkAssign / BulkRemove |
+| Resource tags, audit logs, health | 🚧 see [`docs/roadmap.md`](docs/roadmap.md) |
 
 Every implemented resource works on either surface. `Tag`, `Vocabulary`, and `TagAlias` carry
 `NamespaceType` / `NamespaceID`, which are nil for a global row and on every `/api/v1` response.

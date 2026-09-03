@@ -127,6 +127,10 @@ methods need `tags:read`; mutating methods need `tags:write`.
 | `Aliases.Update` | PATCH | `/tag-aliases/{id}` |
 | `Aliases.Delete` | DELETE | `/tag-aliases/{id}` |
 | `Tags.Resolve` | GET | `/tag-resolution` |
+| `Assignments.Create` | POST | `/tag-assignments` |
+| `Assignments.Remove` | DELETE | `/tag-assignments` — **with a body** |
+| `Assignments.BulkAssign` | POST | `/tag-assignments/bulk-assign` |
+| `Assignments.BulkRemove` | POST | `/tag-assignments/bulk-remove` |
 
 ### List parameters
 
@@ -183,6 +187,56 @@ would in fact be honored on the nested one; exposing them would put this SDK ahe
 contract on a route the server is free to narrow, and is the kind of divergence the drift gate (#18)
 exists to catch. `tag_id` has no meaning there at all — the path names the tag.
 
+## Assignments
+
+Assignments are the one group where the vendored spec is wrong about **two** response shapes, and
+where three request shapes differ from every other resource. All four calls carry their payload in
+the body, so `WithApplication` is refused on all of them — each write struct names its own
+`ApplicationID`, which is authoritative.
+
+| Call | Shape worth knowing |
+| ---- | ------------------- |
+| `Create` | Idempotent. Re-assigning returns the existing row with `200` rather than `201`, and is not an error. Name the tag with **exactly one** of `TagID`, `AliasID`, `AliasSlug`. |
+| `Remove` | A `DELETE` **carrying a JSON body** — the row has no id route, so the four body fields identify it. Removing what is not there is a `204`. |
+| `BulkAssign` | All or nothing; one unknown id fails the whole call. Takes `TagIDs`, `AliasSlugs`, or both. |
+| `BulkRemove` | A **`POST`**, not a `DELETE`. Canonical tag ids only — no alias form. Tolerates ids that match nothing. |
+
+`Assignment.ApplicationID` is a plain `string` rather than the `*string` the other models carry: an
+assignment is always application-scoped, so there is no tenant-shared case to represent. `Remove`
+deletes the row outright — the exception to Octonomy's deactivate-don't-delete rule, since an
+assignment is a link and an inactive link is an absent one.
+
+**The two bulk responses are composites, and `openapi-v2.yaml` describes neither correctly.** It
+claims `bulk-assign` returns a bare array and documents *no schema at all* for `bulk-remove`. Probed
+against a running 3.1.0 server:
+
+```
+POST /tag-assignments/bulk-assign
+  {"data":{"created":1,"existing":0,"skipped":0,"assignments":[{...}]}}
+
+POST /tag-assignments/bulk-remove
+  {"data":{"removed":1}}
+```
+
+A `[]Assignment` decoder written from the spec returns an empty slice and a nil error against that
+body — #32 in a new place — so both go through `doData` with a result struct, and the envelope
+assertion is what catches a mis-routed decode.
+
+**The bulk results require their keys.** `doData` stops at the `data` envelope, which is the right
+line for a resource: a zero-valued `Assignment` has an empty `ID`, and nobody reads that as an answer.
+A composite of counters is different — `created: 0, existing: 0` with no rows is an ordinary result,
+and `removed: 0` is the most common answer bulk remove gives — so a body whose keys the server renamed
+would be read as "nothing needed doing" instead of as the contract break it is. A missing `created`,
+`existing`, `assignments`, or `removed` is therefore an error. `Skipped` is exempt (it is vestigial),
+and a present-but-null `assignments` normalizes to an empty non-nil slice, as `doList` does for a null
+page.
+
+`BulkAssignResult.Skipped` is **always zero** on 3.1.x and exists only because the server emits it.
+Nothing is skipped because nothing is tolerated: an unknown tag id fails the entire call, and an id
+outside the request's namespace is reported identically to one that exists nowhere, so the response
+cannot be used to probe for tags the caller may not read. Both bulk calls cap at the deployment's
+`MAX_BULK_TAGS`, 200 by default.
+
 ## Responses
 
 Every 2xx that carries a payload is wrapped in a `data` envelope. The SDK unwraps it for you; the
@@ -192,6 +246,8 @@ wire column is what the server actually sends.
 | ---- | ----------- | ------- |
 | Single resource (`Create`/`Get`/`Update`) | `{"data": {...}}` | `*Tag`, `*Vocabulary`, `*TagAlias` |
 | Composite (`Tags.Resolve`) | `{"data": {...}}` | `*TagResolution` — a payload, not a resource |
+| Composite (`Assignments.BulkAssign`) | `{"data": {"created", "existing", "skipped", "assignments"}}` | `*BulkAssignResult` |
+| Composite (`Assignments.BulkRemove`) | `{"data": {"removed"}}` | `*BulkRemoveResult` |
 | List | `{"data": [...], "pagination": {...}}` | `*List[T]` |
 | Delete | `204`, no body | `error` only (deactivation on the server) |
 | Error | `{"error": {"code", "message", "details", "request_id"}}` | `*APIError` |
@@ -269,5 +325,4 @@ worth preserving.
 
 ## Not yet implemented
 
-Tag assignments (incl. bulk), resource tags, audit logs, and health — see
-[roadmap.md](roadmap.md).
+Resource tags, audit logs, and health — see [roadmap.md](roadmap.md).

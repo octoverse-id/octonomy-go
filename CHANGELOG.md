@@ -173,6 +173,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validation_error` (`IsValidation`) with `Details["type"]`. Both verified against a running 3.1.0
   server, not read off the spec.
 
+### Added
+- **Tag assignments, including bulk** ([#10](https://github.com/octoverse-id/octonomy-go/issues/10)).
+  `client.Assignments` covers `Create`, `Remove`, `BulkAssign`, and `BulkRemove` — linking tags to
+  external resources, which is the core operation of a tagging service. `Assignment` carries
+  `NamespaceType` / `NamespaceID` (decode-only), making it the fourth of the seven v2 schemas that do,
+  and the only one the contract does not mark them `required` on while the runtime emits them anyway.
+- `Assignment.ApplicationID` is a plain `string`, not the `*string` on `Tag`, `Vocabulary`, and
+  `TagAlias`: an assignment is always application-scoped, so there is no tenant-shared case and no nil
+  to represent.
+- **`Create` is idempotent.** Re-assigning a tag already on a resource returns the existing row with a
+  `200` instead of a `201`, and is not an error. The SDK returns the same `*Assignment` either way and
+  does not surface which happened — `BulkAssign` with a single tag id answers that directly, since its
+  `Created` / `Existing` counts are the same fact carried in the body. The tag may be named by exactly
+  one of `TagID`, `AliasID`, or `AliasSlug`.
+- **`Remove` sends a body on a `DELETE`**, which is how the row is identified: there is no
+  `/tag-assignments/{id}` route. One consequence reaches callers — `WithApplication` is refused there,
+  as on any body-carrying request, because `AssignmentRemove.ApplicationID` is authoritative. Removing
+  an assignment that does not exist is a `204`, not a `404`, and removal is a real delete rather than
+  the deactivation tags, vocabularies, and aliases get: an assignment is a link, and an inactive link
+  is an absent one.
+- **The bulk responses are composites under the `data` envelope, and the vendored spec describes
+  neither correctly.** `openapi-v2.yaml` claims `bulk-assign` returns a bare array and documents no
+  schema at all for `bulk-remove`. Probed against a running 3.1.0 server, they return
+  `{"data": {"created": N, "existing": N, "skipped": N, "assignments": [...]}}` and
+  `{"data": {"removed": N}}`. Both go through `doData` with a result struct: a `[]Assignment` decoder
+  written from the spec would return an empty slice and a nil error against the real body, which is
+  [#32](https://github.com/octoverse-id/octonomy-go/issues/32) in a new place. A regression test
+  asserts both spellings of the spec's claim are errors rather than empty results.
+- `BulkAssignResult.Skipped` is **always zero** on server 3.1.x and exists only because the server
+  emits it: nothing is skipped because nothing is tolerated, an unknown tag id failing the entire call
+  instead. An id outside the request's namespace reports identically to one that exists nowhere, so
+  the response cannot be used to probe for tags in namespaces the caller cannot read.
+- **The bulk results require the keys a caller acts on**, rather than letting an unexpected object
+  shape decode to a zero-valued result with a nil error. `doData` stops at the `data` envelope, which
+  is the right line for a *resource* — a zero-valued `Assignment` has an empty `ID` and no caller
+  mistakes it for an answer — but a composite of counters is different: `created: 0, existing: 0` with
+  no rows is an ordinary result, and `removed: 0` is the single most common one there is. So a renamed
+  or missing `created`, `existing`, `assignments`, or `removed` is an error. `Skipped` is exempt,
+  being vestigial; a present-but-null `assignments` normalizes to an empty non-nil slice, exactly as
+  `doList` treats a null page.
+- `Assignment`'s namespace pair is asserted two ways, because neither alone catches a misspelled
+  field name: a unit test decodes a **raw** body written with the wire's own key names, and the smoke
+  test creates a **namespaced** assignment and checks the pair the server populates. Every other
+  fixture is marshalled from `Assignment` itself, so a wrong json tag is used for both the write and
+  the read and round-trips perfectly — verified by breaking the tags, which left the entire unit suite
+  *and* the real-server smoke test green.
+- `BulkRemove` takes canonical tag ids only, with no alias form — the asymmetry with `BulkAssign`,
+  which also accepts `AliasSlugs` and unions them with `TagIDs`. It tolerates ids matching nothing,
+  counting them out of `Removed` rather than raising. Both bulk calls cap at the deployment's
+  `MAX_BULK_TAGS` (200 by default).
+
 ## [0.1.0] - 2026-06-08
 
 > **Never released.** No `v0.1.0` git tag was ever cut and the module proxy has never served this
