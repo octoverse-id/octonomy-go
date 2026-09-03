@@ -213,6 +213,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or missing `created`, `existing`, `assignments`, or `removed` is an error. `Skipped` is exempt,
   being vestigial; a present-but-null `assignments` normalizes to an empty non-nil slice, exactly as
   `doList` treats a null page.
+- `Assignment`'s namespace pair is asserted two ways, because neither alone catches a misspelled
+  field name: a unit test decodes a **raw** body written with the wire's own key names, and the smoke
+  test creates a **namespaced** assignment and checks the pair the server populates. Every other
+  fixture is marshalled from `Assignment` itself, so a wrong json tag is used for both the write and
+  the read and round-trips perfectly — verified by breaking the tags, which left the entire unit suite
+  *and* the real-server smoke test green.
 - `BulkRemove` takes canonical tag ids only, with no alias form — the asymmetry with `BulkAssign`,
   which also accepts `AliasSlugs` and unions them with `TagIDs`. It tolerates ids matching nothing,
   counting them out of `Removed` rather than raising. Both bulk calls cap at the deployment's

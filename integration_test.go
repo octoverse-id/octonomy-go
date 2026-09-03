@@ -598,4 +598,44 @@ func TestSmoke_RealServer(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Assignments.Remove on an already-removed assignment: %v", err)
 	}
+
+	// A NAMESPACED assignment, whose namespace pair the server populates from the
+	// request headers. Only a real server can assert this: every canned fixture
+	// is marshalled from Assignment itself, so a misspelled json tag is used for
+	// both the write and the read and round-trips perfectly. Verified by breaking
+	// the tags -- the whole unit suite and this smoke test stayed green until
+	// these assertions existed.
+	//
+	// The target is the namespaced tag from step 7, since a namespaced write must
+	// stay inside its own scope.
+	nsResourceID := uniqueSlug("smoke-ns-order")
+	nsAssignment, err := client.Assignments.Create(ctx, octonomy.AssignmentCreate{
+		ApplicationID: appID,
+		TagID:         octonomy.String(nsTag.ID),
+		ResourceType:  "order",
+		ResourceID:    nsResourceID,
+	}, octonomy.WithNamespace(nsType, nsID))
+	if err != nil {
+		t.Fatalf("Assignments.Create (namespaced): %v", err)
+	}
+	if nsAssignment.NamespaceType == nil || *nsAssignment.NamespaceType != nsType {
+		t.Errorf("namespaced assignment: NamespaceType = %v, want %q", nsAssignment.NamespaceType, nsType)
+	}
+	if nsAssignment.NamespaceID == nil || *nsAssignment.NamespaceID != nsID {
+		t.Errorf("namespaced assignment: NamespaceID = %v, want %q", nsAssignment.NamespaceID, nsID)
+	}
+	if nsAssignment.TagID != nsTag.ID {
+		t.Errorf("namespaced assignment: TagID = %s, want %s", nsAssignment.TagID, nsTag.ID)
+	}
+
+	// And the namespaced body-carrying DELETE, which no other resource exercises:
+	// the headers scope the request while the body identifies the row.
+	if err := client.Assignments.Remove(ctx, octonomy.AssignmentRemove{
+		ApplicationID: appID,
+		TagID:         nsTag.ID,
+		ResourceType:  "order",
+		ResourceID:    nsResourceID,
+	}, octonomy.WithNamespace(nsType, nsID)); err != nil {
+		t.Fatalf("Assignments.Remove (namespaced): %v", err)
+	}
 }

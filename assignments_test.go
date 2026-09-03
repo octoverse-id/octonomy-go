@@ -636,3 +636,55 @@ func TestBulkAssignResult_UnmarshalIntoAReusedValueIsTotal(t *testing.T) {
 		t.Errorf("decoded fields did not replace the stale ones: %+v", res)
 	}
 }
+
+// Decodes a RAW body written with the wire's own field names, rather than one
+// marshalled from Assignment itself.
+//
+// That distinction is the entire point. Every other canned fixture here is built
+// by marshalling the struct, so a misspelled json tag is used for both the write
+// and the read and round-trips perfectly -- the fixture and the client share the
+// same mistake. Verified: renaming these tags to "namespaceType"/"namespaceID"
+// left the whole unit suite AND the real-server smoke test green before this
+// test existed, because nothing anywhere asserted the pair was populated.
+func TestAssignment_DecodesTheWiresFieldNames(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, http.StatusCreated, map[string]any{"data": map[string]any{
+			"id":             "asg_1",
+			"tenant_id":      "tenant-1",
+			"application_id": "commerce",
+			"namespace_type": "merchant",
+			"namespace_id":   "m-42",
+			"tag_id":         "tag_1",
+			"resource_type":  "order",
+			"resource_id":    "ord_9",
+			"assigned_by":    "importer",
+			"assigned_at":    "2026-06-08T12:00:00Z",
+		}})
+	})
+
+	got, err := c.Assignments.Create(context.Background(), AssignmentCreate{
+		ApplicationID: "commerce", TagID: String("tag_1"),
+		ResourceType: "order", ResourceID: "ord_9",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got.NamespaceType == nil || *got.NamespaceType != "merchant" {
+		t.Errorf("NamespaceType = %v, want merchant", got.NamespaceType)
+	}
+	if got.NamespaceID == nil || *got.NamespaceID != "m-42" {
+		t.Errorf("NamespaceID = %v, want m-42", got.NamespaceID)
+	}
+	if got.ID != "asg_1" || got.TenantID != "tenant-1" || got.ApplicationID != "commerce" {
+		t.Errorf("identity fields did not decode: %+v", got)
+	}
+	if got.TagID != "tag_1" || got.ResourceType != "order" || got.ResourceID != "ord_9" {
+		t.Errorf("link fields did not decode: %+v", got)
+	}
+	if got.AssignedBy == nil || *got.AssignedBy != "importer" {
+		t.Errorf("AssignedBy = %v, want importer", got.AssignedBy)
+	}
+	if got.AssignedAt.IsZero() {
+		t.Error("AssignedAt did not decode")
+	}
+}
