@@ -22,7 +22,10 @@ func TestAliases_Create(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var in map[string]any
 		if err := json.Unmarshal(body, &in); err != nil {
-			t.Fatalf("decode body: %v", err)
+			// Errorf, not Fatalf: this runs on the server's goroutine, where
+			// FailNow aborts the connection instead of the test.
+			t.Errorf("decode body: %v", err)
+			return
 		}
 		if in["tag_id"] != "tag_1" || in["name"] != "On Sale" || in["slug"] != "on-sale" {
 			t.Errorf("unexpected body: %v", in)
@@ -263,7 +266,10 @@ func TestAliases_Update(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var in map[string]any
 		if err := json.Unmarshal(body, &in); err != nil {
-			t.Fatalf("decode body: %v", err)
+			// Errorf, not Fatalf: this runs on the server's goroutine, where
+			// FailNow aborts the connection instead of the test.
+			t.Errorf("decode body: %v", err)
+			return
 		}
 		// Re-pointing an alias at another tag is a normal edit, not the scope
 		// change PATCH refuses, so tag_id has to reach the wire.

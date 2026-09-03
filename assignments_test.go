@@ -12,15 +12,24 @@ import (
 
 // decodeBody reads a request body as a generic map. Assignments put everything
 // in the body -- including on DELETE -- so nearly every test here needs it.
+//
+// Errorf, never Fatalf: this runs on the httptest server's goroutine, and
+// Fatalf there calls runtime.Goexit on the handler rather than the test,
+// aborting the connection and burying the real failure under a client-side EOF.
+// A nil map is safe to return for the same reason -- reads from it yield zero
+// values, so the caller's own assertions still run and report against the
+// failure this already named.
 func decodeBody(t *testing.T, r *http.Request) map[string]any {
 	t.Helper()
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		t.Fatalf("read body: %v", err)
+		t.Errorf("read body: %v", err)
+		return nil
 	}
 	var in map[string]any
 	if err := json.Unmarshal(raw, &in); err != nil {
-		t.Fatalf("decode body %q: %v", raw, err)
+		t.Errorf("decode body %q: %v", raw, err)
+		return nil
 	}
 	return in
 }

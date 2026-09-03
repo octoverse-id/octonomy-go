@@ -18,7 +18,10 @@ func TestTags_Create(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var in map[string]any
 		if err := json.Unmarshal(body, &in); err != nil {
-			t.Fatalf("decode body: %v", err)
+			// Errorf, not Fatalf: this runs on the server's goroutine, where
+			// FailNow aborts the connection instead of the test.
+			t.Errorf("decode body: %v", err)
+			return
 		}
 		if in["name"] != "Featured" || in["slug"] != "featured" || in["type"] != "label" {
 			t.Errorf("unexpected body: %v", in)
