@@ -115,7 +115,9 @@ type BulkAssignResult struct {
 //
 // doData stops at the data envelope, which is the right line for a RESOURCE: a
 // zero-valued Assignment has an empty ID, and no caller mistakes that for an
-// answer. A composite of counters is different, and that is the whole reason
+// answer. (It is not a perfect line -- an empty data object decodes to a blank
+// resource on every resource in this SDK, which is #40 -- but it is a uniform
+// one.) A composite of counters is different, and that is the whole reason
 // this method exists -- Created 0, Existing 0, Assignments empty is a perfectly
 // ordinary result, so a body whose keys the server renamed would be read as "the
 // tags were all already there" instead of as the contract break it is. The zero
