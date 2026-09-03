@@ -222,6 +222,15 @@ A `[]Assignment` decoder written from the spec returns an empty slice and a nil 
 body — #32 in a new place — so both go through `doData` with a result struct, and the envelope
 assertion is what catches a mis-routed decode.
 
+**The bulk results require their keys.** `doData` stops at the `data` envelope, which is the right
+line for a resource: a zero-valued `Assignment` has an empty `ID`, and nobody reads that as an answer.
+A composite of counters is different — `created: 0, existing: 0` with no rows is an ordinary result,
+and `removed: 0` is the most common answer bulk remove gives — so a body whose keys the server renamed
+would be read as "nothing needed doing" instead of as the contract break it is. A missing `created`,
+`existing`, `assignments`, or `removed` is therefore an error. `Skipped` is exempt (it is vestigial),
+and a present-but-null `assignments` normalizes to an empty non-nil slice, as `doList` does for a null
+page.
+
 `BulkAssignResult.Skipped` is **always zero** on 3.1.x and exists only because the server emits it.
 Nothing is skipped because nothing is tolerated: an unknown tag id fails the entire call, and an id
 outside the request's namespace is reported identically to one that exists nowhere, so the response

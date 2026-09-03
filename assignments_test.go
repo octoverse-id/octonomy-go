@@ -397,10 +397,17 @@ func TestAssignments_NamespaceScopingReachesTheWire(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
-		call func(*Client) error
+		// reply writes the shape THIS call expects. A single superset body
+		// covering all four would pass while proving nothing about any of them,
+		// and would lean on the permissive decode the composites now refuse.
+		reply func(*testing.T, http.ResponseWriter)
+		call  func(*Client) error
 	}{
 		{
 			name: "create", path: "/api/v2/tag-assignments",
+			reply: func(t *testing.T, w http.ResponseWriter) {
+				writeData(t, w, http.StatusCreated, Assignment{ID: "asg_1", TagID: "tag_1"})
+			},
 			call: func(c *Client) error {
 				_, err := c.Assignments.Create(context.Background(), AssignmentCreate{
 					ApplicationID: "commerce", TagID: String("tag_1"),
@@ -411,6 +418,9 @@ func TestAssignments_NamespaceScopingReachesTheWire(t *testing.T) {
 		},
 		{
 			name: "remove", path: "/api/v2/tag-assignments",
+			reply: func(_ *testing.T, w http.ResponseWriter) {
+				w.WriteHeader(http.StatusNoContent)
+			},
 			call: func(c *Client) error {
 				return c.Assignments.Remove(context.Background(), AssignmentRemove{
 					ApplicationID: "commerce", TagID: "tag_1",
@@ -420,6 +430,11 @@ func TestAssignments_NamespaceScopingReachesTheWire(t *testing.T) {
 		},
 		{
 			name: "bulk assign", path: "/api/v2/tag-assignments/bulk-assign",
+			reply: func(t *testing.T, w http.ResponseWriter) {
+				writeData(t, w, http.StatusOK, BulkAssignResult{
+					Created: 1, Assignments: []Assignment{{ID: "asg_1", TagID: "tag_1"}},
+				})
+			},
 			call: func(c *Client) error {
 				_, err := c.Assignments.BulkAssign(context.Background(), BulkAssign{
 					ApplicationID: "commerce", ResourceType: "order", ResourceID: "ord_9",
@@ -430,6 +445,9 @@ func TestAssignments_NamespaceScopingReachesTheWire(t *testing.T) {
 		},
 		{
 			name: "bulk remove", path: "/api/v2/tag-assignments/bulk-remove",
+			reply: func(t *testing.T, w http.ResponseWriter) {
+				writeData(t, w, http.StatusOK, BulkRemoveResult{Removed: 1})
+			},
 			call: func(c *Client) error {
 				_, err := c.Assignments.BulkRemove(context.Background(), BulkRemove{
 					ApplicationID: "commerce", ResourceType: "order", ResourceID: "ord_9",
@@ -456,13 +474,7 @@ func TestAssignments_NamespaceScopingReachesTheWire(t *testing.T) {
 				if r.URL.RawQuery != "" {
 					t.Errorf("expected no query params, got %q", r.URL.RawQuery)
 				}
-				if r.Method == http.MethodDelete {
-					w.WriteHeader(http.StatusNoContent)
-					return
-				}
-				writeData(t, w, http.StatusOK, map[string]any{
-					"id": "asg_1", "removed": 0, "created": 0, "existing": 0, "skipped": 0,
-				})
+				tt.reply(t, w)
 			})
 			if err := tt.call(c); err != nil {
 				t.Fatalf("%s: %v", tt.name, err)
@@ -492,5 +504,107 @@ func TestAssignments_OnV1(t *testing.T) {
 	// v1 responses carry no namespace fields, so they stay nil rather than "".
 	if got.NamespaceType != nil || got.NamespaceID != nil {
 		t.Errorf("v1 assignment reported a namespace: %+v", got)
+	}
+}
+
+// doData stops at the data envelope, which is right for a resource: a
+// zero-valued Assignment has an empty ID and no caller mistakes it for an
+// answer. A composite of counters is different -- created:0 existing:0 with no
+// rows is an ordinary result -- so a renamed or missing key must be an error
+// rather than "the tags were all already there".
+func TestAssignments_BulkAssign_MissingKeysAreErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		data any
+	}{
+		{"empty object", map[string]any{}},
+		{"renamed keys", map[string]any{"results": []any{}, "count": 1}},
+		{"no assignments array", map[string]any{"created": 1, "existing": 0, "skipped": 0}},
+		{"no created count", map[string]any{"existing": 0, "skipped": 0, "assignments": []any{}}},
+		{"no existing count", map[string]any{"created": 1, "skipped": 0, "assignments": []any{}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, http.StatusOK, map[string]any{"data": tt.data})
+			})
+
+			res, err := c.Assignments.BulkAssign(context.Background(), BulkAssign{
+				ApplicationID: "commerce", ResourceType: "order", ResourceID: "ord_9",
+				TagIDs: []string{"tag_1"},
+			})
+			if err == nil {
+				t.Fatalf("expected an error, got %+v", res)
+			}
+		})
+	}
+}
+
+// The two shapes that must NOT be errors: an empty page of assignments is a real
+// answer, and Skipped is vestigial, so the server dropping a dead field is not a
+// client failure.
+func TestAssignments_BulkAssign_LegalMinimalShapes(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string]any
+	}{
+		{"nothing assigned", map[string]any{"created": 0, "existing": 0, "skipped": 0, "assignments": []any{}}},
+		{"skipped absent", map[string]any{"created": 0, "existing": 0, "assignments": []any{}}},
+		{"assignments null", map[string]any{"created": 0, "existing": 0, "assignments": nil}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, http.StatusOK, map[string]any{"data": tt.data})
+			})
+
+			res, err := c.Assignments.BulkAssign(context.Background(), BulkAssign{
+				ApplicationID: "commerce", ResourceType: "order", ResourceID: "ord_9",
+				TagIDs: []string{"tag_1"},
+			})
+			if err != nil {
+				t.Fatalf("BulkAssign: %v", err)
+			}
+			// Empty and non-nil, so a caller can range over it without a nil check.
+			if res.Assignments == nil || len(res.Assignments) != 0 {
+				t.Errorf("Assignments = %+v, want an empty non-nil slice", res.Assignments)
+			}
+		})
+	}
+}
+
+// Sharper here than on bulk assign: this payload is a single counter, so a
+// renamed key decodes to the most common legitimate answer there is.
+func TestAssignments_BulkRemove_MissingRemovedIsAnError(t *testing.T) {
+	for _, data := range []map[string]any{{}, {"deleted": 2}, {"count": 2}} {
+		c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(t, w, http.StatusOK, map[string]any{"data": data})
+		})
+
+		res, err := c.Assignments.BulkRemove(context.Background(), BulkRemove{
+			ApplicationID: "commerce", ResourceType: "order", ResourceID: "ord_9",
+			TagIDs: []string{"tag_1"},
+		})
+		if err == nil {
+			t.Fatalf("body %v: expected an error, got Removed=%d -- 0 is the most common real answer", data, res.Removed)
+		}
+	}
+}
+
+// A removed count of zero is a real answer and must decode cleanly.
+func TestAssignments_BulkRemove_ZeroIsLegal(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, http.StatusOK, map[string]any{"data": map[string]any{"removed": 0}})
+	})
+
+	res, err := c.Assignments.BulkRemove(context.Background(), BulkRemove{
+		ApplicationID: "commerce", ResourceType: "order", ResourceID: "ord_9",
+		TagIDs: []string{"tag_1"},
+	})
+	if err != nil {
+		t.Fatalf("BulkRemove: %v", err)
+	}
+	if res.Removed != 0 {
+		t.Errorf("Removed = %d, want 0", res.Removed)
 	}
 }

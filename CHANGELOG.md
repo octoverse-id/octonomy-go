@@ -205,6 +205,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emits it: nothing is skipped because nothing is tolerated, an unknown tag id failing the entire call
   instead. An id outside the request's namespace reports identically to one that exists nowhere, so
   the response cannot be used to probe for tags in namespaces the caller cannot read.
+- **The bulk results require the keys a caller acts on**, rather than letting an unexpected object
+  shape decode to a zero-valued result with a nil error. `doData` stops at the `data` envelope, which
+  is the right line for a *resource* — a zero-valued `Assignment` has an empty `ID` and no caller
+  mistakes it for an answer — but a composite of counters is different: `created: 0, existing: 0` with
+  no rows is an ordinary result, and `removed: 0` is the single most common one there is. So a renamed
+  or missing `created`, `existing`, `assignments`, or `removed` is an error. `Skipped` is exempt,
+  being vestigial; a present-but-null `assignments` normalizes to an empty non-nil slice, exactly as
+  `doList` treats a null page.
 - `BulkRemove` takes canonical tag ids only, with no alias form — the asymmetry with `BulkAssign`,
   which also accepts `AliasSlugs` and unions them with `TagIDs`. It tolerates ids matching nothing,
   counting them out of `Removed` rather than raising. Both bulk calls cap at the deployment's

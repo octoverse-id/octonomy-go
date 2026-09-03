@@ -2,6 +2,8 @@ package octonomy
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -108,6 +110,59 @@ type BulkAssignResult struct {
 	Assignments []Assignment `json:"assignments"`
 }
 
+// UnmarshalJSON requires the keys a caller acts on, rather than letting an
+// unexpected object shape decode to a zero-valued result with a nil error.
+//
+// doData stops at the data envelope, which is the right line for a RESOURCE: a
+// zero-valued Assignment has an empty ID, and no caller mistakes that for an
+// answer. A composite of counters is different, and that is the whole reason
+// this method exists -- Created 0, Existing 0, Assignments empty is a perfectly
+// ordinary result, so a body whose keys the server renamed would be read as "the
+// tags were all already there" instead of as the contract break it is. The zero
+// value being indistinguishable from a real answer is exactly the #32 shape,
+// one level in from where doData catches it.
+//
+// Skipped is deliberately NOT required: it is vestigial (always 0 on 3.1.x, see
+// above), so demanding it would turn the server dropping a dead field into a
+// client error.
+//
+// Assignments uses json.RawMessage rather than a *[]Assignment because those two
+// spellings of nil have to be told apart, and a pointer-to-slice cannot: an
+// ABSENT key is the contract break this method exists to catch, while a
+// present-but-null one means "no rows" and normalizes to an empty non-nil slice.
+// That is the same distinction decodeEnvelope draws with the same idiom, and the
+// same null handling doList already gives an empty page.
+func (r *BulkAssignResult) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Created     *int            `json:"created"`
+		Existing    *int            `json:"existing"`
+		Skipped     *int            `json:"skipped"`
+		Assignments json.RawMessage `json:"assignments"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	switch {
+	case wire.Created == nil:
+		return fmt.Errorf(`octonomy: bulk assign response has no "created" count`)
+	case wire.Existing == nil:
+		return fmt.Errorf(`octonomy: bulk assign response has no "existing" count`)
+	case wire.Assignments == nil:
+		return fmt.Errorf(`octonomy: bulk assign response has no "assignments" array`)
+	}
+	if err := json.Unmarshal(wire.Assignments, &r.Assignments); err != nil {
+		return fmt.Errorf("octonomy: decode bulk assign assignments: %w", err)
+	}
+	if r.Assignments == nil {
+		r.Assignments = []Assignment{}
+	}
+	r.Created, r.Existing = *wire.Created, *wire.Existing
+	if wire.Skipped != nil {
+		r.Skipped = *wire.Skipped
+	}
+	return nil
+}
+
 // BulkRemove is the request body for removing many tags from ONE resource.
 // TagIDs is required and takes canonical tag ids only, with no alias form -- the
 // asymmetry with BulkAssign, which also accepts AliasSlugs.
@@ -123,6 +178,25 @@ type BulkRemove struct {
 // number of ids sent.
 type BulkRemoveResult struct {
 	Removed int `json:"removed"`
+}
+
+// UnmarshalJSON requires the removed count, for the reason given on
+// BulkAssignResult -- and more sharply here, because this payload is a single
+// counter. A missing or renamed "removed" would otherwise decode to 0 with a nil
+// error, which is not merely a plausible answer but the single most common one:
+// "none of those tags were on that resource".
+func (r *BulkRemoveResult) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Removed *int `json:"removed"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.Removed == nil {
+		return fmt.Errorf(`octonomy: bulk remove response has no "removed" count`)
+	}
+	r.Removed = *wire.Removed
+	return nil
 }
 
 // AssignmentService accesses the /tag-assignments endpoints. Reach it via
