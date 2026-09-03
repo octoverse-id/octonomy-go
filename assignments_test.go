@@ -608,3 +608,22 @@ func TestAssignments_BulkRemove_ZeroIsLegal(t *testing.T) {
 		t.Errorf("Removed = %d, want 0", res.Removed)
 	}
 }
+
+// UnmarshalJSON is exported, so it must fully define the value it decodes into.
+// Skipped is the only optional key, which makes it the one field a response
+// omitting it could leave carrying a previous count. doData always passes a
+// fresh value, so this is unreachable through the service methods -- which is
+// the reason to pin it here rather than trust every future caller to know.
+func TestBulkAssignResult_UnmarshalIntoAReusedValueIsTotal(t *testing.T) {
+	res := BulkAssignResult{Created: 9, Existing: 9, Skipped: 9, Assignments: []Assignment{{ID: "stale"}}}
+
+	if err := json.Unmarshal([]byte(`{"created":1,"existing":2,"assignments":[]}`), &res); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if res.Skipped != 0 {
+		t.Errorf("Skipped = %d, want 0: an omitted key must not leave the previous value", res.Skipped)
+	}
+	if res.Created != 1 || res.Existing != 2 || len(res.Assignments) != 0 {
+		t.Errorf("decoded fields did not replace the stale ones: %+v", res)
+	}
+}

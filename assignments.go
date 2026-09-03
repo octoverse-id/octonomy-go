@@ -150,16 +150,24 @@ func (r *BulkAssignResult) UnmarshalJSON(data []byte) error {
 	case wire.Assignments == nil:
 		return fmt.Errorf(`octonomy: bulk assign response has no "assignments" array`)
 	}
-	if err := json.Unmarshal(wire.Assignments, &r.Assignments); err != nil {
+	// Built whole and assigned in one go, rather than field by field onto the
+	// receiver. UnmarshalJSON is exported, so it must fully define what it
+	// decodes into: assigning Skipped only when the key is present would leave a
+	// REUSED result carrying its previous count on a response that omits it.
+	// doData always passes a fresh value, so nothing in this package could reach
+	// that -- which is exactly why it is worth closing here rather than relying
+	// on every future caller to know.
+	out := BulkAssignResult{Created: *wire.Created, Existing: *wire.Existing}
+	if err := json.Unmarshal(wire.Assignments, &out.Assignments); err != nil {
 		return fmt.Errorf("octonomy: decode bulk assign assignments: %w", err)
 	}
-	if r.Assignments == nil {
-		r.Assignments = []Assignment{}
+	if out.Assignments == nil {
+		out.Assignments = []Assignment{}
 	}
-	r.Created, r.Existing = *wire.Created, *wire.Existing
 	if wire.Skipped != nil {
-		r.Skipped = *wire.Skipped
+		out.Skipped = *wire.Skipped
 	}
+	*r = out
 	return nil
 }
 
@@ -195,7 +203,7 @@ func (r *BulkRemoveResult) UnmarshalJSON(data []byte) error {
 	if wire.Removed == nil {
 		return fmt.Errorf(`octonomy: bulk remove response has no "removed" count`)
 	}
-	r.Removed = *wire.Removed
+	*r = BulkRemoveResult{Removed: *wire.Removed}
 	return nil
 }
 
