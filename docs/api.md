@@ -131,6 +131,9 @@ methods need `tags:read`; mutating methods need `tags:write`.
 | `Assignments.Remove` | DELETE | `/tag-assignments` — **with a body** |
 | `Assignments.BulkAssign` | POST | `/tag-assignments/bulk-assign` |
 | `Assignments.BulkRemove` | POST | `/tag-assignments/bulk-remove` |
+| `Resources.ListTags` | GET | `/resources/{resource_type}/{resource_id}/tags` |
+| `Resources.ReplaceTags` | POST | `/resources/{resource_type}/{resource_id}/tags` |
+| `Tags.ListResources` | GET | `/tags/{tag_id}/resources` |
 
 ### List parameters
 
@@ -237,6 +240,46 @@ outside the request's namespace is reported identically to one that exists nowhe
 cannot be used to probe for tags the caller may not read. Both bulk calls cap at the deployment's
 `MAX_BULK_TAGS`, 200 by default.
 
+## Resource tags
+
+The resource's side of tagging. `ResourceTag` is a tag as seen **from** a resource, with the `Tag`
+nested whole; `TagResource` is a resource as seen **from** a tag. Both carry the namespace pair.
+
+**`ReplaceTags` replaces — it does not merge.** Every tag on the resource and absent from the request
+is removed. To add a tag, read the current set and send the union. And **an empty replace is legal**:
+`ResourceReplace` with no `TagIDs` and no `AliasSlugs` clears every tag, returning `Created: 0` with
+`Removed` equal to what was there. That is a deliberate difference from `BulkAssign`, which refuses an
+empty request — so an empty slice arriving from a filter that matched nothing wipes the resource
+silently and successfully. The whole operation is atomic and shares one `operation_id` across every
+event it emits.
+
+`ResourceReplace` carries no `ResourceType` or `ResourceID` even though the contract lists them: they
+come from the path, and the server overwrites whatever a body sends.
+
+**The replace response is a third composite, and the spec is wrong about it twice.** It claims a bare
+array *and* claims the elements are `ResourceTag`. Probed against a running 3.1.0 server:
+
+```
+POST /resources/cart/{id}/tags
+  {"data":{"created":1,"removed":0,"tags":[{"id":"…","slug":"…","usage_count":1,…}]}}
+```
+
+Those are **`Tag`** values — no `assignment_id`, no `assigned_at`. A client written from the spec
+decodes an empty slice and a nil error; one that fixed only the envelope decodes tags with every field
+empty. `ResourceReplaceResult` therefore requires `created`, `removed`, and `tags`, on the same
+reasoning as the bulk results: zero is an ordinary answer, so a renamed key would read as "nothing
+needed changing".
+
+| Call | Shape worth knowing |
+| ---- | ------------------- |
+| `ListTags` | `ApplicationID` is **required** — the only list in this SDK where that holds. Supply it in the params or with `WithApplication`. |
+| `ReplaceTags` | Full replace. Empty request clears the resource. Body carries the application, so `WithApplication` is refused. |
+| `Tags.ListResources` | `ApplicationID` optional here; unset spans every application the caller can see. |
+
+`ResourceListTagsParams.IncludeInactive` is **not** the `is_active` filter the tag and alias lists
+take — different parameter, different polarity. Nil means active-only; `true` *widens* to include
+deactivated tags. There is no way to ask for deactivated tags alone.
+
 ## Responses
 
 Every 2xx that carries a payload is wrapped in a `data` envelope. The SDK unwraps it for you; the
@@ -248,6 +291,7 @@ wire column is what the server actually sends.
 | Composite (`Tags.Resolve`) | `{"data": {...}}` | `*TagResolution` — a payload, not a resource |
 | Composite (`Assignments.BulkAssign`) | `{"data": {"created", "existing", "skipped", "assignments"}}` | `*BulkAssignResult` |
 | Composite (`Assignments.BulkRemove`) | `{"data": {"removed"}}` | `*BulkRemoveResult` |
+| Composite (`Resources.ReplaceTags`) | `{"data": {"created", "removed", "tags"}}` | `*ResourceReplaceResult` — `tags` are `Tag`, not `ResourceTag` |
 | List | `{"data": [...], "pagination": {...}}` | `*List[T]` |
 | Delete | `204`, no body | `error` only (deactivation on the server) |
 | Error | `{"error": {"code", "message", "details", "request_id"}}` | `*APIError` |
@@ -325,4 +369,4 @@ worth preserving.
 
 ## Not yet implemented
 
-Resource tags, audit logs, and health — see [roadmap.md](roadmap.md).
+Audit logs and health — see [roadmap.md](roadmap.md).

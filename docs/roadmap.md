@@ -1,8 +1,8 @@
 # Roadmap
 
 The foundation (transport, auth, errors, pagination, API version selection, namespace scoping) and
-the **Vocabularies**, **Tags**, **Tag aliases**, **Tag resolution**, and **Tag assignments**
-resources are implemented. The resources below are queued. Each is a self-contained unit that follows the established pattern.
+the **Vocabularies**, **Tags**, **Tag aliases**, **Tag resolution**, **Tag assignments**, and
+**Resource tags** resources are implemented. The resources below are queued. Each is a self-contained unit that follows the established pattern.
 
 **Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint,
 parameter, and response shape below was enumerated from the vendored v2 spec. The previous revision
@@ -50,27 +50,12 @@ arrive with their resource:
 | `Vocabulary` | implemented | ✅ `vocabularies.go` |
 | `TagAlias` | implemented | ✅ `aliases.go` |
 | `Assignment` | implemented | ✅ `assignments.go` |
-| `TagResource` | #10 / #11 | pending |
-| `ResourceTag` | #11 | pending |
+| `TagResource` | implemented | ✅ `resources.go` |
+| `ResourceTag` | implemented | ✅ `resources.go` |
 | `AuditLog` | #12 | pending |
 
 Six mark both fields `required`; `Assignment` carries them without. A drift check that keys on
 `required` will therefore see six, not seven — the runtime emits them on all seven.
-
-## Resource tags
-
-Read or replace the full tag set on a resource. Schemas: `ResourceTag`, `ResourceReplace`,
-`TagResource`.
-
-- `Resources.ListTags` → `GET /resources/{resource_type}/{resource_id}/tags` → `200` list of `ResourceTag`
-  - query: `application_id`, `include_inactive`, `limit`, `offset`, `type`
-- `Resources.ReplaceTags` → `POST /resources/{resource_type}/{resource_id}/tags` — body `ResourceReplace`
-  - composite response under `data`, same caveat as the bulk endpoints above
-- `Tags.ListResources` → `GET /tags/{tag_id}/resources` → `200` list of `TagResource`
-  - query: `application_id`, `limit`, `offset`, `resource_type`
-
-Note `include_inactive` here, versus `is_active` on the tag and alias lists — they are different
-parameters with different shapes, not two spellings of one filter.
 
 ## Audit logs
 
