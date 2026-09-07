@@ -76,7 +76,8 @@ func TestNew_Validation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if c.Tags == nil || c.Vocabularies == nil || c.Aliases == nil || c.Assignments == nil {
+			if c.Tags == nil || c.Vocabularies == nil || c.Aliases == nil ||
+				c.Assignments == nil || c.Resources == nil {
 				t.Fatal("services not wired")
 			}
 		})
@@ -463,4 +464,43 @@ func TestTransport_ErrorsPropagateFromEveryHelper(t *testing.T) {
 			t.Fatalf("expected forbidden, got %v", err)
 		}
 	})
+}
+
+// A base URL with a path prefix, which a deployment behind a reverse proxy
+// has. Client.resolvePath keeps url.URL's decoded Path and escaped RawPath in
+// step, and both halves have to survive a base that already carries a path --
+// otherwise EscapedPath() silently falls back to re-escaping Path, which is the
+// double-escape resolvePath exists to remove.
+func TestBaseURL_WithPathPrefix(t *testing.T) {
+	tests := []struct {
+		name        string
+		suffix      string
+		id          string
+		wantEscaped string
+	}{
+		{"plain id", "/gateway", "tag_1", "/gateway/api/v2/tags/tag_1"},
+		{"id needing escaping", "/gateway", "tag 1", "/gateway/api/v2/tags/tag%201"},
+		{"nested prefix", "/a/b", "tag_1", "/a/b/api/v2/tags/tag_1"},
+		{"trailing slash on the base", "/gateway/", "tag_1", "/gateway/api/v2/tags/tag_1"},
+		{"no prefix", "", "tag 1", "/api/v2/tags/tag%201"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.EscapedPath(); got != tt.wantEscaped {
+					t.Errorf("escaped path = %q, want %q", got, tt.wantEscaped)
+				}
+				writeData(t, w, http.StatusOK, Tag{ID: "tag_1"})
+			}))
+			t.Cleanup(srv.Close)
+
+			c, err := New(Config{BaseURL: srv.URL + tt.suffix, Token: "t", TenantID: "tenant-1"})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if _, err := c.Tags.Get(context.Background(), tt.id); err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+		})
+	}
 }

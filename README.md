@@ -11,9 +11,9 @@ option.
 
 > **Status: nothing published yet.** No version of this SDK has ever been released — there are no
 > git tags and the module proxy has served no semantic version. The transport, auth, error, and
-> pagination foundation plus the **Vocabularies**, **Tags**, **Tag aliases**, **Tag resolution**, and
-> **Tag assignments** resources are implemented; the remaining resources are tracked in
-> [`docs/roadmap.md`](docs/roadmap.md).
+> pagination foundation plus the **Vocabularies**, **Tags**, **Tag aliases**, **Tag resolution**,
+> **Tag assignments**, and **Resource tags** resources are implemented; the remaining resources are
+> tracked in [`docs/roadmap.md`](docs/roadmap.md).
 >
 > The first two releases will be `v1.0.0` on the frozen Go 1.13 compat line and `v2.0.0-alpha.1` on
 > this line. See [versioning.md](docs/versioning.md).
@@ -197,7 +197,8 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 | Tags (`client.Tags`) | ✅ Create / Get / List / Update / Delete / ListAliases / Resolve |
 | Tag aliases (`client.Aliases`) | ✅ Create / Get / List / Update / Delete |
 | Tag assignments (`client.Assignments`) | ✅ Create / Remove / BulkAssign / BulkRemove |
-| Resource tags, audit logs, health | 🚧 see [`docs/roadmap.md`](docs/roadmap.md) |
+| Resource tags (`client.Resources`) | ✅ ListTags / ReplaceTags, plus `Tags.ListResources` |
+| Audit logs, health | 🚧 see [`docs/roadmap.md`](docs/roadmap.md) |
 
 Every implemented resource works on either surface. `Tag`, `Vocabulary`, and `TagAlias` carry
 `NamespaceType` / `NamespaceID`, which are nil for a global row and on every `/api/v1` response.
@@ -207,6 +208,9 @@ unset — so `IsActive: octonomy.Bool(false)` is how you find deleted ones.
 
 `Tags.Resolve` is the odd one out: an unmatched slug is a `400 validation_error`, **not** a `404`, so
 branch on `IsValidation` rather than `IsNotFound`. See [`docs/api.md`](docs/api.md#error-codes).
+
+`Resources.ReplaceTags` **replaces rather than merges**, and an empty request clears the resource
+outright — read the current set and send the union if you meant to add.
 
 ## Common commands
 

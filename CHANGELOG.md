@@ -224,6 +224,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counting them out of `Removed` rather than raising. Both bulk calls cap at the deployment's
   `MAX_BULK_TAGS` (200 by default).
 
+### Fixed
+- **Path segments were escaped twice, so an id containing a space, `%`, or `#` addressed the wrong
+  resource.** `url.PathEscape` produced `%20` and `net/url` escaped the result again when rendering
+  the `url.URL.Path` it was assigned to, so `"ord 9"` went out as `ord%2520` and reached the server as
+  the literal `ord%209`. `doRaw` now sets both halves of the path pair through `Client.resolvePath`,
+  so each segment is escaped exactly once.
+
+  Harmless while every path segment was a uuid, which is why it survived since the first release. It
+  stopped being harmless at `/resources/{resource_type}/{resource_id}`: a resource id is a
+  **caller-chosen external identifier** the server validates only as non-blank, and `ReplaceTags` is
+  destructive — so a wrong id silently replaced the tag set of a resource the caller never named.
+  Confirmed against a running server, where the two spellings produce two distinct rows.
+
+  A resource id containing a **`/`** remains unaddressable however it is escaped: the server's Django
+  route receives a decoded slash from WSGI and matches nothing, answering an envelope-less `404` that
+  the SDK reports as `IsUnexpectedStatus`. Octonomy will *store* such an id (via `Assignments.Create`,
+  whose id travels in the body) but will not *route* it — a server-side gap the SDK documents rather
+  than rejects, since the failure is already loud.
+
+### Added
+- **Resource tags** ([#11](https://github.com/octoverse-id/octonomy-go/issues/11)). `client.Resources`
+  covers `ListTags` and `ReplaceTags`, and `client.Tags.ListResources` completes the mirror. Two new
+  models: `ResourceTag` (a tag as seen from a resource, with the `Tag` nested whole) and `TagResource`
+  (a resource as seen from a tag). Both carry `NamespaceType` / `NamespaceID`, taking the SDK to six
+  of the seven v2 schemas that do.
+- **`ReplaceTags` replaces, it does not merge.** Every tag on the resource and absent from the request
+  is removed. To add, read the current set first and send the union.
+- **An empty replace is legal and clears the resource.** `ResourceReplace` with no `TagIDs` and no
+  `AliasSlugs` removes every tag — a deliberate difference from `BulkAssign`, which refuses an empty
+  request. An empty slice reaching that call by accident, from a filter that matched nothing, wipes
+  the resource silently and successfully. Proven against a real server rather than only documented.
+- **The replace response is a third composite shape, and the vendored spec is wrong about it twice
+  over.** `openapi-v2.yaml` claims a bare array *and* claims the elements are `ResourceTag`. The
+  server sends `{"data": {"created": N, "removed": N, "tags": [...]}}`, where those are **`Tag`**
+  values — no `AssignmentID`, no `AssignedAt`. A client written from the spec decodes an empty slice
+  and a nil error; one that guessed the envelope but kept the element type decodes tags with every
+  field empty. `ResourceReplaceResult` requires `created`, `removed`, and `tags` on decode, for the
+  reason established with the bulk results: zero is an ordinary answer here, so a renamed key would
+  read as "nothing needed changing".
+- `ResourceReplace` deliberately carries **no** `ResourceType` or `ResourceID`, though the contract
+  lists them: they come from the path, and the server overwrites whatever a body sends. A field that
+  cannot affect the request does not belong on it.
+- `ResourceListTagsParams.ApplicationID` is **required by the server** — the only list in this SDK
+  where that holds — and may equally be supplied with `WithApplication`. `IncludeInactive` is not the
+  `is_active` filter the tag and alias lists take: it is a different parameter with different
+  polarity, where nil means active-only and true *widens* to include deactivated tags. There is no way
+  to ask for deactivated tags alone.
+- Both new models' namespace pairs are asserted two ways — a unit test decoding a **raw** body written
+  with the wire's own key names, and namespaced live calls checking what the server populates. Neither
+  alone suffices: renaming the tags left the entire unit suite green until the raw-body test existed,
+  because every other fixture is marshalled from the struct it is decoded into.
+
 ## [0.1.0] - 2026-06-08
 
 > **Never released.** No `v0.1.0` git tag was ever cut and the module proxy has never served this

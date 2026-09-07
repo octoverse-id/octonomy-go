@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 )
@@ -334,21 +333,18 @@ func TestAliases_Delete(t *testing.T) {
 	}
 }
 
-// An id is escaped rather than interpolated: a slash inside one must stay inside
-// its segment and must not address a different route. Asserted as a segment
-// count, not as an exact byte sequence, because the escaping is currently
-// applied twice -- url.PathEscape here, and again when net/url renders the
-// url.URL.Path this is assigned into, so a slash reaches the wire as %252F. That
-// double encoding predates this resource (Tags.Get and Vocabularies.Get do the
-// same) and is not what this test is about; the segment boundary is, and it holds
-// either way. Alias ids are uuids on every route here, so no real id reaches it.
+// An id is escaped rather than interpolated: a slash inside one stays inside its
+// segment and cannot address a different route.
+//
+// Asserted on EscapedPath, which is what goes on the wire and what the server
+// routes on -- URL.Path is the DECODED form, where that slash is a real slash
+// again and counting separators there proves nothing. The escaping is applied
+// exactly once now; it used to happen twice (%252F), which is the defect
+// resolvePath fixes in transport.go.
 func TestAliases_PathKeepsTheIDInOneSegment(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/v2/tag-aliases/") {
-			t.Errorf("path = %q, want the /api/v2/tag-aliases/{id} route", r.URL.Path)
-		}
-		if got := strings.Count(r.URL.Path, "/"); got != 4 {
-			t.Errorf("path = %q has %d separators, want 4: the id escaped its segment", r.URL.Path, got)
+		if got := r.URL.EscapedPath(); got != "/api/v2/tag-aliases/alias%2F1" {
+			t.Errorf("escaped path = %q, want /api/v2/tag-aliases/alias%%2F1", got)
 		}
 		writeData(t, w, http.StatusOK, TagAlias{ID: "alias/1", TagID: "tag_1"})
 	})
@@ -399,13 +395,10 @@ func TestTags_ListAliases(t *testing.T) {
 func TestTags_ListAliases_NilParamsAndEscaping(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		// Same invariant as TestAliases_PathKeepsTheIDInOneSegment, one level in:
-		// the tag id must not be able to reach past its own segment and rename the
-		// /aliases sub-route.
-		if !strings.HasPrefix(r.URL.Path, "/api/v2/tags/") || !strings.HasSuffix(r.URL.Path, "/aliases") {
-			t.Errorf("path = %q, want the /api/v2/tags/{id}/aliases route", r.URL.Path)
-		}
-		if got := strings.Count(r.URL.Path, "/"); got != 5 {
-			t.Errorf("path = %q has %d separators, want 5: the tag id escaped its segment", r.URL.Path, got)
+		// the tag id cannot reach past its own segment and rename the /aliases
+		// sub-route.
+		if got := r.URL.EscapedPath(); got != "/api/v2/tags/tag%2F1/aliases" {
+			t.Errorf("escaped path = %q, want /api/v2/tags/tag%%2F1/aliases", got)
 		}
 		if r.URL.RawQuery != "" {
 			t.Errorf("expected no query params, got %q", r.URL.RawQuery)

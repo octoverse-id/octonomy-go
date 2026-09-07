@@ -9,7 +9,7 @@
 // complete unit suite stayed green through it, because the fixtures encoded the
 // vendored spec rather than the running server.
 //
-// Ten assertions cover the shapes: the single-resource {"data": {...}} envelope
+// Eleven assertions cover the shapes: the single-resource {"data": {...}} envelope
 // on both a write and a read, the {data, pagination} list envelope, all four
 // resources, the composite resolution and bulk payloads, one real error
 // envelope, and a namespaced round trip on /api/v2 -- the last of these being the
@@ -637,5 +637,173 @@ func TestSmoke_RealServer(t *testing.T) {
 		ResourceID:    nsResourceID,
 	}, octonomy.WithNamespace(nsType, nsID)); err != nil {
 		t.Fatalf("Assignments.Remove (namespaced): %v", err)
+	}
+	// 11. Resource tags: the resource's own view of tagging, and a THIRD
+	// composite shape. docs/openapi-v2.yaml is wrong about the replace response
+	// twice over -- it claims a bare array, and claims the elements are
+	// ResourceTag, where the server sends {"created", "removed", "tags"} under
+	// the envelope with Tag values in it.
+	//
+	// Both new models carry the namespace pair, so both are asserted against a
+	// server that populates it. That is the gap #41 closed for Assignment the
+	// hard way: renaming a namespace json tag left every fixture green, because
+	// fixtures are marshalled from the same struct they are decoded into.
+	replaceResourceID := uniqueSlug("smoke-cart")
+	replaced, err := client.Resources.ReplaceTags(ctx, "cart", replaceResourceID, octonomy.ResourceReplace{
+		ApplicationID: appID,
+		TagIDs:        []string{tag.ID},
+		AssignedBy:    octonomy.String("v2-smoke"),
+	})
+	if err != nil {
+		t.Fatalf("Resources.ReplaceTags: %v", err)
+	}
+	if replaced.Created != 1 || replaced.Removed != 0 {
+		t.Errorf("replace counts = created:%d removed:%d, want 1 and 0", replaced.Created, replaced.Removed)
+	}
+	if len(replaced.Tags) != 1 || replaced.Tags[0].ID != tag.ID {
+		t.Fatalf("replace returned %+v, want the one tag", replaced.Tags)
+	}
+	// Tags, not ResourceTags -- the field would be empty if the element type were
+	// wrong, which is the half of the spec's claim an envelope fix alone misses.
+	if replaced.Tags[0].Slug != tagSlug {
+		t.Errorf("replace tag slug = %q, want %q", replaced.Tags[0].Slug, tagSlug)
+	}
+
+	resourceTags, err := client.Resources.ListTags(ctx, "cart", replaceResourceID,
+		&octonomy.ResourceListTagsParams{ApplicationID: octonomy.String(appID)})
+	if err != nil {
+		t.Fatalf("Resources.ListTags: %v", err)
+	}
+	if len(resourceTags.Data) != 1 {
+		t.Fatalf("ListTags returned %d rows, want 1", len(resourceTags.Data))
+	}
+	rt := resourceTags.Data[0]
+	if rt.AssignmentID == "" || rt.AssignedAt.IsZero() {
+		t.Errorf("assignment fields did not decode: %+v", rt)
+	}
+	// The nested tag is the shape's whole point.
+	if rt.Tag.ID != tag.ID || rt.Tag.Slug != tagSlug {
+		t.Errorf("nested tag = %+v, want the created tag %s", rt.Tag, tag.ID)
+	}
+	if rt.AssignedBy == nil || *rt.AssignedBy != "v2-smoke" {
+		t.Errorf("AssignedBy = %v, want v2-smoke", rt.AssignedBy)
+	}
+	// A global assignment reports no namespace.
+	if rt.NamespaceType != nil || rt.NamespaceID != nil {
+		t.Errorf("a global resource tag reported a namespace: %+v", rt)
+	}
+
+	// The mirror route, from the tag's side.
+	tagResources, err := client.Tags.ListResources(ctx, tag.ID, &octonomy.TagListResourcesParams{
+		ApplicationID: octonomy.String(appID),
+		ResourceType:  octonomy.String("cart"),
+	})
+	if err != nil {
+		t.Fatalf("Tags.ListResources: %v", err)
+	}
+	foundResource := false
+	for _, row := range tagResources.Data {
+		if row.ResourceID == replaceResourceID {
+			foundResource = true
+			if row.ResourceType != "cart" || row.ApplicationID != appID {
+				t.Errorf("resource row did not round-trip: %+v", row)
+			}
+			if row.AssignedAt.IsZero() {
+				t.Errorf("AssignedAt did not decode: %+v", row)
+			}
+		}
+	}
+	if !foundResource {
+		t.Errorf("Tags.ListResources returned %d rows, none of them %s", len(tagResources.Data), replaceResourceID)
+	}
+
+	// The namespace pair on BOTH models, populated by the server from the request
+	// headers -- the assertion no fixture can make honestly.
+	nsCartID := uniqueSlug("smoke-ns-cart")
+	if _, err := client.Resources.ReplaceTags(ctx, "cart", nsCartID, octonomy.ResourceReplace{
+		ApplicationID: appID,
+		TagIDs:        []string{nsTag.ID},
+	}, octonomy.WithNamespace(nsType, nsID)); err != nil {
+		t.Fatalf("Resources.ReplaceTags (namespaced): %v", err)
+	}
+	nsResourceTags, err := client.Resources.ListTags(ctx, "cart", nsCartID,
+		&octonomy.ResourceListTagsParams{ApplicationID: octonomy.String(appID)},
+		octonomy.WithNamespace(nsType, nsID))
+	if err != nil {
+		t.Fatalf("Resources.ListTags (namespaced): %v", err)
+	}
+	if len(nsResourceTags.Data) != 1 {
+		t.Fatalf("namespaced ListTags returned %d rows, want 1", len(nsResourceTags.Data))
+	}
+	if got := nsResourceTags.Data[0]; got.NamespaceType == nil || *got.NamespaceType != nsType ||
+		got.NamespaceID == nil || *got.NamespaceID != nsID {
+		t.Errorf("namespaced resource tag: namespace = %v/%v, want %q/%q",
+			got.NamespaceType, got.NamespaceID, nsType, nsID)
+	}
+
+	nsTagResources, err := client.Tags.ListResources(ctx, nsTag.ID, &octonomy.TagListResourcesParams{
+		ApplicationID: octonomy.String(appID),
+	}, octonomy.WithNamespace(nsType, nsID))
+	if err != nil {
+		t.Fatalf("Tags.ListResources (namespaced): %v", err)
+	}
+	if len(nsTagResources.Data) == 0 {
+		t.Fatal("namespaced ListResources returned nothing")
+	}
+	if got := nsTagResources.Data[0]; got.NamespaceType == nil || *got.NamespaceType != nsType ||
+		got.NamespaceID == nil || *got.NamespaceID != nsID {
+		t.Errorf("namespaced tag resource: namespace = %v/%v, want %q/%q",
+			got.NamespaceType, got.NamespaceID, nsType, nsID)
+	}
+
+	// A resource id carrying a character that needs escaping must address the
+	// resource the caller named. Escaped twice -- as every path was before
+	// resolvePath -- "ord 9" reached the server as the literal "ord%209", a
+	// DIFFERENT resource, which on this destructive route means replacing a tag
+	// set nobody asked for. Verified against the server: the two spellings really
+	// do produce two rows.
+	spacedResourceID := uniqueSlug("smoke order")
+	if _, err := client.Resources.ReplaceTags(ctx, "cart", spacedResourceID, octonomy.ResourceReplace{
+		ApplicationID: appID,
+		TagIDs:        []string{tag.ID},
+	}); err != nil {
+		t.Fatalf("Resources.ReplaceTags (id with a space): %v", err)
+	}
+	spacedRows, err := client.Tags.ListResources(ctx, tag.ID, &octonomy.TagListResourcesParams{
+		ApplicationID: octonomy.String(appID),
+		ResourceType:  octonomy.String("cart"),
+	})
+	if err != nil {
+		t.Fatalf("Tags.ListResources (id with a space): %v", err)
+	}
+	spacedFound := false
+	for _, row := range spacedRows.Data {
+		if row.ResourceID == spacedResourceID {
+			spacedFound = true
+		}
+	}
+	if !spacedFound {
+		var got []string
+		for _, row := range spacedRows.Data {
+			got = append(got, row.ResourceID)
+		}
+		t.Errorf("the server stored %v, none of them %q: the id was escaped the wrong number of times",
+			got, spacedResourceID)
+	}
+
+	// An EMPTY replace is legal and clears the resource. Proven here rather than
+	// asserted in a doc comment, because it is the destructive case a caller
+	// reaches by accident with a filter that matched nothing.
+	cleared, err := client.Resources.ReplaceTags(ctx, "cart", replaceResourceID, octonomy.ResourceReplace{
+		ApplicationID: appID,
+	})
+	if err != nil {
+		t.Fatalf("Resources.ReplaceTags (empty): %v", err)
+	}
+	if cleared.Removed != 1 || cleared.Created != 0 {
+		t.Errorf("empty replace counts = created:%d removed:%d, want 0 and 1", cleared.Created, cleared.Removed)
+	}
+	if len(cleared.Tags) != 0 {
+		t.Errorf("empty replace left %d tags, want none", len(cleared.Tags))
 	}
 }

@@ -123,6 +123,8 @@ type Client struct {
 	Aliases *AliasService
 	// Assignments links tags to external resources.
 	Assignments *AssignmentService
+	// Resources reads and replaces the tag set on an external resource.
+	Resources *ResourceService
 }
 
 // New validates cfg and returns a ready Client.
@@ -177,6 +179,7 @@ func New(cfg Config) (*Client, error) {
 	c.Tags = &TagService{client: c}
 	c.Aliases = &AliasService{client: c}
 	c.Assignments = &AssignmentService{client: c}
+	c.Resources = &ResourceService{client: c}
 	return c, nil
 }
 
