@@ -237,6 +237,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   destructive — so a wrong id silently replaced the tag set of a resource the caller never named.
   Confirmed against a running server, where the two spellings produce two distinct rows.
 
+  A resource id containing a **`/`** remains unaddressable however it is escaped: the server's Django
+  route receives a decoded slash from WSGI and matches nothing, answering an envelope-less `404` that
+  the SDK reports as `IsUnexpectedStatus`. Octonomy will *store* such an id (via `Assignments.Create`,
+  whose id travels in the body) but will not *route* it — a server-side gap the SDK documents rather
+  than rejects, since the failure is already loud.
+
 ### Added
 - **Resource tags** ([#11](https://github.com/octoverse-id/octonomy-go/issues/11)). `client.Resources`
   covers `ListTags` and `ReplaceTags`, and `client.Tags.ListResources` completes the mirror. Two new

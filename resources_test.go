@@ -357,28 +357,42 @@ func TestTags_ListResources_UnknownTag(t *testing.T) {
 	}
 }
 
-// Both path segments are escaped EXACTLY ONCE, so neither can reach past its own
-// segment and address a different route.
+// A slash in a segment is escaped, so it cannot reach past that segment and
+// address a different route -- and the request that results is one the server
+// will not route at all.
 //
-// This route is why that precision matters. Elsewhere every path segment is a
-// uuid, so a double escape was invisible; a resource id is a caller-chosen
-// external identifier the server validates only as non-blank, so one can contain
-// a space or a slash -- and ReplaceTags is destructive, which makes addressing
-// the wrong resource a silent rewrite rather than an empty read.
-func TestResources_PathKeepsSegmentsSeparate(t *testing.T) {
+// Both halves matter and the second is easy to miss. The SDK sends %2F, which is
+// correct; the server's Django <str:resource_id> route then receives a DECODED
+// slash from WSGI, splits the segment, and matches nothing. Probed against 3.1.0:
+// an envelope-less 404. So the outcome is a loud failure rather than a read of
+// some other resource, which is the property worth pinning -- a canned 200 here
+// would assert a shape the real server never produces.
+func TestResources_ASlashInAnIDIsEscapedAndThenUnroutable(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// Escaped once, so the id stays one segment on the wire.
 		if got := r.URL.EscapedPath(); got != "/api/v2/resources/order%2Ftype/ord%2F9/tags" {
 			t.Errorf("escaped path = %q, want /api/v2/resources/order%%2Ftype/ord%%2F9/tags", got)
 		}
-		writeJSON(t, w, http.StatusOK, map[string]any{
-			"data":       []ResourceTag{},
-			"pagination": map[string]any{"limit": 50, "offset": 0, "count": 0},
-		})
+		// What the real server answers: a 404 with no Octonomy error envelope.
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		if _, err := w.Write([]byte("<!doctype html><title>Not Found</title>")); err != nil {
+			t.Errorf("write body: %v", err)
+		}
 	})
 
-	if _, err := c.Resources.ListTags(context.Background(), "order/type", "ord/9",
-		&ResourceListTagsParams{ApplicationID: String("commerce")}); err != nil {
-		t.Fatalf("ListTags: %v", err)
+	_, err := c.Resources.ListTags(context.Background(), "order/type", "ord/9",
+		&ResourceListTagsParams{ApplicationID: String("commerce")})
+	if err == nil {
+		t.Fatal("expected an error for an unroutable resource id")
+	}
+	// Loud and correctly classified: an envelope-less 404 is infrastructure, not
+	// "this resource has no tags", so IsNotFound must stay false.
+	if !IsUnexpectedStatus(err) {
+		t.Errorf("expected IsUnexpectedStatus, got %v", err)
+	}
+	if IsNotFound(err) {
+		t.Error("an unrouted 404 must not read as a real not_found")
 	}
 }
 

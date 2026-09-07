@@ -14,9 +14,17 @@ running server wins. See [Responses](#responses).
 
 ## Base URL and headers
 
-Path segments are escaped exactly once, so an id containing a space, `%`, `#`, or `/` addresses the
+Path segments are escaped exactly once, so an id containing a space, `%`, or `#` addresses the
 resource it names. That matters most on `/resources/{resource_type}/{resource_id}`, where the id is a
 caller-chosen external identifier rather than a uuid and `ReplaceTags` is destructive.
+
+**A resource id containing a `/` cannot be addressed at all**, however it is escaped. The server's
+route is a Django `<str:resource_id>` converter, and WSGI hands it a path with `%2F` already decoded,
+so the segment splits and nothing matches — probed against 3.1.0, an envelope-less `404`, which the
+SDK surfaces as `IsUnexpectedStatus` rather than `IsNotFound`. The server's own validator accepts a
+slash, so this is a gap between what Octonomy will **store** and what it will **route**: such a row
+can be created through `Assignments.Create`, whose id travels in the body, and then never read back
+through the `/resources` routes.
 
 The client targets `Config.BaseURL + /api/<version>`, where the version comes from
 `Config.APIVersion` and defaults to `APIV2`. Every request carries:

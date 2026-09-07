@@ -119,11 +119,12 @@ func (r *ResourceReplaceResult) UnmarshalJSON(data []byte) error {
 // ResourceListTagsParams filters and pages a resource's tag list.
 //
 // ApplicationID is REQUIRED on this route -- the only list in this SDK where that
-// is true -- and a request without it is a validation_error naming the parameter.
-// Set it here, or with WithApplication; setting both to different values is a
-// contradiction rather than a precedence question. A nil *params therefore always
-// fails, which is deliberate: the alternative is inventing a default application,
-// and there is no safe one to invent.
+// is true -- and a request supplying it from neither source is a validation_error
+// naming the parameter. Set it here, or with WithApplication; setting both to
+// different values is a contradiction rather than a precedence question. A nil
+// *params is therefore fine WITH the option and fails without it. The SDK does
+// not default it, because the alternative is inventing an application, and there
+// is no safe one to invent.
 //
 // IncludeInactive is NOT the is_active filter the tag and alias lists take. It is
 // a different parameter with different polarity: nil or false returns only
@@ -184,6 +185,24 @@ type ResourceService struct {
 	client *Client
 }
 
+// resourcePath escapes each segment exactly once -- see Client.resolvePath, which
+// is what makes "once" true rather than twice.
+//
+// A resourceID CONTAINING A SLASH cannot be addressed at all, and no amount of
+// escaping changes that. The server's route is a Django <str:resource_id>
+// converter, which matches anything but a slash, and WSGI hands it a path with
+// %2F already decoded -- so the segment splits and no route matches. Probed
+// against 3.1.0: %2F answers 404 with an HTML body and no Octonomy error
+// envelope, which this SDK surfaces as CodeUnexpectedStatus (IsUnexpectedStatus),
+// never as IsNotFound. The failure is loud, which is why the SDK documents the
+// limit here rather than rejecting the input: refusing it locally would be
+// encoding the server's routing, and the server is free to change it.
+//
+// The server's own validator accepts a slash (validate_external_id checks only
+// for blankness), so this is a gap between what Octonomy will STORE and what it
+// will ROUTE, not an SDK restriction. A resource id with a slash can be created
+// through Assignments.Create, whose id travels in the body, and then never read
+// back through these routes.
 func resourcePath(resourceType, resourceID, suffix string) string {
 	return "/resources/" + url.PathEscape(resourceType) + "/" + url.PathEscape(resourceID) + suffix
 }
