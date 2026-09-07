@@ -14,6 +14,10 @@ running server wins. See [Responses](#responses).
 
 ## Base URL and headers
 
+Path segments are escaped exactly once, so an id containing a space, `%`, `#`, or `/` addresses the
+resource it names. That matters most on `/resources/{resource_type}/{resource_id}`, where the id is a
+caller-chosen external identifier rather than a uuid and `ReplaceTags` is destructive.
+
 The client targets `Config.BaseURL + /api/<version>`, where the version comes from
 `Config.APIVersion` and defaults to `APIV2`. Every request carries:
 

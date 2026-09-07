@@ -756,6 +756,41 @@ func TestSmoke_RealServer(t *testing.T) {
 			got.NamespaceType, got.NamespaceID, nsType, nsID)
 	}
 
+	// A resource id carrying a character that needs escaping must address the
+	// resource the caller named. Escaped twice -- as every path was before
+	// resolvePath -- "ord 9" reached the server as the literal "ord%209", a
+	// DIFFERENT resource, which on this destructive route means replacing a tag
+	// set nobody asked for. Verified against the server: the two spellings really
+	// do produce two rows.
+	spacedResourceID := uniqueSlug("smoke order")
+	if _, err := client.Resources.ReplaceTags(ctx, "cart", spacedResourceID, octonomy.ResourceReplace{
+		ApplicationID: appID,
+		TagIDs:        []string{tag.ID},
+	}); err != nil {
+		t.Fatalf("Resources.ReplaceTags (id with a space): %v", err)
+	}
+	spacedRows, err := client.Tags.ListResources(ctx, tag.ID, &octonomy.TagListResourcesParams{
+		ApplicationID: octonomy.String(appID),
+		ResourceType:  octonomy.String("cart"),
+	})
+	if err != nil {
+		t.Fatalf("Tags.ListResources (id with a space): %v", err)
+	}
+	spacedFound := false
+	for _, row := range spacedRows.Data {
+		if row.ResourceID == spacedResourceID {
+			spacedFound = true
+		}
+	}
+	if !spacedFound {
+		var got []string
+		for _, row := range spacedRows.Data {
+			got = append(got, row.ResourceID)
+		}
+		t.Errorf("the server stored %v, none of them %q: the id was escaped the wrong number of times",
+			got, spacedResourceID)
+	}
+
 	// An EMPTY replace is legal and clears the resource. Proven here rather than
 	// asserted in a doc comment, because it is the destructive case a caller
 	// reaches by accident with a filter that matched nothing.

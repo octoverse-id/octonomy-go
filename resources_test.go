@@ -357,15 +357,18 @@ func TestTags_ListResources_UnknownTag(t *testing.T) {
 	}
 }
 
-// Both path segments are escaped, so neither can reach past its own segment and
-// address a different route. Same invariant the alias tests pin, two segments in.
+// Both path segments are escaped EXACTLY ONCE, so neither can reach past its own
+// segment and address a different route.
+//
+// This route is why that precision matters. Elsewhere every path segment is a
+// uuid, so a double escape was invisible; a resource id is a caller-chosen
+// external identifier the server validates only as non-blank, so one can contain
+// a space or a slash -- and ReplaceTags is destructive, which makes addressing
+// the wrong resource a silent rewrite rather than an empty read.
 func TestResources_PathKeepsSegmentsSeparate(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/v2/resources/") || !strings.HasSuffix(r.URL.Path, "/tags") {
-			t.Errorf("path = %q, want the /api/v2/resources/{type}/{id}/tags route", r.URL.Path)
-		}
-		if got := strings.Count(r.URL.Path, "/"); got != 6 {
-			t.Errorf("path = %q has %d separators, want 6: a segment escaped", r.URL.Path, got)
+		if got := r.URL.EscapedPath(); got != "/api/v2/resources/order%2Ftype/ord%2F9/tags" {
+			t.Errorf("escaped path = %q, want /api/v2/resources/order%%2Ftype/ord%%2F9/tags", got)
 		}
 		writeJSON(t, w, http.StatusOK, map[string]any{
 			"data":       []ResourceTag{},
@@ -521,4 +524,68 @@ func TestResourceModels_DecodeTheWiresFieldNames(t *testing.T) {
 			t.Error("assigned_at did not decode")
 		}
 	})
+}
+
+// The P1 this route exposed: a resource id containing a character that needs
+// escaping must reach the server as the id the caller named.
+//
+// resource_id is a caller-chosen external identifier the server validates only
+// as non-blank, so a space is legal in one. Escaped twice -- as every path was
+// before resolvePath -- "ord 9" went out as "ord%2520" and arrived as the
+// literal "ord%209": a different resource. On ListTags that reads nothing; on
+// ReplaceTags, which is destructive, it writes a tag set against a resource the
+// caller never named.
+func TestResources_EscapesSpecialCharactersExactlyOnce(t *testing.T) {
+	tests := []struct {
+		name        string
+		resourceID  string
+		wantEscaped string
+		wantDecoded string
+	}{
+		{"space", "ord 9", "/api/v2/resources/order/ord%209/tags", "/api/v2/resources/order/ord 9/tags"},
+		{"percent", "ord%9", "/api/v2/resources/order/ord%259/tags", "/api/v2/resources/order/ord%9/tags"},
+		{"hash", "ord#9", "/api/v2/resources/order/ord%239/tags", "/api/v2/resources/order/ord#9/tags"},
+		{"plain", "ord_9", "/api/v2/resources/order/ord_9/tags", "/api/v2/resources/order/ord_9/tags"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.EscapedPath(); got != tt.wantEscaped {
+					t.Errorf("escaped path = %q, want %q", got, tt.wantEscaped)
+				}
+				// What the server decodes back out is the id the caller passed.
+				if got := r.URL.Path; got != tt.wantDecoded {
+					t.Errorf("decoded path = %q, want %q", got, tt.wantDecoded)
+				}
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"data":       []ResourceTag{},
+					"pagination": map[string]any{"limit": 50, "offset": 0, "count": 0},
+				})
+			})
+
+			_, err := c.Resources.ListTags(context.Background(), "order", tt.resourceID,
+				&ResourceListTagsParams{ApplicationID: String("commerce")})
+			if err != nil {
+				t.Fatalf("ListTags: %v", err)
+			}
+		})
+	}
+}
+
+// The same guarantee on the destructive route, which is the one that matters:
+// a replace must act on the resource the caller named or fail, never on another.
+func TestResources_ReplaceTagsAddressesTheNamedResource(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/api/v2/resources/order/ord 9/tags" {
+			t.Errorf("decoded path = %q, want the literal id \"ord 9\"", got)
+		}
+		writeData(t, w, http.StatusOK, ResourceReplaceResult{Created: 1, Tags: []Tag{{ID: "tag_1"}}})
+	})
+
+	_, err := c.Resources.ReplaceTags(context.Background(), "order", "ord 9", ResourceReplace{
+		ApplicationID: "commerce", TagIDs: []string{"tag_1"},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceTags: %v", err)
+	}
 }

@@ -224,6 +224,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counting them out of `Removed` rather than raising. Both bulk calls cap at the deployment's
   `MAX_BULK_TAGS` (200 by default).
 
+### Fixed
+- **Path segments were escaped twice, so an id containing a space, `%`, or `#` addressed the wrong
+  resource.** `url.PathEscape` produced `%20` and `net/url` escaped the result again when rendering
+  the `url.URL.Path` it was assigned to, so `"ord 9"` went out as `ord%2520` and reached the server as
+  the literal `ord%209`. `doRaw` now sets both halves of the path pair through `Client.resolvePath`,
+  so each segment is escaped exactly once.
+
+  Harmless while every path segment was a uuid, which is why it survived since the first release. It
+  stopped being harmless at `/resources/{resource_type}/{resource_id}`: a resource id is a
+  **caller-chosen external identifier** the server validates only as non-blank, and `ReplaceTags` is
+  destructive — so a wrong id silently replaced the tag set of a resource the caller never named.
+  Confirmed against a running server, where the two spellings produce two distinct rows.
+
 ### Added
 - **Resource tags** ([#11](https://github.com/octoverse-id/octonomy-go/issues/11)). `client.Resources`
   covers `ListTags` and `ReplaceTags`, and `client.Tags.ListResources` completes the mirror. Two new

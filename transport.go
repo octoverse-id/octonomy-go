@@ -260,8 +260,10 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		return 0, nil, err
 	}
 
-	endpoint := *c.baseURL
-	endpoint.Path += c.apiVersion.prefix() + path
+	endpoint, err := c.resolvePath(path)
+	if err != nil {
+		return 0, nil, err
+	}
 	if len(query) > 0 {
 		endpoint.RawQuery = query.Encode()
 	}
@@ -310,6 +312,40 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		return resp.StatusCode, respBody, parseError(resp.StatusCode, respBody, c.apiVersion)
 	}
 	return resp.StatusCode, respBody, nil
+}
+
+// resolvePath joins the client's base URL, the /api/<version> prefix, and an
+// already-escaped resource path, setting BOTH halves of url.URL's path pair.
+//
+// Resource methods hand in segments escaped with url.PathEscape, and url.URL
+// keeps the path twice: Path holds the DECODED form and RawPath the escaped one.
+// Assigning an escaped string to Path alone -- which this used to do -- means
+// String() escapes it a second time, so a resource id of "ord 9" left as
+// "ord%209" went out as "ord%2520" and reached the server as the literal
+// "ord%209". Every id was addressed correctly right up until one contained a
+// character that needed escaping.
+//
+// That stayed harmless while every path segment was a uuid. It stopped being
+// harmless at /resources/{resource_type}/{resource_id}: resource ids are
+// CALLER-CHOSEN external identifiers, which the server validates only as
+// non-blank (core/validators.py validate_external_id), so a space or a percent
+// is legal in one. A read against the wrong id merely returns nothing, but
+// ResourceService.ReplaceTags is destructive, and silently replacing the tag set
+// of a resource the caller did not name is the failure this exists to prevent.
+//
+// Setting both fields consistently makes EscapedPath() return RawPath verbatim
+// -- it does so whenever RawPath is a valid encoding of Path -- so each segment
+// is escaped exactly once.
+func (c *Client) resolvePath(path string) (*url.URL, error) {
+	escaped := c.apiVersion.prefix() + path
+	decoded, err := url.PathUnescape(escaped)
+	if err != nil {
+		return nil, fmt.Errorf("octonomy: invalid request path %q: %w", path, err)
+	}
+	endpoint := *c.baseURL
+	endpoint.RawPath = endpoint.EscapedPath() + escaped
+	endpoint.Path += decoded
+	return &endpoint, nil
 }
 
 // headers assembles the outbound header set.
