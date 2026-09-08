@@ -902,6 +902,12 @@ func TestSmoke_RealServer(t *testing.T) {
 		if row.ResourceID == nil || *row.ResourceID != replaceResourceID {
 			t.Errorf("row %s names resource %v, want %s", row.ID, row.ResourceID, replaceResourceID)
 		}
+		// The entity is "tag_assignment" while the action is "assignment.*" --
+		// an asymmetry AuditLog documents, and an exact-match filter, so it is
+		// worth pinning against the server rather than against a fixture.
+		if row.EntityType != "tag_assignment" {
+			t.Errorf("assignment row EntityType = %q, want tag_assignment", row.EntityType)
+		}
 		operations[row.OperationID]++
 	}
 	if len(operations) < 2 {

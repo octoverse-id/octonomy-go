@@ -324,6 +324,12 @@ exposing it would put the SDK ahead of the published contract on a route the ser
 narrow. Every filter is an **exact match**, they combine with AND, and the server ignores one set to
 the empty string.
 
+**`EntityType` and `Action` are spelled differently for assignments.** The entity is
+`tag_assignment` while its actions are `assignment.created` and `assignment.removed`; the other three
+agree with themselves (`tag` / `tag.*`, `tag_alias` / `tag_alias.*`, `vocabulary` / `vocabulary.*`).
+Since both are exact-match filters, `EntityType: octonomy.String("assignment")` returns an empty page
+rather than an error.
+
 **`OperationID` is the field that makes a multi-row mutation reconstructable.** `Resources.ReplaceTags`
 and both bulk calls write one row per assignment they touch, all sharing an operation id, so the
 removals and additions of a single replace read as one act rather than as unrelated churn. Read any

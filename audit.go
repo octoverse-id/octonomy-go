@@ -39,8 +39,15 @@ type AuditLog struct {
 
 	// Action names the mutation, e.g. "tag.created", "tag.updated",
 	// "tag.deactivated", "tag_alias.created", "vocabulary.updated",
-	// "assignment.created". EntityType and EntityID identify the row it happened
-	// to ("tag", "tag_alias", "vocabulary", "assignment", and that row's id).
+	// "assignment.created", "assignment.removed". EntityType and EntityID
+	// identify the row it happened to: EntityType is one of "tag", "tag_alias",
+	// "vocabulary", or "tag_assignment", and EntityID is that row's id.
+	//
+	// EntityType and Action are spelled DIFFERENTLY for assignments -- the
+	// entity is "tag_assignment" while its actions are "assignment.created" and
+	// "assignment.removed" -- and both filters are exact matches, so
+	// EntityType: String("assignment") returns an empty page rather than an
+	// error.
 	Action     string `json:"action"`
 	EntityType string `json:"entity_type"`
 	EntityID   string `json:"entity_id"`
