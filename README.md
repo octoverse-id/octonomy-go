@@ -198,10 +198,13 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 | Tag aliases (`client.Aliases`) | ✅ Create / Get / List / Update / Delete |
 | Tag assignments (`client.Assignments`) | ✅ Create / Remove / BulkAssign / BulkRemove |
 | Resource tags (`client.Resources`) | ✅ ListTags / ReplaceTags, plus `Tags.ListResources` |
-| Audit logs, health | 🚧 see [`docs/roadmap.md`](docs/roadmap.md) |
+| Audit logs (`client.AuditLogs`) | ✅ List, plus `Tags.ListAuditLogs` / `Resources.ListAuditLogs` |
+| Health | 🚧 see [`docs/roadmap.md`](docs/roadmap.md) |
 
-Every implemented resource works on either surface. `Tag`, `Vocabulary`, and `TagAlias` carry
-`NamespaceType` / `NamespaceID`, which are nil for a global row and on every `/api/v1` response.
+Every implemented resource works on either surface. All seven v2 response models that carry namespace
+identity now have it — `Tag`, `Vocabulary`, `TagAlias`, `Assignment`, `ResourceTag`, `TagResource`,
+and `AuditLog` — as decode-only `NamespaceType` / `NamespaceID`, nil for a global row and on every
+`/api/v1` response.
 
 `Delete` is deactivation on all three, and the alias lists filter to active rows when `IsActive` is
 unset — so `IsActive: octonomy.Bool(false)` is how you find deleted ones.
@@ -211,6 +214,12 @@ branch on `IsValidation` rather than `IsNotFound`. See [`docs/api.md`](docs/api.
 
 `Resources.ReplaceTags` **replaces rather than merges**, and an empty request clears the resource
 outright — read the current set and send the union if you meant to add.
+
+Audit logs are **list-only** — server-written history, so there is no `Get` and no writes — and they
+are the one group needing the `audit:read` scope: a token without it gets a `403` (`IsForbidden`),
+not an empty page. `AuditLog.OperationID` groups every row one operation emitted, which is how a
+`ReplaceTags` or a bulk call is reconstructed as a single act. See
+[`docs/api.md`](docs/api.md#audit-logs).
 
 ## Common commands
 

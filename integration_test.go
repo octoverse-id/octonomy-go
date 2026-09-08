@@ -806,4 +806,182 @@ func TestSmoke_RealServer(t *testing.T) {
 	if len(cleared.Tags) != 0 {
 		t.Errorf("empty replace left %d tags, want none", len(cleared.Tags))
 	}
+	// 12. Audit logs: the append-only history, and the one payload in this SDK
+	// whose most important field has no type in the contract at all.
+	//
+	// Three things here need a real server. The audit rows are written by the
+	// SERVER as a side effect of the mutations above, so unlike every other
+	// fixture in the unit suite they are not marshalled from the struct they are
+	// decoded into -- a misspelled json tag shows up here and nowhere else. The
+	// `changes` object's real shape is server-authored too. And the namespace
+	// filtering is a property of the query the server runs, not of anything the
+	// client sends.
+	tagAudit, err := client.Tags.ListAuditLogs(ctx, tag.ID, &octonomy.TagListAuditLogsParams{
+		ListOptions: octonomy.ListOptions{Limit: 100},
+	})
+	if err != nil {
+		// A 403 here means the harness token lacks audit:read, which is a harness
+		// fault rather than an SDK one -- scripts/octonomy-harness.sh grants it.
+		if octonomy.IsForbidden(err) {
+			t.Fatalf("audit reads are forbidden for this token: the harness must grant --scope audit:read: %v", err)
+		}
+		t.Fatalf("Tags.ListAuditLogs: %v", err)
+	}
+	var created, updated *octonomy.AuditLog
+	createdIdx, updatedIdx := -1, -1
+	for i, row := range tagAudit.Data {
+		switch row.Action {
+		case "tag.created":
+			created, createdIdx = &tagAudit.Data[i], i
+		case "tag.updated":
+			updated, updatedIdx = &tagAudit.Data[i], i
+		}
+	}
+	if created == nil || updated == nil {
+		t.Fatalf("Tags.ListAuditLogs returned %d rows, missing tag.created or tag.updated", len(tagAudit.Data))
+	}
+	if created.EntityType != "tag" || created.EntityID != tag.ID {
+		t.Errorf("tag.created row names %s/%s, want tag/%s", created.EntityType, created.EntityID, tag.ID)
+	}
+	if created.TenantID == "" || created.OperationID == "" || created.CreatedAt.IsZero() {
+		t.Errorf("identity fields did not decode: %+v", created)
+	}
+	if created.TagID == nil || *created.TagID != tag.ID {
+		t.Errorf("TagID = %v, want %s", created.TagID, tag.ID)
+	}
+	if created.ActorID == nil || *created.ActorID != "v2-smoke" {
+		t.Errorf("ActorID = %v, want v2-smoke (Config.ActorID)", created.ActorID)
+	}
+	// The server generates a request id when the caller sends none, which is
+	// what the SDK does today (#5 sends one).
+	if created.RequestID == nil || *created.RequestID == "" {
+		t.Errorf("RequestID = %v, want the server's generated value", created.RequestID)
+	}
+	// Rows arrive NEWEST FIRST, which AuditLog documents and offset paging
+	// depends on: the rename happened after the create, so it comes back before
+	// it. Asserted on the page order rather than only on the two timestamps,
+	// since the order is what a caller actually reads.
+	if updatedIdx > createdIdx {
+		t.Errorf("tag.updated is at index %d and tag.created at %d: rows must arrive newest first",
+			updatedIdx, createdIdx)
+	}
+	for i := 1; i < len(tagAudit.Data); i++ {
+		if tagAudit.Data[i].CreatedAt.After(tagAudit.Data[i-1].CreatedAt) {
+			t.Errorf("row %d (%v) is newer than row %d (%v): the page is not ordered newest first",
+				i, tagAudit.Data[i].CreatedAt, i-1, tagAudit.Data[i-1].CreatedAt)
+		}
+	}
+
+	// The untyped `changes` object, read the way a caller reads it. The contract
+	// gives this field no type; the server writes {"before": ..., "after": ...}
+	// with the fields the mutation touched.
+	after, ok := updated.Changes["after"].(map[string]any)
+	if !ok {
+		t.Fatalf("tag.updated changes[after] = %#v, want an object", updated.Changes["after"])
+	}
+	if after["name"] != "v2 smoke renamed" {
+		t.Errorf("changes[after][name] = %v, want the renamed value", after["name"])
+	}
+	if before, ok := updated.Changes["before"].(map[string]any); !ok || before["name"] != "v2 smoke" {
+		t.Errorf("changes[before] = %#v, want the pre-rename name", updated.Changes["before"])
+	}
+
+	// OperationID is what makes a multi-row mutation reconstructable: the replace
+	// in step 11 and the empty replace that cleared it are separate operations,
+	// and filtering by one returns that operation's rows alone.
+	resourceAudit, err := client.Resources.ListAuditLogs(ctx, "cart", replaceResourceID,
+		&octonomy.ResourceListAuditLogsParams{ListOptions: octonomy.ListOptions{Limit: 100}})
+	if err != nil {
+		t.Fatalf("Resources.ListAuditLogs: %v", err)
+	}
+	if len(resourceAudit.Data) < 2 {
+		t.Fatalf("Resources.ListAuditLogs returned %d rows, want the assign and the clear", len(resourceAudit.Data))
+	}
+	operations := map[string]int{}
+	for _, row := range resourceAudit.Data {
+		if row.ResourceID == nil || *row.ResourceID != replaceResourceID {
+			t.Errorf("row %s names resource %v, want %s", row.ID, row.ResourceID, replaceResourceID)
+		}
+		operations[row.OperationID]++
+	}
+	if len(operations) < 2 {
+		t.Errorf("the two replaces share %d operation id(s), want one each: %v", len(operations), operations)
+	}
+	oneOperation := resourceAudit.Data[0].OperationID
+	byOperation, err := client.AuditLogs.List(ctx, &octonomy.AuditLogListParams{
+		OperationID: octonomy.String(oneOperation),
+		ListOptions: octonomy.ListOptions{Limit: 100},
+	})
+	if err != nil {
+		t.Fatalf("AuditLogs.List (by operation): %v", err)
+	}
+	if len(byOperation.Data) == 0 {
+		t.Fatalf("filtering by operation_id %s returned nothing", oneOperation)
+	}
+	for _, row := range byOperation.Data {
+		if row.OperationID != oneOperation {
+			t.Errorf("operation_id filter returned %s, want only %s", row.OperationID, oneOperation)
+		}
+	}
+
+	// The collection's filters, and the global rows' namespace pair: a global
+	// mutation records no namespace.
+	entityRows, err := client.AuditLogs.List(ctx, &octonomy.AuditLogListParams{
+		EntityType:  octonomy.String("tag"),
+		EntityID:    octonomy.String(tag.ID),
+		Action:      octonomy.String("tag.created"),
+		ListOptions: octonomy.ListOptions{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("AuditLogs.List (filtered): %v", err)
+	}
+	if len(entityRows.Data) != 1 {
+		t.Fatalf("filtered list returned %d rows, want exactly the tag.created row", len(entityRows.Data))
+	}
+	if entityRows.Data[0].NamespaceType != nil || entityRows.Data[0].NamespaceID != nil {
+		t.Errorf("a global audit row reported a namespace: %+v", entityRows.Data[0])
+	}
+
+	// The namespace pair the server populates, and the fail-closed read: a
+	// namespaced audit read returns that namespace's rows and excludes the global
+	// ones. Without the headers the server serves the global namespace with a
+	// 200, so the exclusion is what proves they arrived.
+	nsAudit, err := client.AuditLogs.List(ctx, &octonomy.AuditLogListParams{
+		ListOptions: octonomy.ListOptions{Limit: 100},
+	}, octonomy.WithNamespace(nsType, nsID), octonomy.WithApplication(appID))
+	if err != nil {
+		t.Fatalf("AuditLogs.List (namespaced): %v", err)
+	}
+	sawNamespacedRow, sawGlobalRow := false, false
+	for _, row := range nsAudit.Data {
+		if row.EntityID == nsTag.ID {
+			sawNamespacedRow = true
+			if row.NamespaceType == nil || *row.NamespaceType != nsType ||
+				row.NamespaceID == nil || *row.NamespaceID != nsID {
+				t.Errorf("namespaced audit row: namespace = %v/%v, want %q/%q",
+					row.NamespaceType, row.NamespaceID, nsType, nsID)
+			}
+		}
+		if row.EntityID == tag.ID {
+			sawGlobalRow = true
+		}
+	}
+	if !sawNamespacedRow {
+		t.Errorf("namespaced audit list returned no row for the namespaced tag %s", nsTag.ID)
+	}
+	if sawGlobalRow {
+		t.Errorf("namespaced audit list returned a GLOBAL row (%s): namespaced reads exclude global rows unless include_global is set", tag.ID)
+	}
+
+	// An unknown tag is an EMPTY PAGE here, not the 404 every other /tags/{id}
+	// route answers: the view filters the audit table by tag_id and never loads
+	// the tag. Documented on TagService.ListAuditLogs, and only a real server can
+	// confirm it.
+	unknownTagAudit, err := client.Tags.ListAuditLogs(ctx, "00000000-0000-0000-0000-000000000000", nil)
+	if err != nil {
+		t.Fatalf("Tags.ListAuditLogs on an unknown tag: want an empty page, got %v", err)
+	}
+	if len(unknownTagAudit.Data) != 0 {
+		t.Errorf("Tags.ListAuditLogs on an unknown tag returned %d rows", len(unknownTagAudit.Data))
+	}
 }

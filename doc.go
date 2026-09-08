@@ -2,7 +2,8 @@
 // taxonomy service (https://github.com/octoverse-id/octonomy).
 //
 // Octonomy is a multi-tenant, multi-application REST service for vocabularies,
-// tags, aliases, and tag assignments. This SDK targets the server's primary
+// tags, aliases, tag assignments, and the audit history of every mutation to
+// them. This SDK targets the server's primary
 // surface, /api/v2 (server release 3.1.1), and can be pointed at /api/v1
 // instead. The bundled docs/openapi-v2.yaml and docs/openapi.yaml are the
 // contracts this client is written against.
@@ -89,6 +90,10 @@
 // (X-Tenant-ID) from Config. Set Config.ActorID (or pass WithActor per call) to
 // populate X-Actor-ID for audit trails. Tokens are scoped to tags:read,
 // tags:write, and audit:read on the server side.
+//
+// audit:read is granted separately and gates only Client.AuditLogs and the two
+// nested audit routes. A token without it reads and writes tags perfectly well
+// and gets a 403 (IsForbidden) from those three -- never an empty page.
 //
 // # Errors
 //

@@ -1,8 +1,9 @@
 # Roadmap
 
 The foundation (transport, auth, errors, pagination, API version selection, namespace scoping) and
-the **Vocabularies**, **Tags**, **Tag aliases**, **Tag resolution**, **Tag assignments**, and
-**Resource tags** resources are implemented. The resources below are queued. Each is a self-contained unit that follows the established pattern.
+the **Vocabularies**, **Tags**, **Tag aliases**, **Tag resolution**, **Tag assignments**,
+**Resource tags**, and **Audit logs** resources are implemented. **Health** is the one group left,
+and it is the one that does not fit the recipe.
 
 **Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint,
 parameter, and response shape below was enumerated from the vendored v2 spec. The previous revision
@@ -52,23 +53,11 @@ arrive with their resource:
 | `Assignment` | implemented | ✅ `assignments.go` |
 | `TagResource` | implemented | ✅ `resources.go` |
 | `ResourceTag` | implemented | ✅ `resources.go` |
-| `AuditLog` | #12 | pending |
+| `AuditLog` | implemented | ✅ `audit.go` |
 
 Six mark both fields `required`; `Assignment` carries them without. A drift check that keys on
-`required` will therefore see six, not seven — the runtime emits them on all seven.
-
-## Audit logs
-
-Append-only mutation history (needs the `audit:read` scope). Schema: `AuditLog`. **List-only — there
-is no `Get`.**
-
-- `AuditLogs.List` → `GET /audit-logs` → `200` list of `AuditLog`
-  - query: `action`, `actor_id`, `application_id`, `entity_id`, `entity_type`, `limit`, `offset`,
-    `operation_id`, `resource_id`, `resource_type`, `tag_id`
-- `Tags.ListAuditLogs` → `GET /tags/{tag_id}/audit-logs` → `200` list of `AuditLog`
-  - query: `action`, `actor_id`, `application_id`, `limit`, `offset`, `operation_id`
-- `Resources.ListAuditLogs` → `GET /resources/{resource_type}/{resource_id}/audit-logs` → `200` list of `AuditLog`
-  - query: `action`, `actor_id`, `application_id`, `limit`, `offset`, `operation_id`
+`required` will therefore see six, not seven — the runtime emits them on all seven. All seven are now
+implemented, so this table is a drift reference rather than a queue.
 
 ## Health
 
