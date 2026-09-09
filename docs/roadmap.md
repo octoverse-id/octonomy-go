@@ -1,9 +1,9 @@
 # Roadmap
 
 The foundation (transport, auth, errors, pagination, API version selection, namespace scoping) and
-the **Vocabularies**, **Tags**, **Tag aliases**, **Tag resolution**, **Tag assignments**,
-**Resource tags**, and **Audit logs** resources are implemented. **Health** is the one group left,
-and it is the one that does not fit the recipe.
+every endpoint group the vendored contracts publish are implemented: **Vocabularies**, **Tags**,
+**Tag aliases**, **Tag resolution**, **Tag assignments**, **Resource tags**, **Audit logs**, and
+**Health**. What is left are the gaps *within* implemented resources, at the bottom of this page.
 
 **Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint,
 parameter, and response shape below was enumerated from the vendored v2 spec. The previous revision
@@ -38,12 +38,12 @@ Scoping is already handled by the transport and needs no per-resource work: `Wit
 `WithApplication`, and `WithIncludeGlobal` apply to any method, and the guards in
 `checkScopeCoherence` cover every resource at the chokepoint.
 
-Each item below is a good single GitHub issue (`feature/<n>-<slug>`).
+The queue this section fed is empty; what follows is reference for the next resource the server adds,
+plus the two sections below on what is already here.
 
 ## Namespace fields
 
-Seven v2 response schemas carry `namespace_type` / `namespace_id`. Two are implemented; the rest
-arrive with their resource:
+Seven v2 response schemas carry `namespace_type` / `namespace_id`, and all seven are implemented:
 
 | Schema | Owner | Status |
 | ------ | ----- | ------ |
@@ -59,19 +59,33 @@ Six mark both fields `required`; `Assignment` carries them without. A drift chec
 `required` will therefore see six, not seven — the runtime emits them on all seven. All seven are now
 implemented, so this table is a drift reference rather than a queue.
 
-## Health
+## Health — implemented, and the one group the recipe does not describe
 
-Unauthenticated liveness/readiness probes.
+Unauthenticated liveness/readiness probes (#13).
 
 - `Health.Live` → `GET /health/live`
 - `Health.Ready` → `GET /health/ready`
 
-**Outside the API surface in three ways at once**, so it does not fit the recipe above: the routes sit
-outside `/api/<version>` (the prefix is unconditional in `doRaw`), the body is a bare `{"status":
-"ok"}` with **no `data` envelope**, and they are unauthenticated — while `New` requires both `Token`
-and `TenantID`. #13 needs its own request path, its own decoder, and the credential-free constructor
-its title names. Do **not** loosen `doData`'s envelope requirement or `New`'s validation to make
-health fit: that re-opens #32, and the tenant guarantee, for every other resource.
+**Outside the API surface in three ways at once**, which is why it needed its own everything: the
+routes sit outside `/api/<version>` (the prefix is unconditional in `doRaw`), the body is a bare
+`{"status": "ok"}` with **no `data` envelope**, and they are unauthenticated — while `New` requires
+both `Token` and `TenantID`, so a caller with no credentials could not construct a client at all in
+order to reach an endpoint that needs none.
+
+What landed, and the constraints that shaped it — all four still bind anyone editing `health.go`:
+
+- `NewHealthClient(baseURL, ...HealthOption)` builds a credential-free client. `New`'s validation was
+  **not** loosened, and `doData`'s envelope requirement was **not** relaxed: either would re-open #32,
+  and the tenant guarantee, for every other resource.
+- `doUnversioned` in `transport.go` is a separate request path, not a `skipAuth` flag threaded through
+  `doRaw`. `doRaw` already carries the version and scope logic and is over the complexity threshold;
+  here the absence of auth is the whole function and cannot be reached by accident.
+- Health has its own decoder. A 2xx with no readable `status` is an **error**, never a zero-valued
+  `HealthStatus` — the same rule `doData` enforces for the envelope.
+- **Unreachable and unready must stay distinguishable.** A 503 carrying the probe's own body is an
+  `*APIError` with `not_ready` (`IsNotReady`); a request that got no response matches
+  `errors.Is(err, ErrUnreachable)` and produces no `*APIError` at all. Collapsing them loses the
+  distinction an operator most needs.
 
 ## Known gaps in implemented resources
 

@@ -68,8 +68,9 @@ stays a faithful, ergonomic client.
   survived a complete unit suite. A canned fixture must carry the envelope (`writeData` in the test
   helpers), because a fixture written against the vendored spec passes against a client that is
   wrong.
-- **The queued groups are not all CRUD, and `docs/openapi.yaml` will mislead you about two of
-  them.** Shapes verified live against server 3.1.0, not read off the spec:
+- **The resource groups are not all CRUD, and `docs/openapi.yaml` will mislead you about two of
+  them.** All are implemented; the table is now a reference for anyone editing them. Shapes verified
+  live against server 3.1.0, not read off the spec:
 
   | Group | Endpoints | Helper |
   | ----- | --------- | ------ |
@@ -78,7 +79,7 @@ stays a faithful, ergonomic client.
   | Assignments (#10) | `POST`/`DELETE /tag-assignments`, plus `bulk-assign`/`bulk-remove` | `doData` + `do`; see the composite note below |
   | Resource tags (#11) | `GET` list + `POST` composite replace | `doList` + `doData` (composite) |
   | Audit logs (#12) | `GET` only, three list routes | `doList` — **list-only**, there is no `Get` |
-  | Health (#13) | `/health/live`, `/health/ready` | neither — see below |
+  | Health (#13) | `/health/live`, `/health/ready` | neither — `doUnversioned` + its own decoder, see below |
 
   - **Bulk and replace return a composite object under `data`**, e.g.
     `{"data": {"created": 1, "existing": 0, "skipped": 0, "assignments": [...]}}`. The spec is no
@@ -92,17 +93,29 @@ stays a faithful, ergonomic client.
   - **Health is outside the API surface in three ways at once.** It is rooted outside `/api/<version>`
     (the prefix is unconditional in `doRaw`), its body is a bare `{"status": "ok"}` with **no `data`
     envelope**, and it is **unauthenticated** — while `New` requires both `Token` and `TenantID`, so
-    the tenant-scoping rule above does not apply to it. #13 needs its own request path, its own
-    decoder, and the credential-free constructor its title names. Do **not** loosen `doData`'s
-    envelope requirement or `New`'s validation to make health fit: that would re-open #32, and the
-    tenant guarantee, for every other resource.
+    the tenant-scoping rule above does not apply to it. It therefore has its own request path
+    (`doUnversioned`), its own decoder (`decodeHealthStatus`), and its own credential-free
+    constructor (`NewHealthClient`). `doData`'s envelope requirement and `New`'s validation were
+    **not** loosened to make it fit, and must not be: that re-opens #32, and the tenant guarantee,
+    for every other resource. Nor may the auth suppression move into `doRaw` as a flag — the design
+    note on #13 refuses a `skipAuth bool` there, and `doRaw` has only grown since.
+  - **Health's decoder enforces the same rule `doData` does.** A 2xx with no readable `status` is an
+    error, never a zero-valued `HealthStatus`: `{}`, a renamed key, and a load balancer's splash page
+    must not read as a healthy server.
+  - **Unreachable and unready must stay distinguishable, on health and everywhere.** A request that
+    got no HTTP response wraps `ErrUnreachable` and produces no `*APIError`; a probe the server
+    *answered* with a non-2xx and its own `{"status": …}` body is an `*APIError` carrying
+    `CodeNotReady`. They mean different things operationally and must never collapse into one error.
 - Non-2xx responses become `*APIError` carrying the `{error:{code,message,details,request_id}}`
   envelope. Add `Is<Code>` helpers for common error codes.
 - **Every non-2xx becomes an `*APIError`, including one whose body could not be read.** An
   oversized or truncated error body must not downgrade to a bare read error: that removes exactly
   the large failures from `AsAPIError` / `IsUnexpectedStatus` while identical smaller ones keep
   working. Wrap the cause so `errors.Is` still finds it.
-- **A non-2xx with no envelope gets `CodeUnexpectedStatus`, never a semantic code.** Do not
+- **A non-2xx with no envelope gets `CodeUnexpectedStatus`, never a semantic code**, and
+  `CodeNotReady` is not an exception: that rule bans *inferring* a code from an HTTP status, while
+  `CodeNotReady` is established by a server-authored body (the health view's `{"status": …}`), and a
+  non-2xx on a probe route whose body is *not* that shape still gets `CodeUnexpectedStatus`. Do not
   reintroduce a status-to-code mapping: deriving `not_found` from a bare 404 is what made an unrouted
   `/api/v2` satisfy `IsNotFound`, so a caller's not-found branch read a missing route as an empty
   taxonomy with no error (#7). A code that arrives *in* an envelope is preserved verbatim, including

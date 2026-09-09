@@ -39,6 +39,11 @@ The client targets `Config.BaseURL + /api/<version>`, where the version comes fr
 | `User-Agent` | `Config.UserAgent` (default `octonomy-go/<version>`) | — |
 | `X-Namespace-Type` / `X-Namespace-ID` | `WithNamespace(...)` | no — **v2 only**, all-or-nothing |
 
+**The health probes carry none of it.** `/health/live` and `/health/ready` sit at the server root,
+outside `/api/<version>`, and authenticate nobody, so the SDK sends them no `Authorization`, no
+`X-Tenant-ID`, and no namespace headers — from a fully configured `Client` just as from a
+credential-free one. See [Health probes](#health-probes).
+
 ## API version and namespace scoping
 
 | Surface | Prefix | Namespace axis |
@@ -155,6 +160,8 @@ filters will not help.
 | `AuditLogs.List` | GET | `/audit-logs` |
 | `Tags.ListAuditLogs` | GET | `/tags/{tag_id}/audit-logs` |
 | `Resources.ListAuditLogs` | GET | `/resources/{resource_type}/{resource_id}/audit-logs` |
+| `Health.Live` | GET | `/health/live` — **server root, no `/api` prefix, no credentials** |
+| `Health.Ready` | GET | `/health/ready` — **server root, no `/api` prefix, no credentials** |
 
 ### List parameters
 
@@ -363,6 +370,80 @@ and only widens what the request *asks* for — a token holding an exact merchan
 authority still sees none, silently absent rather than as an error. A global request sees global rows
 only. There is no way to read across namespaces in one call.
 
+## Health probes
+
+Liveness and readiness, and **the one group that is outside the API surface in three ways at once**:
+the routes sit at the server root rather than under `/api/<version>`, they authenticate nobody, and
+their body is a bare `{"status": "ok"}` with **no `data` envelope**. They are the natural readiness
+check for anything embedding Octonomy.
+
+| Call | HTTP | Answers |
+| ---- | ---- | ------- |
+| `Health.Live` | `GET /health/live` | `200 {"status": "ok"}`, unconditionally — the process is up |
+| `Health.Ready` | `GET /health/ready` | `200 {"status": "ok"}`, or `503 {"status": "unavailable"}` when the database connection will not open |
+
+**Two entry points, one code path.** `New` requires a `Token` and a `TenantID`, so a caller with
+neither could not construct a client at all in order to reach an endpoint that needs neither —
+`NewHealthClient` is the credential-free constructor that fixes it:
+
+```go
+probe, err := octonomy.NewHealthClient("https://octonomy.example.com",
+	octonomy.WithHealthHTTPClient(&http.Client{Timeout: 2 * time.Second})) // usually what a probe loop wants
+st, err := probe.Health.Ready(ctx)
+```
+
+A caller who already holds a full `client` reaches the same code through `client.Health.Ready(ctx)`,
+and the request is byte-for-byte identical: the token is not sent to a route that does not
+authenticate. A `HealthClient` exposes `Health` and nothing else, and the transport refuses a
+credential-free client outright rather than sending a blank `Authorization` header.
+
+`Live` and `Ready` take **no** `RequestOption`. Every option in this package is a scoping or
+attribution knob for the versioned, tenant-scoped API, and none of them means anything on a route
+with no tenant; accepting and ignoring them would be exactly the silent no-op the SDK refuses
+elsewhere.
+
+### Unreachable and unready are different failures
+
+They mean different things operationally — *wait and re-probe* versus *look for the process* — so the
+SDK never collapses them into one error:
+
+```go
+st, err := probe.Health.Ready(ctx)
+switch {
+case err == nil:
+	// ready; st.Status is the server's own word ("ok")
+case octonomy.IsNotReady(err):
+	// answered, and said it cannot serve: back off and re-probe.
+	// AsAPIError(err).Details["status"] carries the server's word.
+case errors.Is(err, octonomy.ErrUnreachable):
+	// no response at all — refused, DNS, TLS, timeout, cancelled context
+default:
+	// answered, but not with a health payload: a proxy or gateway spoke
+}
+```
+
+| Outcome | What arrived | Result |
+| ------- | ------------ | ------ |
+| Ready | 2xx + `{"status": …}` | `*HealthStatus`, nil error |
+| Not ready | non-2xx + `{"status": …}` | `*APIError`, `not_ready`, `IsNotReady` |
+| Not a probe answer | non-2xx, other body | `*APIError`, `CodeUnexpectedStatus` |
+| No answer | nothing | `errors.Is(err, ErrUnreachable)`, **no** `*APIError` |
+| 2xx with no `status` | 2xx, other body | an error, never a zero-valued `HealthStatus` |
+
+**`not_ready` is not the status-to-code mapping [`CodeUnexpectedStatus`](#responses-with-no-error-envelope)
+exists to forbid.** That rule bans *inferring* a code from an HTTP status the SDK did not generate.
+Nothing is inferred here: the code is established by the health view's own `{"status": …}` payload,
+which is as much a server-authored body as `{"error": {…}}` is. A 503 whose body is an HTML error
+page is classified as `CodeUnexpectedStatus` exactly as it would be anywhere else — which is what
+keeps "the application says it is unready" apart from "a load balancer answered because nothing is
+behind it". The server never sends the string `not_ready`; it is the SDK's name for a state the
+server expresses as a status plus a body.
+
+`ErrUnreachable` is not health-specific: **every** call in this package wraps it around a request
+that got no response, so `errors.Is(err, octonomy.ErrUnreachable)` distinguishes "the server never
+answered" from "the server answered and said no" on any method. The cause survives the wrap, so
+`errors.Is(err, context.DeadlineExceeded)` still works alongside it.
+
 ## Responses
 
 Every 2xx that carries a payload is wrapped in a `data` envelope. The SDK unwraps it for you; the
@@ -378,6 +459,7 @@ wire column is what the server actually sends.
 | List | `{"data": [...], "pagination": {...}}` | `*List[T]` |
 | Delete | `204`, no body | `error` only (deactivation on the server) |
 | Error | `{"error": {"code", "message", "details", "request_id"}}` | `*APIError` |
+| Health probe | `{"status": "ok"}` — **no envelope** | `*HealthStatus` ([above](#health-probes)) |
 
 `Pagination` carries `limit`, `offset`, `count`, `next`, and `previous`.
 
@@ -404,6 +486,7 @@ decodes to an empty non-nil slice either way.
 | `namespaced_writes_disabled` | 403 | `IsNamespacedWritesDisabled` |
 | `namespace_api_disabled` | 503 | `IsNamespaceAPIDisabled` |
 | `ambiguous_resolution` | 400 | `IsAmbiguousResolution` |
+| `not_ready` | 503 | `IsNotReady` — **SDK-assigned**, health probes only ([below](#health-probes)) |
 
 `namespaced_writes_disabled` and `namespace_api_disabled` are **operator** states, not caller errors:
 the deployment has `NAMESPACE_WRITE_ENABLED` or `NAMESPACE_V2_API_ENABLED` off. Retrying or changing
@@ -452,4 +535,5 @@ worth preserving.
 
 ## Not yet implemented
 
-Health probes — see [roadmap.md](roadmap.md).
+Every endpoint group the vendored contracts publish is implemented. Remaining gaps are within
+implemented resources — see [roadmap.md](roadmap.md).
