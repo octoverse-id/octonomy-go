@@ -32,8 +32,15 @@ Optional local tools (CI installs them automatically):
 # linter
 go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 # vulnerability scanner
-go install golang.org/x/vuln/cmd/govulncheck@latest
+GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest
 ```
+
+`GOTOOLCHAIN=auto` on that second line is load-bearing whenever the scanner's own
+minimum Go has moved ahead of yours — x/vuln v1.8.0 requires go 1.26, so on a go1.25
+toolchain the plain form fails with `requires go >= 1.26.0`. It lets the go command fetch
+the toolchain needed to **build** the tool; the binary still analyses this module with
+your own Go, which is what you want, since the standard-library advisories it reports are
+the ones affecting the version you build with.
 
 ## Testing approach
 
