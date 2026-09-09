@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // Health probe paths. They sit at the SERVER ROOT, outside /api/<version>: the
@@ -267,10 +268,20 @@ func (s *HealthService) probe(ctx context.Context, path string) (*HealthStatus, 
 // decodeHealthStatus decodes a bare {"status": "..."} body, reporting anything
 // that would otherwise pass as a zero-valued HealthStatus.
 //
-// A MISSING OR EMPTY status IS AN ERROR, not an empty string. The probes exist
-// to be believed, and "" is what a caller would get from {}, from a JSON body
+// A MISSING OR BLANK status IS AN ERROR. The probes exist to be believed, and a
+// status carrying no word is what a caller would get from {}, from a JSON body
 // with a renamed key, and from a 200 served by something that is not Octonomy at
 // all -- three different problems that must not read as a healthy server.
+//
+// Blank is measured after trimming, as every other emptiness test in this
+// package is (Config.Token, the namespace pair, an application id, and the body
+// check right above). "   " carries exactly as much health information as "",
+// and a rule that rejects one while accepting the other is a rule with a hole in
+// it rather than a narrower rule.
+//
+// What is NOT trimmed is the value itself: whatever word the server sent reaches
+// the caller verbatim in Status. The check decides whether a payload arrived at
+// all; it does not get to rewrite the server's answer.
 func decodeHealthStatus(body []byte) (*HealthStatus, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, fmt.Errorf("octonomy: empty health response body, expected a status payload")
@@ -279,7 +290,7 @@ func decodeHealthStatus(body []byte) (*HealthStatus, error) {
 	if err := json.Unmarshal(body, &health); err != nil {
 		return nil, fmt.Errorf("octonomy: decode health response: %w", err)
 	}
-	if health.Status == "" {
+	if strings.TrimSpace(health.Status) == "" {
 		return nil, fmt.Errorf(`octonomy: health response carried no "status" field, so it did not come from an Octonomy health probe`)
 	}
 	return &health, nil

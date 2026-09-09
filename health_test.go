@@ -86,6 +86,23 @@ func TestNewHealthClient_ProbesWithNoCredentials(t *testing.T) {
 	}
 }
 
+// The blank check measures after trimming; it does not TRIM THE VALUE. Whatever
+// word the server sent reaches the caller verbatim -- the check decides whether
+// a payload arrived, and does not get to rewrite the server's answer.
+func TestHealth_StatusReachesTheCallerVerbatim(t *testing.T) {
+	hc := newTestHealthClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, http.StatusOK, map[string]any{"status": " ok "})
+	})
+
+	got, err := hc.Health.Live(context.Background())
+	if err != nil {
+		t.Fatalf("Live: %v", err)
+	}
+	if got.Status != " ok " {
+		t.Errorf("Status = %q, want %q unchanged", got.Status, " ok ")
+	}
+}
+
 // The second entry point, same code and same wire request: a caller who already
 // holds a full Client reaches the probes through Client.Health, and the token it
 // carries still does not go to a route that authenticates nobody.
@@ -231,6 +248,23 @@ func TestHealth_ResponsesThatAreNotAProbeAnswer(t *testing.T) {
 			status:      http.StatusOK,
 			contentType: "application/json",
 			body:        `{"status": null}`,
+			wantErrPart: `no "status" field`,
+		},
+		{
+			// Blank is measured after trimming: "   " carries exactly as much
+			// health information as "", and accepting one while rejecting the
+			// other leaves the guarantee with a hole in it.
+			name:        "200 with a whitespace-only status",
+			status:      http.StatusOK,
+			contentType: "application/json",
+			body:        `{"status": "   "}`,
+			wantErrPart: `no "status" field`,
+		},
+		{
+			name:        "200 with a status of tabs and newlines",
+			status:      http.StatusOK,
+			contentType: "application/json",
+			body:        "{\"status\": \"\\t\\n\"}",
 			wantErrPart: `no "status" field`,
 		},
 		{
