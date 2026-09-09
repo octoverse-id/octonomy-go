@@ -36,10 +36,17 @@ const (
 // chokepoint every method shares.
 var ErrResponseTooLarge = errors.New("octonomy: response body exceeded the " + maxResponseBytesLabel + " read limit")
 
-// ErrUnreachable marks a failure in which NO HTTP RESPONSE WAS RECEIVED: the
-// request never completed, so there is no status and no body to classify.
+// ErrUnreachable marks a failure in which NO USABLE HTTP RESPONSE WAS RECEIVED:
+// the request never completed, so there is no status and no body to classify.
 // Connection refused, DNS failure, a TLS handshake failure, a client timeout, and
 // a cancelled context all land here.
+//
+// So does a redirect chain the client refused to follow, which is the one case
+// where net/http returns a response alongside its error -- and it has already
+// closed that body, and documents the response as ignorable. A 302 the SDK
+// declined to follow is not the server answering this request, so it is not
+// given a status classification either; the cause names itself in the message
+// ("stopped after 10 redirects").
 //
 // It is what separates "the server is gone" from "the server answered and said
 // no". The latter is always an *APIError -- AsAPIError finds it, and on a health
@@ -266,7 +273,13 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 	}
 
 	var rc requestConfig
-	for _, opt := range opts {
+	for i, opt := range opts {
+		// The library never panics; it returns errors. A nil option reaches here
+		// from a caller assembling a slice conditionally, and calling it would
+		// take the process down over a mistake in one argument.
+		if opt == nil {
+			return 0, nil, fmt.Errorf("octonomy: RequestOption %d is nil; omit it rather than passing a nil option", i)
+		}
 		opt(&rc)
 	}
 
@@ -311,6 +324,8 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 	}
 	req.Header = c.headers(rc, body != nil)
 
+	// The response is ignored on error, per net/http's contract -- see the note
+	// on the same call in doUnversioned.
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
@@ -371,6 +386,21 @@ func (c *Client) doUnversioned(ctx context.Context, path string) (int, []byte, e
 		return 0, nil, err
 	}
 
+	// USERINFO ON THE BASE URL WOULD BECOME AN Authorization HEADER. net/http
+	// adds "Authorization: Basic ..." itself for any request whose URL carries
+	// userinfo and whose Authorization header is empty (net/http.Client.send) --
+	// and empty is exactly what this function promises. So a caller who wrote
+	// https://user:pass@octonomy.example.com would send credentials to the one
+	// route in this package documented to carry none.
+	//
+	// Stripping it costs nothing elsewhere: on the versioned path c.headers
+	// always sets Authorization: Bearer, so net/http never reaches its userinfo
+	// branch and a userinfo base URL has never authenticated anything here.
+	// Rejecting it in the constructors instead would turn a today-inert field
+	// into a construction error for every caller, which is a wider call than
+	// this route needs.
+	endpoint.User = nil
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return 0, nil, fmt.Errorf("octonomy: build request: %w", err)
@@ -378,6 +408,13 @@ func (c *Client) doUnversioned(ctx context.Context, path string) (int, []byte, e
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
 
+	// resp is ignored on error by net/http's own contract: "On error, any
+	// Response can be ignored. A non-nil Response with a non-nil error only
+	// occurs when CheckRedirect fails, and even then the returned
+	// Response.Body is already closed." There is nothing left to read and no
+	// final status to classify -- a redirect chain the client refused to follow
+	// is not an answer to this request -- and the cause names itself in the
+	// message ("stopped after 10 redirects").
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("%w: %w", ErrUnreachable, err)

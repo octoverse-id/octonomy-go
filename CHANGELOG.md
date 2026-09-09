@@ -79,6 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the branches read clearly inline.
 
 ### Fixed
+- **A nil `RequestOption` panicked instead of returning an error.** The transport now refuses one by
+  name (`RequestOption 2 is nil`) before anything is sent, as `NewHealthClient` does for a nil
+  `HealthOption`. Conditionally assembled option slices are where a nil comes from, and this library
+  never panics. Found by Codex review of
+  [#13](https://github.com/octoverse-id/octonomy-go/issues/13).
 - **Single-resource responses decoded to zero-valued structs.** The server wraps every payload under
   `data` — single resources as `{"data": {...}}`, not only lists — so `Tags.Create`/`Get`/`Update`
   and the three `Vocabularies` equivalents returned an **empty struct with a nil error** against a

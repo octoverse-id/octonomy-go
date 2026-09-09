@@ -150,7 +150,12 @@ func NewHealthClient(baseURL string, opts ...HealthOption) (*HealthClient, error
 	}
 
 	var cfg healthConfig
-	for _, opt := range opts {
+	for i, opt := range opts {
+		// A nil option is a caller mistake, not a reason to panic -- and
+		// conditionally assembled option slices are exactly where one comes from.
+		if opt == nil {
+			return nil, fmt.Errorf("octonomy: HealthOption %d is nil; omit it rather than passing a nil option", i)
+		}
 		opt(&cfg)
 	}
 	if cfg.err != nil {

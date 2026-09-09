@@ -310,6 +310,64 @@ func TestHealth_OversizedNon2xxKeepsItsAPIErrorClassification(t *testing.T) {
 	}
 }
 
+// Credentials written into the base URL must not become an Authorization header
+// on a route documented to carry none. net/http adds "Authorization: Basic ..."
+// itself whenever the request URL carries userinfo and the header is empty --
+// and empty is precisely what a probe sends.
+func TestHealth_BaseURLUserinfoDoesNotBecomeAuth(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		writeJSON(t, w, http.StatusOK, map[string]any{"status": HealthStatusOK})
+	}))
+	t.Cleanup(srv.Close)
+
+	withCreds := strings.Replace(srv.URL, "http://", "http://user:pass@", 1)
+	hc, err := NewHealthClient(withCreds)
+	if err != nil {
+		t.Fatalf("NewHealthClient: %v", err)
+	}
+	if _, err := hc.Health.Live(context.Background()); err != nil {
+		t.Fatalf("Live: %v", err)
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization = %q, want it absent: userinfo on the base URL must not authenticate an unauthenticated route", gotAuth)
+	}
+}
+
+// The library returns errors; it does not panic. A nil option is what a caller
+// assembling an option slice conditionally can produce.
+func TestHealth_NilOptionsAreErrorsNotPanics(t *testing.T) {
+	t.Run("HealthOption", func(t *testing.T) {
+		_, err := NewHealthClient("https://octonomy.example.com", WithHealthUserAgent("probe/1"), nil)
+		if err == nil {
+			t.Fatal("expected an error for a nil HealthOption")
+		}
+		if !strings.Contains(err.Error(), "HealthOption 1") {
+			t.Errorf("the error should name which option is nil: %v", err)
+		}
+	})
+
+	t.Run("RequestOption", func(t *testing.T) {
+		requests := 0
+		c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			requests++
+			writeData(t, w, http.StatusOK, Tag{ID: "tag_1"})
+		})
+
+		_, err := c.Tags.Get(context.Background(), "tag_1", nil)
+		if err == nil {
+			t.Fatal("expected an error for a nil RequestOption")
+		}
+		if !strings.Contains(err.Error(), "RequestOption 0") {
+			t.Errorf("the error should name which option is nil: %v", err)
+		}
+		if requests != 0 {
+			t.Errorf("the refusal must happen before anything is sent, got %d request(s)", requests)
+		}
+	})
+}
+
 // The 2xx side is not symmetric, as on the versioned surface: a success status
 // with an unusable payload has no classification worth preserving, so it stays a
 // plain read error rather than being dressed up as a probe answer.
