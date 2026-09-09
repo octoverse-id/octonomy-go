@@ -125,6 +125,8 @@ type Client struct {
 	Assignments *AssignmentService
 	// Resources reads and replaces the tag set on an external resource.
 	Resources *ResourceService
+	// AuditLogs reads the append-only mutation history (needs the audit:read scope).
+	AuditLogs *AuditLogService
 }
 
 // New validates cfg and returns a ready Client.
@@ -180,6 +182,7 @@ func New(cfg Config) (*Client, error) {
 	c.Aliases = &AliasService{client: c}
 	c.Assignments = &AssignmentService{client: c}
 	c.Resources = &ResourceService{client: c}
+	c.AuditLogs = &AuditLogService{client: c}
 	return c, nil
 }
 

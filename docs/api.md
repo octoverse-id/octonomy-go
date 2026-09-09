@@ -118,6 +118,12 @@ namespaced alias may target only a global or same-namespace tag). An inactive ta
 Service tokens carry scopes enforced by the server: `tags:read`, `tags:write`, `audit:read`. Read
 methods need `tags:read`; mutating methods need `tags:write`.
 
+**`audit:read` is separate, and only the three audit routes need it.** A token granted `tags:read`
+and `tags:write` but not `audit:read` reads and writes tags perfectly well and gets a `403 forbidden`
+(`IsForbidden`) from `AuditLogs.List`, `Tags.ListAuditLogs`, and `Resources.ListAuditLogs` — never an
+empty page. It is a token misconfiguration rather than a caller mistake, so retrying or narrowing the
+filters will not help.
+
 ## Implemented
 
 | SDK method | HTTP | Path |
@@ -146,6 +152,9 @@ methods need `tags:read`; mutating methods need `tags:write`.
 | `Resources.ListTags` | GET | `/resources/{resource_type}/{resource_id}/tags` |
 | `Resources.ReplaceTags` | POST | `/resources/{resource_type}/{resource_id}/tags` |
 | `Tags.ListResources` | GET | `/tags/{tag_id}/resources` |
+| `AuditLogs.List` | GET | `/audit-logs` |
+| `Tags.ListAuditLogs` | GET | `/tags/{tag_id}/audit-logs` |
+| `Resources.ListAuditLogs` | GET | `/resources/{resource_type}/{resource_id}/audit-logs` |
 
 ### List parameters
 
@@ -292,6 +301,68 @@ needed changing".
 take — different parameter, different polarity. Nil means active-only; `true` *widens* to include
 deactivated tags. There is no way to ask for deactivated tags alone.
 
+## Audit logs
+
+Octonomy's append-only mutation history, written by the server as a side effect of the mutation each
+row describes. **List-only, on all three routes: no `Get`, no writes, and no `/audit-logs/{id}`** —
+a single row is reached by filtering the collection. Every route needs `audit:read` (see
+[Scopes](#scopes)).
+
+Rows arrive **newest first** (`created_at` descending, `id` as a stable tiebreak), so offset paging
+walks backwards through history.
+
+| Call | Filters |
+| ---- | ------- |
+| `AuditLogs.List` | the full set: `action`, `actor_id`, `application_id`, `entity_id`, `entity_type`, `operation_id`, `resource_id`, `resource_type`, `tag_id` |
+| `Tags.ListAuditLogs` | `action`, `actor_id`, `application_id`, `operation_id` |
+| `Resources.ListAuditLogs` | `action`, `actor_id`, `application_id`, `operation_id` |
+
+The two nested routes take narrower params types than the collection, matching what the contract
+documents for each — as `TagListAliasesParams` does against `TagAliasListParams`. One filter function
+serves all three routes on server 3.1.x, so `entity_type` would be honored on the tag route too;
+exposing it would put the SDK ahead of the published contract on a route the server is free to
+narrow. Every filter is an **exact match**, they combine with AND, and the server ignores one set to
+the empty string.
+
+**`EntityType` and `Action` are spelled differently for assignments.** The entity is
+`tag_assignment` while its actions are `assignment.created` and `assignment.removed`; the other three
+agree with themselves (`tag` / `tag.*`, `tag_alias` / `tag_alias.*`, `vocabulary` / `vocabulary.*`).
+Since both are exact-match filters, `EntityType: octonomy.String("assignment")` returns an empty page
+rather than an error.
+
+**`OperationID` is the field that makes a multi-row mutation reconstructable.** `Resources.ReplaceTags`
+and both bulk calls write one row per assignment they touch, all sharing an operation id, so the
+removals and additions of a single replace read as one act rather than as unrelated churn. Read any
+row of an operation, then list by its `OperationID` for the rest. `RequestID` correlates a row with
+the one HTTP request that produced it, and with `APIError.RequestID` for a request that failed; the
+server generates it when the caller sends none, which is what this SDK does today ([#5](https://github.com/octoverse-id/octonomy-go/issues/5)
+sends one).
+
+**`Changes` is `Metadata` — an open object — and it has to be.** The contract gives the field no type
+at all. What the server writes is `{"before": {…}, "after": {…}}`: a create carries `after` alone, an
+update carries the changed fields on both sides. But a `tag.deactivated` that cascaded to aliases adds
+a third key, `cascaded_alias_ids`, whose value is an **array**:
+
+```json
+{"before": {"is_active": true}, "after": {"is_active": false}, "cascaded_alias_ids": ["…", "…"]}
+```
+
+A `Before`/`After` struct would drop that silently, and a `map[string]Metadata` would fail to decode
+the row and take the whole page with it, since one bad element fails the list. So callers read
+`log.Changes["after"].(map[string]any)`.
+
+**An unknown tag or resource is an empty page here, not a `404`.** These routes filter the audit table
+by `tag_id` or by `(resource_type, resource_id)` and never load the entity, so a row that never
+existed, one that was deactivated, and one outside the request's namespace all answer `200` with no
+rows — unlike every other `/tags/{id}` route. Only a `tagID` that is not a uuid fails, and it fails at
+the server's router: an envelope-less `404` that surfaces as `IsUnexpectedStatus`.
+
+On `/api/v2`, audit reads are **namespace-filtered and global rows fail closed**. A namespaced read
+(`WithNamespace`) returns that namespace's rows and no global ones; `WithIncludeGlobal` asks for both,
+and only widens what the request *asks* for — a token holding an exact merchant grant with no global
+authority still sees none, silently absent rather than as an error. A global request sees global rows
+only. There is no way to read across namespaces in one call.
+
 ## Responses
 
 Every 2xx that carries a payload is wrapped in a `data` envelope. The SDK unwraps it for you; the
@@ -381,4 +452,4 @@ worth preserving.
 
 ## Not yet implemented
 
-Audit logs and health — see [roadmap.md](roadmap.md).
+Health probes — see [roadmap.md](roadmap.md).

@@ -244,6 +244,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than rejects, since the failure is already loud.
 
 ### Added
+- **Audit logs** ([#12](https://github.com/octoverse-id/octonomy-go/issues/12)). `client.AuditLogs.List`
+  reads the append-only mutation history, with `Tags.ListAuditLogs` and `Resources.ListAuditLogs` as
+  the pre-filtered nested routes. One new model, `AuditLog`, which completes the seven v2 schemas
+  carrying `NamespaceType` / `NamespaceID`. **List-only in every sense**: the server writes these rows
+  itself as a side effect of the mutation they describe, so there is no create, no update, no delete,
+  and no `Get` — a single row is reached by filtering the collection.
+- **Audit reads need the `audit:read` scope**, which service tokens carry separately from `tags:read`
+  and `tags:write`. A token without it gets a `403 forbidden` (`IsForbidden`) from all three routes
+  while its ordinary reads keep working — never an empty page. It is a token misconfiguration rather
+  than a caller mistake, so retrying or narrowing the filters will not help.
+- **`AuditLog.Changes` is an open `Metadata` object rather than a `Before`/`After` struct, and one row
+  shape forces that.** The contract types the field as nothing at all. The server writes
+  `{"before": {…}, "after": {…}}` — but a `tag.deactivated` that cascaded to aliases adds
+  `cascaded_alias_ids`, whose value is an **array**. A typed pair would drop it silently; a
+  `map[string]Metadata` would fail to decode the row and take the whole page down with it, since one
+  bad element fails the list. Callers read `log.Changes["after"].(map[string]any)`.
+- **`AuditLog.OperationID` groups every row one operation emitted**, which is what makes a multi-row
+  mutation reconstructable weeks later: `Resources.ReplaceTags` and both bulk calls write one row per
+  assignment they touch under a single operation id, so the removals and additions read as one act
+  rather than as unrelated churn. `RequestID` correlates a row with the one HTTP request that produced
+  it, and with `APIError.RequestID` for a request that failed; the server generates it when the caller
+  sends none, which is what this SDK does today ([#5](https://github.com/octoverse-id/octonomy-go/issues/5)
+  sends one).
+- **Rows arrive newest first** (`created_at` descending, `id` as a stable tiebreak), so offset paging
+  walks backwards through history. Asserted against a real server, since page order is a property of
+  the server's query and no fixture can establish it.
+- **An unknown tag or resource is an empty page on the nested routes, not a `404`** — unlike every
+  other `/tags/{id}` route in this SDK. Both filter the audit table by the path's identifier and never
+  load the entity, so a row that never existed, one that was deactivated, and one outside the
+  request's namespace are reported identically: `200` with no rows. Only a `tagID` that is not a uuid
+  fails, at the server's router, as an envelope-less `404` (`IsUnexpectedStatus`).
+- `AuditLogListParams` carries the full documented filter set; `TagListAuditLogsParams` and
+  `ResourceListAuditLogsParams` carry the four each nested route documents. They are deliberately
+  narrower, and deliberately separate types: one filter function serves all three routes on server
+  3.1.x, so `entity_type` would be honored on the tag route too, but exposing it would put the SDK
+  ahead of the published contract on a route the server is free to narrow — the same reasoning
+  `TagListAliasesParams` records against `TagAliasListParams`.
+- On `/api/v2`, audit reads are **namespace-filtered and global rows fail closed**, inherited whole
+  from the transport's scoping options: a namespaced read returns that namespace's rows and no global
+  ones, `WithIncludeGlobal` asks for both, and an exact merchant grant with no global authority still
+  sees none. The smoke test proves the exclusion against a real server, which is the only way to prove
+  the headers arrived — without them the server serves the global namespace with a `200`.
 - **Resource tags** ([#11](https://github.com/octoverse-id/octonomy-go/issues/11)). `client.Resources`
   covers `ListTags` and `ReplaceTags`, and `client.Tags.ListResources` completes the mirror. Two new
   models: `ResourceTag` (a tag as seen from a resource, with the `Tag` nested whole) and `TagResource`

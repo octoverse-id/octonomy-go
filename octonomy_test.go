@@ -77,7 +77,7 @@ func TestNew_Validation(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if c.Tags == nil || c.Vocabularies == nil || c.Aliases == nil ||
-				c.Assignments == nil || c.Resources == nil {
+				c.Assignments == nil || c.Resources == nil || c.AuditLogs == nil {
 				t.Fatal("services not wired")
 			}
 		})
