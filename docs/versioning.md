@@ -131,11 +131,14 @@ Backward-compatible **additions** to the exported API.
 - Examples: a new resource service, a new method, a new optional field on a `*Params`/`*Create` struct,
   a new `Is*` helper.
 - Existing callers keep compiling and working unchanged, with **one Go-level caveat**: adding a field
-  to an exported struct breaks a caller who wrote an *unkeyed* composite literal
-  (`octonomy.TagCreate{"Featured", "featured", "label"}`). Every example in this repository uses
-  keyed fields, which is the reason to — but if you are weighing a field addition against a
-  consumer you do not control, that is the exposure. Adding a field to a struct the caller can only
-  receive (a response model) has no such issue.
+  to an exported struct breaks a caller who wrote an *unkeyed* composite literal, because such a
+  literal must supply exactly one value per field, in order. That applies to **every** exported
+  struct in this package, response models included — `Tag`'s fields are all exported, so nothing stops
+  a consumer building one unkeyed in their own fixtures. Every example in this repository uses keyed
+  fields, which is the reason to; but if you are weighing a field addition against a consumer you do
+  not control, that is the exposure. Unkeyed literals are rare, verbose, and `go vet`'s
+  `composites` check flags them for imported types, so the practical risk is low — it is simply not
+  zero, which is what "backward-compatible" would otherwise imply.
 - While the modern line is still on `v2.0.0-alpha.N` prereleases a necessary breaking change may ride
   an alpha bump, documented in the CHANGELOG; once `v2.0.0` proper ships, that stops being true.
 
