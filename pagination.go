@@ -1,6 +1,9 @@
 package octonomy
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 )
@@ -37,4 +40,213 @@ type Pagination struct {
 type List[T any] struct {
 	Data       []T        `json:"data"`
 	Pagination Pagination `json:"pagination"`
+}
+
+// Each walks every page of a list endpoint and calls fn once per item.
+//
+// IT ISSUES ONE HTTP REQUEST PER PAGE. A walk of 4,000 tags at the server's
+// default page size is 80 round trips, not one. This package promises no hidden
+// behavior, so the cost is in the name and stated here rather than buried:
+// Each is a loop you did not have to write, not a bulk endpoint. Raise
+// start.Limit to trade requests for response size -- the server's ceiling is
+// 200, and it silently clamps anything larger.
+//
+// start seeds the walk. A zero ListOptions starts at the beginning with the
+// server's default page size; set Offset to resume (see the return value) and
+// Limit to choose the page size.
+//
+// page fetches one page. It receives the ListOptions Each has computed for that
+// page and MUST pass them through to the list method, which is what advances
+// the walk:
+//
+//	offset, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 200},
+//		func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Tag], error) {
+//			return client.Tags.List(ctx, &octonomy.TagListParams{
+//				ListOptions:   o,
+//				ApplicationID: octonomy.String("commerce"),
+//			})
+//		},
+//		func(tag octonomy.Tag) error {
+//			fmt.Println(tag.Slug)
+//			return nil
+//		},
+//	)
+//
+// A closure taking extra arguments is how the nested list routes are walked
+// too -- Tags.ListAliases, Tags.ListResources, Resources.ListTags, and the
+// ListAuditLogs pair all fit the same shape, with their positional ids captured
+// from the enclosing scope.
+//
+// # The returned offset
+//
+// Each returns start.Offset plus the number of items it successfully processed
+// -- equivalently, the offset of the first item it did NOT process, which is
+// what makes it a resume point. On a fetch failure that is the start of the
+// page that failed; on a callback failure it is the failing item.
+//
+// The offset is meaningful even when the error is not: a walk that dies on page
+// 40 of 100 hands back 39 pages of progress instead of discarding it.
+//
+// AN OFFSET IS A POSITION, NOT AN IDENTITY, so what a resume does with it is
+// conditional on the drift below. Where the collection is totally ordered and
+// unchanged, resuming re-delivers the item that failed rather than stepping
+// over it. Where it is not -- anything written since, and the tags list even
+// with nothing written -- that offset may address a different row, so a resume
+// MAY retry the failed item and may just as well skip it.
+//
+// Neither at-least-once nor at-most-once is on offer, and a stable ORDER BY
+// would not buy them either: a row inserted or removed BEFORE the offset shifts
+// everything after it, deterministic sort or not. Ordering removes the separate
+// hazard of an undefined result order, nothing more.
+//
+// A keyset cursor -- naming the last row seen instead of counting past it --
+// removes the positional shift, but it is only ever as stable as the key it
+// seeks on, and that varies by endpoint here. Vocabularies and aliases sort on
+// name and slug, both of which a caller can edit mid-walk: rename a row you
+// already passed to something later and it comes round again; rename one ahead
+// of you to something earlier and you never see it. Audit logs and assignments
+// sort on a timestamp that is set once at insert and never updated, so a cursor
+// over those really would be stable. The tags list has no order at all, so
+// there is nothing to seek on.
+//
+// Even on an immutable key a cursor gives continuity, not a consistent view of
+// a moving collection. Only a SNAPSHOT gives that, and it is the server's to
+// offer.
+//
+// IT IS ALSO NOT A POLLING CURSOR. Resuming from the offset a SUCCESSFUL walk
+// returned is not a reliable way to find what has been created since: a new row
+// sorting after the old tail does turn up there, but one sorting before it
+// never will, and on a collection that shrank the offset simply points past the
+// end. To see new items, walk again from the beginning.
+//
+// # Offset drift is real and is not solvable here
+//
+// The server pages by limit/offset and offers no cursor, so the window shifts
+// under concurrent writes. A row that sorts before the current page pushes
+// every later row one place right, and Each delivers one item twice; a row
+// removed behind the cursor pulls them one place left, and Each never sees one.
+//
+// Deletion counts on every list. Assignments and resource tags are removed
+// outright. Tags, vocabularies and aliases are only DEACTIVATED, which would
+// look like a reprieve except that an unfiltered list returns active rows only
+// -- so the row leaves the walked set either way.
+//
+// The sort order is PER ENDPOINT, not one rule. Vocabularies and tag aliases
+// order by (name, slug, id); audit logs by (created_at DESC, id); assignments
+// and resource tags by (assigned_at DESC, id).
+//
+// # The tags list has no ORDER BY at all, which is worse than drift
+//
+// GET /tags is the exception and it is the endpoint most likely to be walked.
+// Its view annotates usage_count, which makes the query a GROUP BY, and Django
+// drops a model's Meta.ordering from aggregate queries -- so the SQL carries no
+// ORDER BY (verified against a running 3.1.0 server: the generated statement
+// ends at GROUP BY, and Django's own queryset.ordered reports false).
+//
+// LIMIT/OFFSET WITHOUT ORDER BY IS UNDEFINED. Each page is a separate query and
+// the database is free to answer two of them in different orders, so a walk of
+// the tags list can repeat or miss rows WITH NO CONCURRENT WRITES AT ALL. In
+// practice the order observed is stable while the rows are unchanged, because
+// it falls out of one hash-aggregate plan; nothing promises that, and a
+// different plan or a changed row count is enough to alter it. Treat a tags
+// walk as best-effort unless the filtered set fits in one page, where the
+// question does not arise.
+//
+// # What a caller can actually do
+//
+// NO CLIENT CAN FIX EITHER PROBLEM. Re-reading a page cannot distinguish a
+// shifted window from a changed one, and this package will not pretend
+// otherwise by de-duplicating and calling it exactness. What does help:
+//
+//   - Narrow the walk with a filter that does not change while it runs
+//     (ApplicationID, VocabularyID, Type), so the set is small -- and small
+//     enough to fit one page is the only fully safe size on the tags list.
+//   - De-duplicate on ID. That is cheap and removes the double-delivery half.
+//   - DETECT the other half, which is the part that leaves no trace: keep the
+//     Pagination.Count from the first page and compare it with the number of
+//     distinct IDs walked. Read it in ONE DIRECTION ONLY, and only for a
+//     complete walk that started at offset 0 -- Count is the size of the whole
+//     collection, not of the part still ahead, so a walk resumed at offset 100
+//     of 150 legitimately sees 50 and is not short. Fewer distinct IDs than
+//     Count proves rows were missed; equality proves nothing, since a
+//     concurrent create and delete cancel out in the total. It recovers
+//     nothing, but it turns one silent wrong answer into a known one.
+//   - Walk when nothing is writing.
+//
+// Each never retries. A cancelled context is observed before the next callback
+// rather than only at the next fetch, so a walk cancelled part-way through its
+// final page still returns ctx.Err() and the offset reached.
+func Each[T any](
+	ctx context.Context,
+	start ListOptions,
+	page func(context.Context, ListOptions) (*List[T], error),
+	fn func(T) error,
+) (int, error) {
+	if page == nil {
+		return start.Offset, errors.New("octonomy: Each: page function is nil")
+	}
+	if fn == nil {
+		return start.Offset, errors.New("octonomy: Each: callback is nil")
+	}
+	if start.Offset < 0 {
+		return 0, fmt.Errorf("octonomy: Each: start.Offset is %d, want >= 0", start.Offset)
+	}
+	if start.Limit < 0 {
+		return start.Offset, fmt.Errorf("octonomy: Each: start.Limit is %d, want >= 0", start.Limit)
+	}
+
+	offset := start.Offset
+	for {
+		pageStart := offset
+		p, err := page(ctx, ListOptions{Limit: start.Limit, Offset: pageStart})
+		if err != nil {
+			return pageStart, err
+		}
+		if p == nil {
+			return pageStart, errors.New("octonomy: Each: page function returned a nil *List with no error")
+		}
+
+		// The server echoes the offset it actually served. If it does not match
+		// the one Each asked for, the page function did not apply the Offset it
+		// was handed -- the NON-TERMINATING misuse, the one that would re-fetch
+		// this same page forever and deliver it again each time. Refuse instead
+		// of looping.
+		//
+		// This catches only the non-terminating shape, and deliberately claims
+		// no more. A dropped Limit is invisible here, and a page function that
+		// ignores everything still passes on a walk that fits in one page --
+		// where it also happens to be correct, since there was no second page
+		// to advance to.
+		if p.Pagination.Offset != pageStart {
+			return pageStart, fmt.Errorf(
+				"octonomy: Each: page function ignored the ListOptions it was given: asked for offset %d, server served %d",
+				pageStart, p.Pagination.Offset)
+		}
+
+		for _, item := range p.Data {
+			// Checked per item, not per page. Handing ctx to the page function
+			// is not enough on the LAST page: there is no next fetch to notice
+			// the cancellation, so a walk cancelled part-way through it would
+			// deliver the rest of the page and return a nil error. A
+			// non-blocking receive is cheap next to the request that fetched
+			// the page.
+			select {
+			case <-ctx.Done():
+				return offset, ctx.Err()
+			default:
+			}
+			if err := fn(item); err != nil {
+				return offset, err
+			}
+			offset++
+		}
+
+		// Two independent stop conditions, and both are load-bearing. Next is
+		// the server's own end-of-collection signal. An empty page is the one
+		// that guarantees termination regardless: without forward progress the
+		// loop could not advance even if Next kept saying otherwise.
+		if len(p.Data) == 0 || p.Pagination.Next == nil {
+			return offset, nil
+		}
+	}
 }

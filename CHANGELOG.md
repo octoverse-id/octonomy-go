@@ -122,6 +122,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **No `Scope` field was added to `TagListParams`.** The parameter belongs to `/tag-resolution` on
   both surfaces and appears exactly once per spec; the tags list route has none.
+- **`Each` pagination walker and `DecodeMetadata` typed metadata**
+  ([#14](https://github.com/octoverse-id/octonomy-go/issues/14)). Both are generic, so both belong to
+  the modern line only — the frozen `v1.x` compat line has no generics and gets neither.
+
+  `Each(ctx, start, page, fn)` is the offset loop everyone was writing by hand, with the termination
+  condition they were getting wrong. **It issues one HTTP request per page**, which is stated in the
+  doc comment, in the README, and in `doc.go`, because one call making N round trips is in real
+  tension with this package's no-hidden-behavior promise and naming plus documentation is the whole
+  mitigation. It advances by the number of items that **arrived**, not by the `Limit` requested — the
+  server silently clamps `Limit` to 200, so a walk at `Limit: 500` that trusted its own arithmetic
+  would skip three items in every five. It stops on the server's `next == nil` *and* on an empty
+  page, the second being what guarantees termination when the first is wrong.
+
+  It returns `start.Offset` plus the number of items processed — the first item it did **not**
+  process, which is what makes it a resume point: the page start on a fetch failure, the failing item
+  on a callback failure. A walk that dies on page 40 of 100 keeps 39 pages of progress. An offset is a
+  **position, not an identity**, so what a resume does with it is conditional: over a stable,
+  unchanged collection it re-delivers the item that failed, but where rows moved — or on the tags
+  list, where they need not have — it may address a different row, so a resume *may* retry the failed
+  item and may equally skip it. Neither at-least-once nor at-most-once is on offer, and a stable
+  `ORDER BY` would not buy them either — a row inserted or removed *before* the offset shifts
+  everything after it, deterministic sort or not. Nor would a keyset cursor on its own: it removes
+  the positional shift but is only as stable as the key it seeks on, and that varies by endpoint —
+  vocabularies and aliases sort on `name`/`slug`, which a caller can edit mid-walk, while audit logs
+  and assignments sort on an insert-time timestamp that never changes, and the tags list has no order
+  to seek on at all. A consistent view of a moving collection needs a **snapshot**, which is the
+  server's to offer. It is also not a polling cursor: a row created
+  since that sorts after the old tail turns up, one sorting before it never does.
+
+  A cancelled context is observed **before the next callback**, not only at the next fetch. Handing
+  `ctx` to the page function alone left a real hole on the final page — with no further fetch to
+  notice, a walk cancelled part-way through it delivered the rest of the page and returned a nil
+  error. Caught in review, fixed, and pinned by a test that fails without the check.
+
+  The page function must pass through the `ListOptions` it is handed. Ignoring the offset would
+  re-fetch page one forever; `Each` detects that from the offset the server echoes and returns an
+  error naming it instead of looping. That guard claims only the non-terminating shape: a dropped
+  `Limit` is invisible to it, and a walk that fits in one page succeeds either way.
+
+  **Offset drift is documented, not papered over**, and the ordering it depends on is per endpoint:
+  vocabularies and tag aliases sort by `(name, slug, id)`, audit logs by `(created_at DESC, id)`,
+  assignments and resource tags by `(assigned_at DESC, id)`. A concurrent create or delete shifts the
+  window either way, and an item can be delivered twice or skipped.
+
+  **`GET /tags` has no `ORDER BY` at all**, which is worse than drift and was found while writing
+  this. Its view annotates `usage_count`, making the query a `GROUP BY`, and Django drops
+  `Meta.ordering` from aggregate queries — verified against a running 3.1.0 server, where the emitted
+  SQL ends at `GROUP BY` and Django's own `queryset.ordered` reports false. `LIMIT`/`OFFSET` over an
+  unordered query is undefined, so a tags walk may repeat or miss rows **with no concurrent writes at
+  all**. Documented on `Each` as best-effort, with the mitigation that is actually available: compare
+  the first page's `Pagination.Count` against the number of distinct IDs walked. It reads in **one
+  direction only** and only for a complete walk from offset 0 — `Count` is the size of the whole
+  collection, not of the part still ahead, so a resumed walk legitimately sees fewer. Fewer proves
+  rows were missed; equal proves nothing, since a concurrent create and delete cancel out in the
+  total. It detects a short walk; nothing client-side can prevent one.
+
+  `DecodeMetadata[T](m)` decodes a resource's `Metadata` into the caller's own struct. It is a
+  **function, not a method**: `Metadata` is a type *alias* for `map[string]any` and Go does not allow
+  methods on aliases. Promoting it to a defined type would not break assignment — Go still accepts a
+  plain map there — but it would change type identity for every type switch, reflection site and
+  signature naming it. A nil or empty map yields the zero value of `T` and no error, short-circuited
+  rather than round-tripped so the promise holds for a pointer or map `T` too; on any error the
+  **zero** value comes back, never the half-filled struct `encoding/json` leaves behind when it hits a
+  type mismatch mid-decode.
+
+  **Large integers MAY lose precision, and not here.** Where they do, it happened when the *response*
+  was decoded into `map[string]any`, whose JSON numbers are `float64` — before `DecodeMetadata` is
+  called and beyond its power to recover. "Above 2^53" is not the rule, and neither is the tempting
+  repair "but even numbers survive": float64 loses resolution in **doubling steps** — every integer is
+  exact below 2^53, only the even ones between 2^53 and 2^54, only multiples of four past 2^54. That
+  is precisely why the caveat says *may*. A `Metadata` the caller built holding a real `int64` is
+  unaffected. The issue suggested "decode the raw JSON yourself"; this SDK has no first-class hook for
+  that, though `Config.HTTPClient` does let a custom `RoundTripper` copy the body first. The simple
+  fix is to store such values as **strings** and parse them out. Tests pin the loss at `2^53+1`, the
+  survival of `2^53+2`, the loss of `2^54+2`, the caller-built exactness, and the string workaround.
+
+  Both are asserted against a real server in `integration_test.go` as well as against fixtures. The
+  fixture reproduces four beliefs about the server's paginator — `count` is the total, `next` goes nil
+  at the end, `limit` is clamped to 200 and echoed, `offset` is echoed. `Each` reads two of them:
+  `next` to stop, and the echoed `offset` to catch a dropped `ListOptions`. The clamp is why
+  "advance by what arrived" is the correct rule, and `count` is what a *caller* needs to detect a
+  short walk — neither is read by the walker. All four are now asserted against a running server
+  rather than only against the fixture that agrees with them. The real-server walk uses the **alias** route, whose order is total, rather than the tags list
+  that has none.
 
 ### Changed
 - `docs/roadmap.md` is re-derived from `openapi-v2.yaml` rather than edited. It had been written

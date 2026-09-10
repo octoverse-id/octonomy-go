@@ -232,6 +232,81 @@ page, err := client.Tags.List(ctx, &octonomy.TagListParams{
 fmt.Println(len(page.Data), "of", page.Pagination.Count)
 ```
 
+### Walking every page
+
+`octonomy.Each` is the offset loop, written once. **It issues one request per page** — the name and
+this sentence are the whole mitigation for a single call making N round trips, so raise `Limit` (the
+server caps it at 200) when the collection is large:
+
+```go
+offset, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 200},
+	func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Tag], error) {
+		return client.Tags.List(ctx, &octonomy.TagListParams{ListOptions: o, Type: octonomy.String("label")})
+	},
+	func(tag octonomy.Tag) error {
+		fmt.Println(tag.Slug)
+		return nil
+	},
+)
+```
+
+The page function **must pass through** the `ListOptions` it is handed — that is what advances the
+walk. A page function that ignores the offset would otherwise re-fetch page one forever; `Each`
+detects that from the offset the server echoes and returns an error instead of looping. It catches
+only that non-terminating shape — a dropped `Limit` is invisible, and a walk that fits in one page
+succeeds either way.
+
+The returned `offset` is `start.Offset` plus the number of items processed — the first item **not**
+processed — so a failure is resumable: pass it back as `ListOptions{Offset: offset}` and the walk
+picks up where it stopped. A walk that dies on page 40 of 100 keeps 39 pages of progress.
+
+An offset is a **position, not an identity**. Over a stable, unchanged collection a resume
+re-delivers the item that failed; where rows moved — or on the tags list, where they need not have —
+that offset may address a different row, so a resume *may* retry the failed item and may equally skip
+it. It is also not a polling cursor: a row created since that sorts *after* the old tail turns up,
+one sorting before it never does.
+
+**Offset drift is real and no client can fix it.** The server pages by limit/offset with no cursor,
+so a concurrent create or delete shifts the window and an item can be delivered twice or missed. The
+sort order is per endpoint — vocabularies and aliases by `(name, slug, id)`, audit logs and
+assignments by their timestamp descending.
+
+**`GET /tags` is worse: it has no `ORDER BY` at all.** Its `usage_count` annotation makes the query a
+`GROUP BY`, and Django drops `Meta.ordering` from aggregate queries. `LIMIT`/`OFFSET` without
+`ORDER BY` is undefined, so a tags walk may repeat or miss rows *with no concurrent writes*. Treat it
+as best-effort unless the filtered set fits in one page.
+
+De-duplicate on ID to remove double delivery. To *detect* the missed half, compare the first page's
+`Pagination.Count` against the number of distinct IDs walked — but read it in one direction only, and
+only for a complete walk from offset 0: `Count` is the size of the whole collection, so a resumed walk
+legitimately sees fewer. **Fewer proves rows were missed; equal proves nothing**, since a concurrent
+create and delete cancel out. See the `Each` doc comment for the full picture.
+
+## Typed metadata
+
+`Metadata` is `map[string]any`, so reading a field means a type assertion that panics when the stored
+shape changes. `octonomy.DecodeMetadata` turns that into an error:
+
+```go
+type shipping struct {
+	Carrier  string `json:"carrier"`
+	Priority int    `json:"priority"`
+}
+cfg, err := octonomy.DecodeMetadata[shipping](tag.Metadata)
+```
+
+It is a function rather than a method because `Metadata` is a type **alias** and Go does not allow
+methods on aliases. A nil map yields the zero value and no error; any error yields the zero value
+rather than a half-filled struct.
+
+**Integers beyond ±2^53 may lose precision, and not here.** The response decodes into
+`map[string]any`, where every JSON number is a `float64`, so a value float64 cannot represent is
+already rounded before `DecodeMetadata` sees it. It is not a clean cutoff — float64 loses resolution
+in doubling steps: every integer is exact below 2^53, between 2^53 and 2^54 only the even ones
+(`2^53+2` survives, `2^53+1` does not), past 2^54 only multiples of four. That is why this holds in
+testing and fails on one production id. A `Metadata` you built yourself holding a real `int64` is
+unaffected. Store large ids and amounts as **strings** in metadata and parse them on the way out.
+
 ## Implemented resources
 
 | Resource | Status |

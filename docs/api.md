@@ -470,7 +470,25 @@ wire column is what the server actually sends.
 | Error | `{"error": {"code", "message", "details", "request_id"}}` | `*APIError` |
 | Health probe | `{"status": "ok"}` — **no envelope** | `*HealthStatus` ([above](#health-probes)) |
 
-`Pagination` carries `limit`, `offset`, `count`, `next`, and `previous`.
+`Pagination` carries `limit`, `offset`, `count`, `next`, and `previous`. `count` is the **total**
+across all pages, not the size of this one; `next` is nil exactly on the last page; and the server
+echoes back the `offset` and the **clamped** `limit` it actually served (ask for 500 and you get
+200).
+
+`octonomy.Each` **reads** two of those: `next` to stop, and the echoed `offset` to catch a page
+function that dropped the `ListOptions` it was handed instead of looping on it forever. It never
+reads `count` or the echoed `limit` — but the clamp is why it advances by the number of items that
+*arrived* rather than by the `Limit` it asked for, and `count` is what a caller needs in order to
+detect a short walk — one-way, and only for a complete walk from offset 0, since `count` is the size
+of the whole collection rather than of the part still ahead. All four are asserted against a real
+server in `integration_test.go`.
+
+**Ordering is per endpoint, and `GET /tags` has none.** Vocabularies and tag aliases order by
+`(name, slug, id)`; audit logs by `(created_at DESC, id)`; assignments and resource tags by
+`(assigned_at DESC, id)`. The tags list annotates `usage_count`, which makes the query a `GROUP BY`,
+and Django drops `Meta.ordering` from aggregate queries — the emitted SQL ends at `GROUP BY` and
+Django's own `queryset.ordered` reports false. `LIMIT`/`OFFSET` over an unordered query is undefined,
+so paging the tags list can repeat or miss rows even with no concurrent writes.
 
 A 2xx whose body does not match the shape above is an **error**, never a zero value. Decoding a
 wrapped body straight into a `*Tag` yields an empty struct with a nil error, and an unexpected list
