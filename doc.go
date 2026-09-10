@@ -34,9 +34,10 @@
 // the unsuffixed path and nothing at all for /v2.
 //
 // Note that the Version constant still reads "0.1.0" on this branch, so the
-// default User-Agent is octonomy-go/0.1.0. It is bumped to the release version in
-// the dedicated release PR (docs/release.md), not here, which is why the source
-// constant and the published tags do not yet agree.
+// default User-Agent is octonomy-go/0.1.0. It is a leftover placeholder from
+// before anything was released, kept to match the historical CHANGELOG heading;
+// the first /v2 release PR replaces it (docs/release.md). No tag on this line
+// corresponds to it, and v1.0.0 belongs to the other module entirely.
 //
 // # Quickstart
 //
@@ -100,8 +101,9 @@
 //
 // # Authentication and scope
 //
-// Every request carries the service token (Authorization: Bearer) and the tenant
-// (X-Tenant-ID) from Config. Set Config.ActorID (or pass WithActor per call) to
+// Every request on the versioned API carries the service token
+// (Authorization: Bearer) and the tenant (X-Tenant-ID) from Config; the health
+// probes below carry neither. Set Config.ActorID (or pass WithActor per call) to
 // populate X-Actor-ID for audit trails. Tokens are scoped to tags:read,
 // tags:write, and audit:read on the server side.
 //
@@ -141,12 +143,19 @@
 // derived from its status. IsNotFound is therefore true only for a real Octonomy
 // not_found, never for a bare 404.
 //
-// A 2xx whose body does not match the expected shape is an error too. The server
-// wraps single resources in {"data": {...}} and lists in
+// A 2xx whose ENVELOPE does not match the expected shape is an error too. The
+// server wraps single resources in {"data": {...}} and lists in
 // {"data": [...], "pagination": {...}}; a body missing that envelope would
 // otherwise decode into a zero-valued struct, or an empty-looking page, with no
 // error at all. A genuinely empty page is not an error and yields an empty
 // non-nil Data slice.
+//
+// The check stops at the envelope. A well-formed envelope carrying the WRONG
+// object -- {"data": {"wrong": true}} -- still decodes to a zero-valued resource
+// with a nil error, since unknown fields are ignored and none is required. That
+// remaining gap is issue #40; the composite results (BulkAssignResult,
+// BulkRemoveResult, ResourceReplaceResult) are the exception and require their
+// keys.
 //
 // # Health probes
 //

@@ -44,10 +44,12 @@ The client targets `Config.BaseURL + /api/<version>`, where the version comes fr
 | `X-Namespace-Type` / `X-Namespace-ID` | `WithNamespace(...)` | no — **v2 only**, all-or-nothing |
 | `X-Request-ID` | `WithRequestID(...)` | no — sent **only** when you supply one; the server mints `req_<uuid>` otherwise |
 
-**The health probes carry none of it.** `/health/live` and `/health/ready` sit at the server root,
-outside `/api/<version>`, and authenticate nobody, so the SDK sends them no `Authorization`, no
-`X-Tenant-ID`, and no namespace headers — from a fully configured `Client` just as from a
-credential-free one. See [Health probes](#health-probes).
+**That table describes the versioned API surface.** `/health/live` and `/health/ready` sit at the
+server root, outside `/api/<version>`, and authenticate nobody, so the SDK sends them **no
+`Authorization`, no `X-Tenant-ID`, no `X-Actor-ID`, and no namespace or request-id headers** — from a
+fully configured `Client` just as from a credential-free one. They do still carry `Accept` and
+`User-Agent`, which identify the client rather than authorize it. See
+[Health probes](#health-probes).
 
 ## API version and namespace scoping
 
@@ -406,9 +408,11 @@ probe, err := octonomy.NewHealthClient("https://octonomy.example.com",
 st, err := probe.Health.Ready(ctx)
 ```
 
-A caller who already holds a full `client` reaches the same code through `client.Health.Ready(ctx)`,
-and the request is byte-for-byte identical: the token is not sent to a route that does not
-authenticate. A `HealthClient` exposes `Health` and nothing else, and the transport refuses a
+A caller who already holds a full `client` reaches the same code through `client.Health.Ready(ctx)`:
+same path, same method, and the same credential behavior — the token is not sent to a route that does
+not authenticate. The one header that can differ between the two entry points is `User-Agent`, since
+`Config.UserAgent` and `WithHealthUserAgent` are set independently; leave both at their defaults and
+the requests are byte-for-byte identical. A `HealthClient` exposes `Health` and nothing else, and the transport refuses a
 credential-free client outright rather than sending a blank `Authorization` header.
 
 `Live` and `Ready` take **no** `RequestOption`, and the option set splits in two on why.
@@ -468,7 +472,8 @@ answered" from "the server answered and said no" on any method. The cause surviv
 
 ## Responses
 
-Every 2xx that carries a payload is wrapped in a `data` envelope. The SDK unwraps it for you; the
+Every 2xx **on the versioned API** that carries a payload is wrapped in a `data` envelope; the health
+probes, outside `/api/<version>`, are the exception and carry none. The SDK unwraps it for you; the
 wire column is what the server actually sends.
 
 | Call | On the wire | You get |
@@ -503,11 +508,21 @@ and Django drops `Meta.ordering` from aggregate queries — the emitted SQL ends
 Django's own `queryset.ordered` reports false. `LIMIT`/`OFFSET` over an unordered query is undefined,
 so paging the tags list can repeat or miss rows even with no concurrent writes.
 
-A 2xx whose body does not match the shape above is an **error**, never a zero value. Decoding a
+A 2xx whose **envelope** does not match the shape above is an error, never a zero value. Decoding a
 wrapped body straight into a `*Tag` yields an empty struct with a nil error, and an unexpected list
 shape is indistinguishable from an empty page — so the client rejects both instead of returning
-something that looks like data. An empty page (`"data": []`, or `"data": null`) is not an error: it
-decodes to an empty non-nil slice either way.
+something that looks like data. A missing `data` key, a null `data` where a resource was expected, an
+empty body, and a list with no usable `pagination` block are all errors. An empty page
+(`"data": []`, or `"data": null`) is not: it decodes to an empty non-nil slice either way.
+
+**The guarantee stops at the envelope, and that boundary is a known gap.** `doData` asserts that
+`data` is present and non-null, then unmarshals it into `T`; a *well-formed* envelope carrying the
+**wrong object** — `{"data": {"wrong": true}}` — still decodes to a zero-valued resource with a nil
+error, because unknown JSON fields are ignored and no field is required. The class of failure #32
+closed is "the envelope is missing"; "the envelope holds something else" is
+[#40](https://github.com/octoverse-id/octonomy-go/issues/40) and is still open. The composite results
+are the exception — `BulkAssignResult`, `BulkRemoveResult`, and `ResourceReplaceResult` require their
+keys on decode, for the reason given [above](#assignments).
 
 ## Error codes
 

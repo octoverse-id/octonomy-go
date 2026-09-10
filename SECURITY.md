@@ -34,7 +34,8 @@ unpatched standard-library and toolchain advisories regardless of what this SDK 
 `1.x` line is an informed trade, not a supported-forever state.
 
 **A published `1.x` version cannot be recalled for that audience.** `retract` shipped in Go 1.16, so
-a Go 1.13 toolchain ignores it, and `GOPROXY` caches tags permanently. An advisory on that line is
+a Go 1.13 toolchain ignores it, and `proxy.golang.org` — the default proxy — retains a version
+permanently once it has served it, so deleting the git tag withdraws nothing. An advisory on that line is
 something to upgrade past, not something we can withdraw — which is why its releases are kept
 deliberately small and its CI runs a real `go1.13` job as a required check.
 

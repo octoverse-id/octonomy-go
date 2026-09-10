@@ -88,19 +88,28 @@ state of the tree, but that release was never cut — see the note under that he
 worth re-checking rather than trusting:
 
 ```console
-$ curl -s https://proxy.golang.org/github.com/octoverse-id/octonomy-go/@v/list
+$ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octoverse-id/octonomy-go/@v/list
 v1.0.0
-$ curl -s https://proxy.golang.org/github.com/octoverse-id/octonomy-go/v2/@v/list
-                                            # empty: no /v2 version has been published
+[HTTP 200]
+$ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octoverse-id/octonomy-go/v2/@v/list
+                                            # no rows: no /v2 version is resolvable
+[HTTP 200]
 ```
+
+Read that for what it is: the proxy's **current** view of resolvable versions, which is the thing a
+consumer can actually reach. Keep `-w` on the command — a bare `curl -s` renders a network failure as
+the same blank output that a genuinely empty list produces, which is how this kind of evidence turns
+into a false claim.
 
 That is what made adopting the `/v2` module path free, since no import path was in the wild to break.
 
 > **`version.go` does not agree with that yet, and should not.** The `Version` constant on `main`
-> still reads `0.1.0`, so the default User-Agent is `octonomy-go/0.1.0`. `version.go` is bumped in
-> the dedicated release PR and nowhere else (see [Where this shows up](#where-this-shows-up)), so
-> between releases the source constant trails the tags by design. Read the **git tag** for what is
-> published and `version.go` for what the next release PR will bump.
+> still reads `0.1.0`, so the default User-Agent is `octonomy-go/0.1.0`. It is a **placeholder left
+> from before anything was released**, kept to match the historical `## [0.1.0]` CHANGELOG heading,
+> and no tag anywhere corresponds to it — `v1.0.0` belongs to the other module. The first `/v2`
+> release PR replaces it, since `version.go` is bumped there and nowhere else (see
+> [Where this shows up](#where-this-shows-up)); from that point on the constant names the most recent
+> release of *this* line until the next release PR moves it.
 
 **Why the tag history looks odd.** `v1.0.0` is not an ancestor of `main`. It sits on
 `support/go1.13`, whose `go.mod` declares the **unsuffixed** module path, while `main` declares

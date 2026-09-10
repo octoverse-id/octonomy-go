@@ -44,11 +44,20 @@ repository publishes a second one with a different floor:
 > go get github.com/octoverse-id/octonomy-go   # v1.x, Go 1.13, security fixes only
 > ```
 >
-> **That unsuffixed path is the pin.** It can only ever resolve within `v1.x` — currently `v1.0.0`,
-> the one version `proxy.golang.org` serves for it — and Go cannot move you from it to `/v2`, because
-> the two are different modules. Leave it unversioned rather than pinning `@v1.0.0` outright, so a
-> future security patch (`v1.0.1`, …) still reaches you; that is the only kind of release this line
-> will ever get.
+> **The unsuffixed path is what pins you to the line**, and it is the whole mechanism: it can only
+> ever resolve within `v1.x` — currently `v1.0.0`, the one version `proxy.golang.org` serves for it —
+> and Go cannot move you from it to `/v2`, because the two are different modules.
+>
+> **Within the line, nothing is automatic.** That `go get` selects the highest `v1.x` *at the moment
+> you run it* and then records an exact `require ... v1.0.0` in your `go.mod`, so a later security
+> patch does not arrive on its own. Pull one deliberately:
+>
+> ```bash
+> go get github.com/octoverse-id/octonomy-go@latest   # highest v1.x; still cannot cross to /v2
+> ```
+>
+> Watch this repository's releases or [SECURITY.md](SECURITY.md), since a patch here is the only kind
+> of release this line will ever get.
 >
 > - **Scope:** Vocabularies and Tags, `/api/v1` only. No `/api/v2`, no namespaces, no webhooks, ever.
 > - **Support:** security fixes only — no features, no ordinary bug fixes.
@@ -59,7 +68,8 @@ repository publishes a second one with a different floor:
 >   standard-library advisories regardless of what this SDK does. Pinning here is an informed trade,
 >   not a safe harbour.
 > - **A published `v1.x` cannot be recalled for you.** `retract` shipped in Go 1.16, so a Go 1.13
->   toolchain ignores it and `GOPROXY` caches tags permanently.
+>   toolchain ignores it — and `proxy.golang.org`, the default proxy, caches a version permanently
+>   once it has served it.
 >
 > The two paths are different modules, so Go itself will not move you between them — you need no
 > `exclude`, no upper-bound pin, and no build tag on your side. Full policy in
@@ -108,7 +118,9 @@ A complete, runnable program lives in [`examples/quickstart`](examples/quickstar
 
 ## Authentication and tenant scope
 
-Every request carries two credentials from `Config`:
+Every request to the versioned API carries two credentials from `Config`. (The health probes carry
+neither — they are unauthenticated and sit outside `/api/<version>`; see
+[Health probes](#health-probes).)
 
 | Header | Source | Purpose |
 | ------ | ------ | ------- |
@@ -337,9 +349,11 @@ Every resource group the vendored contracts publish is implemented, reached from
 > method means editing it there; this page, [`docs/roadmap.md`](docs/roadmap.md), and
 > [`docs/versioning.md`](docs/versioning.md) link to it rather than restate it.
 >
-> Other pages still *name* resources where they are making a different point — `AGENTS.md` tabulates
-> which transport helper each group needs, `roadmap.md` explains why health has its own request path
-> — and that is deliberate. What none of them repeats is the method-to-endpoint mapping.
+> Other pages still *name* resources, and occasionally a route, where they are making a different
+> point — `AGENTS.md` tabulates which transport helper each group needs, `roadmap.md` names the two
+> health routes while explaining why that group has its own request path. That is deliberate. What
+> none of them carries is the **complete** mapping, so `docs/api.md` is the one place to look for it
+> and the one place to update.
 
 The rest of this section is the behavior worth knowing before you call them.
 
@@ -439,29 +453,27 @@ event, and structured log. `NewHealthClient` takes the same hook through
 (`&http.Client{Timeout: 30 * time.Second}`) rather than decorating it, so a bare `&http.Client{}`
 has no timeout at all.
 
-### On HTTP/1.1, the first scaling bottleneck is `MaxIdleConnsPerHost`
+### `MaxIdleConnsPerHost` and HTTP/1.1 connection churn
 
-**Check whether this applies to you before acting on it — on HTTP/2 it does not.** An `http.Client`
-with no `Transport` uses `http.DefaultTransport`, which sets `ForceAttemptHTTP2: true`, so against an
-HTTPS endpoint that negotiates h2 every request multiplexes over **one** connection and the idle-pool
-size stops mattering. What follows is for an HTTP/1.1 deployment: plaintext, a proxy or load balancer
-that terminates at 1.1, or a custom transport that did not opt into h2.
+**Check whether this applies to you before acting on it.** An `http.Client` with no `Transport` uses
+`http.DefaultTransport`, which sets `ForceAttemptHTTP2: true`, so against an HTTPS endpoint that
+negotiates h2 requests multiplex over a connection and the idle-pool size largely stops mattering.
+What follows concerns HTTP/1.1: plaintext, or a proxy or load balancer that terminates at 1.1.
 
 There, `http.DefaultTransport` leaves `MaxIdleConnsPerHost` unset, so it falls back to
-`http.DefaultMaxIdleConnsPerHost`, which is **2**. Octonomy is a single host, so past two
-**concurrent** calls each extra one opens a fresh TCP + TLS connection and then closes it on
-completion rather than returning it to the pool. It is a cap on *pooled* connections, not on
-in-flight ones: nothing blocks, the handshakes just stop being amortized, and it shows up as latency
-and socket churn well before the server is the constraint.
+`http.DefaultMaxIdleConnsPerHost`, which is **2**. It caps how many **idle** connections to one host
+are kept for reuse — it does not cap in-flight requests and nothing blocks. Octonomy is a single
+host, so with more than two calls in flight the surplus connections are closed on completion rather
+than returned to the pool, and the next call pays a fresh handshake. What you observe is latency and
+socket churn, not a ceiling.
 
-**It is a concurrency limit, so sequential work never meets it** on either protocol. One goroutine
-calling in a loop — `Each` included, which issues its pages strictly one at a time — reuses a single
-pooled connection whatever this is set to. It bites when many goroutines share one `*Client`, which
-is the supported and recommended way to use it.
+**Sequential work never reaches it**, on either protocol: one goroutine calling in a loop — `Each`
+included, which issues its pages strictly one at a time — reuses a single pooled connection whatever
+this is set to. It is a fan-out across goroutines sharing one `*Client` that produces the churn.
 
 **The SDK does not tune this, deliberately** — transport configuration is the caller's, and a library
 that silently raised a connection limit would be making a capacity decision on your behalf, in your
-process, invisibly. Raise it yourself when you have measured an HTTP/1.1 fan-out that warrants it:
+process, invisibly. Raise it yourself if you have measured HTTP/1.1 churn that warrants it:
 
 ```go
 tr := http.DefaultTransport.(*http.Transport).Clone()
@@ -473,8 +485,11 @@ client, err := octonomy.New(octonomy.Config{
 })
 ```
 
-`Clone` keeps `DefaultTransport`'s proxy, dialer, and HTTP/2 settings; constructing a bare
-`&http.Transport{}` silently drops all three.
+`Clone` starts from `DefaultTransport`'s configured defaults — `ProxyFromEnvironment`, its dialer and
+handshake timeouts, `MaxIdleConns: 100`, `IdleConnTimeout: 90s` — where a bare `&http.Transport{}`
+starts from the zero value and silently has none of them. (A zero transport does still negotiate
+HTTP/2 on its own, since it sets no custom dialer or TLS config; it is the tuned defaults you lose,
+not h2.)
 
 **The pool lives on the transport, not on the client.** Reuse one `*Client` across goroutines — it is
 safe for concurrent use, and it is the simplest way to get this right. A client built per request

@@ -73,11 +73,13 @@ turns each of those into an error ([#32](https://github.com/octoverse-id/octonom
   `MaxIdleConnsPerHost`, which `http.DefaultTransport` leaves at `http.DefaultMaxIdleConnsPerHost`
   (2) and which matters only on HTTP/1.1: a library that silently changed a connection limit would be
   making a capacity decision inside the caller's process. Both are documented for callers in the
-  [README](../README.md#on-http11-the-first-scaling-bottleneck-is-maxidleconnsperhost).
+  [README](../README.md#maxidleconnsperhost-and-http11-connection-churn).
 
 ## Multi-tenancy
 
-Every request is scoped to one tenant via `X-Tenant-ID` (`Config.TenantID`, required). Tags and
+Every request on the versioned API is scoped to one tenant via `X-Tenant-ID` (`Config.TenantID`,
+required); the unauthenticated health probes, which sit outside `/api/<version>`, are the exception.
+Tags and
 vocabularies may be shared (`application_id == nil`) or application-specific; assignments always carry
 an `application_id`. The SDK passes these through faithfully — the server enforces isolation.
 

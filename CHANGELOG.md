@@ -46,8 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authorized for (`include_global`, a query parameter — fail-closed on the server). It is refused on
   writes, where the server ignores it, rather than being sent to do nothing.
 - `NamespaceType` / `NamespaceID` on `Tag` and `Vocabulary` — decode-only, nil on a global row and on
-  every `/api/v1` response. The five remaining v2 schemas that carry them arrive with their resources
-  (see [`docs/roadmap.md`](docs/roadmap.md)).
+  every `/api/v1` response. All **seven** v2 schemas that carry namespace identity now have them:
+  the five remaining (`TagAlias`, `Assignment`, `TagResource`, `ResourceTag`, `AuditLog`) landed with
+  their resources later in this same unreleased set (see [`docs/roadmap.md`](docs/roadmap.md)).
 - Error codes and helpers for the namespace surface: `namespace_not_supported`, `namespace_invalid`,
   `namespaced_writes_disabled`, `namespace_api_disabled`, `ambiguous_resolution`, each with an `Is*`
   helper. `namespaced_writes_disabled` and `namespace_api_disabled` are **operator** states — rollout
@@ -589,6 +590,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and it now distinguishes what the two compat checks actually do: `go1.13` builds, vets, and runs
   `go test -race` under a real toolchain, while `compat guard` never compiles the package and asserts
   the `go.mod` invariants.
+- **The decode guarantee is stated at its real boundary, which is the envelope.** `docs/api.md` and
+  `doc.go` said a 2xx whose body "does not match the shape above" is an error, never a zero value.
+  `doData` asserts that `data` is present and non-null and then unmarshals; a *well-formed* envelope
+  carrying the **wrong object** (`{"data": {"wrong": true}}`) still yields a zero-valued resource with
+  a nil error. That is [#40](https://github.com/octoverse-id/octonomy-go/issues/40), open — and the
+  overstated guarantee contradicted the gap this same release documents. Both pages now say what #32
+  actually closed ("the envelope is missing") and name the composites that do require their keys.
+- **The health carve-out is applied everywhere the unqualified claim appeared**, not only where the
+  probes are described: `AGENTS.md`, `README.md`, `doc.go`, `docs/architecture.md`, and `docs/api.md`
+  each said *every* request carries the token and tenant, or that *every* 2xx payload is `data`-wrapped.
+  `docs/api.md` also said the probes "carry none of it" — they carry no credentials, but they do send
+  `Accept` and `User-Agent`.
+- **"Byte-for-byte identical" is qualified.** The two health entry points share code, path, and
+  credential behavior, but `Config.UserAgent` and `WithHealthUserAgent` are set independently, so the
+  `User-Agent` can differ.
+- **The compat-line install note no longer implies automatic patching.** An unversioned `go get`
+  selects the highest `v1.x` at that moment and then records an exact `require`; a later security
+  patch needs `go get ...@latest`. The README now shows that command instead of implying it happens.
+- **The `MaxIdleConnsPerHost` note is narrowed again** after a second pass: it is an *idle-connection*
+  cap, so the symptom is handshake churn rather than a concurrency ceiling; HTTP/2 can still open more
+  than one connection; a plaintext HTTP/1.1 connection involves no TLS handshake; and a bare
+  `&http.Transport{}` loses `DefaultTransport`'s tuned defaults but **not** HTTP/2, which it still
+  negotiates on its own.
+- **`version.go`'s `0.1.0` is described as a pre-release placeholder**, not as "trailing the tags" —
+  no tag on this line corresponds to it and `v1.0.0` belongs to the other module. The proxy evidence
+  is presented as the proxy's current view of resolvable versions, with `-w` on the command so a
+  network failure cannot masquerade as an empty list.
 - The bug-report template asked for a version "e.g. `v0.1.0`", which was never released, and did not
   ask which of the two modules the reporter imports — the first thing triage needs. Both fixed. The
   PR template now checks the base branch against the line and the no-version-bump rule, and both

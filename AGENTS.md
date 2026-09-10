@@ -21,7 +21,9 @@ stays a faithful, ergonomic client.
   belong there.** The server rejects all of them by name too, so the guard buys a round trip and a
   better-targeted error — except `include_global` on a write, which the server silently ignores, and
   silence is the failure mode this SDK refuses.
-- Every request is tenant-scoped via the `X-Tenant-ID` header; `Config.TenantID` is required.
+- Every request **on the versioned API** is tenant-scoped via the `X-Tenant-ID` header;
+  `Config.TenantID` is required. The health probes are the documented exception — see the health
+  rules below.
 - `application_id` is optional on tags and vocabularies (`nil` = shared across the tenant) and is
   required for assignments.
 - Tag deletion is **deactivation** on the server, not hard delete. `Delete` methods call HTTP

@@ -1,10 +1,14 @@
 # Release Runbook
 
 The SDK is published as a Go module via a git tag `vX.Y.Z`. There is no registry to push to: pushing
-the tag is the release. Consumers reach it through Go's configured module proxy —
-`proxy.golang.org` by default, which fetches from GitHub and then caches the version permanently —
-falling back to direct VCS access only for `GOPRIVATE`/`GONOSUMDB` paths or `GOFLAGS=-mod=mod`
-with `GOPROXY=direct`. **The cache is why a tag cannot be unpublished.**
+the tag is the release. Consumers reach it through `GOPROXY`, which defaults to
+`https://proxy.golang.org,direct` — the proxy is tried first and fetches the tag from GitHub, with
+`direct` (straight from the VCS) as the fallback in the chain. A consumer can bypass the proxy
+entirely with `GOPROXY=direct`, or per-path with `GONOPROXY`/`GOPRIVATE`.
+
+**`proxy.golang.org` retains a version permanently once it has served it, which is why a tag cannot
+be unpublished.** Deleting or moving the git tag does not withdraw the release; only `retract` marks
+it, and `retract` is inert for a Go 1.13 toolchain (see [versioning.md](versioning.md)).
 
 ## Versioning
 
