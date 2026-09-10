@@ -145,6 +145,7 @@ func WithActor(actorID string) RequestOption {
 // all share. The health probes are the exception: they take no options at all,
 // and HealthService records why this one is excluded with the rest. Order does
 // not matter.
+//
 // Repeating it overrides, unlike the scope options: the axes those guard are
 // tenant, namespace, and application, where last-wins is a silent wrong-scope
 // read; the worst a wrong id can do is mislabel a log line, and overriding one
@@ -169,9 +170,9 @@ func WithActor(actorID string) RequestOption {
 // That width is a SERVER rule -- a column, which a later release may widen --
 // so this client does not enforce it. A cap here would become a false rejection
 // of a legal id the moment the server changed, which is the drift AGENTS.md
-// keeps server invariants out of this package to avoid. The printable-ASCII
-// guard below is a different thing: it is the wire grammar of an HTTP header,
-// which no server release can widen.
+// keeps server invariants out of this package to avoid. The guards below are a
+// different thing: they are the wire grammar of an HTTP header, which no server
+// release can widen.
 func WithRequestID(id string) RequestOption {
 	return func(rc *requestConfig) {
 		if strings.TrimSpace(id) == "" {
