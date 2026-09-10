@@ -100,8 +100,11 @@ see no sign the option did nothing — so the SDK makes it loud.
 
 ### Response fields
 
-`Tag`, `Vocabulary`, and `TagAlias` carry `NamespaceType` and `NamespaceID` (`*string`,
-decode-only). Both are nil for a global row, and on every `/api/v1` response. Scope is fixed at
+**All seven** v2 response schemas that carry namespace identity have `NamespaceType` and
+`NamespaceID` (`*string`, decode-only): `Tag`, `Vocabulary`, `TagAlias`, `Assignment`, `TagResource`,
+`ResourceTag`, and `AuditLog`. Both are nil for a global row, and on every `/api/v1` response. They
+are server-set from the `X-Namespace-*` headers and never accepted in a write body, so they appear on
+no `*Create` / `*Update`. Scope is fixed at
 creation: changing `application_id`, `namespace_type`, or `namespace_id` on a PATCH is a
 `409 scope_immutable`.
 
@@ -129,6 +132,11 @@ empty page. It is a token misconfiguration rather than a caller mistake, so retr
 filters will not help.
 
 ## Implemented
+
+**This table is the canonical resource inventory for the SDK.** The README, `architecture.md`,
+`roadmap.md`, and `versioning.md` link here rather than restating it, so a new method is added in one
+place. Every group the vendored contracts publish is implemented; paths are relative to
+`BaseURL + /api/<version>` except the two health routes, which sit at the server root.
 
 | SDK method | HTTP | Path |
 | ---------- | ---- | ---- |
@@ -460,7 +468,7 @@ wire column is what the server actually sends.
 
 | Call | On the wire | You get |
 | ---- | ----------- | ------- |
-| Single resource (`Create`/`Get`/`Update`) | `{"data": {...}}` | `*Tag`, `*Vocabulary`, `*TagAlias` |
+| Single resource (`Create`/`Get`/`Update`) | `{"data": {...}}` | the resource — `*Tag`, `*Vocabulary`, `*TagAlias`, `*Assignment` |
 | Composite (`Tags.Resolve`) | `{"data": {...}}` | `*TagResolution` — a payload, not a resource |
 | Composite (`Assignments.BulkAssign`) | `{"data": {"created", "existing", "skipped", "assignments"}}` | `*BulkAssignResult` |
 | Composite (`Assignments.BulkRemove`) | `{"data": {"removed"}}` | `*BulkRemoveResult` |
@@ -564,4 +572,4 @@ worth preserving.
 ## Not yet implemented
 
 Every endpoint group the vendored contracts publish is implemented. Remaining gaps are within
-implemented resources — see [roadmap.md](roadmap.md).
+implemented resources — see [roadmap.md](roadmap.md), which tracks them against their issues.

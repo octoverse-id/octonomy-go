@@ -21,8 +21,16 @@
 //   - github.com/octoverse-id/octonomy-go/v2   v2.x, Go 1.24+, active development
 //
 // Because the paths differ, version selection cannot move a consumer between the
-// two lines. If you are on Go 1.13, use the unsuffixed path; it receives security
-// fixes only and has a published sunset date. See docs/versioning.md.
+// two lines, and a consumer needs no exclude, pin, or build tag of their own. If
+// you are on Go 1.13, use the unsuffixed path: it carries Vocabularies and Tags
+// on /api/v1 only, receives security fixes and nothing else, and sunsets on
+// 2027-08-31, after which it receives nothing at all. Go 1.13 is itself unpatched
+// (go1.13.15, August 2020, was its last release), so pinning there is an informed
+// trade rather than a safe harbour. See docs/versioning.md and SECURITY.md.
+//
+// This line is not yet tagged: v2.0.0-alpha.1 is unreleased, so go get on the /v2
+// path resolves a pseudo-version. The compat line is released at v1.0.0. There
+// has never been a v0.x of either.
 //
 // # Quickstart
 //
@@ -178,6 +186,36 @@
 // the first item it did not process, so a failed walk resumes instead of
 // starting over. Its doc comment covers the offset drift that limit/offset
 // paging cannot avoid.
+//
+// # Transport, observability, and connection reuse
+//
+// This package never logs, never retries, and never mutates global state, so the
+// sanctioned extension point for metrics, tracing, request logging, retries, and
+// rate limiting is an http.RoundTripper on the *http.Client you supply through
+// Config.HTTPClient (or WithHealthHTTPClient). A RoundTripper sees the fully
+// assembled request and the raw response; read X-Request-ID off the request to
+// join your span to the server's record of the same call.
+//
+// Config.HTTPClient REPLACES the default (&http.Client{Timeout: 30 * time.Second})
+// rather than decorating it, so set a Timeout on any client you pass.
+//
+// An *http.Client with no Transport uses http.DefaultTransport, which leaves
+// MaxIdleConnsPerHost unset and therefore falls back to
+// http.DefaultMaxIdleConnsPerHost, which is 2. Octonomy is a single host, so past
+// two CONCURRENT calls each additional one opens and then discards its own
+// connection instead of returning it to the pool. It caps pooled connections
+// rather than in-flight ones, so nothing blocks -- the handshakes simply stop
+// being amortized. Sequential work never meets it: one goroutine in a loop, Each
+// included, reuses a single connection whatever the setting. It is the first
+// bottleneck a fan-out across goroutines sharing one Client will hit.
+//
+// This package does not tune it: transport configuration belongs to the caller.
+// Raise it by cloning DefaultTransport (Clone keeps its proxy, dialer, and HTTP/2
+// settings, which a bare &http.Transport{} drops) and setting MaxIdleConnsPerHost
+// at or above your peak concurrency. See the README for a worked example.
+//
+// A Client is safe for concurrent use; share one rather than constructing per
+// request, which defeats pooling however the transport is configured.
 //
 // # Typed metadata
 //

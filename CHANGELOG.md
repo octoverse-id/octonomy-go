@@ -502,6 +502,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone suffices: renaming the tags left the entire unit suite green until the raw-body test existed,
   because every other fixture is marshalled from the struct it is decoded into.
 
+### Documentation
+- **Documentation truth pass across the whole tree**
+  ([#15](https://github.com/octoverse-id/octonomy-go/issues/15)). Every file that asserted a Go
+  floor, an API version, a list-type shape, or a release state that is false for the line it
+  describes is corrected, and the facts the two-line split created are written down for the first
+  time.
+  - **Two Go floors, stated as two.** `AGENTS.md`, `CONTRIBUTING.md`, `docs/development.md`, and the
+    README said "Go 1.24+" flatly. Each now names the line it is describing: `main` is
+    `.../octonomy-go/v2` at Go 1.24+, `support/go1.13` is `.../octonomy-go` at Go 1.13 with no
+    generics, no `any`, and no post-1.13 standard library. `AGENTS.md` and `CONTRIBUTING.md` said
+    "List methods return `*List[T]`" as an unqualified rule; that spelling is `main`-only, and the
+    compat line's per-resource `*TagList` / `*VocabularyList` is now recorded next to it.
+  - **A published sunset date with a named owner: 2027-08-31.** It was previously a rule ("12 months
+    from the `v1.0.0` tag") rather than a date, which is not something a blocked team can plan
+    against. The date, its derivation from the 2026-08-26 tag, and its owner now appear in
+    `SECURITY.md`, `docs/versioning.md`, the README, and `doc.go`, matching the copies already on
+    `support/go1.13`.
+  - **`SECURITY.md` on `main` reflects both lines.** It claimed security fixes go to "the latest
+    `0.x` release" and listed only `0.1.x` — a version that does not exist. It now carries the
+    two-module supported-versions table, the sunset, the backport rule, and the two facts a Go 1.13
+    consumer needs: that toolchain is itself unpatched past `go1.13.15` (August 2020), and `retract`
+    cannot recall a release for it.
+  - **The release record is accurate.** `README.md` and `docs/versioning.md` said the repository had
+    no git tags and nothing published. `v1.0.0` was tagged on `support/go1.13` on 2026-08-26.
+    `docs/versioning.md` now carries a Release state section covering both lines, why `v1.0.0` is not
+    an ancestor of `main`, and why `git describe` here will not find it.
+  - **One live versioning policy.** The `0.3.0`-minor framing an earlier plan carried is recorded as
+    settled: v2 support ships on a new module path at `v2.x`, a major, which is what the
+    major-effort rule in `docs/versioning.md` already required.
+  - **The consumer-side `exclude` snippet is documented as unnecessary**, not omitted. The `/v2`
+    module path made Go itself the enforcement, so a reader following an older plan document is told
+    so explicitly rather than left hunting for a snippet that no longer exists.
+  - **One canonical resource inventory.** It was restated in five places and drifting. `docs/api.md`
+    is now the single source of truth; the README, `docs/roadmap.md`, `docs/architecture.md`, and
+    `docs/versioning.md` link to it. `docs/versioning.md` still claimed only Vocabularies and Tags
+    were implemented, and `docs/api.md` still listed three namespace-carrying schemas rather than
+    seven.
+  - **`docs/release.md`** gains the three branch roles (`support/` line, `<type>/<issue>-`
+    implementation, `release/vX.Y.Z` tag PR) and a worked backport procedure — branch off the support
+    line, expect the cherry-pick to need rewriting against a tree with no generics, and let the
+    `compat guard` and `go1.13` jobs prove it, since a modern toolchain enforces the language version
+    from `go.mod` but not the standard library.
+  - **`docs/roadmap.md`** stops restating what exists and becomes the recipe plus a register of known
+    gaps, each against its issue (#36, #37, #40, #49) with the two deliberate deferrals (#20, #22)
+    named as such.
+- **The `http.RoundTripper` extension point is documented** in the README, `doc.go`, and
+  `docs/architecture.md`. Since `AGENTS.md` forbids logging in the library, a `RoundTripper` on the
+  caller's `*http.Client` is the sanctioned path for metrics, tracing, request logging, retries, and
+  rate limiting — and it pairs with `WithRequestID` to join a client span to the server's audit row.
+- **`MaxIdleConnsPerHost` is documented as the first scaling bottleneck, and deliberately not
+  tuned.** An `*http.Client` with no `Transport` uses `http.DefaultTransport`, which leaves the field
+  unset and so falls back to `http.DefaultMaxIdleConnsPerHost` — **2**. Against a single host that
+  means every **concurrent** call past the second opens and discards its own connection instead of
+  pooling it. It caps pooled connections rather than in-flight ones, so nothing blocks and sequential
+  work never meets it — `Each` issues its pages one at a time and reuses one connection — but a
+  fan-out across goroutines sharing one `*Client` hits it well before the server is the constraint.
+  Raising it silently would be a capacity decision taken inside the caller's process, so the README
+  shows the `http.DefaultTransport.Clone()` recipe instead (a bare `&http.Transport{}` drops the
+  proxy, dialer, and HTTP/2 settings).
+- The bug-report template asked for a version "e.g. `v0.1.0`", which was never released, and did not
+  ask which of the two modules the reporter imports — the first thing triage needs. Both fixed. The
+  PR template now checks the base branch against the line and the no-version-bump rule, and both
+  templates cite `openapi-v2.yaml` alongside `openapi.yaml`.
+
 ## [0.1.0] - 2026-06-08
 
 > **Never released.** No `v0.1.0` git tag was ever cut and the module proxy has never served this

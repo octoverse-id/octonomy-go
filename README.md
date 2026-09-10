@@ -9,17 +9,17 @@ multi-application tag management and taxonomy service. This SDK is a hand-writte
 (standard library only) client for the REST **v2** API, with `/api/v1` available as a configuration
 option.
 
-> **Status: nothing published yet.** No version of this SDK has ever been released — there are no
-> git tags and the module proxy has served no semantic version. The transport, auth, error, and
-> pagination foundation plus the **Vocabularies**, **Tags**, **Tag aliases**, **Tag resolution**,
-> **Tag assignments**, and **Resource tags** resources are implemented; the remaining resources are
-> tracked in [`docs/roadmap.md`](docs/roadmap.md).
->
-> The first two releases will be `v1.0.0` on the frozen Go 1.13 compat line and `v2.0.0-alpha.1` on
-> this line. See [versioning.md](docs/versioning.md).
+> **Status: this line has no tag yet.** Every resource group the vendored contracts publish is
+> implemented — see [Implemented resources](#implemented-resources) — but `v2.0.0-alpha.1` has not
+> been cut ([#29](https://github.com/octoverse-id/octonomy-go/issues/29)), so `go get` on the `/v2`
+> path resolves a pseudo-version until it is. The **compat** line is released: `v1.0.0`, tagged
+> 2026-08-26 on `support/go1.13`. There has never been a `v0.x` of either line.
+> See [versioning.md](docs/versioning.md) for both lines and their support policies.
 
 > [!IMPORTANT]
-> **Upgrading from `0.1.x`: the default REST surface is now `/api/v2`.** If your Octonomy server
+> **The default REST surface is now `/api/v2`.** Earlier states of this tree targeted `/api/v1`
+> unconditionally, so if you are tracking `main` by pseudo-version or carrying a vendored copy, this
+> changes the wire. If your Octonomy server
 > predates **2.0**, set `Config.APIVersion = octonomy.APIV1` — such a deployment has no `/api/v2`
 > route and answers every call with an unrouted 404. This is a wire-level change that compiles
 > clean, and there is no version handshake for the SDK to detect it with.
@@ -34,17 +34,30 @@ option.
 go get github.com/octoverse-id/octonomy-go/v2
 ```
 
-Requires Go 1.24 or newer.
+Requires **Go 1.24 or newer** — that is the floor for *this* module, `.../octonomy-go/v2`. The
+repository publishes a second one with a different floor:
 
-> **On Go 1.13?** Use the frozen compatibility line instead — it lives at the **unsuffixed** module
-> path and never receives features:
+> **On Go 1.13?** Use the frozen compatibility line. It lives at the **unsuffixed** module path,
+> targets Go 1.13, and never receives features:
 >
 > ```bash
 > go get github.com/octoverse-id/octonomy-go   # v1.x, Go 1.13, security fixes only
 > ```
 >
-> The two paths are different modules, so Go will not move you between them. See
-> [versioning.md](docs/versioning.md) for the support policy and the sunset date.
+> - **Scope:** Vocabularies and Tags, `/api/v1` only. No `/api/v2`, no namespaces, no webhooks, ever.
+> - **Support:** security fixes only — no features, no ordinary bug fixes.
+> - **Sunset: 2027-08-31**, owned by the SDK maintainer, after which it receives nothing at all.
+>   Plan the toolchain upgrade against that date; it is the only real fix.
+> - **Go 1.13 itself is unpatched.** Its last release was `go1.13.15` (August 2020) and the Go team
+>   supports only the two most recent major versions, so that toolchain carries unpatched
+>   standard-library advisories regardless of what this SDK does. Pinning here is an informed trade,
+>   not a safe harbour.
+> - **A published `v1.x` cannot be recalled for you.** `retract` shipped in Go 1.16, so a Go 1.13
+>   toolchain ignores it and `GOPROXY` caches tags permanently.
+>
+> The two paths are different modules, so Go itself will not move you between them — you need no
+> `exclude`, no upper-bound pin, and no build tag on your side. Full policy in
+> [versioning.md](docs/versioning.md) and [SECURITY.md](SECURITY.md).
 
 ## Quickstart
 
@@ -309,23 +322,27 @@ unaffected. Store large ids and amounts as **strings** in metadata and parse the
 
 ## Implemented resources
 
-| Resource | Status |
-| -------- | ------ |
-| Vocabularies (`client.Vocabularies`) | ✅ Create / Get / List / Update / Delete |
-| Tags (`client.Tags`) | ✅ Create / Get / List / Update / Delete / ListAliases / Resolve |
-| Tag aliases (`client.Aliases`) | ✅ Create / Get / List / Update / Delete |
-| Tag assignments (`client.Assignments`) | ✅ Create / Remove / BulkAssign / BulkRemove |
-| Resource tags (`client.Resources`) | ✅ ListTags / ReplaceTags, plus `Tags.ListResources` |
-| Audit logs (`client.AuditLogs`) | ✅ List, plus `Tags.ListAuditLogs` / `Resources.ListAuditLogs` |
-| Health (`client.Health`) | ✅ Live / Ready, and `NewHealthClient` for callers with no credentials |
+Every resource group the vendored contracts publish is implemented, reached from a field on
+`Client`: `Vocabularies`, `Tags`, `Aliases`, `Assignments`, `Resources`, `AuditLogs`, and `Health`
+(plus `NewHealthClient` for a caller with no credentials).
 
-Every implemented resource works on either surface. All seven v2 response models that carry namespace
+> **[`docs/api.md`](docs/api.md#implemented) is the canonical inventory** — every SDK method, its
+> HTTP verb, and its path, in one table. That list is maintained in exactly one place; this page,
+> [`docs/roadmap.md`](docs/roadmap.md), and [`docs/versioning.md`](docs/versioning.md) link to it
+> rather than restate it, so adding a method means editing one file rather than four.
+
+The rest of this section is the behavior worth knowing before you call them.
+
+Every **versioned** resource works on either surface; health is the exception, sitting outside
+`/api/<version>` altogether ([below](#health-probes)). All seven v2 response models that carry namespace
 identity now have it — `Tag`, `Vocabulary`, `TagAlias`, `Assignment`, `ResourceTag`, `TagResource`,
 and `AuditLog` — as decode-only `NamespaceType` / `NamespaceID`, nil for a global row and on every
 `/api/v1` response.
 
-`Delete` is deactivation on all three, and the alias lists filter to active rows when `IsActive` is
-unset — so `IsActive: octonomy.Bool(false)` is how you find deleted ones.
+`Delete` is **deactivation**, not removal, on all three resources that have one — `Vocabularies`,
+`Tags`, and `Aliases` — and their lists filter to active rows when `IsActive` is unset, so
+`IsActive: octonomy.Bool(false)` is how you find deleted ones. `Assignments.Remove` is the exception
+and deletes outright: an assignment is a link, and an inactive link is an absent one.
 
 `Tags.Resolve` is the odd one out: an unmatched slug is a `400 validation_error`, **not** a `404`, so
 branch on `IsValidation` rather than `IsNotFound`. See [`docs/api.md`](docs/api.md#error-codes).
@@ -371,6 +388,77 @@ A caller who already holds a full client uses `client.Health.Ready(ctx)`, which 
 and sends the same request: no `Authorization`, no `X-Tenant-ID`, no `/api` prefix, from either entry
 point. `ErrUnreachable` is not health-specific — every method in the package wraps it around a
 request that got no response. See [`docs/api.md`](docs/api.md#health-probes).
+
+## Transport, observability, and connection reuse
+
+The library never logs, never retries, and never mutates global state. Everything at that layer is
+your `*http.Client`, which means the sanctioned extension point for metrics, tracing, and request
+logging is an **`http.RoundTripper`**:
+
+```go
+type instrumented struct{ next http.RoundTripper }
+
+func (t instrumented) RoundTrip(req *http.Request) (*http.Response, error) {
+	start := time.Now()
+	resp, err := t.next.RoundTrip(req)
+	// record req.Method, req.URL.Path, resp.StatusCode, time.Since(start) —
+	// and req.Header.Get("X-Request-ID") to join this span to the server's record.
+	return resp, err
+}
+
+client, err := octonomy.New(octonomy.Config{
+	BaseURL:  "https://octonomy.example.com",
+	Token:    "svc_live_...",
+	TenantID: "acme",
+	HTTPClient: &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: instrumented{next: http.DefaultTransport},
+	},
+})
+```
+
+A `RoundTripper` sees the fully assembled request — headers, query, body — and the raw response, so
+it is also where retries, circuit breaking, and rate limiting belong. Pair it with `WithRequestID`
+([above](#request-correlation)) and your span carries the same id as the server's audit row, outbox
+event, and structured log. `NewHealthClient` takes the same hook through
+`WithHealthHTTPClient`.
+
+**Set a `Timeout` on any client you supply.** `Config.HTTPClient` replaces the SDK's default
+(`&http.Client{Timeout: 30 * time.Second}`) rather than decorating it, so a bare `&http.Client{}`
+has no timeout at all.
+
+### The first scaling bottleneck is `MaxIdleConnsPerHost`
+
+An `http.Client` with no `Transport` uses `http.DefaultTransport`, which leaves
+`MaxIdleConnsPerHost` unset — so it falls back to `http.DefaultMaxIdleConnsPerHost`, which is **2**.
+Octonomy is a single host, so past two **concurrent** calls each extra one opens a fresh TCP + TLS
+connection and then closes it on completion rather than returning it to the pool. It is a cap on
+*pooled* connections, not on in-flight ones: nothing blocks, the handshakes just stop being amortized,
+and it shows up as latency and socket churn well before the server is the constraint.
+
+**This is a concurrency limit, so sequential work never meets it.** One goroutine calling in a loop —
+`Each` included, which issues its pages strictly one at a time — reuses a single pooled connection
+whatever this is set to. It bites when many goroutines share one `*Client`, which is the supported
+and recommended way to use it.
+
+**The SDK does not tune this, deliberately** — transport configuration is the caller's, and a library
+that silently raised a connection limit would be making a capacity decision on your behalf, in your
+process, invisibly. Raise it yourself when your fan-out warrants it:
+
+```go
+tr := http.DefaultTransport.(*http.Transport).Clone()
+tr.MaxIdleConnsPerHost = 64 // at or above your peak concurrency against this host
+
+client, err := octonomy.New(octonomy.Config{
+	// ...
+	HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: tr},
+})
+```
+
+`Clone` keeps `DefaultTransport`'s proxy, dialer, and HTTP/2 settings; constructing a bare
+`&http.Transport{}` silently drops all three. Reuse one `*Client` across goroutines — it is safe for
+concurrent use, and a per-request client defeats connection pooling no matter how the transport is
+configured.
 
 ## Common commands
 

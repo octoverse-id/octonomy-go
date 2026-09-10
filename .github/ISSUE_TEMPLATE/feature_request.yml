@@ -26,6 +26,6 @@ body:
     id: context
     attributes:
       label: Additional context
-      description: Related Octonomy endpoint(s) in `docs/openapi.yaml`, roadmap item, or related issues.
+      description: 'Related Octonomy endpoint(s) in `docs/openapi-v2.yaml` (or `docs/openapi.yaml` for /api/v1), roadmap item, or related issues. Note: the `v1.x` compat line is frozen and takes no features.'
     validations:
       required: false

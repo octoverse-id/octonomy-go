@@ -40,9 +40,54 @@ the **base branch, the PR target, the commit you tag, and the verify command**. 
 > Tags cannot be recalled, and `retract` is inert for a Go 1.13 consumer's toolchain — so the compat
 > line has no second chance. **Check `go.mod`'s module line before you tag** (steps 1 and 7).
 
-**Backporting to the compat line.** A security fix that applies to both lands on `main` first, then is
-cherry-picked onto `support/go1.13` and released as a `v1.x` patch through this same runbook. The
-compat line takes **security fixes only** — no features, no ordinary bug fixes.
+### Three branch roles, and they are not interchangeable
+
+| Role | Shape | Lives for | Version bumps? | Closes an issue? |
+| ---- | ----- | -------- | -------------- | ---------------- |
+| **Support line** | `support/<description>` — `support/go1.13` | Indefinitely; outlives every issue | No | No — exempt from the issue-number rule |
+| **Implementation** | `<type>/<issue>-<description>` — `chore/15-documentation-truth-pass` | One issue | **Never** | Yes — `Closes #<n>` |
+| **Release** | `release/vX.Y.Z` — `release/v1.0.1` | One release | **Only here** | Closes the milestone |
+
+A support line is a *base*, not a unit of work: you branch off it and merge back into it, exactly as
+with `main`. It is the only branch type in this repository that is allowed to exist without an issue
+number, because it tracks a support commitment rather than a task. `version.go` and the CHANGELOG
+heading move in a `release/` PR and nowhere else — that is what keeps `make version-check` meaningful
+and stops two feature PRs from racing the same version number.
+
+### Backporting to the compat line
+
+A security fix that applies to both lands on `main` first, then is cherry-picked onto
+`support/go1.13` and released as a `v1.x` patch through this same runbook. The compat line takes
+**security fixes only** — no features, no ordinary bug fixes.
+
+**Land it on `main` first**, then take its commit onto a branch cut from the support line — not from
+`main`:
+
+```bash
+git switch main && git pull
+git log --oneline -1                      # the merged fix; note its SHA
+
+git switch support/go1.13 && git pull     # branch off the SUPPORT LINE
+git switch -c fix/<issue>-<description>
+git cherry-pick <SHA>
+```
+
+**Expect the cherry-pick to need work, and never resolve a conflict by taking `main`'s side
+wholesale.** The two trees have diverged on purpose: the compat line has no generics, no `any`, no
+post-1.13 standard library, and no v2, namespace, health, or webhook code for a `main` hunk to land
+in. A fix touching `List[T]` has to be rewritten against `TagList` / `VocabularyList`; a fix touching
+code that exists only on `main` needs no backport at all.
+
+**Then open the PR against `support/go1.13`.** The `compat guard` and `go1.13` CI jobs are what prove
+the result actually compiles and tests on the toolchain the line exists for. A modern toolchain
+enforces the *language* version declared in `go.mod` but **not** the standard library, so an
+`io.ReadAll` that rode in on a backported hunk passes `go build`, `go vet`, and staticcheck at
+`go 1.13` and fails only under a real `go1.13`.
+
+**Release it as a `v1.x` patch** through the runbook below with `BASE = support/go1.13`, record the
+backport in **both** CHANGELOGs, and check the sunset date in [versioning.md](versioning.md) and
+[`SECURITY.md`](../SECURITY.md) has not passed — after **2027-08-31** the answer to a compat-line
+advisory is "upgrade", not "patch".
 
 ## Cutting a release
 
@@ -90,6 +135,8 @@ statements. Do that only for a deliberate breaking release — see [versioning.m
 
 ## Server contract changes
 
-If a release targets a new Octonomy server contract, refresh the vendored `docs/openapi.yaml`,
-reconcile types, and update the "targeted server contract" note in [versioning.md](versioning.md) in
-the same release PR.
+If a release targets a new Octonomy server contract, refresh **both** vendored specs —
+`docs/openapi-v2.yaml` (`/api/v2`) and `docs/openapi.yaml` (`/api/v1`) — reconcile types, and update
+the "targeted server contract" note in [versioning.md](versioning.md) in the same release PR. The
+compat line vendors `/api/v1` only, and refreshing it is a feature-shaped change that its
+security-fixes-only policy does not admit.

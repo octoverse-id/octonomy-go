@@ -9,7 +9,14 @@ go build ./...
 make test
 ```
 
-Requires Go 1.24+. There are **no runtime dependencies** — keep `go.mod` free of a runtime `require`
+Requires **Go 1.24+** — the floor for `main`, which is the module
+`github.com/octoverse-id/octonomy-go/v2`. The frozen compat line on `support/go1.13` is the module
+`github.com/octoverse-id/octonomy-go` and targets **Go 1.13**: no generics, no `any`, no post-1.13
+standard library, and it must compile *and test* under a real `go1.13` toolchain. This page describes
+`main`; see [versioning.md](versioning.md) for the two-line policy and [release.md](release.md) for
+the backport step.
+
+There are **no runtime dependencies** on either line — keep `go.mod` free of a runtime `require`
 block.
 
 ## Quality gates
@@ -161,6 +168,8 @@ drift apart on setup. CI reaches it through the `.github/actions/octonomy-harnes
 
 ## Keeping the contract current
 
-`docs/openapi.yaml` is vendored from the Octonomy server. When targeting a new server contract,
-refresh it (regenerate on the server with `make openapi`, copy the file here), reconcile any type
-changes, and note the server version in [versioning.md](versioning.md).
+`docs/openapi-v2.yaml` (`/api/v2`) and `docs/openapi.yaml` (`/api/v1`) are vendored from the Octonomy
+server, both at release **3.1.1**. When targeting a new server contract, refresh **both** (the server
+generates one per `--api-version` with `make openapi`; copy the files here), reconcile any type
+changes, and note the server version in [versioning.md](versioning.md). The drift gate that would
+catch a stale copy automatically is [#18](https://github.com/octoverse-id/octonomy-go/issues/18).
