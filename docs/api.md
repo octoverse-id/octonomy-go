@@ -470,7 +470,13 @@ wire column is what the server actually sends.
 | Error | `{"error": {"code", "message", "details", "request_id"}}` | `*APIError` |
 | Health probe | `{"status": "ok"}` — **no envelope** | `*HealthStatus` ([above](#health-probes)) |
 
-`Pagination` carries `limit`, `offset`, `count`, `next`, and `previous`.
+`Pagination` carries `limit`, `offset`, `count`, `next`, and `previous`. `count` is the **total**
+across all pages, not the size of this one; `next` is nil exactly on the last page; and the server
+echoes back the `offset` and the **clamped** `limit` it actually served (ask for 500 and you get
+200). `octonomy.Each` depends on all three: it advances by what arrived rather than by what it asked
+for, stops on `next == nil` or an empty page, and refuses to continue if the echoed offset is not the
+one it requested — which is how a page function that drops its `ListOptions` is caught instead of
+looped on forever.
 
 A 2xx whose body does not match the shape above is an **error**, never a zero value. Decoding a
 wrapped body straight into a `*Tag` yields an empty struct with a nil error, and an unexpected list

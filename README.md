@@ -232,6 +232,59 @@ page, err := client.Tags.List(ctx, &octonomy.TagListParams{
 fmt.Println(len(page.Data), "of", page.Pagination.Count)
 ```
 
+### Walking every page
+
+`octonomy.Each` is the offset loop, written once. **It issues one request per page** — the name and
+this sentence are the whole mitigation for a single call making N round trips, so raise `Limit` (the
+server caps it at 200) when the collection is large:
+
+```go
+offset, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 200},
+	func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Tag], error) {
+		return client.Tags.List(ctx, &octonomy.TagListParams{ListOptions: o, Type: octonomy.String("label")})
+	},
+	func(tag octonomy.Tag) error {
+		fmt.Println(tag.Slug)
+		return nil
+	},
+)
+```
+
+The page function **must pass through** the `ListOptions` it is handed — that is what advances the
+walk. Dropping them is refused rather than looped on.
+
+The returned `offset` is the first item **not** processed, so a failure is resumable: pass it back as
+`ListOptions{Offset: offset}` and the walk picks up where it stopped. A walk that dies on page 40 of
+100 keeps 39 pages of progress.
+
+**Offset drift is real and no client can fix it.** The server pages by limit/offset over a
+`(name, slug, id)` ordering with no cursor, so a concurrent create or delete shifts the window and an
+item can be delivered twice or missed entirely. Narrow the walk with a filter that does not change
+while it runs, de-duplicate on ID if double delivery matters, and see the `Each` doc comment for why
+the missed half cannot be detected client-side.
+
+## Typed metadata
+
+`Metadata` is `map[string]any`, so reading a field means a type assertion that panics when the stored
+shape changes. `octonomy.DecodeMetadata` turns that into an error:
+
+```go
+type shipping struct {
+	Carrier  string `json:"carrier"`
+	Priority int    `json:"priority"`
+}
+cfg, err := octonomy.DecodeMetadata[shipping](tag.Metadata)
+```
+
+It is a function rather than a method because `Metadata` is a type **alias** and Go does not allow
+methods on aliases. A nil map yields the zero value and no error; any error yields the zero value
+rather than a half-filled struct.
+
+**Integers above 2^53 are already rounded before this runs.** The response decodes into
+`map[string]any`, where every JSON number is a `float64`, so the precision is gone before
+`DecodeMetadata` sees it and no decoder can recover it. Store large ids and amounts as **strings** in
+metadata and parse them on the way out.
+
 ## Implemented resources
 
 | Resource | Status |

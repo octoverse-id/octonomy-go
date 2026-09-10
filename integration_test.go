@@ -256,6 +256,89 @@ func TestSmoke_RealServer(t *testing.T) {
 		t.Errorf("Vocabularies.List returned %d rows, none of them the created %s", len(vocabs.Data), vocab.ID)
 	}
 
+	// 5b. Each over a real multi-page collection (#14). The unit tests drive it
+	// against a fixture that reproduces what this file believes DRF's
+	// LimitOffsetPagination does -- count is the total rather than the page
+	// size, next goes nil at the end, and the offset is echoed back. Every one
+	// of those beliefs is load-bearing (the echo is what the walker's
+	// dropped-options guard keys on), and a fixture asserting them proves only
+	// that the fixture and the walker agree. This walks a real server.
+	//
+	// Three tags sharing a freshly minted type, walked one per page, so the set
+	// is pinned regardless of what else the harness already holds and the walk
+	// is genuinely multi-page rather than one page called three times.
+	walkType := uniqueSlug("smoke-walk")
+	wantIDs := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		slug := uniqueSlug(fmt.Sprintf("smoke-walk-%d", i))
+		created, err := client.Tags.Create(ctx, octonomy.TagCreate{
+			Name: fmt.Sprintf("walk %d", i), Slug: slug, Type: walkType,
+		})
+		if err != nil {
+			t.Fatalf("Tags.Create for the walk: %v", err)
+		}
+		wantIDs[created.ID] = true
+		id := created.ID
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cleanupCancel()
+			if err := client.Tags.Delete(cleanupCtx, id); err != nil {
+				t.Errorf("Tags.Delete for the walk: %v", err)
+			}
+		})
+	}
+
+	pages := 0
+	visits := map[string]int{}
+	offset, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 1},
+		func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Tag], error) {
+			pages++
+			return client.Tags.List(ctx, &octonomy.TagListParams{
+				ListOptions: o,
+				Type:        octonomy.String(walkType),
+			})
+		},
+		func(walked octonomy.Tag) error {
+			visits[walked.ID]++
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("Each over a real collection: %v", err)
+	}
+	if offset != 3 {
+		t.Errorf("Each returned offset %d, want 3 (one past the last item)", offset)
+	}
+	// Exactly once each: neither a skipped row nor a redelivered one.
+	if len(visits) != len(wantIDs) {
+		t.Errorf("walked %d distinct tags, want %d", len(visits), len(wantIDs))
+	}
+	for id := range wantIDs {
+		if visits[id] != 1 {
+			t.Errorf("tag %s visited %d times, want exactly 1", id, visits[id])
+		}
+	}
+	// One request per page, as the doc comment promises. Three items at one per
+	// page is three pages -- a fourth would mean the walker only stops on an
+	// empty page and never reads the server's own end-of-collection signal.
+	if pages != 3 {
+		t.Errorf("Each made %d requests for 3 items at Limit 1, want 3", pages)
+	}
+
+	// DecodeMetadata against metadata the SERVER stored and returned, rather
+	// than a map this test just built (#14). The tag from step 3 carries
+	// {"source": "v2-smoke"}, and it reaches here having survived a real encode,
+	// a real round trip, and a real decode into map[string]any.
+	type smokeMeta struct {
+		Source string `json:"source"`
+	}
+	decoded, err := octonomy.DecodeMetadata[smokeMeta](tag.Metadata)
+	if err != nil {
+		t.Fatalf("DecodeMetadata on server-returned metadata: %v", err)
+	}
+	if decoded.Source != "v2-smoke" {
+		t.Errorf("DecodeMetadata gave Source = %q, want v2-smoke", decoded.Source)
+	}
+
 	// 6. A real error envelope from the real server, not a canned httptest body.
 	_, err = client.Tags.Get(ctx, "00000000-0000-0000-0000-000000000000")
 	if err == nil {

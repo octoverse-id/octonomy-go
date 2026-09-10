@@ -122,6 +122,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **No `Scope` field was added to `TagListParams`.** The parameter belongs to `/tag-resolution` on
   both surfaces and appears exactly once per spec; the tags list route has none.
+- **`Each` pagination walker and `DecodeMetadata` typed metadata**
+  ([#14](https://github.com/octoverse-id/octonomy-go/issues/14)). Both are generic, so both belong to
+  the modern line only — the frozen `v1.x` compat line has no generics and gets neither.
+
+  `Each(ctx, start, page, fn)` is the offset loop everyone was writing by hand, with the termination
+  condition they were getting wrong. **It issues one HTTP request per page**, which is stated in the
+  doc comment, in the README, and in `doc.go`, because one call making N round trips is in real
+  tension with this package's no-hidden-behavior promise and naming plus documentation is the whole
+  mitigation. It advances by the number of items that **arrived**, not by the `Limit` requested — the
+  server silently clamps `Limit` to 200, so a walk at `Limit: 500` that trusted its own arithmetic
+  would skip three items in every five. It stops on the server's `next == nil` *and* on an empty
+  page, the second being what guarantees termination when the first is wrong.
+
+  It returns **the offset of the first item it did not process**, which is exactly the offset to
+  resume from: the page start on a fetch failure, the failing item on a callback failure — so a
+  resume redelivers that item rather than stepping over it. A walk that dies on page 40 of 100 keeps
+  39 pages of progress.
+
+  The page function must pass through the `ListOptions` it is handed. Dropping them is the one misuse
+  that still compiles, and it would re-fetch page one forever; `Each` detects it from the offset the
+  server echoes and returns an error naming it instead of looping.
+
+  **Offset drift is documented, not papered over.** The server pages by limit/offset over a
+  `(name, slug, id)` ordering with no cursor, so a concurrent create or delete shifts the window and
+  an item can be delivered twice or skipped. That is not fixable client-side — re-reading a page
+  cannot tell a shifted window from a changed one — so the doc comment says so and recommends
+  narrowing the walk and de-duplicating on ID, rather than de-duplicating internally and calling it
+  exactness.
+
+  `DecodeMetadata[T](m)` decodes a resource's `Metadata` into the caller's own struct. It is a
+  **function, not a method**: `Metadata` is a type *alias* for `map[string]any` and Go does not allow
+  methods on aliases, while promoting it to a defined type would break every caller passing a plain
+  map. A nil map yields the zero value and no error; on any error the **zero** value comes back, never
+  the half-filled struct `encoding/json` leaves behind when it hits a type mismatch mid-decode.
+
+  **The large-integer caveat is narrower than it looks, and the usual advice does not apply.** The
+  precision is lost when the *response* is decoded into `map[string]any`, where every JSON number
+  becomes a `float64` — before `DecodeMetadata` is ever called, and beyond its power to recover.
+  "Decode the raw JSON yourself" is not an option, because this SDK exposes no raw-response hook. So
+  the workaround is on the writing side: store values that outgrow 2^53 as **strings** and parse them
+  out. Values within 2^53 round-trip exactly. A test walks the real path — raw JSON to `Metadata` to
+  struct — and pins both the loss at 2^53+1 and the string workaround.
+
+  Both are asserted against a real server in `integration_test.go` as well as against fixtures. The
+  fixture reproduces what this SDK believes the server's pagination does — `count` is the total,
+  `next` goes nil at the end, `limit` is clamped and echoed, `offset` is echoed — and every one of
+  those beliefs is load-bearing, so a fixture agreeing with the walker proves only that they agree.
+  All four were verified against a running 3.1.0 container.
 
 ### Changed
 - `docs/roadmap.md` is re-derived from `openapi-v2.yaml` rather than edited. It had been written

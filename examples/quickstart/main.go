@@ -1,5 +1,6 @@
 // Command quickstart demonstrates the Octonomy Go SDK end to end: configure a
-// client, create a vocabulary and a tag, list tags, and handle a typed error.
+// client, create a vocabulary and a tag, list tags, walk every page, decode
+// typed metadata, and handle a typed error.
 //
 // Run it against a local Octonomy instance:
 //
@@ -71,6 +72,38 @@ func main() {
 		log.Fatalf("list tags: %v", err)
 	}
 	fmt.Printf("tenant has %d label tag(s) on this page\n", len(page.Data))
+
+	// Each is that same list call in a loop, for when one page is not enough.
+	// It costs ONE REQUEST PER PAGE -- 20 at a time here -- and hands back the
+	// offset it reached so a failure can resume instead of starting over.
+	walked := 0
+	offset, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 20},
+		func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Tag], error) {
+			return client.Tags.List(ctx, &octonomy.TagListParams{
+				Type:        octonomy.String("label"),
+				ListOptions: o,
+			})
+		},
+		func(octonomy.Tag) error {
+			walked++
+			return nil
+		},
+	)
+	if err != nil {
+		log.Fatalf("walk tags: %v (resume from offset %d)", err, offset)
+	}
+	fmt.Printf("walked %d label tag(s) across every page\n", walked)
+
+	// Metadata is map[string]any. DecodeMetadata reads it into a struct without
+	// the type assertion that would panic when the stored shape changes.
+	type tagMeta struct {
+		Team string `json:"team"`
+	}
+	meta, err := octonomy.DecodeMetadata[tagMeta](tag.Metadata)
+	if err != nil {
+		log.Fatalf("decode tag metadata: %v", err)
+	}
+	fmt.Printf("tag metadata team=%q\n", meta.Team)
 }
 
 func env(key, fallback string) string {

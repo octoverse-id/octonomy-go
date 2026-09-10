@@ -172,4 +172,18 @@
 // List methods return a *List[T] holding the Data slice and Pagination metadata
 // (limit, offset, count, next, previous). Page with ListOptions on each resource's
 // *ListParams.
+//
+// Each walks every page for you. It issues ONE REQUEST PER PAGE -- said plainly
+// because this package promises no hidden behavior -- and returns the offset of
+// the first item it did not process, so a failed walk resumes instead of
+// starting over. Its doc comment covers the offset drift that limit/offset
+// paging cannot avoid.
+//
+// # Typed metadata
+//
+// DecodeMetadata decodes a resource's Metadata into a struct of the caller's own
+// shape, replacing the type assertion that would otherwise panic when the stored
+// shape changes. It is a function rather than a method because Metadata is a
+// type alias. Integers above 2^53 are already rounded by the time Metadata
+// exists; see its doc comment.
 package octonomy
