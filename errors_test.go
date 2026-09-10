@@ -129,8 +129,8 @@ func TestParseError_Enveloped503IsDistinguishableFromABare503(t *testing.T) {
 }
 
 // Codes the SDK has no constant for are preserved verbatim rather than
-// flattened -- #6 adds scope_immutable, and a server ahead of this SDK will send
-// others.
+// flattened -- scope_immutable arrived this way before #6 named it, and a server
+// ahead of this SDK will send others.
 func TestParseError_PreservesAnUnknownEnvelopeCode(t *testing.T) {
 	c := newVersionedTestClient(t, APIV2, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, http.StatusConflict, map[string]any{
@@ -219,6 +219,7 @@ func TestErrorHelpers_MatchOnlyTheirOwnCode(t *testing.T) {
 		{CodeTenantMismatch, IsTenantMismatch},
 		{CodeApplicationMismatch, IsApplicationMismatch},
 		{CodeInactiveTag, IsInactiveTag},
+		{CodeScopeImmutable, IsScopeImmutable},
 		{CodeNamespaceNotSupported, IsNamespaceNotSupported},
 		{CodeNamespaceInvalid, IsNamespaceInvalid},
 		{CodeNamespacedWritesDisabled, IsNamespacedWritesDisabled},
@@ -391,5 +392,91 @@ func TestDoRaw_Oversized2xxStaysAPlainReadError(t *testing.T) {
 	}
 	if apiErr, ok := AsAPIError(err); ok {
 		t.Errorf("a 2xx read failure became an *APIError (%v); there is no status classification to preserve", apiErr)
+	}
+}
+
+// --- scope_immutable ------------------------------------------------------
+
+// The refreshed contract documents 409 scope_immutable on exactly three
+// operations per surface -- the detail PATCH for tags, vocabularies, and tag
+// aliases -- so one helper has to hold across six call sites. The test walks all
+// of them rather than picking one, and pins the three properties a caller
+// depends on: the helper matches, the code survives, and the 409 does NOT read
+// as a plain conflict. That last one is the whole reason the constant exists:
+// the server raises scope_immutable as a subclass of its conflict error, so a
+// caller branching on IsConflict would retry a request that can never succeed.
+func TestIsScopeImmutable_OnEveryDocumentedPatch(t *testing.T) {
+	// details mirrors the server's shape: the changed scope fields, each mapped
+	// to its own message. A caller reports which axis it tried to move from it.
+	details := map[string]any{
+		"application_id": []any{"This field is immutable; re-create the row in the target scope."},
+	}
+
+	routes := []struct {
+		name string
+		path string
+		call func(*Client) error
+	}{
+		{"tags", "/tags/tag_1", func(c *Client) error {
+			_, err := c.Tags.Update(context.Background(), "tag_1", TagUpdate{ApplicationID: String("other")})
+			return err
+		}},
+		{"vocabularies", "/vocabularies/voc_1", func(c *Client) error {
+			_, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{ApplicationID: String("other")})
+			return err
+		}},
+		{"tag-aliases", "/tag-aliases/alias_1", func(c *Client) error {
+			_, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{ApplicationID: String("other")})
+			return err
+		}},
+	}
+
+	// Both surfaces document it. /api/v1 has no namespace axis, so only
+	// application_id can trigger it there -- which is what the payloads above
+	// change, keeping one fixture valid for both.
+	for _, version := range []APIVersion{APIV1, APIV2} {
+		for _, route := range routes {
+			t.Run(string(version)+" "+route.name, func(t *testing.T) {
+				wantPath := "/api/" + string(version) + route.path
+				c := newVersionedTestClient(t, version, func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != http.MethodPatch || r.URL.Path != wantPath {
+						t.Errorf("got %s %s, want PATCH %s", r.Method, r.URL.Path, wantPath)
+					}
+					writeJSON(t, w, http.StatusConflict, map[string]any{
+						"error": map[string]any{
+							"code":    CodeScopeImmutable,
+							"message": "A row's application and namespace scope cannot be changed after creation.",
+							"details": details,
+						},
+					})
+				})
+
+				err := route.call(c)
+				apiErr, ok := AsAPIError(err)
+				if !ok {
+					t.Fatalf("expected *APIError, got %v", err)
+				}
+				if !IsScopeImmutable(err) {
+					t.Errorf("IsScopeImmutable = false for %+v", apiErr)
+				}
+				if apiErr.StatusCode != http.StatusConflict {
+					t.Errorf("StatusCode = %d, want 409", apiErr.StatusCode)
+				}
+				if apiErr.Code != CodeScopeImmutable {
+					t.Errorf("Code = %q, want %q", apiErr.Code, CodeScopeImmutable)
+				}
+				if IsConflict(err) {
+					t.Error("scope_immutable must not read as a plain conflict")
+				}
+				if IsUnexpectedStatus(err) {
+					t.Error("an enveloped 409 must not read as envelope-less")
+				}
+				if got, ok := apiErr.Details["application_id"]; !ok {
+					t.Errorf("Details lost the offending field: %#v", apiErr.Details)
+				} else if len(got.([]any)) != 1 {
+					t.Errorf("Details[application_id] = %#v, want the server's one message", got)
+				}
+			})
+		}
 	}
 }

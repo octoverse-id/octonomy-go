@@ -11,11 +11,11 @@ import (
 // names the tenant-shared namespace explicitly, while as an X-Namespace-Type it
 // is reserved and rejected (see WithNamespace).
 //
-// It is sent on BOTH surfaces, and the vendored docs/openapi.yaml will suggest
-// otherwise: that file is pinned at server 1.0.0, which predates the parameter.
-// The running server carries it on /api/v1 too -- probed against 3.1.0, where
-// GET /api/v1/tag-resolution validates it by name rather than ignoring it -- so
-// the stale spec loses to the server, as it does for the response envelopes.
+// It is sent on BOTH surfaces, and docs/openapi.yaml now documents it on
+// /api/v1/tag-resolution as well. It suggested otherwise only while that file
+// was pinned at server 1.0.0, which predates the parameter; sending it on v1 was
+// already right then -- probed against 3.1.0, GET /api/v1/tag-resolution
+// validates it by name rather than ignoring it -- and the 3.1.1 refresh says so.
 // Gating this to APIV2 would refuse a call every current deployment answers, and
 // the SDK has no version handshake with which to tell an old v1 server from a
 // current one. Against a server predating the parameter it is dropped like any

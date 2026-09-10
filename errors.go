@@ -16,6 +16,7 @@ const (
 	CodeTenantMismatch      = "tenant_mismatch"
 	CodeApplicationMismatch = "application_mismatch"
 	CodeInactiveTag         = "inactive_tag"
+	CodeScopeImmutable      = "scope_immutable"
 
 	// Namespace codes. Every one of these is reachable only on /api/v2 (see
 	// APIVersion); v1 has no namespace axis.
@@ -137,6 +138,31 @@ func IsApplicationMismatch(err error) bool { return hasCode(err, CodeApplication
 // IsInactiveTag reports whether err is an inactive_tag error. Octonomy deletes
 // tags by deactivating them, and an inactive tag cannot be assigned.
 func IsInactiveTag(err error) bool { return hasCode(err, CodeInactiveTag) }
+
+// IsScopeImmutable reports whether err is a scope_immutable error (409): a PATCH
+// tried to change a row's scope -- application_id, namespace_type, or
+// namespace_id.
+//
+// REMEDIATION IS TO RE-CREATE, NOT TO RETRY. Scope is fixed at creation. Moving
+// a row between scopes would orphan the assignments, child tags, aliases, and
+// vocabulary references attached to it under the old scope, and could hand
+// merchant-private data to a different merchant, so the server refuses the move
+// outright rather than cascading it. Create the row in the target scope and
+// delete the original; no payload adjustment makes the PATCH succeed.
+//
+// APIError.Details names the offending fields, each mapped to its own message,
+// so a caller can report which part of the scope it tried to move.
+//
+// IsConflict reports FALSE for it. The server raises it as a subclass of its
+// conflict error, so it carries 409, but the envelope's code is
+// scope_immutable rather than conflict -- a caller that branches on IsConflict
+// for "duplicate slug, pick another" must branch on this first, or it will
+// retry a request that can never succeed.
+//
+// It is reachable on BOTH surfaces. /api/v1 has no namespace axis, so only
+// application_id can trigger it there; /api/v2 can trigger it on any of the
+// three.
+func IsScopeImmutable(err error) bool { return hasCode(err, CodeScopeImmutable) }
 
 // IsNamespaceNotSupported reports whether err is a namespace_not_supported
 // error: namespace headers were sent to /api/v1, which is global-only.

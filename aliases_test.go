@@ -292,16 +292,16 @@ func TestAliases_Update(t *testing.T) {
 	}
 }
 
-// scope_immutable has no constant in this package yet, which is exactly what
-// makes it worth a test: parseError preserves whatever code the envelope carries,
-// so a caller can branch on APIError.Code today. IsConflict is deliberately false
-// -- it keys on "conflict", and reading a scope change as a duplicate slug would
-// send a caller down a retry path that cannot work.
+// IsConflict is deliberately false for scope_immutable -- it keys on "conflict",
+// and reading a fixed-scope refusal as a duplicate slug would send a caller down
+// a retry path that cannot work. The helper is exercised across all three PATCH
+// routes in TestIsScopeImmutable_OnEveryDocumentedPatch; this keeps the
+// alias-specific call site covered from the resource's own suite.
 func TestAliases_UpdateScopeImmutable(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, http.StatusConflict, map[string]any{
 			"error": map[string]any{
-				"code":    "scope_immutable",
+				"code":    CodeScopeImmutable,
 				"message": "Scope is fixed at creation.",
 			},
 		})
@@ -312,8 +312,11 @@ func TestAliases_UpdateScopeImmutable(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *APIError, got %v", err)
 	}
-	if apiErr.Code != "scope_immutable" || apiErr.StatusCode != http.StatusConflict {
+	if apiErr.Code != CodeScopeImmutable || apiErr.StatusCode != http.StatusConflict {
 		t.Errorf("unexpected error: %+v", apiErr)
+	}
+	if !IsScopeImmutable(err) {
+		t.Error("IsScopeImmutable did not match a scope_immutable envelope")
 	}
 	if IsConflict(err) {
 		t.Error("scope_immutable must not read as a plain conflict")

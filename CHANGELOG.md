@@ -94,6 +94,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server-side, landing in the audit row as mojibake; and outer whitespace is silently trimmed by
   `net/http` while writing the header, so `" req-abc "` would be recorded as `"req-abc"`.
 - `docs/openapi-v2.yaml`, vendored from server 3.1.1.
+- **`CodeScopeImmutable` / `IsScopeImmutable`, and `docs/openapi.yaml` re-vendored from server
+  3.1.1** ([#6](https://github.com/octoverse-id/octonomy-go/issues/6)). The v1 spec had been pinned
+  at server `1.0.0`; both vendored specs now track the same server release. The v1 contract itself
+  moved by 53 lines: a documented `409 scope_immutable` on the detail `PATCH` for tags,
+  vocabularies, and tag aliases; the `scope` query parameter on `/tag-resolution`, which
+  `Tags.Resolve` was already sending against a running server; an `ErrorResponse` schema component;
+  and `default: true` on `is_active` in the `Tag`, `TagAlias`, and `Vocabulary` response schemas,
+  which records a default the server always applied and needs no SDK change.
+
+  `IsScopeImmutable` is convenience, not a fix: `parseError` already preserved the code verbatim, so
+  `APIError.Code == "scope_immutable"` worked before this. What it adds is a name for the one
+  branch a caller must not get wrong — the server raises it as a subclass of its conflict error, so
+  it carries `409` while its code is **not** `conflict`, and `IsConflict` reports false for it.
+  Scope is fixed at creation; the remediation is to re-create the row in the target scope, never to
+  retry. `APIError.Details` names the offending fields. Reachable on both surfaces — `/api/v1` has
+  no namespace axis, so only `application_id` can trigger it there.
+
+  **No `Scope` field was added to `TagListParams`.** The parameter belongs to `/tag-resolution` on
+  both surfaces and appears exactly once per spec; the tags list route has none.
 
 ### Changed
 - `docs/roadmap.md` is re-derived from `openapi-v2.yaml` rather than edited. It had been written
@@ -158,10 +177,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `client.Tags.ListAliases` for `GET /tags/{tag_id}/aliases`. `TagAlias` carries `NamespaceType` /
   `NamespaceID` (decode-only), which makes it the third of the seven v2 schemas that do.
 - `TagAliasUpdate.TagID` re-points an alias at a different tag. That is a normal edit, not the scope
-  change `PATCH` refuses: moving the alias itself between scopes is a `409` carrying the code
-  `scope_immutable`, which reaches callers verbatim as `APIError.Code` and deliberately does **not**
-  satisfy `IsConflict` — reading a fixed-scope refusal as a duplicate slug would send a caller down a
-  retry path that cannot work.
+  change `PATCH` refuses: moving the alias itself between scopes is a `409 scope_immutable`
+  (`IsScopeImmutable`), which deliberately does **not** satisfy `IsConflict` — reading a fixed-scope
+  refusal as a duplicate slug would send a caller down a retry path that cannot work.
 - `TagAliasListParams` exposes the full documented filter set for the collection route
   (`application_id`, `include_shared`, `is_active`, `q` as `Query`, `slug`, `tag_id`, plus paging).
   `TagListAliasesParams` is a separate, narrower type for the nested route, which the contract

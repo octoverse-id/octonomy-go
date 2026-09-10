@@ -115,6 +115,12 @@
 // envelope (Code, Message, Details, RequestID) plus the HTTP StatusCode. Use the
 // IsNotFound, IsConflict, and IsValidation helpers to branch on common cases.
 //
+// The helpers match on code, never on status, so a 409 is not automatically an
+// IsConflict: a PATCH that tries to move a row between application or namespace
+// scopes answers 409 scope_immutable, which IsScopeImmutable matches and
+// IsConflict does not. Scope is fixed at creation -- re-create the row in the
+// target scope rather than retrying.
+//
 // A non-2xx that arrives WITHOUT that envelope did not come from Octonomy's
 // application layer -- a proxy, a load balancer, a server with no route for the
 // requested API version -- and carries CodeUnexpectedStatus rather than a code

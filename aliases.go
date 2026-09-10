@@ -66,8 +66,8 @@ type TagAliasCreate struct {
 //
 // TagID re-points the alias at a different tag; the new target must satisfy the
 // same compatibility rules a create does. ApplicationID is present because the
-// server's patch schema carries it, but changing it is a 409 scope_immutable --
-// see AliasService.Update.
+// server's patch schema carries it, but changing it is a 409 scope_immutable
+// (IsScopeImmutable) -- see AliasService.Update.
 type TagAliasUpdate struct {
 	ApplicationID *string `json:"application_id,omitempty"`
 	TagID         *string `json:"tag_id,omitempty"`
@@ -198,11 +198,10 @@ func (s *AliasService) List(ctx context.Context, params *TagAliasListParams, opt
 // Update partially updates an alias (PATCH /tag-aliases/{id}).
 //
 // Scope is fixed at creation: a body that changes ApplicationID, or the namespace
-// the row already holds, is refused with a 409 carrying the code scope_immutable
-// (read it from APIError.Code -- a code the server sends is preserved verbatim
-// whether or not this SDK names it). Re-create the alias in the target scope
-// instead. Re-pointing the alias to a different tag through TagID is not a scope
-// change and is allowed, subject to the same target rules as Create.
+// the row already holds, is refused with a 409 that IsScopeImmutable matches.
+// Re-create the alias in the target scope instead. Re-pointing the alias to a
+// different tag through TagID is not a scope change and is allowed, subject to
+// the same target rules as Create.
 func (s *AliasService) Update(ctx context.Context, id string, in TagAliasUpdate, opts ...RequestOption) (*TagAlias, error) {
 	return doData[TagAlias](ctx, s.client, http.MethodPatch, "/tag-aliases/"+url.PathEscape(id), nil, in, opts...)
 }

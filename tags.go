@@ -134,6 +134,10 @@ func (s *TagService) List(ctx context.Context, params *TagListParams, opts ...Re
 }
 
 // Update partially updates a tag (PATCH /tags/{id}).
+//
+// Scope is fixed at creation: a body that changes ApplicationID, or the namespace
+// the row already holds, is refused with a 409 that IsScopeImmutable matches.
+// Re-create the tag in the target scope instead.
 func (s *TagService) Update(ctx context.Context, id string, in TagUpdate, opts ...RequestOption) (*Tag, error) {
 	return doData[Tag](ctx, s.client, http.MethodPatch, "/tags/"+url.PathEscape(id), nil, in, opts...)
 }
