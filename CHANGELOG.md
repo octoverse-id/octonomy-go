@@ -551,16 +551,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/architecture.md`. Since `AGENTS.md` forbids logging in the library, a `RoundTripper` on the
   caller's `*http.Client` is the sanctioned path for metrics, tracing, request logging, retries, and
   rate limiting — and it pairs with `WithRequestID` to join a client span to the server's audit row.
-- **`MaxIdleConnsPerHost` is documented as the first scaling bottleneck, and deliberately not
-  tuned.** An `*http.Client` with no `Transport` uses `http.DefaultTransport`, which leaves the field
-  unset and so falls back to `http.DefaultMaxIdleConnsPerHost` — **2**. Against a single host that
-  means every **concurrent** call past the second opens and discards its own connection instead of
-  pooling it. It caps pooled connections rather than in-flight ones, so nothing blocks and sequential
-  work never meets it — `Each` issues its pages one at a time and reuses one connection — but a
-  fan-out across goroutines sharing one `*Client` hits it well before the server is the constraint.
-  Raising it silently would be a capacity decision taken inside the caller's process, so the README
-  shows the `http.DefaultTransport.Clone()` recipe instead (a bare `&http.Transport{}` drops the
-  proxy, dialer, and HTTP/2 settings).
+- **`MaxIdleConnsPerHost` is documented as the first scaling bottleneck *on HTTP/1.1*, and
+  deliberately not tuned.** `http.DefaultTransport` sets `ForceAttemptHTTP2`, so against an HTTPS
+  endpoint that negotiates h2 every request multiplexes over one connection and none of this applies
+  — the docs say so first, because advice given without that qualifier sends readers tuning something
+  inert. Where the connection really is HTTP/1.1, `DefaultTransport` leaves the field unset and it
+  falls back to `http.DefaultMaxIdleConnsPerHost` — **2** — so every **concurrent** call past the
+  second opens and discards its own connection instead of pooling it. It caps pooled connections
+  rather than in-flight ones, so nothing blocks and sequential work never meets it on either protocol
+  (`Each` issues its pages one at a time and reuses one connection); a fan-out across goroutines
+  sharing one `*Client` is what hits it. Raising it silently would be a capacity decision taken inside
+  the caller's process, so the README shows the `http.DefaultTransport.Clone()` recipe instead (a bare
+  `&http.Transport{}` drops the proxy, dialer, and HTTP/2 settings). The pool belongs to the
+  **transport**, not the client, which is what makes sharing one `*Client` the simple correct default.
+- **"Never retries" is stated accurately as "adds no retry loop."** `net/http`'s own transport already
+  retries a request it failed to write on a *reused* connection; that is recovery from a half-closed
+  idle socket rather than a retry policy, and the previous absolute wording would have misled anyone
+  reasoning about idempotency.
+- **`version.go` trailing the published tags is disclosed rather than left to surprise.** The
+  `Version` constant on `main` still reads `0.1.0` — so the default User-Agent is `octonomy-go/0.1.0`
+  — because `version.go` is bumped only in the release PR. `docs/versioning.md` now says to read the
+  git tag for what is published and `version.go` for what the next release PR will bump. The claim
+  that no `v0.x` was ever published is now backed by a re-runnable `proxy.golang.org` query rather
+  than by assertion.
+- **`docs/development.md` no longer calls the integration suite "six assertions."** It has grown into
+  a 1,235-line ordered walk covering both envelopes, pagination and `Each`, `DecodeMetadata`,
+  `409 scope_immutable`, the namespace axis, aliases, resolution, both bulk composites, the
+  resource-tag replace, audit rows, and request-id correlation.
+- **The "two response envelopes" framing is corrected where it implied a closed set.**
+  `docs/architecture.md` said the envelopes *are* the deliberate divergences; the two bulk-assignment
+  responses and the resource-tag replace are three more, and `docs/api.md` — which carries the
+  complete list — is now what it points to. `docs/api.md` also no longer says the server wraps
+  *every* payload under `data`: the health probes answer with a bare `{"status": "ok"}`, as the same
+  page says further down, and its request-header table was missing `X-Request-ID` entirely.
+- **`docs/release.md`** no longer says `go get` resolves tags "directly from GitHub" — the default
+  path is `proxy.golang.org`, whose permanent cache is precisely why a tag cannot be unpublished —
+  and it now distinguishes what the two compat checks actually do: `go1.13` builds, vets, and runs
+  `go test -race` under a real toolchain, while `compat guard` never compiles the package and asserts
+  the `go.mod` invariants.
 - The bug-report template asked for a version "e.g. `v0.1.0`", which was never released, and did not
   ask which of the two modules the reporter imports — the first thing triage needs. Both fixed. The
   PR template now checks the base branch against the line and the no-version-bump rule, and both

@@ -7,10 +7,14 @@ parameters, and field names; this page is the client-side view.
 - [`openapi.yaml`](openapi.yaml) — `/api/v1`, server **3.1.1**. Both specs now track the same server
   release.
 
-**One exception, and it is load-bearing: the vendored spec is wrong about response envelopes.** The
-server wraps every payload under `data` — lists as `{"data": [...], "pagination": {...}}` and single
-resources as `{"data": {...}}` — and the generated spec documents neither. Where the two disagree the
-running server wins. See [Responses](#responses).
+**One exception, and it is load-bearing: the vendored spec is wrong about response envelopes.** On
+the versioned API surface the server wraps every payload under `data` — lists as
+`{"data": [...], "pagination": {...}}` and single resources as `{"data": {...}}` — and the generated
+spec documents neither. Where the two disagree the running server wins. See
+[Responses](#responses).
+
+**The health probes are outside that rule**, as they are outside `/api/<version>` itself: they answer
+with a bare `{"status": "ok"}` and no envelope at all. See [Health probes](#health-probes).
 
 ## Base URL and headers
 
@@ -38,6 +42,7 @@ The client targets `Config.BaseURL + /api/<version>`, where the version comes fr
 | `Content-Type: application/json` | requests with a body | — |
 | `User-Agent` | `Config.UserAgent` (default `octonomy-go/<version>`) | — |
 | `X-Namespace-Type` / `X-Namespace-ID` | `WithNamespace(...)` | no — **v2 only**, all-or-nothing |
+| `X-Request-ID` | `WithRequestID(...)` | no — sent **only** when you supply one; the server mints `req_<uuid>` otherwise |
 
 **The health probes carry none of it.** `/health/live` and `/health/ready` sit at the server root,
 outside `/api/<version>`, and authenticate nobody, so the SDK sends them no `Authorization`, no

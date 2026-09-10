@@ -55,22 +55,25 @@ turns each of those into an error ([#32](https://github.com/octoverse-id/octonom
 - **Contract reference:** `docs/openapi-v2.yaml` (`/api/v2`, the default surface) and
   `docs/openapi.yaml` (`/api/v1`) are vendored from the server, both at release 3.1.1. Types mirror
   them field-for-field; read the **v2** spec when adding a resource, since v1's schemas have no
-  namespace fields. The deliberate divergences are the **two response envelopes** the generated spec
-  omits: the server wraps lists in `{data, pagination}` (`octonomy/core/pagination.py` upstream) and
-  single resources in `{data}` (`octonomy/core/responses.py`, present since the server's first
-  commit). The spec shows a bare array and a bare object respectively. The SDK follows the server;
-  both divergences are noted in code. Only the list half was known before #32 — the other was found
-  by running against a real container, which is now `make smoke`.
+  namespace fields. Where they disagree with the running server, the server wins and the SDK follows
+  it. The divergences **begin** with the two response envelopes the generated spec omits — the server
+  wraps lists in `{data, pagination}` (`octonomy/core/pagination.py` upstream) and single resources in
+  `{data}` (`octonomy/core/responses.py`, present since the server's first commit), where the spec
+  shows a bare array and a bare object — but they do not end there: the two bulk-assignment responses
+  and the resource-tag replace are composites the spec describes wrongly or not at all.
+  **[`api.md`](api.md) carries the complete list**; each is also noted in code. Only the list envelope
+  was known before #32 — the rest were found by running against a real container, which is now
+  `make smoke`.
 - **Pointers for optionality:** nullable server fields decode into `*string`; write structs use
   pointers + `omitempty` so PATCH only sends what the caller set.
-- **No hidden behavior:** the client never retries, panics, logs, or mutates global state. Retries,
-  timeouts, and transport tuning are the caller's `*http.Client`. That makes an
-  **`http.RoundTripper`** the sanctioned extension point for metrics, tracing, and request logging —
-  it sees the assembled request and the raw response — and it is why the SDK leaves
-  `http.DefaultTransport`'s `MaxIdleConnsPerHost` at its default of **2** rather than raising it: a
-  library that silently changed a connection limit would be making a capacity decision inside the
-  caller's process. Both are documented for callers in the
-  [README](../README.md#transport-observability-and-connection-reuse).
+- **No hidden behavior:** the client never panics, never logs, never mutates global state, and adds
+  no retry loop of its own. Retries, timeouts, and transport tuning are the caller's `*http.Client`. That
+  makes an **`http.RoundTripper`** the sanctioned extension point for metrics, tracing, and request
+  logging — it sees the assembled request and the raw response — and it is why the SDK does not touch
+  `MaxIdleConnsPerHost`, which `http.DefaultTransport` leaves at `http.DefaultMaxIdleConnsPerHost`
+  (2) and which matters only on HTTP/1.1: a library that silently changed a connection limit would be
+  making a capacity decision inside the caller's process. Both are documented for callers in the
+  [README](../README.md#on-http11-the-first-scaling-bottleneck-is-maxidleconnsperhost).
 
 ## Multi-tenancy
 

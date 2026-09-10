@@ -10,7 +10,7 @@ copy of this file on `support/go1.13`; both describe the same policy.
 | ------ | -------- | ------ | --------- | ---------------- |
 | `github.com/octoverse-id/octonomy-go/v2` | `2.x` | `main` | ✅ | Active development — features, fixes, security |
 | `github.com/octoverse-id/octonomy-go` | `1.x` | `support/go1.13` | ✅ until **2027-08-31** | **Security fixes only** |
-| — | `0.x` | — | n/a | Never released; no `v0.x` tag exists and the module proxy has never served one |
+| — | `0.x` | — | n/a | Never released. No `v0.x` tag exists, and `proxy.golang.org` lists `v1.0.0` alone for the unsuffixed path |
 
 **The `1.x` line takes security fixes and nothing else.** No features, no ordinary bug fixes, no
 `/api/v2`, no namespaces, no webhooks — see the support policy in

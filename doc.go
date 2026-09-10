@@ -29,8 +29,14 @@
 // trade rather than a safe harbour. See docs/versioning.md and SECURITY.md.
 //
 // This line is not yet tagged: v2.0.0-alpha.1 is unreleased, so go get on the /v2
-// path resolves a pseudo-version. The compat line is released at v1.0.0. There
-// has never been a v0.x of either.
+// path resolves a pseudo-version. The compat line is released at v1.0.0. No v0.x
+// of either line was ever published -- proxy.golang.org lists v1.0.0 alone for
+// the unsuffixed path and nothing at all for /v2.
+//
+// Note that the Version constant still reads "0.1.0" on this branch, so the
+// default User-Agent is octonomy-go/0.1.0. It is bumped to the release version in
+// the dedicated release PR (docs/release.md), not here, which is why the source
+// constant and the published tags do not yet agree.
 //
 // # Quickstart
 //
@@ -189,33 +195,43 @@
 //
 // # Transport, observability, and connection reuse
 //
-// This package never logs, never retries, and never mutates global state, so the
-// sanctioned extension point for metrics, tracing, request logging, retries, and
-// rate limiting is an http.RoundTripper on the *http.Client you supply through
-// Config.HTTPClient (or WithHealthHTTPClient). A RoundTripper sees the fully
-// assembled request and the raw response; read X-Request-ID off the request to
-// join your span to the server's record of the same call.
+// This package never logs, never mutates global state, and adds no retry loop of
+// its own, so the sanctioned extension point for metrics, tracing, request
+// logging, retries, and rate limiting is an http.RoundTripper on the *http.Client
+// you supply through Config.HTTPClient (or WithHealthHTTPClient). A RoundTripper
+// sees the fully assembled request and the raw response; read X-Request-ID off
+// the request to join your span to the server's record of the same call.
+// (net/http's own transport already retries a request it failed to write on a
+// REUSED connection -- recovery from a half-closed idle socket, not a retry
+// policy, and not something this package adds to.)
 //
 // Config.HTTPClient REPLACES the default (&http.Client{Timeout: 30 * time.Second})
 // rather than decorating it, so set a Timeout on any client you pass.
 //
-// An *http.Client with no Transport uses http.DefaultTransport, which leaves
-// MaxIdleConnsPerHost unset and therefore falls back to
+// ON HTTP/1.1 ONLY, the idle-connection pool is the first scaling bottleneck.
+// http.DefaultTransport sets ForceAttemptHTTP2, so against an HTTPS endpoint that
+// negotiates h2 every request multiplexes over one connection and none of this
+// applies. Where the connection really is HTTP/1.1 -- plaintext, a proxy that
+// terminates at 1.1, or a transport that did not opt into h2 -- DefaultTransport
+// leaves MaxIdleConnsPerHost unset and it falls back to
 // http.DefaultMaxIdleConnsPerHost, which is 2. Octonomy is a single host, so past
 // two CONCURRENT calls each additional one opens and then discards its own
 // connection instead of returning it to the pool. It caps pooled connections
 // rather than in-flight ones, so nothing blocks -- the handshakes simply stop
-// being amortized. Sequential work never meets it: one goroutine in a loop, Each
-// included, reuses a single connection whatever the setting. It is the first
-// bottleneck a fan-out across goroutines sharing one Client will hit.
+// being amortized.
+//
+// Sequential work never meets it on either protocol: one goroutine in a loop,
+// Each included, reuses a single connection whatever the setting. It is a
+// fan-out across goroutines sharing one Client that hits it.
 //
 // This package does not tune it: transport configuration belongs to the caller.
 // Raise it by cloning DefaultTransport (Clone keeps its proxy, dialer, and HTTP/2
 // settings, which a bare &http.Transport{} drops) and setting MaxIdleConnsPerHost
 // at or above your peak concurrency. See the README for a worked example.
 //
-// A Client is safe for concurrent use; share one rather than constructing per
-// request, which defeats pooling however the transport is configured.
+// A Client is safe for concurrent use, and sharing one is the simplest way to get
+// this right. The pool belongs to the TRANSPORT, not the Client, so a per-request
+// Client defeats pooling only when it also builds a new *http.Transport each time.
 //
 // # Typed metadata
 //

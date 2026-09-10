@@ -1,7 +1,10 @@
 # Release Runbook
 
-The SDK is published as a Go module via a git tag `vX.Y.Z`. There is no registry to push to —
-`go get` resolves the tag directly from GitHub.
+The SDK is published as a Go module via a git tag `vX.Y.Z`. There is no registry to push to: pushing
+the tag is the release. Consumers reach it through Go's configured module proxy —
+`proxy.golang.org` by default, which fetches from GitHub and then caches the version permanently —
+falling back to direct VCS access only for `GOPRIVATE`/`GONOSUMDB` paths or `GOFLAGS=-mod=mod`
+with `GOPROXY=direct`. **The cache is why a tag cannot be unpublished.**
 
 ## Versioning
 
@@ -78,8 +81,11 @@ post-1.13 standard library, and no v2, namespace, health, or webhook code for a 
 in. A fix touching `List[T]` has to be rewritten against `TagList` / `VocabularyList`; a fix touching
 code that exists only on `main` needs no backport at all.
 
-**Then open the PR against `support/go1.13`.** The `compat guard` and `go1.13` CI jobs are what prove
-the result actually compiles and tests on the toolchain the line exists for. A modern toolchain
+**Then open the PR against `support/go1.13`.** Two required checks cover different halves, and only
+one of them runs your code: **`go1.13`** builds, vets, and runs `go test -race` under a real
+`go1.13.15` toolchain, which is what proves the result works on the toolchain the line exists for;
+**`compat guard`** never compiles the package and instead asserts the release line's `go.mod`
+invariants, catching a drifted `go` directive or module path before a tag makes it permanent. A modern toolchain
 enforces the *language* version declared in `go.mod` but **not** the standard library, so an
 `io.ReadAll` that rode in on a backported hunk passes `go build`, `go vet`, and staticcheck at
 `go 1.13` and fails only under a real `go1.13`.
