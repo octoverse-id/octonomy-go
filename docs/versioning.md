@@ -132,11 +132,14 @@ Backward-compatible **additions** to the exported API.
   a new `Is*` helper.
 - Existing callers keep compiling and working unchanged, with **one Go-level caveat**: adding a field
   to an exported struct breaks a caller who wrote an *unkeyed* composite literal, because such a
-  literal must supply exactly one value per field, in order. That applies to **every** exported
-  struct in this package, response models included — `Tag`'s fields are all exported, so nothing stops
-  a consumer building one unkeyed in their own fixtures. Every example in this repository uses keyed
-  fields, which is the reason to; but if you are weighing a field addition against a consumer you do
-  not control, that is the exposure. Unkeyed literals are rare, verbose, and `go vet`'s
+  literal must supply exactly one value per field, in order. It applies to the structs whose fields are
+  **all exported** — the models, the `*Create` / `*Update` / `*ListParams` types, `Config`,
+  `ListOptions`, `Pagination` — and response models are not exempt: `Tag`'s fields are all exported,
+  so nothing stops a consumer building one unkeyed in their own fixtures. It does **not** apply to
+  `Client`, `APIError`, or the `*Service` types, which carry unexported fields and therefore cannot be
+  written unkeyed from outside the package at all. Every example in this repository uses keyed fields,
+  which is the reason to; but if you are weighing a field addition against a consumer you do not
+  control, that is the exposure. Unkeyed literals are rare, verbose, and `go vet`'s
   `composites` check flags them for imported types, so the practical risk is low — it is simply not
   zero, which is what "backward-compatible" would otherwise imply.
 - While the modern line is still on `v2.0.0-alpha.N` prereleases a necessary breaking change may ride
