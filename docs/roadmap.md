@@ -20,7 +20,7 @@ well as the collection — then:
 
 1. Read the matching schema(s) in [`openapi-v2.yaml`](openapi-v2.yaml). Read the **v2** spec, not
    [`openapi.yaml`](openapi.yaml): both are vendored at server 3.1.1, but v1 has no namespace axis,
-   so its schemas omit the scope fields every new resource needs.
+   so its schemas omit the `namespace_type` / `namespace_id` fields every new resource needs.
 2. Create `<resource>.go` with: the model struct, `*Create`/`*Update` write structs (pointer +
    `omitempty`), `*ListParams` with a `query()` method, and a `*Service` whose methods take
    `context.Context` first and `...RequestOption` last and delegate to the transport helper matching
