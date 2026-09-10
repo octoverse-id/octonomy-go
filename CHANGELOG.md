@@ -579,10 +579,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first `/v2` release PR replaces it, since `version.go` is bumped there and nowhere else. The
   claim that no `v0.x` was published is now backed by a re-runnable `proxy.golang.org` query rather
   than by assertion, framed as the proxy's current set of tag-resolvable versions.
-- **`docs/development.md` no longer calls the integration suite "six assertions."** It has grown into
-  a 1,235-line ordered walk covering both envelopes, pagination and `Each`, `DecodeMetadata`,
-  `409 scope_immutable`, the namespace axis, aliases, resolution, both bulk composites, the
-  resource-tag replace, audit rows, and request-id correlation.
 - **The "two response envelopes" framing is corrected where it implied a closed set.**
   `docs/architecture.md` said the envelopes *are* the deliberate divergences; the two bulk-assignment
   responses and the resource-tag replace are three more, and `docs/api.md` — which carries the

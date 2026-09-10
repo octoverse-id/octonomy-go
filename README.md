@@ -344,8 +344,8 @@ Every resource group the vendored contracts publish is implemented, reached from
 `Client`: `Vocabularies`, `Tags`, `Aliases`, `Assignments`, `Resources`, `AuditLogs`, and `Health`
 (plus `NewHealthClient` for a caller with no credentials).
 
-> **[`docs/api.md`](docs/api.md#implemented) is the canonical inventory** — every SDK method, its
-> HTTP verb, and its path, in one table, and the only place that mapping is maintained. Adding a
+> **[`docs/api.md`](docs/api.md#implemented) holds the only complete inventory** — every SDK method,
+> its HTTP verb, and its path, in one table, and the only place that mapping is maintained. Adding a
 > method means editing it there; this page, [`docs/roadmap.md`](docs/roadmap.md), and
 > [`docs/versioning.md`](docs/versioning.md) link to it rather than restate it.
 >

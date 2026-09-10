@@ -169,7 +169,7 @@ an SDK `/v3` — only a break in the SDK's own exported Go API would.
 > selects one and defaults to `APIV2`, and the namespace axis is per-request (`WithNamespace`). The
 > compat line remains `/api/v1` only, permanently — that is its policy, not a gap. Every resource
 > group the vendored contracts publish is implemented on the modern line, on either surface;
-> [`api.md`](api.md#implemented) is the canonical inventory and [`roadmap.md`](roadmap.md) records
+> [`api.md`](api.md#implemented) holds the only complete inventory and [`roadmap.md`](roadmap.md) records
 > the gaps that remain *within* those resources.
 
 ## Where this shows up

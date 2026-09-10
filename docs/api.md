@@ -31,7 +31,7 @@ can be created through `Assignments.Create`, whose id travels in the body, and t
 through the `/resources` routes.
 
 The client targets `Config.BaseURL + /api/<version>`, where the version comes from
-`Config.APIVersion` and defaults to `APIV2`. Every request carries:
+`Config.APIVersion` and defaults to `APIV2`. Every request **on that versioned surface** carries:
 
 | Header | Source | Required |
 | ------ | ------ | -------- |
@@ -426,8 +426,8 @@ middleware runs on these routes too — probed against 3.1.0, `/health/ready` ec
 `X-Request-ID` back and mints one when there is none. But a probe mutates nothing, so it writes no
 audit row and emits no event, and its non-2xx carries `{"status": …}` rather than the error envelope:
 of the four sinks that make a correlation id worth sending, a probe reaches only the server's log
-line. Options on that path would cost the byte-for-byte-identical property above, which is what lets
-both entry points share one code path and one test suite.
+line. Options on that path would cost the identical-request property above, which is what lets both
+entry points share one code path and one test suite.
 
 ### Unreachable and unready are different failures
 
