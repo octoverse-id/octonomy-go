@@ -239,6 +239,12 @@ func TestWithRequestID_RejectsUnusableValues(t *testing.T) {
 		{"nul byte", "req\x00abc"},
 		{"del", "req\x7fabc"},
 		{"non-ascii", "req-café"},
+		// Printable, so the ASCII loop accepts it -- and then net/http trims it
+		// while writing the header, so the server would store a string the
+		// caller never logged. Probed: " req-abc " leaves as " req-abc " and
+		// arrives as "req-abc".
+		{"leading space", " req-abc"},
+		{"trailing space", "req-abc "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

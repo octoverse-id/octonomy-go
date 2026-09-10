@@ -84,11 +84,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `(*T, error)` — so callers who want correlation on a success generate the id themselves, which is
   the whole point of the option.
 
-  A blank or non-printable-ASCII id is refused locally, before the request is sent. That is wire
-  grammar, not a server rule: a control byte is rejected by `net/http` inside `Do`, where the SDK
-  would report it as `ErrUnreachable` ("nothing answered") for a request that was never sent, and a
-  byte above `0x7e` is *accepted* and then decoded `latin-1` server-side, landing in the audit row as
-  mojibake that no longer equals what the caller logged.
+  An id that is blank, non-printable-ASCII, or surrounded by whitespace is refused locally, before
+  the request is sent. That is wire grammar, not a server rule, and each case is a distinct way the
+  id the caller logged and the id the server stores stop matching: a control byte is rejected by
+  `net/http` inside `Do`, where the SDK would report it as `ErrUnreachable` ("nothing answered") for
+  a request that was never sent; a byte above `0x7e` is *accepted* and then decoded `latin-1`
+  server-side, landing in the audit row as mojibake; and outer whitespace is silently trimmed by
+  `net/http` while writing the header, so `" req-abc "` would be recorded as `"req-abc"`.
 - `docs/openapi-v2.yaml`, vendored from server 3.1.1.
 
 ### Changed

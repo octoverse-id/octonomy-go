@@ -153,7 +153,8 @@ func WithActor(actorID string) RequestOption {
 // a caller who passes an id already has it. Generate one per outbound call
 // (a UUID, or the trace id you already carry) and log it on your side.
 //
-// The id must be printable ASCII and non-blank; see the guard below.
+// The id must be non-blank printable ASCII with no leading or trailing
+// whitespace; see the guard below for what each of those prevents.
 //
 // KEEP IT SHORT. The server stores it in a 100-character column (audit/models.py
 // and events/models.py), and a longer id fails the row insert: probed against
@@ -195,6 +196,19 @@ func WithRequestID(id string) RequestOption {
 				rc.fail(fmt.Errorf("octonomy: WithRequestID(%q): byte %#02x at offset %d is not printable ASCII; a request id travels in an HTTP header and is matched by string equality in the audit log, the event envelope, and the server's logs, so it must be printable ASCII (a UUID, or your own trace id)", id, b, i))
 				return
 			}
+		}
+		// Outer whitespace is the third way the id the caller logs and the id the
+		// server stores can differ, and the only one that is not visibly wrong:
+		// a space IS printable ASCII, so the loop above accepts it, and then
+		// net/http TRIMS it while writing the header (textproto.TrimString in
+		// Header.writeSubset). Probed: " req-abc " leaves the client as
+		// " req-abc " and arrives at the server as "req-abc". Trimming it here
+		// instead would send a legal request and still break equality, since the
+		// caller's own logs keep the untrimmed string. So it is refused, and the
+		// message names the fix. Found by Codex review on #5.
+		if trimmed := strings.TrimSpace(id); trimmed != id {
+			rc.fail(fmt.Errorf("octonomy: WithRequestID(%q): a request id may not begin or end with whitespace; net/http trims it on the way out, so the server would record %q and no longer match the id you logged -- pass the trimmed value", id, trimmed))
+			return
 		}
 		rc.requestID, rc.requestIDSet = id, true
 	}

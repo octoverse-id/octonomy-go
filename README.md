@@ -135,9 +135,11 @@ nothing. On a **successful** call the SDK does not hand back the server's id —
 `(*T, error)` — so supplying your own is what puts an id in both your logs and Octonomy's. On a
 **failed** call you get the server's id either way, from `APIError.RequestID`.
 
-The id must be non-blank printable ASCII; anything else is refused locally, before the request is
-sent, because a control byte is rejected by `net/http` itself and a non-ASCII one is decoded
-`latin-1` server-side and stored as mojibake that no longer matches what you logged.
+The id must be non-blank printable ASCII with no leading or trailing whitespace; anything else is
+refused locally, before the request is sent. Each of those is a way the id you logged and the id the
+server stores stop matching: a control byte is rejected by `net/http` itself, a non-ASCII one is
+decoded `latin-1` server-side and stored as mojibake, and outer whitespace is trimmed by `net/http`
+on the way out — so `" req-abc "` would be recorded as `"req-abc"`.
 
 **Keep it short.** The server stores the id in a 100-character column; a longer one fails the audit
 insert and the whole mutation answers `500` with no error envelope. A UUID (36) or a W3C

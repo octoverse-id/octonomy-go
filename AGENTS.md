@@ -58,8 +58,10 @@ stays a faithful, ergonomic client.
   `APIError.RequestID` with one that was never surfaced anywhere. The success path deliberately does
   not return the server's id — `doRaw` discards `resp.Header` and every method returns `(*T, error)`
   — and a caller who wants correlation on a success supplies their own. The option validates wire
-  grammar only (non-blank, printable ASCII, because a control byte would surface as `ErrUnreachable`
-  and a high byte as latin-1 mojibake in the audit row); it does **not** enforce the server's
+  grammar only (non-blank, printable ASCII, no outer whitespace — a control byte would surface as
+  `ErrUnreachable`, a high byte as latin-1 mojibake in the audit row, and outer space is trimmed by
+  `net/http` on the way out, so each one silently breaks the string equality the id exists for); it
+  does **not** enforce the server's
   100-character column, which is a server rule and stays out of this package.
 - **A scope option that contradicts one already on the request is an error, never last-wins.** This
   holds option-versus-params and option-versus-itself. Last-wins on a scope axis is a silent
