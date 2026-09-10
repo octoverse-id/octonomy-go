@@ -399,10 +399,18 @@ and the request is byte-for-byte identical: the token is not sent to a route tha
 authenticate. A `HealthClient` exposes `Health` and nothing else, and the transport refuses a
 credential-free client outright rather than sending a blank `Authorization` header.
 
-`Live` and `Ready` take **no** `RequestOption`. Every option in this package is a scoping or
-attribution knob for the versioned, tenant-scoped API, and none of them means anything on a route
-with no tenant; accepting and ignoring them would be exactly the silent no-op the SDK refuses
-elsewhere.
+`Live` and `Ready` take **no** `RequestOption`, and the option set splits in two on why.
+`WithNamespace`, `WithApplication`, `WithIncludeGlobal`, and `WithActor` are scoping or attribution
+knobs for the versioned, tenant-scoped API, and none of them means anything on a route with no
+tenant; accepting and ignoring them would be exactly the silent no-op the SDK refuses elsewhere.
+
+`WithRequestID` is the one that *would* do something, and it is excluded anyway. The server's request
+middleware runs on these routes too — probed against 3.1.0, `/health/ready` echoes a caller-supplied
+`X-Request-ID` back and mints one when there is none. But a probe mutates nothing, so it writes no
+audit row and emits no event, and its non-2xx carries `{"status": …}` rather than the error envelope:
+of the four sinks that make a correlation id worth sending, a probe reaches only the server's log
+line. Options on that path would cost the byte-for-byte-identical property above, which is what lets
+both entry points share one code path and one test suite.
 
 ### Unreachable and unready are different failures
 

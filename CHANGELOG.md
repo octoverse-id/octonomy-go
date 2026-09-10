@@ -73,7 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audit row (`AuditLog.RequestID`), the outbox / webhook event envelope (its `request_id` field and
   the delivered webhook's `X-Octonomy-Request-ID`), the structured request log, and the error
   envelope (`APIError.RequestID`). It composes with `WithActor` — actor is *who*, request id is
-  *which call* — and applies to any method.
+  *which call* — and applies to every method that takes options. The health probes are the
+  exception: they take none, and `HealthService` now records why this option is excluded along with
+  the scoping knobs.
 
   **The SDK never mints one, and there is no `Config` field.** No header is sent unless the option is
   used, which leaves the server's own `req_<uuid>` minting intact; a client-minted id would replace a
