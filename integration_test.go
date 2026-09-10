@@ -272,6 +272,52 @@ func TestSmoke_RealServer(t *testing.T) {
 		t.Errorf("APIError = {status:%d code:%q}, want {404 %q}", apiErr.StatusCode, apiErr.Code, octonomy.CodeNotFound)
 	}
 
+	// 6b. The one error whose STATUS and CODE disagree, against a real server
+	// (#6). scope_immutable is raised as a subclass of the server's conflict
+	// error, so it arrives as a 409 whose code is not "conflict" -- and a
+	// fixture asserting that is a fixture asserting what this SDK already
+	// believes. Only the server settles whether IsScopeImmutable is true and
+	// IsConflict is false on the same response.
+	//
+	// The vocabulary from step 1 is global, so naming any application at all is
+	// a scope move. The target need not exist: the guard runs on the scope
+	// change itself, before anything resolves the application. The row is
+	// unchanged by a 409, so the step-1 cleanup still applies.
+	_, err = client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{
+		ApplicationID: octonomy.String("smoke-scope-move"),
+	})
+	if err == nil {
+		t.Fatal("Vocabularies.Update moving a global row into an application: expected a 409")
+	}
+	if !octonomy.IsScopeImmutable(err) {
+		t.Errorf("scope-moving PATCH: IsScopeImmutable = false, err = %v", err)
+	}
+	if octonomy.IsConflict(err) {
+		t.Error("scope-moving PATCH: IsConflict = true; scope_immutable must not read as a plain conflict")
+	}
+	scopeErr, ok := octonomy.AsAPIError(err)
+	if !ok {
+		t.Fatalf("scope-moving PATCH: error is not *APIError: %v", err)
+	}
+	if scopeErr.StatusCode != 409 || scopeErr.Code != octonomy.CodeScopeImmutable {
+		t.Errorf("APIError = {status:%d code:%q}, want {409 %q}", scopeErr.StatusCode, scopeErr.Code, octonomy.CodeScopeImmutable)
+	}
+	// Details names the offending field. The doc comment on IsScopeImmutable
+	// promises a caller can report which axis it tried to move, and only the
+	// server's real payload backs that.
+	if _, ok := scopeErr.Details["application_id"]; !ok {
+		t.Errorf("Details did not name the offending field: %#v", scopeErr.Details)
+	}
+	// The row must not have moved. A 409 that mutated anyway would leave the
+	// SDK reporting a refusal the server did not actually make.
+	stillGlobal, err := client.Vocabularies.Get(ctx, vocab.ID)
+	if err != nil {
+		t.Fatalf("Vocabularies.Get after a refused scope move: %v", err)
+	}
+	if stillGlobal.ApplicationID != nil {
+		t.Errorf("a refused scope move still changed the row: application_id = %v", *stillGlobal.ApplicationID)
+	}
+
 	// 7. The namespace axis, which exists only on /api/v2.
 	//
 	// A unit test cannot reach this: the namespace response fields are populated

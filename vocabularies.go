@@ -104,6 +104,10 @@ func (s *VocabularyService) List(ctx context.Context, params *VocabularyListPara
 }
 
 // Update partially updates a vocabulary (PATCH /vocabularies/{id}).
+//
+// Scope is fixed at creation: a body that changes ApplicationID, or the namespace
+// the row already holds, is refused with a 409 that IsScopeImmutable matches.
+// Re-create the vocabulary in the target scope instead.
 func (s *VocabularyService) Update(ctx context.Context, id string, in VocabularyUpdate, opts ...RequestOption) (*Vocabulary, error) {
 	return doData[Vocabulary](ctx, s.client, http.MethodPatch, "/vocabularies/"+url.PathEscape(id), nil, in, opts...)
 }

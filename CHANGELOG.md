@@ -94,6 +94,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server-side, landing in the audit row as mojibake; and outer whitespace is silently trimmed by
   `net/http` while writing the header, so `" req-abc "` would be recorded as `"req-abc"`.
 - `docs/openapi-v2.yaml`, vendored from server 3.1.1.
+- **`CodeScopeImmutable` / `IsScopeImmutable`, and `docs/openapi.yaml` re-vendored from server
+  3.1.1** ([#6](https://github.com/octoverse-id/octonomy-go/issues/6)). The v1 spec had been pinned
+  at server `1.0.0`; both vendored specs now track the same server release. The v1 contract itself
+  moved by 53 lines: a documented `409 scope_immutable` on the detail `PATCH` for tags,
+  vocabularies, and tag aliases; the `scope` query parameter on `/tag-resolution`, which
+  `Tags.Resolve` was already sending against a running server; an `ErrorResponse` schema component;
+  and `default: true` on `is_active` in the `Tag`, `TagAlias`, and `Vocabulary` response schemas,
+  which records a default the server always applied and needs no SDK change.
+
+  `IsScopeImmutable` is convenience, not a fix: `parseError` already preserved the code verbatim, so
+  `APIError.Code == "scope_immutable"` worked before this. What it adds is a name for the one
+  branch a caller must not get wrong — the server raises it as a subclass of its conflict error, so
+  it carries `409` while its code is **not** `conflict`, and `IsConflict` reports false for it. A
+  caller keying on the *status* reads "duplicate slug, pick another" and retries a request that can
+  never succeed. Scope is fixed at creation; the remediation is to re-create the row in the target
+  scope. `APIError.Details` names the offending fields. From this SDK only `ApplicationID` can raise
+  it, on **either** surface: the server's rule covers all three scope fields and its detail-PATCH
+  view is shared by `/api/v1` and `/api/v2`, but namespace is header-set rather than body-set, so
+  the three `*Update` structs carry no namespace field for a PATCH to move.
+
+  The 409-versus-`conflict` split is asserted in `integration_test.go` against a real server, not
+  only against a canned fixture: a fixture asserting that `IsScopeImmutable` is true and
+  `IsConflict` is false on the same response is a fixture asserting what this SDK already believes.
+  The smoke step moves a global vocabulary into an application, and also asserts that the refused
+  PATCH left the row unchanged.
+
+  **No `Scope` field was added to `TagListParams`.** The parameter belongs to `/tag-resolution` on
+  both surfaces and appears exactly once per spec; the tags list route has none.
 
 ### Changed
 - `docs/roadmap.md` is re-derived from `openapi-v2.yaml` rather than edited. It had been written
@@ -158,10 +186,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `client.Tags.ListAliases` for `GET /tags/{tag_id}/aliases`. `TagAlias` carries `NamespaceType` /
   `NamespaceID` (decode-only), which makes it the third of the seven v2 schemas that do.
 - `TagAliasUpdate.TagID` re-points an alias at a different tag. That is a normal edit, not the scope
-  change `PATCH` refuses: moving the alias itself between scopes is a `409` carrying the code
-  `scope_immutable`, which reaches callers verbatim as `APIError.Code` and deliberately does **not**
-  satisfy `IsConflict` — reading a fixed-scope refusal as a duplicate slug would send a caller down a
-  retry path that cannot work.
+  change `PATCH` refuses: moving the alias itself between scopes is a `409 scope_immutable`
+  (`IsScopeImmutable`), which deliberately does **not** satisfy `IsConflict` — reading a fixed-scope
+  refusal as a duplicate slug would send a caller down a retry path that cannot work.
 - `TagAliasListParams` exposes the full documented filter set for the collection route
   (`application_id`, `include_shared`, `is_active`, `q` as `Query`, `slug`, `tag_id`, plus paging).
   `TagListAliasesParams` is a separate, narrower type for the nested route, which the contract
@@ -183,15 +210,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ResolutionScopeMerchant` resolves within the request's own namespace, so the SDK refuses it
   locally on a request that has none.
 
-  **`Scope` is not in the vendored v1 contract.** `docs/openapi.yaml` is still at server `1.0.0`,
-  which predates the parameter; the running server adds it to *both* surfaces, verified against a
-  3.1.0 container, where `/api/v1/tag-resolution` validates it by name — `scope=merchant` on a global
-  request is rejected with "Merchant scope requires a namespaced request", and an unknown value with
-  "Use 'global' or 'merchant'". So it is sent on v1 rather than gated to v2: the running server is
-  the authority where the vendored spec is merely stale, and the SDK has no version handshake with
+  **`Scope` is sent on both surfaces**, and `docs/openapi.yaml` documents it on
+  `/api/v1/tag-resolution` as of the #6 refresh above. It was absent from the vendored v1 contract
+  only while that file sat at server `1.0.0`, which predates the parameter; sending it on v1 was
+  already right then, verified against a 3.1.0 container where `/api/v1/tag-resolution` validates it
+  by name — `scope=merchant` on a global request is rejected with "Merchant scope requires a
+  namespaced request", and an unknown value with "Use 'global' or 'merchant'". Gating it to v2 would
+  have refused a call every current deployment answers, and the SDK has no version handshake with
   which to gate it honestly. Against a v1 deployment older than the release that added it, the
   parameter is silently dropped like any unknown query parameter — the same exposure every other
-  post-1.0.0 addition carries, and what #6 closes by re-vendoring the v1 contract at 3.1.1. `ResolutionScopeGlobal` is a legal explicit pin — the one place
+  post-1.0.0 addition carries. `ResolutionScopeGlobal` is a legal explicit pin — the one place
   in this SDK where the literal `global` is accepted, as against the reserved `X-Namespace-Type` — and
   from a namespaced request it is *also* the authorization opt-in, so it does not need
   `WithIncludeGlobal` beside it: the server widens the authorized set for this route only when it

@@ -4,8 +4,8 @@ How SDK methods map to Octonomy REST endpoints. The vendored specs are the refer
 parameters, and field names; this page is the client-side view.
 
 - [`openapi-v2.yaml`](openapi-v2.yaml) — `/api/v2`, server **3.1.1**. The default surface.
-- [`openapi.yaml`](openapi.yaml) — `/api/v1`, still vendored at server **1.0.0** until #6 refreshes
-  it. The v1 contract itself barely moved between those releases.
+- [`openapi.yaml`](openapi.yaml) — `/api/v1`, server **3.1.1**. Both specs now track the same server
+  release.
 
 **One exception, and it is load-bearing: the vendored spec is wrong about response envelopes.** The
 server wraps every payload under `data` — lists as `{"data": [...], "pagination": {...}}` and single
@@ -105,11 +105,10 @@ decode-only). Both are nil for a global row, and on every `/api/v1` response. Sc
 creation: changing `application_id`, `namespace_type`, or `namespace_id` on a PATCH is a
 `409 scope_immutable`.
 
-That code has no constant in this package yet (it arrives with the v1 contract refresh, #6), which
-costs a caller nothing: a code the server sends in the envelope is preserved verbatim, so
-`APIError.Code == "scope_immutable"` works today. It is deliberately **not** matched by `IsConflict`,
-which keys on `conflict` — a fixed-scope refusal read as a duplicate slug sends a caller down a retry
-path that cannot succeed. Re-create the row in the target scope instead.
+Match it with `IsScopeImmutable`. It is deliberately **not** matched by `IsConflict`, which keys on
+`conflict` — a fixed-scope refusal read as a duplicate slug sends a caller down a retry path that
+cannot succeed. Re-create the row in the target scope instead; no payload adjustment makes the PATCH
+work. `APIError.Details` names the offending fields, each mapped to its own message.
 
 `TagAlias.TagID` is decode-only on the response but is not immutable: `TagAliasUpdate.TagID`
 re-points an alias at a different tag, which is an ordinary edit rather than a scope change. The new
@@ -186,15 +185,15 @@ carrying the same slug.
 describes it as a bare `string` while the server accepts exactly two values. An unset `Scope` is
 omitted rather than sent empty.
 
-**`Scope` is absent from the vendored v1 contract, and is still sent on v1.** `openapi.yaml` is
-pinned at server `1.0.0`, which predates the parameter (#6 re-vendors it at `3.1.1`). The running
-server carries it on *both* surfaces: probed against 3.1.0, `GET /api/v1/tag-resolution` validates it
-by name, rejecting `scope=merchant` on a global request and an unknown value with
-`Use 'global' or 'merchant'`. Where the vendored spec is stale rather than divergent the server wins,
-and gating the parameter to `APIV2` would refuse a call every current deployment supports — the SDK
-has no version handshake, so it cannot tell a 1.0-era v1 server from a 3.1 one. Against a server old
-enough to predate the parameter it is dropped like any unknown query parameter, which is the exposure
-every post-`1.0.0` addition shares.
+**`Scope` is documented on both surfaces, and is sent on both.** The vendored `openapi.yaml` carries
+it on `GET /api/v1/tag-resolution` as of the `3.1.1` refresh; it was absent only while that file was
+pinned at server `1.0.0`, which predates the parameter. Sending it on v1 was already correct against
+a running server — probed against 3.1.0, the v1 route validates it by name, rejecting
+`scope=merchant` on a global request and an unknown value with `Use 'global' or 'merchant'` — and the
+refreshed spec now says so. Gating it to `APIV2` would have refused a call every current deployment
+supports: the SDK has no version handshake, so it cannot tell a 1.0-era v1 server from a 3.1 one.
+Against a server old enough to predate the parameter it is dropped like any unknown query parameter,
+which is the exposure every post-`1.0.0` addition shares.
 
 **`global` is legal here and reserved elsewhere.** As a *scope* it pins the tenant-shared namespace;
 as an `X-Namespace-Type` it is refused (see `WithNamespace`). `ResolutionScopeMerchant` resolves
@@ -491,6 +490,7 @@ decodes to an empty non-nil slice either way.
 | `tenant_mismatch` | 400 | `IsTenantMismatch` |
 | `application_mismatch` | 400 | `IsApplicationMismatch` |
 | `inactive_tag` | 400 | `IsInactiveTag` |
+| `scope_immutable` | 409 | `IsScopeImmutable` — **not** matched by `IsConflict` ([above](#response-fields)) |
 | `namespace_not_supported` | 400 | `IsNamespaceNotSupported` |
 | `namespace_invalid` | 400 | `IsNamespaceInvalid` |
 | `namespaced_writes_disabled` | 403 | `IsNamespacedWritesDisabled` |

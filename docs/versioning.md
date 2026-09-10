@@ -9,7 +9,7 @@ source of truth for how a change maps to a version bump.
 | ------- | ----- | ------- |
 | **Module path** | `module` line in `go.mod` | Which release line you are on. The `/v2` suffix is what makes the two lines *different modules* to Go. |
 | **SDK version** | `Version` in `version.go` + git tag `vX.Y.Z` | Canonical SemVer for the SDK and CHANGELOG. Go modules resolve versions from git tags. |
-| **Targeted server contract** | this document + the vendored `docs/openapi-v2.yaml` / `docs/openapi.yaml` | Which Octonomy REST contract the SDK is written against. **`/api/v2` at server `3.1.1`** is the default surface; `/api/v1` is selectable via `Config.APIVersion` and is still vendored at server `1.0.0` pending #6. |
+| **Targeted server contract** | this document + the vendored `docs/openapi-v2.yaml` / `docs/openapi.yaml` | Which Octonomy REST contract the SDK is written against. **Both surfaces track server `3.1.1`**: `/api/v2` is the default, `/api/v1` is selectable via `Config.APIVersion`. |
 
 The SDK versions **independently** of the Octonomy server. A new SDK release does not require a new
 server release, and vice versa. `make version-check` asserts `version.go` matches the latest

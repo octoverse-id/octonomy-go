@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Octonomy API
-  version: 1.0.0
+  version: 3.1.1
   description: Multi-tenant tag management and taxonomy service.
 paths:
   /api/v1/audit-logs:
@@ -312,6 +312,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/TagAlias'
           description: ''
+        '409':
+          description: The request tried to change a row's application_id, namespace_type,
+            or namespace_id. Scope is fixed at creation (NS-1); the error envelope
+            carries code scope_immutable. Re-create the row in the target scope instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       operationId: api_v1_tag_aliases_destroy
       parameters:
@@ -415,6 +423,10 @@ paths:
       parameters:
       - in: query
         name: application_id
+        schema:
+          type: string
+      - in: query
+        name: scope
         schema:
           type: string
       - in: query
@@ -561,6 +573,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Tag'
           description: ''
+        '409':
+          description: The request tried to change a row's application_id, namespace_type,
+            or namespace_id. Scope is fixed at creation (NS-1); the error envelope
+            carries code scope_immutable. Re-create the row in the target scope instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       operationId: api_v1_tags_destroy
       parameters:
@@ -808,6 +828,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Vocabulary'
           description: ''
+        '409':
+          description: The request tried to change a row's application_id, namespace_type,
+            or namespace_id. Scope is fixed at creation (NS-1); the error envelope
+            carries code scope_immutable. Re-create the row in the target scope instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       operationId: api_v1_vocabularies_destroy
       parameters:
@@ -1186,6 +1214,7 @@ components:
         metadata: {}
         is_active:
           type: boolean
+          default: true
         usage_count:
           type: integer
           readOnly: true
@@ -1236,6 +1265,7 @@ components:
         metadata: {}
         is_active:
           type: boolean
+          default: true
         created_at:
           type: string
           format: date-time
@@ -1374,6 +1404,7 @@ components:
         metadata: {}
         is_active:
           type: boolean
+          default: true
         created_at:
           type: string
           format: date-time
@@ -1413,3 +1444,24 @@ components:
       required:
       - name
       - slug
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+            request_id:
+              type: string
+              nullable: true
+          required:
+          - code
+          - message
+      required:
+      - error
