@@ -114,6 +114,39 @@
 // error at all. A genuinely empty page is not an error and yields an empty
 // non-nil Data slice.
 //
+// # Health probes
+//
+// The liveness and readiness routes sit at the SERVER ROOT, outside
+// /api/<version>, authenticate nobody, and answer with a bare {"status": "ok"}
+// carrying no data envelope. Because New requires a Token and a TenantID,
+// reaching them with neither needs its own constructor:
+//
+//	probe, err := octonomy.NewHealthClient("https://octonomy.example.com")
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	st, err := probe.Health.Ready(ctx)
+//	switch {
+//	case err == nil:
+//		// ready; st.Status is the server's own word
+//	case octonomy.IsNotReady(err):
+//		// it answered and said it cannot serve: back off and re-probe
+//	case errors.Is(err, octonomy.ErrUnreachable):
+//		// no response at all -- refused, DNS, TLS, timeout, cancelled context
+//	}
+//
+// A caller holding a full Client uses client.Health instead, which runs the same
+// code and sends the same request: no Authorization, no X-Tenant-ID, and no
+// /api prefix, from either entry point.
+//
+// Unreachable and unready are deliberately never collapsed into one error. They
+// call for different responses -- wait, versus go looking for the process -- so a
+// 503 carrying the probe's own body is an *APIError (IsNotReady) while a request
+// that got no response produces no *APIError at all and matches
+// errors.Is(err, ErrUnreachable). ErrUnreachable is not health-specific: every
+// method in this package wraps it around a request that got no response.
+//
 // # List responses
 //
 // List methods return a *List[T] holding the Data slice and Pagination metadata

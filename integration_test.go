@@ -9,12 +9,12 @@
 // complete unit suite stayed green through it, because the fixtures encoded the
 // vendored spec rather than the running server.
 //
-// Eleven assertions cover the shapes: the single-resource {"data": {...}} envelope
+// The assertions cover the shapes: the single-resource {"data": {...}} envelope
 // on both a write and a read, the {data, pagination} list envelope, all four
 // resources, the composite resolution and bulk payloads, one real error
-// envelope, and a namespaced round trip on /api/v2 -- the last of these being the
-// only place the namespace response fields meet a server that actually populates
-// them.
+// envelope, the ENVELOPE-LESS health probes, and a namespaced round trip on
+// /api/v2 -- the last of these being the only place the namespace response
+// fields meet a server that actually populates them.
 //
 // The bulk assertions matter most of the set. docs/openapi-v2.yaml claims
 // bulk-assign returns a bare array and documents no schema at all for
@@ -97,6 +97,40 @@ func TestSmoke_RealServer(t *testing.T) {
 	client := newSmokeClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+
+	// 0. The health probes, which are the one group a fixture can least be
+	// trusted for: they are rooted OUTSIDE /api/<version>, they authenticate
+	// nobody, and their body is a bare {"status": "ok"} with no data envelope.
+	// Three claims a canned handler simply restates. The credential-free
+	// constructor is exercised the way a caller would -- base URL alone, no
+	// token, no tenant -- against a server that really does reject
+	// unauthenticated traffic everywhere else.
+	//
+	// newSmokeClient has already gated on this variable, so it is set here.
+	baseURL := os.Getenv("OCTONOMY_TEST_BASE_URL")
+	probe, err := octonomy.NewHealthClient(baseURL)
+	if err != nil {
+		t.Fatalf("NewHealthClient: %v", err)
+	}
+	live, err := probe.Health.Live(ctx)
+	if err != nil {
+		t.Fatalf("Health.Live with no credentials: %v", err)
+	}
+	if live.Status != octonomy.HealthStatusOK {
+		t.Errorf("Health.Live status = %q, want %q", live.Status, octonomy.HealthStatusOK)
+	}
+	ready, err := probe.Health.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Health.Ready with no credentials: %v", err)
+	}
+	if ready.Status != octonomy.HealthStatusOK {
+		t.Errorf("Health.Ready status = %q, want %q", ready.Status, octonomy.HealthStatusOK)
+	}
+	// The second entry point runs the same code against the same routes, and a
+	// full client must not start sending its token there.
+	if _, err := client.Health.Ready(ctx); err != nil {
+		t.Fatalf("Client.Health.Ready: %v", err)
+	}
 
 	// 1. A write that returns a resource. The server answers 201 with
 	// {"data": {...}}; before #32 this decoded to an empty Vocabulary and a nil

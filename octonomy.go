@@ -115,6 +115,12 @@ type Client struct {
 	// default ceiling to prove the check fires.
 	maxResponseBytes int64
 
+	// probeOnly marks a Client built by NewHealthClient: no token, no tenant, no
+	// API version, and no service wired but Health. doRaw refuses such a client
+	// outright, so the credential-free constructor cannot become a way to reach
+	// a tenant-scoped route with blank credentials.
+	probeOnly bool
+
 	// Vocabularies manages tenant-scoped tag groupings.
 	Vocabularies *VocabularyService
 	// Tags manages the core tagging units.
@@ -127,12 +133,34 @@ type Client struct {
 	Resources *ResourceService
 	// AuditLogs reads the append-only mutation history (needs the audit:read scope).
 	AuditLogs *AuditLogService
+	// Health probes liveness and readiness. Unauthenticated and unversioned, so
+	// it needs no credentials at all -- see NewHealthClient for the entry point
+	// that requires none.
+	Health *HealthService
+}
+
+// parseBaseURL validates and normalizes an Octonomy origin for both
+// constructors. label names the caller's field so the error points at the
+// argument the caller actually wrote ("Config.BaseURL" or "baseURL").
+func parseBaseURL(raw, label string) (*url.URL, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("octonomy: %s is required", label)
+	}
+	base, err := url.Parse(strings.TrimRight(raw, "/"))
+	if err != nil {
+		return nil, fmt.Errorf("octonomy: invalid %s: %w", label, err)
+	}
+	if base.Scheme == "" || base.Host == "" {
+		return nil, fmt.Errorf("octonomy: %s must be an absolute URL, got %q", label, raw)
+	}
+	return base, nil
 }
 
 // New validates cfg and returns a ready Client.
 func New(cfg Config) (*Client, error) {
-	if strings.TrimSpace(cfg.BaseURL) == "" {
-		return nil, fmt.Errorf("octonomy: Config.BaseURL is required")
+	base, err := parseBaseURL(cfg.BaseURL, "Config.BaseURL")
+	if err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(cfg.Token) == "" {
 		return nil, fmt.Errorf("octonomy: Config.Token is required")
@@ -147,14 +175,6 @@ func New(cfg Config) (*Client, error) {
 	}
 	if !apiVersion.valid() {
 		return nil, fmt.Errorf("octonomy: invalid Config.APIVersion %q, want %q or %q", cfg.APIVersion, APIV1, APIV2)
-	}
-
-	base, err := url.Parse(strings.TrimRight(cfg.BaseURL, "/"))
-	if err != nil {
-		return nil, fmt.Errorf("octonomy: invalid Config.BaseURL: %w", err)
-	}
-	if base.Scheme == "" || base.Host == "" {
-		return nil, fmt.Errorf("octonomy: Config.BaseURL must be an absolute URL, got %q", cfg.BaseURL)
 	}
 
 	httpClient := cfg.HTTPClient
@@ -183,6 +203,7 @@ func New(cfg Config) (*Client, error) {
 	c.Assignments = &AssignmentService{client: c}
 	c.Resources = &ResourceService{client: c}
 	c.AuditLogs = &AuditLogService{client: c}
+	c.Health = &HealthService{client: c}
 	return c, nil
 }
 

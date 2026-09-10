@@ -79,6 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the branches read clearly inline.
 
 ### Fixed
+- **A nil `RequestOption` panicked instead of returning an error.** The transport now refuses one by
+  name (`RequestOption 2 is nil`) before anything is sent, as `NewHealthClient` does for a nil
+  `HealthOption`. Conditionally assembled option slices are where a nil comes from, and this library
+  never panics. Found by Codex review of
+  [#13](https://github.com/octoverse-id/octonomy-go/issues/13).
 - **Single-resource responses decoded to zero-valued structs.** The server wraps every payload under
   `data` — single resources as `{"data": {...}}`, not only lists — so `Tags.Create`/`Get`/`Update`
   and the three `Vocabularies` equivalents returned an **empty struct with a nil error** against a
@@ -256,6 +261,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than rejects, since the failure is already loud.
 
 ### Added
+- **Health probes** ([#13](https://github.com/octoverse-id/octonomy-go/issues/13)). `Health.Live` and
+  `Health.Ready` reach `/health/live` and `/health/ready`, the one group that sits **outside the API
+  surface in three ways at once**: rooted at the server root rather than under `/api/<version>`,
+  answering with a bare `{"status": "ok"}` that carries **no `data` envelope**, and authenticating
+  nobody. They are reachable two ways — `client.Health` for a caller who already has a full client,
+  and the new credential-free constructor for one who has no credentials at all — and both run the
+  same code and send the same request.
+- **`NewHealthClient(baseURL, ...HealthOption)`**, a constructor requiring **only a base URL**, with
+  `WithHealthHTTPClient` (the knob a probe loop wants: the 30s default timeout is rarely right for
+  one) and `WithHealthUserAgent`. It exists because `New` rejects a blank `Token` or `TenantID`, so
+  until now a caller could not construct a client *at all* in order to reach an endpoint that needs
+  neither. `New`'s validation was **not** loosened and `doData`'s envelope requirement was **not**
+  relaxed to make health fit — either would have cost every other resource the guarantees those
+  checks exist for. A `HealthClient` exposes `Health` and nothing else, and the API transport refuses
+  a credential-free client outright rather than sending a blank `Authorization` header.
+- **`ErrUnreachable`**, matched with `errors.Is`, marks a request that received **no HTTP response at
+  all** — connection refused, DNS, TLS, a client timeout, a cancelled context. It is not
+  health-specific: every method in the package wraps it, so "the server never answered" is now
+  distinguishable from "the server answered and said no" everywhere. The cause survives the wrap
+  (`errors.Is(err, context.DeadlineExceeded)` still works), and the error message is unchanged.
+- **`CodeNotReady` / `IsNotReady`**, for a health probe the server **answered** with a non-2xx and its
+  own `{"status": …}` body — `/health/ready` returns `503 {"status": "unavailable"}` when its
+  database connection will not open. `APIError.Details["status"]` carries the server's own word.
+
+  **Unreachable and unready are never collapsed into one error**, because they call for different
+  operator responses: back off and re-probe, versus go looking for the process. And `not_ready` is
+  **not** the status-to-code mapping `CodeUnexpectedStatus` exists to forbid — nothing is inferred
+  from an HTTP status here; the code is established by the health view's own server-authored payload.
+  A 503 whose body is an HTML error page is still `CodeUnexpectedStatus`, which is what keeps "the
+  application says it is unready" apart from "a load balancer answered because nothing is behind it".
 - **Audit logs** ([#12](https://github.com/octoverse-id/octonomy-go/issues/12)). `client.AuditLogs.List`
   reads the append-only mutation history, with `Tags.ListAuditLogs` and `Resources.ListAuditLogs` as
   the pre-filtered nested routes. One new model, `AuditLog`, which completes the seven v2 schemas

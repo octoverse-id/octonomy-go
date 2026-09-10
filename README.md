@@ -199,7 +199,7 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 | Tag assignments (`client.Assignments`) | ✅ Create / Remove / BulkAssign / BulkRemove |
 | Resource tags (`client.Resources`) | ✅ ListTags / ReplaceTags, plus `Tags.ListResources` |
 | Audit logs (`client.AuditLogs`) | ✅ List, plus `Tags.ListAuditLogs` / `Resources.ListAuditLogs` |
-| Health | 🚧 see [`docs/roadmap.md`](docs/roadmap.md) |
+| Health (`client.Health`) | ✅ Live / Ready, and `NewHealthClient` for callers with no credentials |
 
 Every implemented resource works on either surface. All seven v2 response models that carry namespace
 identity now have it — `Tag`, `Vocabulary`, `TagAlias`, `Assignment`, `ResourceTag`, `TagResource`,
@@ -220,6 +220,39 @@ are the one group needing the `audit:read` scope: a token without it gets a `403
 not an empty page. `AuditLog.OperationID` groups every row one operation emitted, which is how a
 `ReplaceTags` or a bulk call is reconstructed as a single act. See
 [`docs/api.md`](docs/api.md#audit-logs).
+
+## Health probes
+
+`/health/live` and `/health/ready` sit at the **server root**, outside `/api/<version>`, and
+authenticate nobody. Since `New` requires a token and a tenant, there is a second constructor that
+requires neither — a base URL is the whole configuration:
+
+```go
+probe, err := octonomy.NewHealthClient("https://octonomy.example.com",
+	// A probe loop usually wants a much shorter timeout than the 30s default.
+	octonomy.WithHealthHTTPClient(&http.Client{Timeout: 2 * time.Second}),
+)
+
+st, err := probe.Health.Ready(ctx)
+switch {
+case err == nil:
+	// ready; st.Status is the server's own word ("ok")
+case octonomy.IsNotReady(err):
+	// it answered and said it cannot serve: back off and re-probe
+case errors.Is(err, octonomy.ErrUnreachable):
+	// no response at all — refused, DNS, TLS, timeout, cancelled context
+}
+```
+
+**Unreachable and unready are never collapsed into one error.** A `503 {"status": "unavailable"}` is
+the application answering, so it is an `*APIError` (`IsNotReady`); a request that got no response
+produces no `*APIError` at all and matches `errors.Is(err, octonomy.ErrUnreachable)`. They call for
+different operator responses — wait versus go looking for the process.
+
+A caller who already holds a full client uses `client.Health.Ready(ctx)`, which runs the same code
+and sends the same request: no `Authorization`, no `X-Tenant-ID`, no `/api` prefix, from either entry
+point. `ErrUnreachable` is not health-specific — every method in the package wraps it around a
+request that got no response. See [`docs/api.md`](docs/api.md#health-probes).
 
 ## Common commands
 

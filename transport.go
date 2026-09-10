@@ -36,6 +36,30 @@ const (
 // chokepoint every method shares.
 var ErrResponseTooLarge = errors.New("octonomy: response body exceeded the " + maxResponseBytesLabel + " read limit")
 
+// ErrUnreachable marks a failure in which NO USABLE HTTP RESPONSE WAS RECEIVED:
+// the request never completed, so there is no status and no body to classify.
+// Connection refused, DNS failure, a TLS handshake failure, a client timeout, and
+// a cancelled context all land here.
+//
+// So does a redirect chain the client refused to follow, which is the one case
+// where net/http returns a response alongside its error -- and it has already
+// closed that body, and documents the response as ignorable. A 302 the SDK
+// declined to follow is not the server answering this request, so it is not
+// given a status classification either; the cause names itself in the message
+// ("stopped after 10 redirects").
+//
+// It is what separates "the server is gone" from "the server answered and said
+// no". The latter is always an *APIError -- AsAPIError finds it, and on a health
+// probe IsNotReady names it exactly -- while this sentinel is reachable only when
+// nothing answered at all. The two call for different operator responses, so the
+// SDK never collapses them.
+//
+// Wrapping preserves the cause, so the narrower checks still work alongside it:
+// errors.Is(err, context.DeadlineExceeded) and errors.As into *net.OpError both
+// reach through. Its own message is the "octonomy: request failed" prefix these
+// errors have always carried.
+var ErrUnreachable = errors.New("octonomy: request failed")
+
 // RequestOption customizes a single request.
 //
 // Options contribute headers (WithActor, WithNamespace), query parameters
@@ -237,8 +261,25 @@ func WithIncludeGlobal() RequestOption {
 // carries nothing where a payload was expected" an error instead of a zero
 // value. Resource files must not call doRaw directly.
 func (c *Client) doRaw(ctx context.Context, method, path string, query url.Values, body any, opts ...RequestOption) (int, []byte, error) {
+	// A probe client (NewHealthClient) holds no token and no tenant. Nothing
+	// exported can route an API call through one today -- HealthClient exposes
+	// only Health, and every service field lives on a Client that New built --
+	// so this is an invariant guard rather than a branch a caller can reach.
+	// It is here because the failure it prevents is silent: the header assembly
+	// below would send "Authorization: Bearer " and an empty X-Tenant-ID, a
+	// well-formed request that no server can attribute to anyone.
+	if c.probeOnly {
+		return 0, nil, fmt.Errorf("octonomy: this client was built by NewHealthClient and carries no credentials, so it can reach only the health probes; use New for API calls")
+	}
+
 	var rc requestConfig
-	for _, opt := range opts {
+	for i, opt := range opts {
+		// The library never panics; it returns errors. A nil option reaches here
+		// from a caller assembling a slice conditionally, and calling it would
+		// take the process down over a mistake in one argument.
+		if opt == nil {
+			return 0, nil, fmt.Errorf("octonomy: RequestOption %d is nil; omit it rather than passing a nil option", i)
+		}
 		opt(&rc)
 	}
 
@@ -283,9 +324,11 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 	}
 	req.Header = c.headers(rc, body != nil)
 
+	// The response is ignored on error, per net/http's contract -- see the note
+	// on the same call in doUnversioned.
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, nil, fmt.Errorf("octonomy: request failed: %w", err)
+		return 0, nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -309,9 +352,85 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resp.StatusCode, respBody, parseError(resp.StatusCode, respBody, c.apiVersion)
+		return resp.StatusCode, respBody, parseError(resp.StatusCode, respBody, versionHint(resp.StatusCode, c.apiVersion))
 	}
 	return resp.StatusCode, respBody, nil
+}
+
+// doUnversioned performs a GET against a route that sits OUTSIDE
+// /api/<version> and authenticates nobody -- today the two health probes, and
+// nothing else.
+//
+// IT IS A SEPARATE FUNCTION RATHER THAN A FLAG ON doRaw. Threading a skipAuth
+// or skipPrefix bool through doRaw would put a credential-suppressing branch in
+// the middle of the one path every tenant-scoped call takes, on top of the
+// version and scope logic already there. Here the absence of auth is the whole
+// function and cannot be reached by accident.
+//
+// It sends NO Authorization, NO X-Tenant-ID, no namespace headers, and no actor,
+// from EITHER entry point. A probe from a fully configured Client is byte-for-byte
+// the one a credential-free HealthClient sends, which is what lets Client.Health
+// and NewHealthClient share this code and one set of tests. Request options are
+// not accepted at all -- see HealthService.
+//
+// IT RETURNS THE STATUS AND BODY FOR EVERY RESPONSE, converting only a transport
+// or read failure into an error, and leaves the non-2xx classification to its
+// caller. On /health/ready a 503 is a documented ANSWER -- reachable but not
+// serving -- rather than a failure of the request, and routing it through
+// parseError here would flatten it into CodeUnexpectedStatus alongside the 503 a
+// load balancer emits when nothing is behind it. HealthService.probe makes that
+// split on the body.
+func (c *Client) doUnversioned(ctx context.Context, path string) (int, []byte, error) {
+	endpoint, err := c.joinPath(path)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	// USERINFO ON THE BASE URL WOULD BECOME AN Authorization HEADER. net/http
+	// adds "Authorization: Basic ..." itself for any request whose URL carries
+	// userinfo and whose Authorization header is empty (net/http.Client.send) --
+	// and empty is exactly what this function promises. So a caller who wrote
+	// https://user:pass@octonomy.example.com would send credentials to the one
+	// route in this package documented to carry none.
+	//
+	// Stripping it costs nothing elsewhere: on the versioned path c.headers
+	// always sets Authorization: Bearer, so net/http never reaches its userinfo
+	// branch and a userinfo base URL has never authenticated anything here.
+	// Rejecting it in the constructors instead would turn a today-inert field
+	// into a construction error for every caller, which is a wider call than
+	// this route needs.
+	endpoint.User = nil
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return 0, nil, fmt.Errorf("octonomy: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
+
+	// resp is ignored on error by net/http's own contract: "On error, any
+	// Response can be ignored. A non-nil Response with a non-nil error only
+	// occurs when CheckRedirect fails, and even then the returned
+	// Response.Body is already closed." There is nothing left to read and no
+	// final status to classify -- a redirect chain the client refused to follow
+	// is not an answer to this request -- and the cause names itself in the
+	// message ("stopped after 10 redirects").
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := readBounded(resp.Body, c.maxResponseBytes)
+	if err != nil {
+		// Same rule as doRaw: a non-2xx whose body could not be read is still a
+		// non-2xx, and the status is the part the caller branches on.
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return resp.StatusCode, nil, unreadableBodyError(resp.StatusCode, err)
+		}
+		return resp.StatusCode, nil, fmt.Errorf("octonomy: read response body: %w", err)
+	}
+	return resp.StatusCode, body, nil
 }
 
 // resolvePath joins the client's base URL, the /api/<version> prefix, and an
@@ -337,10 +456,21 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 // -- it does so whenever RawPath is a valid encoding of Path -- so each segment
 // is escaped exactly once.
 func (c *Client) resolvePath(path string) (*url.URL, error) {
-	escaped := c.apiVersion.prefix() + path
+	return c.joinPath(c.apiVersion.prefix() + path)
+}
+
+// joinPath appends an already-escaped, absolute path to the client's base URL,
+// keeping url.URL's Path/RawPath pair consistent for the reason resolvePath
+// records above.
+//
+// It is shared with doUnversioned, which appends a root-level path with no
+// version prefix. The escaping rule is the same for both and belongs in one
+// place: the health probes are constant paths today, but a second copy of this
+// is a second chance to set only one half of the pair.
+func (c *Client) joinPath(escaped string) (*url.URL, error) {
 	decoded, err := url.PathUnescape(escaped)
 	if err != nil {
-		return nil, fmt.Errorf("octonomy: invalid request path %q: %w", path, err)
+		return nil, fmt.Errorf("octonomy: invalid request path %q: %w", escaped, err)
 	}
 	endpoint := *c.baseURL
 	endpoint.RawPath = endpoint.EscapedPath() + escaped
@@ -696,11 +826,12 @@ func (c *Client) resolveActor(rc requestConfig) string {
 
 // parseError converts a non-2xx response into an *APIError.
 //
-// It takes the requested API version -- rather than only (status, body) -- so an
-// envelope-less 404 can name the most likely cause. That is a signature the
-// caller has to thread through, and it is deliberate: the alternative is a
-// second guess at the call site, where the version is equally available but the
-// mapping rule is not.
+// It takes a hint -- rather than only (status, body) -- so an envelope-less
+// response can name the most likely cause, which differs by surface: the
+// versioned API's is a server with no /api/v2 route (versionHint), and the
+// probes' is a base URL that does not point at the Octonomy origin (healthHint).
+// The hint is built by the caller because only the caller knows which surface it
+// is on; the mapping rule below stays the same for both.
 //
 // The mapping rule has exactly two branches:
 //
@@ -713,7 +844,7 @@ func (c *Client) resolveActor(rc requestConfig) string {
 // what made an unrouted 404 satisfy IsNotFound and let a missing /api/v2 read as
 // an empty taxonomy. Deriving semantics from a status this SDK did not generate
 // cannot be made safe, so it is gone -- see CodeUnexpectedStatus.
-func parseError(status int, body []byte, version APIVersion) error {
+func parseError(status int, body []byte, hint string) error {
 	var envelope struct {
 		Error struct {
 			Code      string         `json:"code"`
@@ -739,7 +870,7 @@ func parseError(status int, body []byte, version APIVersion) error {
 	return &APIError{
 		StatusCode: status,
 		Code:       CodeUnexpectedStatus,
-		Message:    message + versionHint(status, version),
+		Message:    message + hint,
 	}
 }
 

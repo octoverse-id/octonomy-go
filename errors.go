@@ -44,6 +44,25 @@ const (
 // stays distinguishable from an infrastructure 503 that never reached Octonomy.
 const CodeUnexpectedStatus = "unexpected_status"
 
+// CodeNotReady is the code carried by an *APIError from a HEALTH PROBE that the
+// server answered with a non-2xx AND its own {"status": ...} body: reachable,
+// up, and reporting that it cannot serve. /health/ready answers
+// 503 {"status": "unavailable"} when its database connection will not open.
+//
+// THIS IS NOT THE STATUS-TO-CODE MAPPING CodeUnexpectedStatus EXISTS TO FORBID.
+// That rule bans INFERRING a semantic code from an HTTP status this SDK did not
+// generate. Nothing is inferred here: the code is established by a
+// server-authored payload, the health view's own {"status": ...} envelope, which
+// is as much a response body as {"error": {...}} is. A non-2xx on a probe route
+// whose body is NOT that shape gets CodeUnexpectedStatus like every other
+// envelope-less response -- which is exactly what keeps "the application says it
+// is unready" apart from "a load balancer answered 503 because nothing is
+// behind it".
+//
+// The server never sends this string; it is the SDK's name for a state the
+// server expresses as a status plus a body.
+const CodeNotReady = "not_ready"
+
 // APIError is returned for any non-2xx response from the Octonomy API. It carries
 // the HTTP status alongside the server's error envelope so callers can branch on
 // Code, inspect Details, and correlate logs via RequestID.
@@ -160,6 +179,21 @@ func IsNamespaceAPIDisabled(err error) bool { return hasCode(err, CodeNamespaceA
 // scope, so the server cannot deterministically pick one. Narrow the call with
 // application_id, type, or an explicit scope.
 func IsAmbiguousResolution(err error) bool { return hasCode(err, CodeAmbiguousResolution) }
+
+// IsNotReady reports whether err is a health probe the server ANSWERED with a
+// non-2xx and its own status payload: it is reachable and up, but not serving.
+// APIError.Details carries the server's own word under "status".
+//
+// It is one half of a distinction health callers need and this SDK never
+// collapses. The other half is an UNREACHABLE server, which produces no
+// *APIError at all and matches errors.Is(err, ErrUnreachable). Not ready means
+// back off and re-probe; unreachable means the process, the URL, or the network
+// is the problem, and no amount of waiting on the database will fix it.
+//
+// It reports false for a 503 that did NOT come from the probe -- an HTML error
+// page from a gateway is IsUnexpectedStatus -- so a true here is the
+// application's own answer.
+func IsNotReady(err error) bool { return hasCode(err, CodeNotReady) }
 
 // IsUnexpectedStatus reports whether err is a non-2xx response that carried no
 // Octonomy error envelope -- see CodeUnexpectedStatus.
