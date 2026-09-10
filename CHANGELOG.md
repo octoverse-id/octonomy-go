@@ -106,10 +106,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `IsScopeImmutable` is convenience, not a fix: `parseError` already preserved the code verbatim, so
   `APIError.Code == "scope_immutable"` worked before this. What it adds is a name for the one
   branch a caller must not get wrong — the server raises it as a subclass of its conflict error, so
-  it carries `409` while its code is **not** `conflict`, and `IsConflict` reports false for it.
-  Scope is fixed at creation; the remediation is to re-create the row in the target scope, never to
-  retry. `APIError.Details` names the offending fields. Reachable on both surfaces — `/api/v1` has
-  no namespace axis, so only `application_id` can trigger it there.
+  it carries `409` while its code is **not** `conflict`, and `IsConflict` reports false for it. A
+  caller keying on the *status* reads "duplicate slug, pick another" and retries a request that can
+  never succeed. Scope is fixed at creation; the remediation is to re-create the row in the target
+  scope. `APIError.Details` names the offending fields. From this SDK only `ApplicationID` can raise
+  it, on **either** surface: the server's rule covers all three scope fields and its detail-PATCH
+  view is shared by `/api/v1` and `/api/v2`, but namespace is header-set rather than body-set, so
+  the three `*Update` structs carry no namespace field for a PATCH to move.
 
   **No `Scope` field was added to `TagListParams`.** The parameter belongs to `/tag-resolution` on
   both surfaces and appears exactly once per spec; the tags list route has none.
@@ -201,15 +204,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ResolutionScopeMerchant` resolves within the request's own namespace, so the SDK refuses it
   locally on a request that has none.
 
-  **`Scope` is not in the vendored v1 contract.** `docs/openapi.yaml` is still at server `1.0.0`,
-  which predates the parameter; the running server adds it to *both* surfaces, verified against a
-  3.1.0 container, where `/api/v1/tag-resolution` validates it by name — `scope=merchant` on a global
-  request is rejected with "Merchant scope requires a namespaced request", and an unknown value with
-  "Use 'global' or 'merchant'". So it is sent on v1 rather than gated to v2: the running server is
-  the authority where the vendored spec is merely stale, and the SDK has no version handshake with
+  **`Scope` is sent on both surfaces**, and `docs/openapi.yaml` documents it on
+  `/api/v1/tag-resolution` as of the #6 refresh above. It was absent from the vendored v1 contract
+  only while that file sat at server `1.0.0`, which predates the parameter; sending it on v1 was
+  already right then, verified against a 3.1.0 container where `/api/v1/tag-resolution` validates it
+  by name — `scope=merchant` on a global request is rejected with "Merchant scope requires a
+  namespaced request", and an unknown value with "Use 'global' or 'merchant'". Gating it to v2 would
+  have refused a call every current deployment answers, and the SDK has no version handshake with
   which to gate it honestly. Against a v1 deployment older than the release that added it, the
   parameter is silently dropped like any unknown query parameter — the same exposure every other
-  post-1.0.0 addition carries, and what #6 closes by re-vendoring the v1 contract at 3.1.1. `ResolutionScopeGlobal` is a legal explicit pin — the one place
+  post-1.0.0 addition carries. `ResolutionScopeGlobal` is a legal explicit pin — the one place
   in this SDK where the literal `global` is accepted, as against the reserved `X-Namespace-Type` — and
   from a namespaced request it is *also* the authorization opt-in, so it does not need
   `WithIncludeGlobal` beside it: the server widens the authorized set for this route only when it

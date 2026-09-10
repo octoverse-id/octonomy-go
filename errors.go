@@ -153,15 +153,20 @@ func IsInactiveTag(err error) bool { return hasCode(err, CodeInactiveTag) }
 // APIError.Details names the offending fields, each mapped to its own message,
 // so a caller can report which part of the scope it tried to move.
 //
-// IsConflict reports FALSE for it. The server raises it as a subclass of its
-// conflict error, so it carries 409, but the envelope's code is
-// scope_immutable rather than conflict -- a caller that branches on IsConflict
-// for "duplicate slug, pick another" must branch on this first, or it will
-// retry a request that can never succeed.
+// IsConflict reports FALSE for it, and that is the trap. The server raises it
+// as a subclass of its conflict error, so it carries 409 while its code is
+// scope_immutable rather than conflict. A caller that keys on the STATUS --
+// "409 means duplicate slug, pick another" -- retries a request that can never
+// succeed; one that keys on IsConflict alone drops it into a generic error path
+// with the remediation unread. Branch ORDER is not the issue: IsConflict
+// compares the exact code and never matches this one whichever runs first.
 //
-// It is reachable on BOTH surfaces. /api/v1 has no namespace axis, so only
-// application_id can trigger it there; /api/v2 can trigger it on any of the
-// three.
+// From this SDK only ApplicationID can raise it, on EITHER surface. The
+// server's rule covers all three scope fields and its detail-PATCH view is
+// shared by /api/v1 and /api/v2, so the raw REST API can reject any of them on
+// either one. Namespace, though, is set by the X-Namespace-* headers rather
+// than by the body, so TagUpdate, VocabularyUpdate and TagAliasUpdate carry no
+// namespace field for a PATCH to move.
 func IsScopeImmutable(err error) bool { return hasCode(err, CodeScopeImmutable) }
 
 // IsNamespaceNotSupported reports whether err is a namespace_not_supported

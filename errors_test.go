@@ -402,9 +402,10 @@ func TestDoRaw_Oversized2xxStaysAPlainReadError(t *testing.T) {
 // aliases -- so one helper has to hold across six call sites. The test walks all
 // of them rather than picking one, and pins the three properties a caller
 // depends on: the helper matches, the code survives, and the 409 does NOT read
-// as a plain conflict. That last one is the whole reason the constant exists:
-// the server raises scope_immutable as a subclass of its conflict error, so a
-// caller branching on IsConflict would retry a request that can never succeed.
+// as a plain conflict. That last one is the whole reason the constant exists.
+// The server raises scope_immutable as a subclass of its conflict error, so the
+// status alone says "conflict" while the code does not, and a caller keying on
+// the status would retry a request that can never succeed.
 func TestIsScopeImmutable_OnEveryDocumentedPatch(t *testing.T) {
 	// details mirrors the server's shape: the changed scope fields, each mapped
 	// to its own message. A caller reports which axis it tried to move from it.
