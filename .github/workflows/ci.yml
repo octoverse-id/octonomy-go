@@ -65,15 +65,45 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
+      # Installed and run as two explicit steps rather than through
+      # golang/govulncheck-action, which cannot express the one thing this job
+      # needs. The action hardcodes `go install golang.org/x/vuln/...@latest`
+      # with no version input, and actions/setup-go exports GOTOOLCHAIN=local so
+      # that a pinned Go really is the Go used -- so the moment x/vuln raised its
+      # own go directive past the pinned version, the install failed and the scan
+      # never ran. x/vuln v1.8.0 (2026-09-08) requires go >= 1.26.0, and every
+      # run since has failed on `requires go >= 1.26.0 (running go 1.25.x;
+      # GOTOOLCHAIN=local)` -- on main as well as on PRs.
+      #
+      # Dropping the action costs nothing else: the job already checks out and
+      # sets up Go above, and the action's own copies of both were redundant
+      # (its checkout was already disabled here, because a second one leaves two
+      # credential configs in place and the fetch fails with
+      # `Duplicate header: "Authorization"`).
+      - name: Install govulncheck
+        # GOTOOLCHAIN=auto lets the go command fetch whatever toolchain is needed
+        # to BUILD the scanner. It is set inline, in the shell, rather than in an
+        # `env:` block, so it cannot be silently re-overridden by the
+        # GOTOOLCHAIN=local that setup-go exports into the job environment.
+        #
+        # It applies to the install ONLY, which is the whole point: the binary it
+        # produces still analyzes this module with the Go pinned above (verified
+        # -- govulncheck -version reports `Go: go1.25.x` alongside
+        # `Scanner: govulncheck@v1.8.0`). Scanning with a newer stdlib than the
+        # one under test would hide exactly the standard-library advisories this
+        # job exists to surface.
+        #
+        # @latest, not a pin: a pinned scanner ages into the same failure from
+        # the other direction, and the vulnerability database is fetched from
+        # vuln.go.dev at run time regardless, so a newer tool is strictly better
+        # here. With GOTOOLCHAIN=auto the version ratchet can no longer break it.
+        run: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest
+      # Deliberately NOT `make vuln`: that target SKIPS when the binary is absent,
+      # which is right on a laptop and is exactly the wrong behavior here -- a
+      # failed install would report a green scan that never happened. Calling the
+      # binary directly makes a missing one a failing step.
       - name: govulncheck
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-input: "1.25"
-          # The job already checked out above. Letting the action check out a
-          # second time leaves two credential configs in place, and git sends
-          # both -- the fetch then fails with `Duplicate header: "Authorization"`
-          # and HTTP 400.
-          repo-checkout: "false"
+        run: govulncheck ./...
 
   # The harness boot AND its only real consumer, in one job.
   #

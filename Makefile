@@ -78,7 +78,7 @@ vuln: ## Run govulncheck (skipped if not installed; CI runs it)
 	@if command -v govulncheck >/dev/null 2>&1; then \
 		govulncheck ./...; \
 	else \
-		echo "govulncheck not installed; skipping. Install: go install golang.org/x/vuln/cmd/govulncheck@latest"; \
+		echo "govulncheck not installed; skipping. Install: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest"; \
 	fi
 
 examples: ## Compile-check the runnable examples (no binaries emitted)
