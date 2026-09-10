@@ -126,7 +126,8 @@ tag, err := client.Tags.Update(ctx, id, octonomy.TagUpdate{
 ```
 
 The two options compose — actor is *who*, request id is *which call* — and a request id applies to
-any method, read or write.
+every method that takes options, read or write. The health probes are the exception: they take no
+options at all, since a probe writes no audit row and emits no event (see [Health probes](#health-probes)).
 
 **Generate the id yourself.** The SDK never mints one: no header is sent unless you use the option,
 which leaves the server's own minting intact, and there is deliberately no `Config` field, since a

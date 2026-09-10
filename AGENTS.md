@@ -49,8 +49,9 @@ stays a faithful, ergonomic client.
   silently producing a tenant-shared row. `include_global` is a **query** parameter and is
   meaningless on writes.
 - **Request correlation is send-only, per call, and never minted here.** `WithRequestID` sets
-  `X-Request-ID` at the same transport chokepoint the scope options use, and the header goes out
-  **only** when the caller supplied one — the server mints `req_<uuid>` otherwise and threads
+  `X-Request-ID` at the same transport chokepoint the scope options use — so every method that takes
+  options gets it, and the health probes, which take none, deliberately do not (`health.go` records
+  why) — and the header goes out **only** when the caller supplied one — the server mints `req_<uuid>` otherwise and threads
   whichever id it holds into the audit row, the outbox/webhook event, its structured log, and the
   error envelope. Do **not** add a `Config.RequestID`: a request id names *one* request, so a
   client-level default would stamp every call the process makes with a single value and correlate

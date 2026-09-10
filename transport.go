@@ -140,8 +140,11 @@ func WithActor(actorID string) RequestOption {
 // single value and correlate nothing, while looking exactly like it worked.
 //
 // It composes with WithActor rather than replacing it -- actor is WHO, request
-// id is WHICH CALL, and a mutation usually wants both -- and applies to any
-// method, since it is set at the transport chokepoint. Order does not matter.
+// id is WHICH CALL, and a mutation usually wants both -- and applies to every
+// method that takes a RequestOption, since it is set at the one chokepoint they
+// all share. The health probes are the exception: they take no options at all,
+// and HealthService records why this one is excluded with the rest. Order does
+// not matter.
 // Repeating it overrides, unlike the scope options: the axes those guard are
 // tenant, namespace, and application, where last-wins is a silent wrong-scope
 // read; the worst a wrong id can do is mislabel a log line, and overriding one

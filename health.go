@@ -50,12 +50,26 @@ type HealthStatus struct {
 // probe from a fully configured Client is byte-for-byte the one a credential-free
 // HealthClient sends.
 //
-// The methods take no RequestOption. Every option this package has is a scoping
-// or attribution knob for the versioned, tenant-scoped API -- WithNamespace,
-// WithApplication, WithIncludeGlobal, WithActor -- and none of them means
-// anything on a route that has no tenant. Accepting and ignoring them would be
-// the silent no-op this SDK refuses everywhere else, so the signature says so
-// instead.
+// The methods take no RequestOption, and the option set splits in two on why.
+// WithNamespace, WithApplication, WithIncludeGlobal, and WithActor are scoping
+// or attribution knobs for the versioned, tenant-scoped API, and none of them
+// means anything on a route that has no tenant. Accepting and ignoring them
+// would be the silent no-op this SDK refuses everywhere else, so the signature
+// says so instead.
+//
+// WITHREQUESTID IS THE ONE THAT WOULD DO SOMETHING, and it is excluded anyway.
+// The server's request middleware runs on these routes too: probed against
+// 3.1.0, /health/ready echoes a caller-supplied X-Request-ID back and mints one
+// when there is none. But a probe mutates nothing, so it writes no audit row and
+// emits no event, and its non-2xx carries {"status": ...} rather than the error
+// envelope -- so of the four sinks that make a correlation id worth sending, a
+// probe reaches only the server's log line. Against that thin gain: options here
+// mean either accepting all of them and ignoring most, or growing a per-option
+// rejection surface on the one route with nothing to scope, and either one costs
+// the property above -- that both entry points send a byte-for-byte identical
+// request, which is what lets them share one code path and one set of tests.
+// Raised by Codex review on #5 and refused on those grounds. If a correlated
+// probe is ever wanted, doUnversioned is what to revisit, not this signature.
 type HealthService struct {
 	client *Client
 }
