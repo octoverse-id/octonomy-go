@@ -86,6 +86,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   encoded the spec rather than the server, and so a complete unit suite stayed green throughout.
   Found by the compat line's smoke test on its first run against a container
   ([#32](https://github.com/octoverse-id/octonomy-go/issues/32)).
+- **The `vuln` CI job stopped running govulncheck at all.** `golang/govulncheck-action` installs
+  `golang.org/x/vuln/cmd/govulncheck@latest` and offers no version input, while `actions/setup-go`
+  exports `GOTOOLCHAIN=local` so the pinned Go really is the Go used. When x/vuln v1.8.0
+  (2026-09-08) raised its own minimum to go 1.26, the install began failing on
+  `requires go >= 1.26.0 (running go 1.25.x; GOTOOLCHAIN=local)` — on `main` as well as on every
+  PR — and the scan never ran. The job now installs with `GOTOOLCHAIN=auto` (which applies to
+  *building* the tool; the scan still uses the pinned Go, so standard-library advisories stay
+  reported against the version under test) and invokes `govulncheck` directly, so a failed install
+  is a failed step rather than a skipped scan. No advisories against this module: all 18 findings
+  seen while reproducing were artifacts of a local go1.25.4 and are fixed at the 1.25 patch CI
+  resolves to. Same one-line fix applied to the install hints in `docs/development.md` and the
+  `Makefile`, which reproduce the identical error on a go1.25 toolchain.
 
 ### Changed
 - The transport is now one request path (`doRaw`) and three decoders chosen by response shape:
