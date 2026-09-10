@@ -144,8 +144,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   item and may equally skip it. Neither at-least-once nor at-most-once is on offer, and a stable
   `ORDER BY` would not buy them either — a row inserted or removed *before* the offset shifts
   everything after it, deterministic sort or not. Nor would a keyset cursor on its own: it removes
-  the positional shift but is only as stable as the key it seeks on, and these collections sort on
-  `name` and `slug`, which a caller can edit mid-walk. Exactness needs a **snapshot**, which is the
+  the positional shift but is only as stable as the key it seeks on, and that varies by endpoint —
+  vocabularies and aliases sort on `name`/`slug`, which a caller can edit mid-walk, while audit logs
+  and assignments sort on an insert-time timestamp that never changes, and the tags list has no order
+  to seek on at all. A consistent view of a moving collection needs a **snapshot**, which is the
   server's to offer. It is also not a polling cursor: a row created
   since that sorts after the old tail turns up, one sorting before it never does.
 

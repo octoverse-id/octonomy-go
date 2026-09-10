@@ -100,12 +100,18 @@ type List[T any] struct {
 // hazard of an undefined result order, nothing more.
 //
 // A keyset cursor -- naming the last row seen instead of counting past it --
-// removes the positional shift, but it is not exactness either, and not here:
-// it is only as stable as the key it seeks on, and these collections sort on
-// name and slug, both of which a caller can edit mid-walk. Rename a row you
+// removes the positional shift, but it is only ever as stable as the key it
+// seeks on, and that varies by endpoint here. Vocabularies and aliases sort on
+// name and slug, both of which a caller can edit mid-walk: rename a row you
 // already passed to something later and it comes round again; rename one ahead
-// of you to something earlier and you never see it. Exactness needs a SNAPSHOT
-// of the collection, and that is the server's to offer.
+// of you to something earlier and you never see it. Audit logs and assignments
+// sort on a timestamp that is set once at insert and never updated, so a cursor
+// over those really would be stable. The tags list has no order at all, so
+// there is nothing to seek on.
+//
+// Even on an immutable key a cursor gives continuity, not a consistent view of
+// a moving collection. Only a SNAPSHOT gives that, and it is the server's to
+// offer.
 //
 // IT IS ALSO NOT A POLLING CURSOR. Resuming from the offset a SUCCESSFUL walk
 // returned is not a reliable way to find what has been created since: a new row
