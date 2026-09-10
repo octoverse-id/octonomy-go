@@ -96,6 +96,7 @@ Every request carries two credentials from `Config`:
 | `Authorization: Bearer <token>` | `Config.Token` | Service token (scopes: `tags:read`, `tags:write`, `audit:read`) |
 | `X-Tenant-ID` | `Config.TenantID` | Scopes every request to one tenant |
 | `X-Actor-ID` *(optional)* | `Config.ActorID` or `WithActor(...)` | Attributes mutations in the audit log |
+| `X-Request-ID` *(optional)* | `WithRequestID(...)` | Correlates one call with the server's records of it |
 
 ```go
 // Attribute a single mutation to a specific actor.
@@ -103,6 +104,48 @@ tag, err := client.Tags.Update(ctx, id, octonomy.TagUpdate{
 	IsActive: octonomy.Bool(false),
 }, octonomy.WithActor("svc-catalog"))
 ```
+
+## Request correlation
+
+`WithRequestID` sends your own correlation id as `X-Request-ID`. The server reads it when present
+and mints `req_<uuid>` when it is not, then carries whichever id it holds into four places:
+
+- the **audit row** for the mutation — `AuditLog.RequestID`
+- the **outbox / webhook event** envelope — its `request_id` field, and the delivered webhook's
+  `X-Octonomy-Request-ID` header
+- the server's **structured request log**
+- the **error envelope** of a failed call — `APIError.RequestID`
+
+```go
+requestID := uuid.NewString() // or the trace id your service already carries
+log.Printf("updating tag %s request_id=%s", id, requestID)
+
+tag, err := client.Tags.Update(ctx, id, octonomy.TagUpdate{
+	Name: octonomy.String("Autumn"),
+}, octonomy.WithActor("svc-catalog"), octonomy.WithRequestID(requestID))
+```
+
+The two options compose — actor is *who*, request id is *which call* — and a request id applies to
+every method that takes options, read or write. The health probes are the exception: they take no
+options at all, since a probe writes no audit row and emits no event (see [Health probes](#health-probes)).
+
+**Generate the id yourself.** The SDK never mints one: no header is sent unless you use the option,
+which leaves the server's own minting intact, and there is deliberately no `Config` field, since a
+client-level default would stamp every call the process makes with a single value and correlate
+nothing. On a **successful** call the SDK does not hand back the server's id — methods return
+`(*T, error)` — so supplying your own is what puts an id in both your logs and Octonomy's. On a
+**failed** call you get the server's id either way, from `APIError.RequestID`.
+
+The id must be non-blank printable ASCII with no leading or trailing whitespace; anything else is
+refused locally, before the request is sent. Each of those is a way the id you logged and the id the
+server stores stop matching: a control byte is rejected by `net/http` itself, a non-ASCII one is
+decoded `latin-1` server-side and stored as mojibake, and outer whitespace is trimmed by `net/http`
+on the way out — so `" req-abc "` would be recorded as `"req-abc"`.
+
+**Keep it short.** The server stores the id in a 100-character column; a longer one fails the audit
+insert and the whole mutation answers `500` with no error envelope. A UUID (36) or a W3C
+`traceparent` (55) is well inside it. The SDK does not enforce that width — it is a server rule,
+which a later release may widen.
 
 ## API version and namespaces
 

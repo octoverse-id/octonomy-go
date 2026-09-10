@@ -68,6 +68,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than on whether it is a read. A bodyless `DELETE` is exactly the case where the query string
   is the whole request and `WithApplication` is the only way to supply an application, so it is now
   checked locally instead of being sent to a certain `403`.
+- **`WithRequestID(id)` sends `X-Request-ID`** ([#5](https://github.com/octoverse-id/octonomy-go/issues/5)),
+  threading a caller's own correlation id through the four places the server records a request: the
+  audit row (`AuditLog.RequestID`), the outbox / webhook event envelope (its `request_id` field and
+  the delivered webhook's `X-Octonomy-Request-ID`), the structured request log, and the error
+  envelope (`APIError.RequestID`). It composes with `WithActor` — actor is *who*, request id is
+  *which call* — and applies to every method that takes options. The health probes are the
+  exception: they take none, and `HealthService` now records why this option is excluded along with
+  the scoping knobs.
+
+  **The SDK never mints one, and there is no `Config` field.** No header is sent unless the option is
+  used, which leaves the server's own `req_<uuid>` minting intact; a client-minted id would replace a
+  value the caller can at least read back off an error envelope with one that was never surfaced
+  anywhere. A client-level default is worse still: a request id names *one* request, so it would
+  stamp every call the process makes with a single value and correlate nothing while looking like it
+  worked. The server's id is still not surfaced on the **success** path — methods return
+  `(*T, error)` — so callers who want correlation on a success generate the id themselves, which is
+  the whole point of the option.
+
+  An id that is blank, non-printable-ASCII, or surrounded by whitespace is refused locally, before
+  the request is sent. That is wire grammar, not a server rule, and each case is a distinct way the
+  id the caller logged and the id the server stores stop matching: a control byte is rejected by
+  `net/http` inside `Do`, where the SDK would report it as `ErrUnreachable` ("nothing answered") for
+  a request that was never sent; a byte above `0x7e` is *accepted* and then decoded `latin-1`
+  server-side, landing in the audit row as mojibake; and outer whitespace is silently trimmed by
+  `net/http` while writing the header, so `" req-abc "` would be recorded as `"req-abc"`.
 - `docs/openapi-v2.yaml`, vendored from server 3.1.1.
 
 ### Changed
@@ -311,9 +336,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mutation reconstructable weeks later: `Resources.ReplaceTags` and both bulk calls write one row per
   assignment they touch under a single operation id, so the removals and additions read as one act
   rather than as unrelated churn. `RequestID` correlates a row with the one HTTP request that produced
-  it, and with `APIError.RequestID` for a request that failed; the server generates it when the caller
-  sends none, which is what this SDK does today ([#5](https://github.com/octoverse-id/octonomy-go/issues/5)
-  sends one).
+  it, and with `APIError.RequestID` for a request that failed. Pass
+  [`WithRequestID`](https://github.com/octoverse-id/octonomy-go/issues/5) to supply your own; the
+  server mints one when the caller sends none.
 - **Rows arrive newest first** (`created_at` descending, `id` as a stable tiebreak), so offset paging
   walks backwards through history. Asserted against a real server, since page order is a property of
   the server's query and no fixture can establish it.

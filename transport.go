@@ -22,6 +22,11 @@ const (
 	// two spellings that scope differently.
 	reservedNamespaceTypeGlobal = "global"
 
+	// requestIDHeader carries the caller's OWN correlation id, and only when the
+	// caller supplied one -- see WithRequestID for where the server puts it and
+	// why the SDK never mints one itself.
+	requestIDHeader = "X-Request-ID"
+
 	applicationIDParam    = "application_id"
 	includeGlobalParam    = "include_global"
 	scopeParam            = "scope"
@@ -73,6 +78,9 @@ type requestConfig struct {
 	actorID  string
 	actorSet bool
 
+	requestID    string
+	requestIDSet bool
+
 	namespaceType string
 	namespaceID   string
 	namespaceSet  bool
@@ -102,6 +110,111 @@ func WithActor(actorID string) RequestOption {
 	return func(rc *requestConfig) {
 		rc.actorID = actorID
 		rc.actorSet = true
+	}
+}
+
+// WithRequestID sets the X-Request-ID header for one request, threading the
+// caller's own correlation id through everything the server records about that
+// request.
+//
+// The server reads the header when it is present and mints req_<uuid> when it is
+// not (core/middleware.py), then carries whichever id it holds into four places:
+//
+//   - the audit row written for the mutation -- AuditLog.RequestID
+//   - the outbox / webhook event envelope -- its request_id field, and the
+//     X-Octonomy-Request-ID header on the delivered webhook
+//   - the server's structured request log
+//   - the error envelope of a failed call -- APIError.RequestID
+//
+// Supplying the id is what joins those four to the caller's own logs. Without it
+// they are internally consistent and unreachable from outside: Octonomy holds
+// one id, the calling service holds another, and nothing joins them.
+//
+// THE SDK NEVER MINTS ONE. No header is sent unless this option is used, which
+// leaves the server's own minting intact. A client-side id would replace a
+// server-generated one the caller can at least find in an error envelope with
+// one that was never surfaced anywhere -- strictly worse than sending none.
+//
+// For the same reason there is no Config field. A request id names ONE request,
+// so a client-level default would stamp every call the process makes with a
+// single value and correlate nothing, while looking exactly like it worked.
+//
+// It composes with WithActor rather than replacing it -- actor is WHO, request
+// id is WHICH CALL, and a mutation usually wants both -- and applies to every
+// method that takes a RequestOption, since it is set at the one chokepoint they
+// all share. The health probes are the exception: they take no options at all,
+// and HealthService records why this one is excluded with the rest. Order does
+// not matter.
+//
+// Repeating it overrides, unlike the scope options: the axes those guard are
+// tenant, namespace, and application, where last-wins is a silent wrong-scope
+// read; the worst a wrong id can do is mislabel a log line, and overriding one
+// held in a shared []RequestOption is the same act WithActor already allows.
+//
+// ON THE SUCCESS PATH THE SERVER'S ID IS NOT SURFACED. Methods return
+// (*T, error), the transport discards the response headers, and a Client holds
+// no per-call state to park one in. That is not a gap this option leaves open:
+// a caller who passes an id already has it. Generate one per outbound call
+// (a UUID, or the trace id you already carry) and log it on your side.
+//
+// The id must be non-blank printable ASCII with no leading or trailing
+// whitespace; see the guard below for what each of those prevents.
+//
+// KEEP IT SHORT. The server stores it in a 100-character column (audit/models.py
+// and events/models.py), and a longer id fails the row insert: probed against
+// 3.1.0 on Postgres, a 150-character id answers 500 with a bare HTML body -- no
+// error envelope, so it reaches a caller as CodeUnexpectedStatus naming nothing
+// -- and the mutation is rolled back whole rather than committed without its
+// audit row. A uuid is 36 characters and a W3C traceparent is 55.
+//
+// That width is a SERVER rule -- a column, which a later release may widen --
+// so this client does not enforce it. A cap here would become a false rejection
+// of a legal id the moment the server changed, which is the drift AGENTS.md
+// keeps server invariants out of this package to avoid. The guards below are a
+// different thing: they are the wire grammar of an HTTP header, which no server
+// release can widen.
+func WithRequestID(id string) RequestOption {
+	return func(rc *requestConfig) {
+		if strings.TrimSpace(id) == "" {
+			rc.fail(fmt.Errorf("octonomy: WithRequestID: request id is required; omit the option to let the server mint one"))
+			return
+		}
+		// NOT a server-rule check. This is the wire grammar of a header value,
+		// plus the one property a correlation id has to keep: being matched by
+		// string EQUALITY at the far end.
+		//
+		// A control byte is refused by net/http itself, at write time, inside
+		// httpClient.Do -- so doRaw would wrap it in ErrUnreachable, a sentinel
+		// documented to mean nothing answered, for a request that was never sent.
+		// The most likely way to get one is not exotic: an id read from a file or
+		// an environment variable with its trailing newline still attached.
+		//
+		// A byte above 0x7e is worse, because it is ACCEPTED. The header goes out
+		// verbatim and the server's WSGI layer decodes it as latin-1 (PEP 3333),
+		// so a UTF-8 id lands in the audit row as mojibake that no longer equals
+		// the one the caller logged: probed against 3.1.0, "req-café" is stored
+		// as "req-cafÃ©". Correlation is lost with a 201 and no error anywhere,
+		// and silence is the failure mode this SDK refuses.
+		for i := 0; i < len(id); i++ {
+			if b := id[i]; b < 0x20 || b > 0x7e {
+				rc.fail(fmt.Errorf("octonomy: WithRequestID(%q): byte %#02x at offset %d is not printable ASCII; a request id travels in an HTTP header and is matched by string equality in the audit log, the event envelope, and the server's logs, so it must be printable ASCII (a UUID, or your own trace id)", id, b, i))
+				return
+			}
+		}
+		// Outer whitespace is the third way the id the caller logs and the id the
+		// server stores can differ, and the only one that is not visibly wrong:
+		// a space IS printable ASCII, so the loop above accepts it, and then
+		// net/http TRIMS it while writing the header (textproto.TrimString in
+		// Header.writeSubset). Probed: " req-abc " leaves the client as
+		// " req-abc " and arrives at the server as "req-abc". Trimming it here
+		// instead would send a legal request and still break equality, since the
+		// caller's own logs keep the untrimmed string. So it is refused, and the
+		// message names the fix. Found by Codex review on #5.
+		if trimmed := strings.TrimSpace(id); trimmed != id {
+			rc.fail(fmt.Errorf("octonomy: WithRequestID(%q): a request id may not begin or end with whitespace; net/http trims it on the way out, so the server would record %q and no longer match the id you logged -- pass the trimmed value", id, trimmed))
+			return
+		}
+		rc.requestID, rc.requestIDSet = id, true
 	}
 }
 
@@ -496,6 +609,14 @@ func (c *Client) headers(rc requestConfig, hasBody bool) http.Header {
 	}
 	if actor := c.resolveActor(rc); actor != "" {
 		h.Set("X-Actor-ID", actor)
+	}
+	// ONLY when the caller supplied one. Sending a client-minted id here would
+	// bypass the server's own minting for no benefit, and sending an empty header
+	// would be worse than sending none: the server treats a blank value as
+	// absent and mints anyway, so the request would carry a header that means
+	// nothing. WithRequestID refuses a blank id for that reason.
+	if rc.requestIDSet {
+		h.Set(requestIDHeader, rc.requestID)
 	}
 	// The pair is all-or-nothing by construction: WithNamespace refuses to set
 	// half of it, and WithGlobalNamespace clears both. The server rejects a half

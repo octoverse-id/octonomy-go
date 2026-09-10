@@ -160,6 +160,123 @@ func TestDo_ActorHeader(t *testing.T) {
 	}
 }
 
+// TestDo_RequestIDHeader pins both halves of #5: a caller-supplied correlation
+// id reaches the wire, and NOTHING is sent when the caller supplies none.
+//
+// The absent case is asserted with Values, not Get: a present-but-empty header
+// reads as "" through Get and would pass a test that only compared strings,
+// while on the wire it is a header the server sees, treats as absent, and mints
+// over -- the one shape this option must never produce.
+func TestDo_RequestIDHeader(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      []RequestOption
+		wantID    string
+		wantActor string
+	}{
+		{"absent by default", nil, "", ""},
+		{"sent when supplied", []RequestOption{WithRequestID("req-abc")}, "req-abc", ""},
+		{"composes with WithActor", []RequestOption{WithActor("svc-catalog"), WithRequestID("req-abc")}, "req-abc", "svc-catalog"},
+		{"composes in the other order", []RequestOption{WithRequestID("req-abc"), WithActor("svc-catalog")}, "req-abc", "svc-catalog"},
+		// Not a scope axis: the axes that refuse last-wins are the ones where a
+		// silent override reads the wrong tenant's rows. Overriding an id held in
+		// a shared []RequestOption is the same act WithActor already allows.
+		{"repeating it overrides", []RequestOption{WithRequestID("req-first"), WithRequestID("req-second")}, "req-second", ""},
+		{"survives the scope options", []RequestOption{WithRequestID("req-abc"), WithNamespace("merchant", "acme-store"), WithApplication("storefront")}, "req-abc", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				values := r.Header.Values(requestIDHeader)
+				switch {
+				case tt.wantID == "" && len(values) != 0:
+					t.Errorf("%s = %q, want the header to be absent entirely so the server mints its own", requestIDHeader, values)
+				case tt.wantID != "" && (len(values) != 1 || values[0] != tt.wantID):
+					t.Errorf("%s = %q, want exactly [%q]", requestIDHeader, values, tt.wantID)
+				}
+				if got := r.Header.Get("X-Actor-ID"); got != tt.wantActor {
+					t.Errorf("X-Actor-ID = %q, want %q: the two options must compose, not overwrite", got, tt.wantActor)
+				}
+				writeData(t, w, http.StatusOK, Tag{ID: "abc"})
+			}))
+			t.Cleanup(srv.Close)
+
+			c, err := New(Config{BaseURL: srv.URL, Token: "t", TenantID: "acme"})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			tag, err := c.Tags.Get(context.Background(), "abc", tt.opts...)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if tag.ID != "abc" {
+				t.Errorf("tag.ID = %q, want abc", tag.ID)
+			}
+		})
+	}
+}
+
+// TestWithRequestID_RejectsUnusableValues asserts the option fails LOCALLY, with
+// its own name in the message, rather than letting the value reach the wire.
+//
+// The handler fails the test if it is ever reached, because where the failure
+// happens is the point. A control byte would otherwise be refused by net/http
+// inside httpClient.Do, and doRaw wraps everything from there in ErrUnreachable
+// -- a sentinel that promises no server answered -- so a newline on the end of
+// an id read from a file would be reported as an unreachable server. A byte
+// above 0x7e would not fail at all: it would be decoded latin-1 by the server
+// and stored as mojibake, correlating nothing, with a 2xx and no error.
+func TestWithRequestID_RejectsUnusableValues(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{"empty", ""},
+		{"whitespace only", "   "},
+		{"trailing newline", "req-abc\n"},
+		{"embedded carriage return", "req\rabc"},
+		{"embedded tab", "req\tabc"},
+		{"nul byte", "req\x00abc"},
+		{"del", "req\x7fabc"},
+		{"non-ascii", "req-café"},
+		// Printable, so the ASCII loop accepts it -- and then net/http trims it
+		// while writing the header, so the server would store a string the
+		// caller never logged. Probed: " req-abc " leaves as " req-abc " and
+		// arrives as "req-abc".
+		{"leading space", " req-abc"},
+		{"trailing space", "req-abc "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newUnreachableClient(t, APIV2)
+			_, err := c.Tags.Get(context.Background(), "abc", WithRequestID(tt.id))
+			if err == nil {
+				t.Fatalf("WithRequestID(%q) was accepted, want a local failure", tt.id)
+			}
+			if !strings.Contains(err.Error(), "WithRequestID") {
+				t.Errorf("error = %v, want it to name WithRequestID", err)
+			}
+		})
+	}
+}
+
+// TestWithRequestID_DoesNotMaskAnEarlierOptionFailure keeps the option inside
+// requestConfig's first-failure-wins contract: an id that cannot be sent is
+// still not the mistake to report when the caller already made an earlier one.
+func TestWithRequestID_DoesNotMaskAnEarlierOptionFailure(t *testing.T) {
+	c := newUnreachableClient(t, APIV2)
+	_, err := c.Tags.Get(context.Background(), "abc",
+		WithApplication(" "),
+		WithRequestID("req\n"),
+	)
+	if err == nil {
+		t.Fatal("both options were accepted, want the first failure reported")
+	}
+	if !strings.Contains(err.Error(), "WithApplication") {
+		t.Errorf("error = %v, want the FIRST failure (WithApplication), not the request id", err)
+	}
+}
+
 func TestDo_ErrorEnvelope(t *testing.T) {
 	tests := []struct {
 		name      string

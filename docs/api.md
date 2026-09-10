@@ -341,9 +341,11 @@ rather than an error.
 and both bulk calls write one row per assignment they touch, all sharing an operation id, so the
 removals and additions of a single replace read as one act rather than as unrelated churn. Read any
 row of an operation, then list by its `OperationID` for the rest. `RequestID` correlates a row with
-the one HTTP request that produced it, and with `APIError.RequestID` for a request that failed; the
-server generates it when the caller sends none, which is what this SDK does today ([#5](https://github.com/octoverse-id/octonomy-go/issues/5)
-sends one).
+the one HTTP request that produced it, and with `APIError.RequestID` for a request that failed. The
+server mints `req_<uuid>` when the caller sends none; pass `WithRequestID` to supply your own and
+join the row to your service's logs ([#5](https://github.com/octoverse-id/octonomy-go/issues/5)).
+The SDK never mints one for you — see the request-correlation section of the README for why, and for
+the 100-character ceiling the server's column imposes.
 
 **`Changes` is `Metadata` — an open object — and it has to be.** The contract gives the field no type
 at all. What the server writes is `{"before": {…}, "after": {…}}`: a create carries `after` alone, an
@@ -397,10 +399,18 @@ and the request is byte-for-byte identical: the token is not sent to a route tha
 authenticate. A `HealthClient` exposes `Health` and nothing else, and the transport refuses a
 credential-free client outright rather than sending a blank `Authorization` header.
 
-`Live` and `Ready` take **no** `RequestOption`. Every option in this package is a scoping or
-attribution knob for the versioned, tenant-scoped API, and none of them means anything on a route
-with no tenant; accepting and ignoring them would be exactly the silent no-op the SDK refuses
-elsewhere.
+`Live` and `Ready` take **no** `RequestOption`, and the option set splits in two on why.
+`WithNamespace`, `WithApplication`, `WithIncludeGlobal`, and `WithActor` are scoping or attribution
+knobs for the versioned, tenant-scoped API, and none of them means anything on a route with no
+tenant; accepting and ignoring them would be exactly the silent no-op the SDK refuses elsewhere.
+
+`WithRequestID` is the one that *would* do something, and it is excluded anyway. The server's request
+middleware runs on these routes too — probed against 3.1.0, `/health/ready` echoes a caller-supplied
+`X-Request-ID` back and mints one when there is none. But a probe mutates nothing, so it writes no
+audit row and emits no event, and its non-2xx carries `{"status": …}` rather than the error envelope:
+of the four sinks that make a correlation id worth sending, a probe reaches only the server's log
+line. Options on that path would cost the byte-for-byte-identical property above, which is what lets
+both entry points share one code path and one test suite.
 
 ### Unreachable and unready are different failures
 
