@@ -40,6 +40,12 @@ func Int(v int) *int { return &v }
 // aliases. Making it a defined type instead would break every caller already
 // passing a plain map, so the alias stays and this takes an argument.
 //
+// It is a FUNCTION rather than a method for a second reason too, but not
+// because a defined type would break assignment: Go still lets a plain
+// map[string]any be passed where a defined map type is wanted. What changes is
+// type IDENTITY -- type switches, reflection, and anything naming the type in a
+// signature -- which is disruption without a matching gain.
+//
 // A nil or empty Metadata yields the zero value of T and a nil error: absent
 // metadata is not a failure. On any error the ZERO value is returned, never a
 // half-populated T -- encoding/json fills fields as it goes and stops at the
@@ -48,24 +54,42 @@ func Int(v int) *int { return &v }
 // and missing keys are left zero, exactly as encoding/json does elsewhere, so a
 // struct naming a subset of the stored keys is a legal projection.
 //
-// # Large integers are already imprecise before this is called
+// # Large integers MAY lose precision, and not here
 //
-// The loss is real but it does not happen here. Metadata is decoded from the
+// Where they do, the loss has already happened. Metadata is decoded from the
 // server's response into map[string]any by encoding/json, which represents
-// every JSON number as float64. Integers above 2^53 (9007199254740992) are
-// therefore already rounded by the time Metadata exists, and re-encoding them
+// every JSON number as float64. A value the server sent that float64 cannot
+// represent is therefore rounded before Metadata exists, and re-encoding it
 // into an int64 field cannot recover what was discarded: 9007199254740993
-// arrives as 9007199254740992 and no decoder gets the 3 back.
+// (2^53+1) arrives as 9007199254740992 and no decoder gets the 3 back.
 //
-// The usual advice -- decode the raw JSON yourself -- is NOT available here,
-// because this SDK exposes no raw-response hook. So the workaround is on the
-// writing side: store an identifier or amount that must survive exactly as a
-// STRING in metadata, and parse it with strconv.ParseInt on the way out.
-// Snowflake ids, ledger amounts in minor units, and anything else that outgrows
-// float64 belong in a string field. Values within 2^53 round-trip exactly and
-// need none of this.
+// "Above 2^53" is the wrong rule of thumb, though: float64 holds every EVEN
+// integer well past it, so 2^53+2 survives exactly while 2^53+1 does not. The
+// honest statement is that integers beyond +/-2^53 MAY lose precision depending
+// on the value, which is worse than a clean cutoff because it holds in testing
+// and fails on one production id.
+//
+// Two things this does NOT apply to. A Metadata the CALLER built holding a real
+// int64 marshals exactly -- nothing rounded it, so nothing is lost. And a
+// caller who must have the raw bytes is not without recourse: Config.HTTPClient
+// accepts an *http.Client, so a custom http.RoundTripper can copy the response
+// body before this SDK decodes it. That is a deliberate escape hatch rather
+// than a supported API, and it is a lot of machinery for one field.
+//
+// The simple fix is on the writing side: store a value that must survive
+// exactly as a STRING in metadata and parse it with strconv.ParseInt on the way
+// out. Snowflake ids and ledger amounts in minor units belong in a string
+// field. Values within 2^53 round-trip exactly and need none of this.
 func DecodeMetadata[T any](m Metadata) (T, error) {
 	var out T
+	// Short-circuit rather than decode "{}" or "null". T is not constrained to
+	// a struct, and for a pointer or map T the decoders disagree about what
+	// nothing means: "null" leaves a *T nil while "{}" allocates one, and "{}"
+	// gives a map T an empty non-nil map. Returning the zero value directly is
+	// the only way the sentence above is true for every T.
+	if len(m) == 0 {
+		return out, nil
+	}
 	raw, err := json.Marshal(m)
 	if err != nil {
 		var zero T

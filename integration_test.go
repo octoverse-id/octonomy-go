@@ -257,71 +257,124 @@ func TestSmoke_RealServer(t *testing.T) {
 	}
 
 	// 5b. Each over a real multi-page collection (#14). The unit tests drive it
-	// against a fixture that reproduces what this file believes DRF's
-	// LimitOffsetPagination does -- count is the total rather than the page
-	// size, next goes nil at the end, and the offset is echoed back. Every one
-	// of those beliefs is load-bearing (the echo is what the walker's
-	// dropped-options guard keys on), and a fixture asserting them proves only
-	// that the fixture and the walker agree. This walks a real server.
+	// against a fixture reproducing four beliefs about the server's paginator:
+	// count is the total rather than the page size, next goes nil at the end,
+	// limit is clamped to 200, and the requested offset is echoed back. Each
+	// READS only the last two -- next to stop, the echo to catch a page function
+	// that dropped its options -- but the other two are what make advancing by
+	// what arrived rather than by the limit requested the correct rule, so all
+	// four are pinned here against a real server rather than against a fixture
+	// that merely agrees with the walker.
 	//
-	// Three tags sharing a freshly minted type, walked one per page, so the set
-	// is pinned regardless of what else the harness already holds and the walk
-	// is genuinely multi-page rather than one page called three times.
-	walkType := uniqueSlug("smoke-walk")
-	wantIDs := map[string]bool{}
-	for i := 0; i < 3; i++ {
+	// It walks ALIASES, not tags, and via the nested route. Two reasons. The
+	// nested route is the closure shape Each's doc comment advertises for
+	// positional ids, and nothing else here covers it. More importantly the
+	// aliases list is totally ordered by (name, slug, id), while GET /tags
+	// carries no ORDER BY at all -- its usage_count annotation makes the query a
+	// GROUP BY and Django drops Meta.ordering from those. A tags walk is
+	// therefore allowed to repeat or miss rows between pages with no writes at
+	// all, which is documented on Each and is not something to build a
+	// deterministic assertion on.
+	//
+	// The aliases hang off a tag of their own rather than off the one from step
+	// 3, which step 8 asserts holds exactly one alias. Sharing it would have
+	// made this step break that one -- and a walk fixture is not worth weakening
+	// an assertion elsewhere to accommodate.
+	const walkAliases = 3
+	walkTag, err := client.Tags.Create(ctx, octonomy.TagCreate{
+		Name: "v2 smoke walk", Slug: uniqueSlug("smoke-walk-tag"), Type: "label",
+	})
+	if err != nil {
+		t.Fatalf("Tags.Create for the walk: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cleanupCancel()
+		if err := client.Tags.Delete(cleanupCtx, walkTag.ID); err != nil {
+			t.Errorf("Tags.Delete for the walk: %v", err)
+		}
+	})
+
+	wantAliasIDs := map[string]bool{}
+	for i := 0; i < walkAliases; i++ {
 		slug := uniqueSlug(fmt.Sprintf("smoke-walk-%d", i))
-		created, err := client.Tags.Create(ctx, octonomy.TagCreate{
-			Name: fmt.Sprintf("walk %d", i), Slug: slug, Type: walkType,
+		created, err := client.Aliases.Create(ctx, octonomy.TagAliasCreate{
+			TagID: walkTag.ID,
+			Name:  fmt.Sprintf("walk %d", i),
+			Slug:  slug,
 		})
 		if err != nil {
-			t.Fatalf("Tags.Create for the walk: %v", err)
+			t.Fatalf("Aliases.Create for the walk: %v", err)
 		}
-		wantIDs[created.ID] = true
+		wantAliasIDs[created.ID] = true
 		id := created.ID
 		t.Cleanup(func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
 			defer cleanupCancel()
-			if err := client.Tags.Delete(cleanupCtx, id); err != nil {
-				t.Errorf("Tags.Delete for the walk: %v", err)
+			if err := client.Aliases.Delete(cleanupCtx, id); err != nil {
+				t.Errorf("Aliases.Delete for the walk: %v", err)
 			}
 		})
+	}
+
+	// count is the TOTAL across pages, not the size of this one, and the server
+	// clamps an over-large limit and echoes the clamped value back. Both are
+	// asserted directly because Each's advance-by-what-arrived rule is only
+	// correct if they hold.
+	onePage, err := client.Tags.ListAliases(ctx, walkTag.ID, &octonomy.TagListAliasesParams{
+		ListOptions: octonomy.ListOptions{Limit: 1},
+	})
+	if err != nil {
+		t.Fatalf("Tags.ListAliases: %v", err)
+	}
+	if len(onePage.Data) != 1 {
+		t.Fatalf("asked for 1 alias, got %d", len(onePage.Data))
+	}
+	if onePage.Pagination.Count != walkAliases {
+		t.Errorf("pagination.count = %d on a 1-row page, want %d (the total, not the page size)",
+			onePage.Pagination.Count, walkAliases)
+	}
+	clamped, err := client.Tags.ListAliases(ctx, walkTag.ID, &octonomy.TagListAliasesParams{
+		ListOptions: octonomy.ListOptions{Limit: 500},
+	})
+	if err != nil {
+		t.Fatalf("Tags.ListAliases with an over-large limit: %v", err)
+	}
+	if clamped.Pagination.Limit != 200 {
+		t.Errorf("asked for limit 500, server echoed %d, want the 200 clamp", clamped.Pagination.Limit)
 	}
 
 	pages := 0
 	visits := map[string]int{}
 	offset, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 1},
-		func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Tag], error) {
+		func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.TagAlias], error) {
 			pages++
-			return client.Tags.List(ctx, &octonomy.TagListParams{
-				ListOptions: o,
-				Type:        octonomy.String(walkType),
-			})
+			return client.Tags.ListAliases(ctx, walkTag.ID, &octonomy.TagListAliasesParams{ListOptions: o})
 		},
-		func(walked octonomy.Tag) error {
+		func(walked octonomy.TagAlias) error {
 			visits[walked.ID]++
 			return nil
 		})
 	if err != nil {
 		t.Fatalf("Each over a real collection: %v", err)
 	}
-	if offset != 3 {
-		t.Errorf("Each returned offset %d, want 3 (one past the last item)", offset)
+	if offset != walkAliases {
+		t.Errorf("Each returned offset %d, want %d", offset, walkAliases)
 	}
 	// Exactly once each: neither a skipped row nor a redelivered one.
-	if len(visits) != len(wantIDs) {
-		t.Errorf("walked %d distinct tags, want %d", len(visits), len(wantIDs))
+	if len(visits) != len(wantAliasIDs) {
+		t.Errorf("walked %d distinct aliases, want %d", len(visits), len(wantAliasIDs))
 	}
-	for id := range wantIDs {
+	for id := range wantAliasIDs {
 		if visits[id] != 1 {
-			t.Errorf("tag %s visited %d times, want exactly 1", id, visits[id])
+			t.Errorf("alias %s visited %d times, want exactly 1", id, visits[id])
 		}
 	}
 	// One request per page, as the doc comment promises. Three items at one per
 	// page is three pages -- a fourth would mean the walker only stops on an
 	// empty page and never reads the server's own end-of-collection signal.
-	if pages != 3 {
-		t.Errorf("Each made %d requests for 3 items at Limit 1, want 3", pages)
+	if pages != walkAliases {
+		t.Errorf("Each made %d requests for %d items at Limit 1, want %d", pages, walkAliases, walkAliases)
 	}
 
 	// DecodeMetadata against metadata the SERVER stored and returned, rather

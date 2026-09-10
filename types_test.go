@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"strconv"
 	"testing"
 )
@@ -65,6 +66,51 @@ func TestDecodeMetadata(t *testing.T) {
 				if got.Regions[i] != tt.want.Regions[i] {
 					t.Errorf("Regions = %v, want %v", got.Regions, tt.want.Regions)
 				}
+			}
+		})
+	}
+}
+
+// The zero-value promise has to hold for every T, not just a value struct.
+// Decoding "{}" would allocate a non-nil pointer and a non-nil empty map, so
+// absent metadata is short-circuited instead of round-tripped.
+func TestDecodeMetadata_AbsentMetadataIsTheZeroValueForEveryT(t *testing.T) {
+	for _, meta := range []Metadata{nil, {}} {
+		name := "nil"
+		if meta != nil {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			ptr, err := DecodeMetadata[*shipping](meta)
+			if err != nil {
+				t.Fatalf("pointer T: %v", err)
+			}
+			if ptr != nil {
+				t.Errorf("pointer T = %+v, want nil", ptr)
+			}
+
+			m, err := DecodeMetadata[map[string]any](meta)
+			if err != nil {
+				t.Fatalf("map T: %v", err)
+			}
+			if m != nil {
+				t.Errorf("map T = %#v, want a nil map", m)
+			}
+
+			sl, err := DecodeMetadata[[]string](meta)
+			if err != nil {
+				t.Fatalf("slice T: %v", err)
+			}
+			if sl != nil {
+				t.Errorf("slice T = %#v, want a nil slice", sl)
+			}
+
+			st, err := DecodeMetadata[shipping](meta)
+			if err != nil {
+				t.Fatalf("struct T: %v", err)
+			}
+			if !isZeroShipping(st) {
+				t.Errorf("struct T = %+v, want the zero value", st)
 			}
 		})
 	}
@@ -166,28 +212,47 @@ func TestDecodeMetadata_LargeIntegerPrecision(t *testing.T) {
 		})
 	}
 
-	// The boundary itself, stated as the doc comment states it.
+	// "Above 2^53 is lost" would be the tidy rule, and it is wrong: float64
+	// holds every even integer well past it. The doc comment says MAY lose
+	// precision for exactly this reason, so the counterexample is pinned too --
+	// otherwise the caveat drifts back into a clean cutoff that testing
+	// confirms and one production id disproves.
+	const evenPastBoundary = (int64(1) << 53) + 2
+	if int64(float64(evenPastBoundary)) != evenPastBoundary {
+		t.Errorf("%d does not survive float64, but it is even and should", evenPastBoundary)
+	}
 	if float64(safe) != math.Trunc(float64(safe)) || int64(float64(unsafe)) != safe {
 		t.Errorf("2^53 boundary does not behave as documented")
+	}
+
+	// A Metadata the CALLER built is not on the lossy path at all: nothing
+	// rounded it, so an int64 marshals and decodes exactly.
+	built, err := DecodeMetadata[ledger](Metadata{"amount": unsafe})
+	if err != nil {
+		t.Fatalf("DecodeMetadata on a caller-built map: %v", err)
+	}
+	if built.Amount != unsafe {
+		t.Errorf("caller-built int64 = %d, want %d exactly", built.Amount, unsafe)
 	}
 }
 
 // Metadata is a type ALIAS, which is why DecodeMetadata is a function rather
-// than a method. These two calls assert the alias in both directions: a
-// Metadata is accepted where a plain map is wanted and the reverse. Promoting
-// Metadata to a defined type -- which is what would let it carry methods --
-// breaks this at compile time, which is the point of keeping it here.
+// than a method: Go does not allow methods on an alias.
+//
+// Assignability proves nothing here, and that is the trap this test exists to
+// avoid. Go already permits assignment between a defined map type and an
+// unnamed map[string]any, so `var m map[string]any = Metadata{}` compiles
+// whether Metadata is an alias or `type Metadata map[string]any`. The
+// discriminator is type IDENTITY: an alias resolves to the unnamed map type and
+// so has no name of its own, while a defined type is named.
 func TestMetadataIsStillAnAlias(t *testing.T) {
-	takesMap := func(m map[string]any) int { return len(m) }
-	takesMetadata := func(m Metadata) int { return len(m) }
-
-	if takesMap(Metadata{"k": "v"}) != 1 {
-		t.Error("a Metadata is not usable as a map[string]any")
+	got := reflect.TypeOf(Metadata{})
+	if name := got.Name(); name != "" {
+		t.Errorf("Metadata resolves to the named type %q; it is no longer an alias, "+
+			"so DecodeMetadata could be a method -- and every type switch and "+
+			"signature naming it has changed identity", name)
 	}
-	if takesMetadata(map[string]any{"k": "v"}) != 1 {
-		t.Error("a map[string]any is not usable as a Metadata")
-	}
-	if _, err := DecodeMetadata[struct{}](map[string]any{"k": "v"}); err != nil {
-		t.Fatalf("DecodeMetadata on a plain map: %v", err)
+	if want := reflect.TypeOf(map[string]any{}); got != want {
+		t.Errorf("Metadata is %v, want the identical type %v", got, want)
 	}
 }

@@ -251,17 +251,30 @@ offset, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 200},
 ```
 
 The page function **must pass through** the `ListOptions` it is handed — that is what advances the
-walk. Dropping them is refused rather than looped on.
+walk. A page function that ignores the offset would otherwise re-fetch page one forever; `Each`
+detects that from the offset the server echoes and returns an error instead of looping. It catches
+only that non-terminating shape — a dropped `Limit` is invisible, and a walk that fits in one page
+succeeds either way.
 
-The returned `offset` is the first item **not** processed, so a failure is resumable: pass it back as
-`ListOptions{Offset: offset}` and the walk picks up where it stopped. A walk that dies on page 40 of
-100 keeps 39 pages of progress.
+The returned `offset` is `start.Offset` plus the number of items processed — the first item **not**
+processed — so a failure is resumable: pass it back as `ListOptions{Offset: offset}` and the walk
+picks up where it stopped. A walk that dies on page 40 of 100 keeps 39 pages of progress. It is
+**not** a polling cursor: resuming from a successful walk's offset will not find what was created
+since, because a new row can sort before it.
 
-**Offset drift is real and no client can fix it.** The server pages by limit/offset over a
-`(name, slug, id)` ordering with no cursor, so a concurrent create or delete shifts the window and an
-item can be delivered twice or missed entirely. Narrow the walk with a filter that does not change
-while it runs, de-duplicate on ID if double delivery matters, and see the `Each` doc comment for why
-the missed half cannot be detected client-side.
+**Offset drift is real and no client can fix it.** The server pages by limit/offset with no cursor,
+so a concurrent create or delete shifts the window and an item can be delivered twice or missed. The
+sort order is per endpoint — vocabularies and aliases by `(name, slug, id)`, audit logs and
+assignments by their timestamp descending.
+
+**`GET /tags` is worse: it has no `ORDER BY` at all.** Its `usage_count` annotation makes the query a
+`GROUP BY`, and Django drops `Meta.ordering` from aggregate queries. `LIMIT`/`OFFSET` without
+`ORDER BY` is undefined, so a tags walk may repeat or miss rows *with no concurrent writes*. Treat it
+as best-effort unless the filtered set fits in one page.
+
+De-duplicate on ID to remove double delivery, and compare the first page's `Pagination.Count` against
+the number of distinct IDs walked to *detect* the missed half — that turns a silent wrong answer into
+a known one. See the `Each` doc comment for the full picture.
 
 ## Typed metadata
 
@@ -280,10 +293,12 @@ It is a function rather than a method because `Metadata` is a type **alias** and
 methods on aliases. A nil map yields the zero value and no error; any error yields the zero value
 rather than a half-filled struct.
 
-**Integers above 2^53 are already rounded before this runs.** The response decodes into
-`map[string]any`, where every JSON number is a `float64`, so the precision is gone before
-`DecodeMetadata` sees it and no decoder can recover it. Store large ids and amounts as **strings** in
-metadata and parse them on the way out.
+**Integers beyond ±2^53 may lose precision, and not here.** The response decodes into
+`map[string]any`, where every JSON number is a `float64`, so a value float64 cannot represent is
+already rounded before `DecodeMetadata` sees it. "Above 2^53" is not a clean cutoff — float64 holds
+every even integer well past it, so `2^53+2` survives and `2^53+1` does not, which is why this holds
+in testing and fails on one production id. A `Metadata` you built yourself holding a real `int64` is
+unaffected. Store large ids and amounts as **strings** in metadata and parse them on the way out.
 
 ## Implemented resources
 

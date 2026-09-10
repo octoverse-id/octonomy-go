@@ -96,14 +96,20 @@ func main() {
 
 	// Metadata is map[string]any. DecodeMetadata reads it into a struct without
 	// the type assertion that would panic when the stored shape changes.
-	type tagMeta struct {
-		Team string `json:"team"`
+	//
+	// Guarded on tag != nil because the conflict branch above continues without
+	// one: a failed Create returns a nil *Tag, and this is a demo of a library
+	// that never panics.
+	if tag != nil {
+		type tagMeta struct {
+			Source string `json:"source"`
+		}
+		meta, err := octonomy.DecodeMetadata[tagMeta](tag.Metadata)
+		if err != nil {
+			log.Fatalf("decode tag metadata: %v", err)
+		}
+		fmt.Printf("tag metadata source=%q\n", meta.Source)
 	}
-	meta, err := octonomy.DecodeMetadata[tagMeta](tag.Metadata)
-	if err != nil {
-		log.Fatalf("decode tag metadata: %v", err)
-	}
-	fmt.Printf("tag metadata team=%q\n", meta.Team)
 }
 
 func env(key, fallback string) string {

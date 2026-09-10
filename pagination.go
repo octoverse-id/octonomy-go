@@ -79,37 +79,67 @@ type List[T any] struct {
 //
 // # The returned offset
 //
-// Each returns the offset of the first item it did NOT successfully process,
-// which is exactly the offset to resume from. On a fetch failure that is the
-// start of the page that failed; on a callback failure it is the failing item,
-// so a resumed walk retries it rather than skipping it -- delivery is
-// at-least-once across a resume, never at-most-once. On success it is one past
-// the last item, which is where items added since the walk began will appear.
+// Each returns start.Offset plus the number of items it successfully processed
+// -- equivalently, the offset of the first item it did NOT process, which is
+// what makes it a resume point. On a fetch failure that is the start of the
+// page that failed; on a callback failure it is the failing item, so a resumed
+// walk retries it rather than skipping it: delivery is at-least-once across a
+// resume, never at-most-once.
 //
 // The offset is meaningful even when the error is not: a walk that dies on page
 // 40 of 100 hands back 39 pages of progress instead of discarding it.
 //
+// IT IS NOT A POLLING CURSOR. Resuming from the offset a SUCCESSFUL walk
+// returned does not find what has been created since, and the drift below is
+// why: a new row can sort before that offset, where a resume will never look,
+// and on a collection that shrank the offset simply points past the end. To see
+// new items, walk again from the beginning.
+//
 // # Offset drift is real and is not solvable here
 //
-// The server pages by limit/offset over an ordering of (name, slug, id) and
-// offers no cursor, so the window shifts under concurrent writes. A tag created
-// with a name sorting before the current page pushes every later row one place
-// right, and Each delivers one item twice; a tag deactivated behind the cursor
-// pulls them one place left, and Each never sees one. Deletion counts here
-// because Octonomy deletes by deactivating and an unfiltered list returns
-// active rows only, so a delete really does remove a row from the walked set.
+// The server pages by limit/offset and offers no cursor, so the window shifts
+// under concurrent writes. A row that sorts before the current page pushes
+// every later row one place right, and Each delivers one item twice; a row
+// removed behind the cursor pulls them one place left, and Each never sees one.
+// Deletion counts here because Octonomy deletes by deactivating and an
+// unfiltered list returns active rows only, so a delete really does remove a
+// row from the walked set.
 //
-// NO CLIENT CAN FIX THIS. Re-reading a page cannot distinguish a shifted window
-// from a changed one, and this package will not pretend otherwise by
-// de-duplicating and calling it exactness. What callers who need exactness can
-// do:
+// The sort order is PER ENDPOINT, not one rule. Vocabularies and tag aliases
+// order by (name, slug, id); audit logs by (created_at DESC, id); assignments
+// and resource tags by (assigned_at DESC, id).
+//
+// # The tags list has no ORDER BY at all, which is worse than drift
+//
+// GET /tags is the exception and it is the endpoint most likely to be walked.
+// Its view annotates usage_count, which makes the query a GROUP BY, and Django
+// drops a model's Meta.ordering from aggregate queries -- so the SQL carries no
+// ORDER BY (verified against a running 3.1.0 server: the generated statement
+// ends at GROUP BY, and Django's own queryset.ordered reports false).
+//
+// LIMIT/OFFSET WITHOUT ORDER BY IS UNDEFINED. Each page is a separate query and
+// the database is free to answer two of them in different orders, so a walk of
+// the tags list can repeat or miss rows WITH NO CONCURRENT WRITES AT ALL. In
+// practice the order observed is stable while the rows are unchanged, because
+// it falls out of one hash-aggregate plan; nothing promises that, and a
+// different plan or a changed row count is enough to alter it. Treat a tags
+// walk as best-effort unless the filtered set fits in one page, where the
+// question does not arise.
+//
+// # What a caller can actually do
+//
+// NO CLIENT CAN FIX EITHER PROBLEM. Re-reading a page cannot distinguish a
+// shifted window from a changed one, and this package will not pretend
+// otherwise by de-duplicating and calling it exactness. What does help:
 //
 //   - Narrow the walk with a filter that does not change while it runs
-//     (ApplicationID, VocabularyID, Type), so the set is small and the window
-//     closes quickly.
+//     (ApplicationID, VocabularyID, Type), so the set is small -- and small
+//     enough to fit one page is the only fully safe size on the tags list.
 //   - De-duplicate on ID. That is cheap and removes the double-delivery half.
-//     The skipped half leaves no trace client-side, so it cannot be removed the
-//     same way.
+//   - DETECT the other half, which is the part that leaves no trace: keep the
+//     Pagination.Count from the first page and compare it with the number of
+//     distinct IDs walked. Fewer means rows were missed. That does not recover
+//     them, but it turns a silent wrong answer into a known one.
 //   - Walk when nothing is writing.
 //
 // Each never retries, and a context cancellation surfaces as the page error
@@ -145,10 +175,16 @@ func Each[T any](
 		}
 
 		// The server echoes the offset it actually served. If it does not match
-		// the one Each asked for, the page function dropped the ListOptions it
+		// the one Each asked for, the page function did not apply the Offset it
 		// was handed -- the one way to misuse this API that still compiles --
 		// and every following iteration would re-fetch this same page forever,
 		// delivering it again each time. Refuse instead of looping.
+		//
+		// This catches only the non-terminating shape, and deliberately claims
+		// no more. A dropped Limit is invisible here, and a page function that
+		// ignores everything still passes on a walk that fits in one page --
+		// where it also happens to be correct, since there was no second page
+		// to advance to.
 		if p.Pagination.Offset != pageStart {
 			return pageStart, fmt.Errorf(
 				"octonomy: Each: page function ignored the ListOptions it was given: asked for offset %d, server served %d",

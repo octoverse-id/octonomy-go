@@ -135,41 +135,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would skip three items in every five. It stops on the server's `next == nil` *and* on an empty
   page, the second being what guarantees termination when the first is wrong.
 
-  It returns **the offset of the first item it did not process**, which is exactly the offset to
-  resume from: the page start on a fetch failure, the failing item on a callback failure — so a
-  resume redelivers that item rather than stepping over it. A walk that dies on page 40 of 100 keeps
-  39 pages of progress.
+  It returns `start.Offset` plus the number of items processed — the first item it did **not**
+  process, which is what makes it a resume point: the page start on a fetch failure, the failing item
+  on a callback failure, so a resume redelivers that item rather than stepping over it. A walk that
+  dies on page 40 of 100 keeps 39 pages of progress. It is **not** a polling cursor — resuming from a
+  successful walk's offset will not find what was created since, because a new row can sort before
+  it.
 
-  The page function must pass through the `ListOptions` it is handed. Dropping them is the one misuse
-  that still compiles, and it would re-fetch page one forever; `Each` detects it from the offset the
-  server echoes and returns an error naming it instead of looping.
+  The page function must pass through the `ListOptions` it is handed. Ignoring the offset would
+  re-fetch page one forever; `Each` detects that from the offset the server echoes and returns an
+  error naming it instead of looping. That guard claims only the non-terminating shape: a dropped
+  `Limit` is invisible to it, and a walk that fits in one page succeeds either way.
 
-  **Offset drift is documented, not papered over.** The server pages by limit/offset over a
-  `(name, slug, id)` ordering with no cursor, so a concurrent create or delete shifts the window and
-  an item can be delivered twice or skipped. That is not fixable client-side — re-reading a page
-  cannot tell a shifted window from a changed one — so the doc comment says so and recommends
-  narrowing the walk and de-duplicating on ID, rather than de-duplicating internally and calling it
-  exactness.
+  **Offset drift is documented, not papered over**, and the ordering it depends on is per endpoint:
+  vocabularies and tag aliases sort by `(name, slug, id)`, audit logs by `(created_at DESC, id)`,
+  assignments and resource tags by `(assigned_at DESC, id)`. A concurrent create or delete shifts the
+  window either way, and an item can be delivered twice or skipped.
+
+  **`GET /tags` has no `ORDER BY` at all**, which is worse than drift and was found while writing
+  this. Its view annotates `usage_count`, making the query a `GROUP BY`, and Django drops
+  `Meta.ordering` from aggregate queries — verified against a running 3.1.0 server, where the emitted
+  SQL ends at `GROUP BY` and Django's own `queryset.ordered` reports false. `LIMIT`/`OFFSET` over an
+  unordered query is undefined, so a tags walk may repeat or miss rows **with no concurrent writes at
+  all**. Documented on `Each` as best-effort, with the mitigation that is actually available: compare
+  the first page's `Pagination.Count` against the number of distinct IDs walked, which detects a short
+  walk even though nothing client-side can prevent one.
 
   `DecodeMetadata[T](m)` decodes a resource's `Metadata` into the caller's own struct. It is a
   **function, not a method**: `Metadata` is a type *alias* for `map[string]any` and Go does not allow
-  methods on aliases, while promoting it to a defined type would break every caller passing a plain
-  map. A nil map yields the zero value and no error; on any error the **zero** value comes back, never
-  the half-filled struct `encoding/json` leaves behind when it hits a type mismatch mid-decode.
+  methods on aliases. Promoting it to a defined type would not break assignment — Go still accepts a
+  plain map there — but it would change type identity for every type switch, reflection site and
+  signature naming it. A nil or empty map yields the zero value of `T` and no error, short-circuited
+  rather than round-tripped so the promise holds for a pointer or map `T` too; on any error the
+  **zero** value comes back, never the half-filled struct `encoding/json` leaves behind when it hits a
+  type mismatch mid-decode.
 
-  **The large-integer caveat is narrower than it looks, and the usual advice does not apply.** The
-  precision is lost when the *response* is decoded into `map[string]any`, where every JSON number
-  becomes a `float64` — before `DecodeMetadata` is ever called, and beyond its power to recover.
-  "Decode the raw JSON yourself" is not an option, because this SDK exposes no raw-response hook. So
-  the workaround is on the writing side: store values that outgrow 2^53 as **strings** and parse them
-  out. Values within 2^53 round-trip exactly. A test walks the real path — raw JSON to `Metadata` to
-  struct — and pins both the loss at 2^53+1 and the string workaround.
+  **Large integers MAY lose precision, and not here.** Where they do, it happened when the *response*
+  was decoded into `map[string]any`, whose JSON numbers are `float64` — before `DecodeMetadata` is
+  called and beyond its power to recover. "Above 2^53" is not the rule: float64 holds every even
+  integer well past it, so `2^53+2` survives exactly and `2^53+1` does not, which is precisely why the
+  caveat says *may*. A `Metadata` the caller built holding a real `int64` is unaffected. The issue
+  suggested "decode the raw JSON yourself"; this SDK has no first-class hook for that, though
+  `Config.HTTPClient` does let a custom `RoundTripper` copy the body first. The simple fix is to store
+  such values as **strings** and parse them out. Tests pin the loss at `2^53+1`, the survival of
+  `2^53+2`, the caller-built exactness, and the string workaround.
 
   Both are asserted against a real server in `integration_test.go` as well as against fixtures. The
-  fixture reproduces what this SDK believes the server's pagination does — `count` is the total,
-  `next` goes nil at the end, `limit` is clamped and echoed, `offset` is echoed — and every one of
-  those beliefs is load-bearing, so a fixture agreeing with the walker proves only that they agree.
-  All four were verified against a running 3.1.0 container.
+  fixture reproduces four beliefs about the server's paginator — `count` is the total, `next` goes nil
+  at the end, `limit` is clamped to 200 and echoed, `offset` is echoed — and although `Each` reads
+  only the last two, the other two are what make "advance by what arrived" the correct rule. All four
+  are now asserted against a running server rather than only against the fixture that agrees with
+  them. The real-server walk uses the **alias** route, whose order is total, rather than the tags list
+  that has none.
 
 ### Changed
 - `docs/roadmap.md` is re-derived from `openapi-v2.yaml` rather than edited. It had been written

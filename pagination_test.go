@@ -167,18 +167,25 @@ func TestEach_StartOffsetResumes(t *testing.T) {
 	}
 }
 
-// A start offset past the end is a legal resume -- it is what the previous walk
-// returned -- and must be an empty, successful walk rather than an error.
-func TestEach_StartOffsetPastTheEnd(t *testing.T) {
-	c := newTestClient(t, pagedTags(t, 5, nil))
+// A start offset at or past the end is a legal resume -- it is what the previous
+// walk returned, and a collection can shrink under it -- and must be an empty,
+// successful walk rather than an error. Both are covered because the server
+// reaches them by different routes: offset == count slices an empty window,
+// while offset > count is its own early return.
+func TestEach_StartOffsetAtOrPastTheEnd(t *testing.T) {
+	for _, start := range []int{5, 7} {
+		t.Run(fmt.Sprintf("offset %d of 5", start), func(t *testing.T) {
+			c := newTestClient(t, pagedTags(t, 5, nil))
 
-	var seen []string
-	offset, err := Each(context.Background(), ListOptions{Limit: 3, Offset: 5}, walkTags(c), collectIDs(&seen))
-	if err != nil {
-		t.Fatalf("Each: %v", err)
-	}
-	if offset != 5 || len(seen) != 0 {
-		t.Errorf("offset = %d, visited = %v, want 5 and nothing", offset, seen)
+			var seen []string
+			offset, err := Each(context.Background(), ListOptions{Limit: 3, Offset: start}, walkTags(c), collectIDs(&seen))
+			if err != nil {
+				t.Fatalf("Each: %v", err)
+			}
+			if offset != start || len(seen) != 0 {
+				t.Errorf("offset = %d, visited = %v, want %d and nothing", offset, seen, start)
+			}
+		})
 	}
 }
 
@@ -390,6 +397,27 @@ func TestEach_RefusesAPageFunctionThatIgnoresItsOptions(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Errorf("page function called %d times, want 2 (one good, one caught)", calls)
+	}
+}
+
+// The guard's limit, asserted so the doc comment cannot quietly outgrow it. A
+// page function that ignores everything still succeeds when the walk fits in a
+// single page -- there is no second page to advance to, so the offset it echoes
+// is the one that was asked for, and the answer is right anyway.
+func TestEach_GuardDoesNotFireOnASinglePageWalk(t *testing.T) {
+	c := newTestClient(t, pagedTags(t, 3, nil))
+
+	var seen []string
+	offset, err := Each(context.Background(), ListOptions{Limit: 50},
+		func(ctx context.Context, _ ListOptions) (*List[Tag], error) {
+			// Every option dropped, and it does not matter here.
+			return c.Tags.List(ctx, &TagListParams{})
+		}, collectIDs(&seen))
+	if err != nil {
+		t.Fatalf("Each: %v", err)
+	}
+	if offset != 3 || len(seen) != 3 {
+		t.Errorf("offset = %d, visited = %d, want 3 and 3", offset, len(seen))
 	}
 }
 
