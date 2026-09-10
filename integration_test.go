@@ -319,9 +319,11 @@ func TestSmoke_RealServer(t *testing.T) {
 	}
 
 	// count is the TOTAL across pages, not the size of this one, and the server
-	// clamps an over-large limit and echoes the clamped value back. Both are
-	// asserted directly because Each's advance-by-what-arrived rule is only
-	// correct if they hold.
+	// clamps an over-large limit and echoes the clamped value back. The CLAMP is
+	// what makes Each's advance-by-what-arrived rule necessary -- advancing by
+	// the limit requested would skip whatever the clamp withheld. count carries
+	// no weight in the walk at all; it is asserted because the short-walk
+	// detector Each documents is built on it.
 	onePage, err := client.Tags.ListAliases(ctx, walkTag.ID, &octonomy.TagListAliasesParams{
 		ListOptions: octonomy.ListOptions{Limit: 1},
 	})

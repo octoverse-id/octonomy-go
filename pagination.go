@@ -92,9 +92,14 @@ type List[T any] struct {
 // unchanged, resuming re-delivers the item that failed rather than stepping
 // over it. Where it is not -- anything written since, and the tags list even
 // with nothing written -- that offset may address a different row, so a resume
-// MAY retry the failed item and may just as well skip it. Neither at-least-once
-// nor at-most-once is on offer; only the server can provide that, with a stable
-// order or a cursor.
+// MAY retry the failed item and may just as well skip it.
+//
+// Neither at-least-once nor at-most-once is on offer, and a stable ORDER BY
+// would not buy them either: a row inserted or removed BEFORE the offset shifts
+// everything after it, deterministic sort or not. Ordering removes the separate
+// hazard of an undefined result order, nothing more. Only a snapshot of the
+// collection, or a keyset cursor naming the last row seen rather than counting
+// past it, makes a resume exact -- and both are the server's to offer.
 //
 // IT IS ALSO NOT A POLLING CURSOR. Resuming from the offset a SUCCESSFUL walk
 // returned is not a reliable way to find what has been created since: a new row

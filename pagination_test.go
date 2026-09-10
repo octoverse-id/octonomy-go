@@ -435,7 +435,12 @@ func TestEach_EmptyPageTerminatesEvenWhenNextSaysOtherwise(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if calls > 3 {
-			t.Fatal("Each looped on an empty page that advertised a next link")
+			// Errorf, not Fatalf: this runs on the server's goroutine, where
+			// FailNow is not valid and would Goexit the handler -- turning the
+			// assertion into a transport error that reports the wrong problem.
+			t.Errorf("Each looped on an empty page that advertised a next link")
+			writeJSON(t, w, http.StatusInternalServerError, nil)
+			return
 		}
 		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 		writeJSON(t, w, http.StatusOK, map[string]any{

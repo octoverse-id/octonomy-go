@@ -141,8 +141,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **position, not an identity**, so what a resume does with it is conditional: over a stable,
   unchanged collection it re-delivers the item that failed, but where rows moved — or on the tags
   list, where they need not have — it may address a different row, so a resume *may* retry the failed
-  item and may equally skip it. Neither at-least-once nor at-most-once is on offer; only a stable
-  server-side order or a cursor could provide that. It is also not a polling cursor: a row created
+  item and may equally skip it. Neither at-least-once nor at-most-once is on offer, and a stable
+  `ORDER BY` would not buy them either — a row inserted or removed *before* the offset shifts
+  everything after it, deterministic sort or not. Only a snapshot, or a keyset cursor naming the last
+  row seen rather than counting past it, makes a resume exact. It is also not a polling cursor: a row created
   since that sorts after the old tail turns up, one sorting before it never does.
 
   A cancelled context is observed **before the next callback**, not only at the next fetch. Handing
