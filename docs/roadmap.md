@@ -1,15 +1,21 @@
 # Roadmap
 
 The foundation (transport, auth, errors, pagination, API version selection, namespace scoping) and
-every endpoint group the vendored contracts publish are implemented. **[`api.md`](api.md#implemented)
-is the canonical inventory** — every SDK method, verb, and path — and this page does not restate it.
-What is left are the gaps *within* implemented resources, at the bottom of this page.
+every endpoint group the vendored contracts publish are implemented.
+**[`api.md`](api.md#implemented) holds the only complete inventory** — every SDK method, verb, and
+path — and is the one place to update when a method is added. This page names a route only where it
+is making some other point (the health section below does). What is left are the gaps *within*
+implemented resources, at the bottom of this page.
 
 This page is therefore two things: the **recipe** for adding the next resource the server ships, and
 the **register of known gaps**. Neither is a list of what exists.
 
-**Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint,
-parameter, and response shape below was enumerated from the vendored v2 spec. The previous revision
+**Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint
+and parameter below was enumerated from the vendored v2 spec. **Response shapes are a different
+matter** and were verified against a running server: the spec omits both `data` envelopes, describes
+the two bulk composites and the resource-tag replace wrongly or not at all, and carries no schema for
+the health probes, which are outside the API surface entirely. Where spec and server disagree, the
+server wins — see [`api.md`](api.md). The previous revision
 of this file was written against server 1.0.0 and had drifted — most visibly, it documented
 `Tags.Resolve` as taking `slug` + `application_id` when the endpoint takes four parameters. Since
 #8–#13 delegate to this file, that drift would have been copied into six resources. Re-derive rather
@@ -37,7 +43,7 @@ well as the collection — then:
 5. Add table-driven `httptest` tests (assert method/path/headers/query/body server-side; assert
    decoded values client-side; cover the error envelope).
 6. Add a `## [Unreleased]` CHANGELOG entry and add every new method to the inventory table in
-   [`api.md`](api.md#implemented) — the one place that list is kept.
+   [`api.md`](api.md#implemented) — the one place the complete list is kept.
 
 Scoping is already handled by the transport and needs no per-resource work: `WithNamespace`,
 `WithApplication`, and `WithIncludeGlobal` apply to any method, and the guards in

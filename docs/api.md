@@ -140,9 +140,10 @@ filters will not help.
 
 ## Implemented
 
-**This table is the canonical resource inventory for the SDK.** The README, `architecture.md`,
-`roadmap.md`, and `versioning.md` link here rather than restating it, so a new method is added in one
-place. Every group the vendored contracts publish is implemented; paths are relative to
+**This table is the only complete resource inventory for the SDK.** The README,
+`architecture.md`, `roadmap.md`, and `versioning.md` link here rather than reproducing it — they name
+individual resources, and occasionally a route, only where they are making some other point — so a
+new method is added in one place. Every group the vendored contracts publish is implemented; paths are relative to
 `BaseURL + /api/<version>` except the two health routes, which sit at the server root.
 
 | SDK method | HTTP | Path |

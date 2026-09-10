@@ -245,15 +245,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The transport is now one request path (`doRaw`) and three decoders chosen by response shape:
   `doData[T]` unwraps the single-resource envelope, `doList[T]` decodes the list envelope, and
-  `Client.do` handles a call with no payload. Every shape that would previously have decoded to a
-  zero value with a nil error is an error instead: a 2xx with no `data` key, a null `data` where a
-  resource was expected, an empty body, a list response with no usable `pagination` block, and a
-  non-204 answer to `Delete`. A present-but-null `"data"` on a list normalizes to an empty non-nil
-  slice, identical to `"data": []`.
+  `Client.do` handles a call with no payload. Every **envelope** shape that would previously have
+  decoded to a zero value with a nil error is an error instead: a 2xx with no `data` key, a null
+  `data` where a resource was expected, an empty body, a list response with no usable `pagination`
+  block, and a non-204 answer to `Delete`. A present-but-null `"data"` on a list normalizes to an
+  empty non-nil slice, identical to `"data": []`. The check stops at the envelope: a well-formed
+  envelope carrying the *wrong object* still decodes to a zero value, which is
+  [#40](https://github.com/octoverse-id/octonomy-go/issues/40) and remains open.
 
 ### Added
-- `integration_test.go` (build tag `integration`, `make smoke`): a six-assertion smoke test against
-  a real server, covering both response envelopes on both resources. Wired into CI as a
+- `integration_test.go` (build tag `integration`, `make smoke`): a smoke test against a real server,
+  covering both response envelopes on both resources. It has grown with each resource landed in this
+  same set and is now an ordered walk over every group. Wired into CI as a
   non-advisory `smoke` job running `make smoke` with `OCTONOMY_SMOKE_REQUIRED=1`, so neither a
   harness that failed to export its credentials nor a test that no longer runs can report a vacuous
   green. It replaces the advisory bootstrap-only `harness` job, keeping that job's cross-step
@@ -405,7 +408,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answering with a bare `{"status": "ok"}` that carries **no `data` envelope**, and authenticating
   nobody. They are reachable two ways — `client.Health` for a caller who already has a full client,
   and the new credential-free constructor for one who has no credentials at all — and both run the
-  same code and send the same request.
+  same code, hit the same path, and send no credentials. `Config.UserAgent` and `WithHealthUserAgent`
+  are set independently, so `User-Agent` is the one header that can differ between them.
 - **`NewHealthClient(baseURL, ...HealthOption)`**, a constructor requiring **only a base URL**, with
   `WithHealthHTTPClient` (the knob a probe loop wants: the 30s default timeout is rarely right for
   one) and `WithHealthUserAgent`. It exists because `New` rejects a blank `Token` or `TenantID`, so
@@ -535,9 +539,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **The consumer-side `exclude` snippet is documented as unnecessary**, not omitted. The `/v2`
     module path made Go itself the enforcement, so a reader following an older plan document is told
     so explicitly rather than left hunting for a snippet that no longer exists.
-  - **One canonical resource inventory.** It was restated in five places and drifting. `docs/api.md`
-    is now the single source of truth; the README, `docs/roadmap.md`, `docs/architecture.md`, and
-    `docs/versioning.md` link to it. `docs/versioning.md` still claimed only Vocabularies and Tags
+  - **One complete resource inventory.** It was restated in five places and drifting. `docs/api.md`
+    now holds the only complete method-to-endpoint mapping and is the one place to update; the
+    README, `docs/roadmap.md`, `docs/architecture.md`, and `docs/versioning.md` link to it, naming
+    individual routes only where they are making some other point. `docs/versioning.md` still claimed only Vocabularies and Tags
     were implemented, and `docs/api.md` still listed three namespace-carrying schemas rather than
     seven.
   - **`docs/release.md`** gains the three branch roles (`support/` line, `<type>/<issue>-`
@@ -552,29 +557,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/architecture.md`. Since `AGENTS.md` forbids logging in the library, a `RoundTripper` on the
   caller's `*http.Client` is the sanctioned path for metrics, tracing, request logging, retries, and
   rate limiting — and it pairs with `WithRequestID` to join a client span to the server's audit row.
-- **`MaxIdleConnsPerHost` is documented as the first scaling bottleneck *on HTTP/1.1*, and
-  deliberately not tuned.** `http.DefaultTransport` sets `ForceAttemptHTTP2`, so against an HTTPS
-  endpoint that negotiates h2 every request multiplexes over one connection and none of this applies
-  — the docs say so first, because advice given without that qualifier sends readers tuning something
-  inert. Where the connection really is HTTP/1.1, `DefaultTransport` leaves the field unset and it
-  falls back to `http.DefaultMaxIdleConnsPerHost` — **2** — so every **concurrent** call past the
-  second opens and discards its own connection instead of pooling it. It caps pooled connections
-  rather than in-flight ones, so nothing blocks and sequential work never meets it on either protocol
-  (`Each` issues its pages one at a time and reuses one connection); a fan-out across goroutines
-  sharing one `*Client` is what hits it. Raising it silently would be a capacity decision taken inside
-  the caller's process, so the README shows the `http.DefaultTransport.Clone()` recipe instead (a bare
-  `&http.Transport{}` drops the proxy, dialer, and HTTP/2 settings). The pool belongs to the
-  **transport**, not the client, which is what makes sharing one `*Client` the simple correct default.
-- **"Never retries" is stated accurately as "adds no retry loop."** `net/http`'s own transport already
-  retries a request it failed to write on a *reused* connection; that is recovery from a half-closed
-  idle socket rather than a retry policy, and the previous absolute wording would have misled anyone
-  reasoning about idempotency.
-- **`version.go` trailing the published tags is disclosed rather than left to surprise.** The
-  `Version` constant on `main` still reads `0.1.0` — so the default User-Agent is `octonomy-go/0.1.0`
-  — because `version.go` is bumped only in the release PR. `docs/versioning.md` now says to read the
-  git tag for what is published and `version.go` for what the next release PR will bump. The claim
-  that no `v0.x` was ever published is now backed by a re-runnable `proxy.golang.org` query rather
-  than by assertion.
+- **`MaxIdleConnsPerHost` is documented, and deliberately not tuned.** It caps how many **idle**
+  connections to one host are kept for reuse; `http.DefaultTransport` leaves it unset, so it falls
+  back to `http.DefaultMaxIdleConnsPerHost` — **2**. Check whether it applies before acting on it:
+  `DefaultTransport` sets `ForceAttemptHTTP2`, so against an HTTPS endpoint that negotiates h2 the
+  requests multiplex and pool size largely stops mattering. On HTTP/1.1, surplus connections beyond
+  two in flight are closed on completion rather than pooled, so the symptom is handshake churn rather
+  than a ceiling — nothing blocks. Sequential work never reaches it on either protocol (`Each` issues
+  its pages one at a time); a fan-out across goroutines sharing one `*Client` is what produces the
+  churn. Raising it silently would be a capacity decision taken inside the caller's process, so the
+  README shows the `http.DefaultTransport.Clone()` recipe instead — `Clone` keeps the tuned defaults
+  a bare `&http.Transport{}` starts without, though a bare transport does still negotiate HTTP/2. The
+  pool belongs to the **transport**, not the client, which is what makes sharing one `*Client` the
+  simple correct default.
+- **The library "adds no retry loop of its own"**, stated that way rather than as "never retries":
+  `net/http`'s transport already retries a request it failed to write on a *reused* connection, which
+  is recovery from a half-closed idle socket rather than a retry policy.
+- **`version.go`'s `0.1.0` is disclosed as a pre-release placeholder** rather than left to surprise.
+  The `Version` constant on `main` still reads `0.1.0`, so the default User-Agent is
+  `octonomy-go/0.1.0`. No tag anywhere corresponds to it — `v1.0.0` belongs to the other module — and
+  the first `/v2` release PR replaces it, since `version.go` is bumped there and nowhere else. The
+  claim that no `v0.x` was published is now backed by a re-runnable `proxy.golang.org` query rather
+  than by assertion, framed as the proxy's current set of tag-resolvable versions.
 - **`docs/development.md` no longer calls the integration suite "six assertions."** It has grown into
   a 1,235-line ordered walk covering both envelopes, pagination and `Each`, `DecodeMetadata`,
   `409 scope_immutable`, the namespace axis, aliases, resolution, both bulk composites, the
@@ -590,33 +594,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and it now distinguishes what the two compat checks actually do: `go1.13` builds, vets, and runs
   `go test -race` under a real toolchain, while `compat guard` never compiles the package and asserts
   the `go.mod` invariants.
-- **The decode guarantee is stated at its real boundary, which is the envelope.** `docs/api.md` and
-  `doc.go` said a 2xx whose body "does not match the shape above" is an error, never a zero value.
-  `doData` asserts that `data` is present and non-null and then unmarshals; a *well-formed* envelope
-  carrying the **wrong object** (`{"data": {"wrong": true}}`) still yields a zero-valued resource with
-  a nil error. That is [#40](https://github.com/octoverse-id/octonomy-go/issues/40), open — and the
-  overstated guarantee contradicted the gap this same release documents. Both pages now say what #32
-  actually closed ("the envelope is missing") and name the composites that do require their keys.
-- **The health carve-out is applied everywhere the unqualified claim appeared**, not only where the
-  probes are described: `AGENTS.md`, `README.md`, `doc.go`, `docs/architecture.md`, and `docs/api.md`
-  each said *every* request carries the token and tenant, or that *every* 2xx payload is `data`-wrapped.
-  `docs/api.md` also said the probes "carry none of it" — they carry no credentials, but they do send
-  `Accept` and `User-Agent`.
-- **"Byte-for-byte identical" is qualified.** The two health entry points share code, path, and
-  credential behavior, but `Config.UserAgent` and `WithHealthUserAgent` are set independently, so the
-  `User-Agent` can differ.
-- **The compat-line install note no longer implies automatic patching.** An unversioned `go get`
-  selects the highest `v1.x` at that moment and then records an exact `require`; a later security
-  patch needs `go get ...@latest`. The README now shows that command instead of implying it happens.
-- **The `MaxIdleConnsPerHost` note is narrowed again** after a second pass: it is an *idle-connection*
-  cap, so the symptom is handshake churn rather than a concurrency ceiling; HTTP/2 can still open more
-  than one connection; a plaintext HTTP/1.1 connection involves no TLS handshake; and a bare
-  `&http.Transport{}` loses `DefaultTransport`'s tuned defaults but **not** HTTP/2, which it still
-  negotiates on its own.
-- **`version.go`'s `0.1.0` is described as a pre-release placeholder**, not as "trailing the tags" —
-  no tag on this line corresponds to it and `v1.0.0` belongs to the other module. The proxy evidence
-  is presented as the proxy's current view of resolvable versions, with `-w` on the command so a
-  network failure cannot masquerade as an empty list.
 - The bug-report template asked for a version "e.g. `v0.1.0`", which was never released, and did not
   ask which of the two modules the reporter imports — the first thing triage needs. Both fixed. The
   PR template now checks the base branch against the line and the no-version-bump rule, and both

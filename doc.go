@@ -217,26 +217,29 @@
 // Config.HTTPClient REPLACES the default (&http.Client{Timeout: 30 * time.Second})
 // rather than decorating it, so set a Timeout on any client you pass.
 //
-// ON HTTP/1.1 ONLY, the idle-connection pool is the first scaling bottleneck.
-// http.DefaultTransport sets ForceAttemptHTTP2, so against an HTTPS endpoint that
-// negotiates h2 every request multiplexes over one connection and none of this
-// applies. Where the connection really is HTTP/1.1 -- plaintext, a proxy that
-// terminates at 1.1, or a transport that did not opt into h2 -- DefaultTransport
-// leaves MaxIdleConnsPerHost unset and it falls back to
-// http.DefaultMaxIdleConnsPerHost, which is 2. Octonomy is a single host, so past
-// two CONCURRENT calls each additional one opens and then discards its own
-// connection instead of returning it to the pool. It caps pooled connections
-// rather than in-flight ones, so nothing blocks -- the handshakes simply stop
-// being amortized.
+// MaxIdleConnsPerHost caps how many IDLE connections to one host are kept for
+// reuse. It does not cap in-flight requests and nothing blocks on it. Check
+// whether it applies before acting on it: http.DefaultTransport sets
+// ForceAttemptHTTP2, so against an HTTPS endpoint that negotiates h2 the requests
+// multiplex and the pool size largely stops mattering.
 //
-// Sequential work never meets it on either protocol: one goroutine in a loop,
+// On HTTP/1.1 -- plaintext, or a proxy that terminates at 1.1 -- DefaultTransport
+// leaves the field unset and it falls back to http.DefaultMaxIdleConnsPerHost,
+// which is 2. Octonomy is a single host, so with more than two calls in flight the
+// surplus connections are closed on completion rather than returned to the pool,
+// and the next call pays a fresh handshake. The symptom is latency and socket
+// churn, not a ceiling.
+//
+// Sequential work never reaches it on either protocol: one goroutine in a loop,
 // Each included, reuses a single connection whatever the setting. It is a
-// fan-out across goroutines sharing one Client that hits it.
+// fan-out across goroutines sharing one Client that produces the churn.
 //
 // This package does not tune it: transport configuration belongs to the caller.
-// Raise it by cloning DefaultTransport (Clone keeps its proxy, dialer, and HTTP/2
-// settings, which a bare &http.Transport{} drops) and setting MaxIdleConnsPerHost
-// at or above your peak concurrency. See the README for a worked example.
+// Raise it by cloning DefaultTransport -- Clone starts from its configured
+// defaults (ProxyFromEnvironment, the dialer and handshake timeouts,
+// MaxIdleConns: 100, IdleConnTimeout: 90s), where a bare &http.Transport{} starts
+// from the zero value and has none of them, though it does still negotiate HTTP/2
+// on its own. See the README for a worked example.
 //
 // A Client is safe for concurrent use, and sharing one is the simplest way to get
 // this right. The pool belongs to the TRANSPORT, not the Client, so a per-request

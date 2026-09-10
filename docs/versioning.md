@@ -92,14 +92,15 @@ $ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octo
 v1.0.0
 [HTTP 200]
 $ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octoverse-id/octonomy-go/v2/@v/list
-                                            # no rows: no /v2 version is resolvable
+                                            # no rows: no TAGGED /v2 release exists
 [HTTP 200]
 ```
 
-Read that for what it is: the proxy's **current** view of resolvable versions, which is the thing a
-consumer can actually reach. Keep `-w` on the command — a bare `curl -s` renders a network failure as
-the same blank output that a genuinely empty list produces, which is how this kind of evidence turns
-into a false claim.
+Read that for what it is: the proxy's **current** view of **tagged** versions. `@v/list` deliberately
+omits pseudo-versions, so an empty list means "nothing is released", not "nothing resolves" — a
+`go get` on the `/v2` path still resolves the default branch to a pseudo-version, as noted above.
+Keep `-w` on the command, too: a bare `curl -s` renders a network failure as the same blank output a
+genuinely empty list produces, which is how this kind of evidence turns into a false claim.
 
 That is what made adopting the `/v2` module path free, since no import path was in the wild to break.
 
@@ -129,9 +130,14 @@ Backward-compatible **bug fixes**. No change to the exported Go API.
 Backward-compatible **additions** to the exported API.
 - Examples: a new resource service, a new method, a new optional field on a `*Params`/`*Create` struct,
   a new `Is*` helper.
-- Existing callers keep compiling and working unchanged. While the modern line is still on
-  `v2.0.0-alpha.N` prereleases a necessary breaking change may ride an alpha bump, documented in the
-  CHANGELOG; once `v2.0.0` proper ships, that stops being true.
+- Existing callers keep compiling and working unchanged, with **one Go-level caveat**: adding a field
+  to an exported struct breaks a caller who wrote an *unkeyed* composite literal
+  (`octonomy.TagCreate{"Featured", "featured", "label"}`). Every example in this repository uses
+  keyed fields, which is the reason to — but if you are weighing a field addition against a
+  consumer you do not control, that is the exposure. Adding a field to a struct the caller can only
+  receive (a response model) has no such issue.
+- While the modern line is still on `v2.0.0-alpha.N` prereleases a necessary breaking change may ride
+  an alpha bump, documented in the CHANGELOG; once `v2.0.0` proper ships, that stops being true.
 
 ### MAJOR — `vN.0.0`
 Backward-**incompatible** changes to the exported Go API once a line has shipped a stable release.
