@@ -260,11 +260,12 @@ func TestSmoke_RealServer(t *testing.T) {
 	// against a fixture reproducing four beliefs about the server's paginator:
 	// count is the total rather than the page size, next goes nil at the end,
 	// limit is clamped to 200, and the requested offset is echoed back. Each
-	// READS only the last two -- next to stop, the echo to catch a page function
-	// that dropped its options -- but the other two are what make advancing by
-	// what arrived rather than by the limit requested the correct rule, so all
-	// four are pinned here against a real server rather than against a fixture
-	// that merely agrees with the walker.
+	// READS two of them -- next to stop, the echoed offset to catch a page
+	// function that dropped its options. The clamp is why it advances by what
+	// arrived rather than by the limit it asked for, and count is what a CALLER
+	// needs to detect a short walk; neither is read by the walker. All four are
+	// pinned here against a real server rather than against a fixture that
+	// merely agrees with the walker.
 	//
 	// It walks ALIASES, not tags, and via the nested route. Two reasons. The
 	// nested route is the closure shape Each's doc comment advertises for

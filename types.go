@@ -37,14 +37,12 @@ func Int(v int) *int { return &v }
 //
 // It is a FUNCTION rather than a method on Metadata because Metadata is a type
 // ALIAS for map[string]any (see above) and Go does not allow methods on
-// aliases. Making it a defined type instead would break every caller already
-// passing a plain map, so the alias stays and this takes an argument.
-//
-// It is a FUNCTION rather than a method for a second reason too, but not
-// because a defined type would break assignment: Go still lets a plain
-// map[string]any be passed where a defined map type is wanted. What changes is
-// type IDENTITY -- type switches, reflection, and anything naming the type in a
-// signature -- which is disruption without a matching gain.
+// aliases. Promoting it to a defined type is what would let it carry methods,
+// and that is not blocked by assignment -- Go still accepts a plain
+// map[string]any where a defined map type is wanted. What it would change is
+// type IDENTITY: type switches, reflection, and every signature naming the
+// type. That is disruption without a matching gain, so the alias stays and this
+// takes an argument.
 //
 // A nil or empty Metadata yields the zero value of T and a nil error: absent
 // metadata is not a failure. On any error the ZERO value is returned, never a
@@ -63,11 +61,13 @@ func Int(v int) *int { return &v }
 // into an int64 field cannot recover what was discarded: 9007199254740993
 // (2^53+1) arrives as 9007199254740992 and no decoder gets the 3 back.
 //
-// "Above 2^53" is the wrong rule of thumb, though: float64 holds every EVEN
-// integer well past it, so 2^53+2 survives exactly while 2^53+1 does not. The
-// honest statement is that integers beyond +/-2^53 MAY lose precision depending
-// on the value, which is worse than a clean cutoff because it holds in testing
-// and fails on one production id.
+// "Above 2^53" is the wrong rule of thumb, though. What float64 loses above it
+// is RESOLUTION, in doubling steps: every integer is exact below 2^53; between
+// 2^53 and 2^54 only the even ones are, so 2^53+2 survives while 2^53+1 does
+// not; between 2^54 and 2^55 only multiples of four, so even 2^54+2 is gone;
+// and so on. The honest statement is that integers beyond +/-2^53 MAY lose
+// precision depending on the value, which is worse than a clean cutoff because
+// it holds in testing and fails on one production id.
 //
 // Two things this does NOT apply to. A Metadata the CALLER built holding a real
 // int64 marshals exactly -- nothing rounded it, so nothing is lost. And a

@@ -212,14 +212,21 @@ func TestDecodeMetadata_LargeIntegerPrecision(t *testing.T) {
 		})
 	}
 
-	// "Above 2^53 is lost" would be the tidy rule, and it is wrong: float64
-	// holds every even integer well past it. The doc comment says MAY lose
-	// precision for exactly this reason, so the counterexample is pinned too --
-	// otherwise the caveat drifts back into a clean cutoff that testing
-	// confirms and one production id disproves.
-	const evenPastBoundary = (int64(1) << 53) + 2
-	if int64(float64(evenPastBoundary)) != evenPastBoundary {
-		t.Errorf("%d does not survive float64, but it is even and should", evenPastBoundary)
+	// "Above 2^53 is lost" would be the tidy rule and it is wrong; so is the
+	// tempting repair, "but every even integer survives". float64 loses
+	// resolution in DOUBLING steps, so the even ones survive only up to 2^54,
+	// after which it takes multiples of four. Both rungs are pinned, because
+	// each one is a rule someone would otherwise write down as the whole story.
+	const evenBelow54 = (int64(1) << 53) + 2 // in [2^53, 2^54): even is enough
+	if int64(float64(evenBelow54)) != evenBelow54 {
+		t.Errorf("%d should survive float64: it is even and below 2^54", evenBelow54)
+	}
+	const evenAbove54 = (int64(1) << 54) + 2 // in [2^54, 2^55): even is NOT enough
+	if int64(float64(evenAbove54)) == evenAbove54 {
+		t.Errorf("%d survived float64, but past 2^54 only multiples of four do", evenAbove54)
+	}
+	if got := int64(float64(evenAbove54)); got != int64(1)<<54 {
+		t.Errorf("%d rounded to %d, want %d", evenAbove54, got, int64(1)<<54)
 	}
 	if float64(safe) != math.Trunc(float64(safe)) || int64(float64(unsafe)) != safe {
 		t.Errorf("2^53 boundary does not behave as documented")

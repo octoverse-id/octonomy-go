@@ -82,18 +82,25 @@ type List[T any] struct {
 // Each returns start.Offset plus the number of items it successfully processed
 // -- equivalently, the offset of the first item it did NOT process, which is
 // what makes it a resume point. On a fetch failure that is the start of the
-// page that failed; on a callback failure it is the failing item, so a resumed
-// walk retries it rather than skipping it: delivery is at-least-once across a
-// resume, never at-most-once.
+// page that failed; on a callback failure it is the failing item.
 //
 // The offset is meaningful even when the error is not: a walk that dies on page
 // 40 of 100 hands back 39 pages of progress instead of discarding it.
 //
-// IT IS NOT A POLLING CURSOR. Resuming from the offset a SUCCESSFUL walk
-// returned does not find what has been created since, and the drift below is
-// why: a new row can sort before that offset, where a resume will never look,
-// and on a collection that shrank the offset simply points past the end. To see
-// new items, walk again from the beginning.
+// AN OFFSET IS A POSITION, NOT AN IDENTITY, so what a resume does with it is
+// conditional on the drift below. Where the collection is totally ordered and
+// unchanged, resuming re-delivers the item that failed rather than stepping
+// over it. Where it is not -- anything written since, and the tags list even
+// with nothing written -- that offset may address a different row, so a resume
+// MAY retry the failed item and may just as well skip it. Neither at-least-once
+// nor at-most-once is on offer; only the server can provide that, with a stable
+// order or a cursor.
+//
+// IT IS ALSO NOT A POLLING CURSOR. Resuming from the offset a SUCCESSFUL walk
+// returned is not a reliable way to find what has been created since: a new row
+// sorting after the old tail does turn up there, but one sorting before it
+// never will, and on a collection that shrank the offset simply points past the
+// end. To see new items, walk again from the beginning.
 //
 // # Offset drift is real and is not solvable here
 //
@@ -138,12 +145,18 @@ type List[T any] struct {
 //   - De-duplicate on ID. That is cheap and removes the double-delivery half.
 //   - DETECT the other half, which is the part that leaves no trace: keep the
 //     Pagination.Count from the first page and compare it with the number of
-//     distinct IDs walked. Fewer means rows were missed. That does not recover
-//     them, but it turns a silent wrong answer into a known one.
+//     distinct IDs walked. Read it in ONE DIRECTION ONLY, and only for a
+//     complete walk that started at offset 0 -- Count is the size of the whole
+//     collection, not of the part still ahead, so a walk resumed at offset 100
+//     of 150 legitimately sees 50 and is not short. Fewer distinct IDs than
+//     Count proves rows were missed; equality proves nothing, since a
+//     concurrent create and delete cancel out in the total. It recovers
+//     nothing, but it turns one silent wrong answer into a known one.
 //   - Walk when nothing is writing.
 //
-// Each never retries, and a context cancellation surfaces as the page error
-// along with the offset reached.
+// Each never retries. A cancelled context is observed before the next callback
+// rather than only at the next fetch, so a walk cancelled part-way through its
+// final page still returns ctx.Err() and the offset reached.
 func Each[T any](
 	ctx context.Context,
 	start ListOptions,
@@ -192,6 +205,17 @@ func Each[T any](
 		}
 
 		for _, item := range p.Data {
+			// Checked per item, not per page. Handing ctx to the page function
+			// is not enough on the LAST page: there is no next fetch to notice
+			// the cancellation, so a walk cancelled part-way through it would
+			// deliver the rest of the page and return a nil error. A
+			// non-blocking receive is cheap next to the request that fetched
+			// the page.
+			select {
+			case <-ctx.Done():
+				return offset, ctx.Err()
+			default:
+			}
 			if err := fn(item); err != nil {
 				return offset, err
 			}

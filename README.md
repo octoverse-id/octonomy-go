@@ -258,9 +258,13 @@ succeeds either way.
 
 The returned `offset` is `start.Offset` plus the number of items processed — the first item **not**
 processed — so a failure is resumable: pass it back as `ListOptions{Offset: offset}` and the walk
-picks up where it stopped. A walk that dies on page 40 of 100 keeps 39 pages of progress. It is
-**not** a polling cursor: resuming from a successful walk's offset will not find what was created
-since, because a new row can sort before it.
+picks up where it stopped. A walk that dies on page 40 of 100 keeps 39 pages of progress.
+
+An offset is a **position, not an identity**. Over a stable, unchanged collection a resume
+re-delivers the item that failed; where rows moved — or on the tags list, where they need not have —
+that offset may address a different row, so a resume *may* retry the failed item and may equally skip
+it. It is also not a polling cursor: a row created since that sorts *after* the old tail turns up,
+one sorting before it never does.
 
 **Offset drift is real and no client can fix it.** The server pages by limit/offset with no cursor,
 so a concurrent create or delete shifts the window and an item can be delivered twice or missed. The
@@ -272,9 +276,11 @@ assignments by their timestamp descending.
 `ORDER BY` is undefined, so a tags walk may repeat or miss rows *with no concurrent writes*. Treat it
 as best-effort unless the filtered set fits in one page.
 
-De-duplicate on ID to remove double delivery, and compare the first page's `Pagination.Count` against
-the number of distinct IDs walked to *detect* the missed half — that turns a silent wrong answer into
-a known one. See the `Each` doc comment for the full picture.
+De-duplicate on ID to remove double delivery. To *detect* the missed half, compare the first page's
+`Pagination.Count` against the number of distinct IDs walked — but read it in one direction only, and
+only for a complete walk from offset 0: `Count` is the size of the whole collection, so a resumed walk
+legitimately sees fewer. **Fewer proves rows were missed; equal proves nothing**, since a concurrent
+create and delete cancel out. See the `Each` doc comment for the full picture.
 
 ## Typed metadata
 
@@ -295,9 +301,10 @@ rather than a half-filled struct.
 
 **Integers beyond ±2^53 may lose precision, and not here.** The response decodes into
 `map[string]any`, where every JSON number is a `float64`, so a value float64 cannot represent is
-already rounded before `DecodeMetadata` sees it. "Above 2^53" is not a clean cutoff — float64 holds
-every even integer well past it, so `2^53+2` survives and `2^53+1` does not, which is why this holds
-in testing and fails on one production id. A `Metadata` you built yourself holding a real `int64` is
+already rounded before `DecodeMetadata` sees it. It is not a clean cutoff — float64 loses resolution
+in doubling steps: every integer is exact below 2^53, between 2^53 and 2^54 only the even ones
+(`2^53+2` survives, `2^53+1` does not), past 2^54 only multiples of four. That is why this holds in
+testing and fails on one production id. A `Metadata` you built yourself holding a real `int64` is
 unaffected. Store large ids and amounts as **strings** in metadata and parse them on the way out.
 
 ## Implemented resources

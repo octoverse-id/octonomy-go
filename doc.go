@@ -184,6 +184,7 @@
 // DecodeMetadata decodes a resource's Metadata into a struct of the caller's own
 // shape, replacing the type assertion that would otherwise panic when the stored
 // shape changes. It is a function rather than a method because Metadata is a
-// type alias. Integers above 2^53 are already rounded by the time Metadata
-// exists; see its doc comment.
+// type alias. Integers beyond +/-2^53 MAY already have been rounded by the time
+// Metadata exists -- float64 loses resolution in doubling steps rather than at
+// a clean cutoff; see its doc comment.
 package octonomy

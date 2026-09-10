@@ -479,7 +479,9 @@ echoes back the `offset` and the **clamped** `limit` it actually served (ask for
 function that dropped the `ListOptions` it was handed instead of looping on it forever. It never
 reads `count` or the echoed `limit` — but the clamp is why it advances by the number of items that
 *arrived* rather than by the `Limit` it asked for, and `count` is what a caller needs in order to
-detect a short walk. All four are asserted against a real server in `integration_test.go`.
+detect a short walk — one-way, and only for a complete walk from offset 0, since `count` is the size
+of the whole collection rather than of the part still ahead. All four are asserted against a real
+server in `integration_test.go`.
 
 **Ordering is per endpoint, and `GET /tags` has none.** Vocabularies and tag aliases order by
 `(name, slug, id)`; audit logs by `(created_at DESC, id)`; assignments and resource tags by

@@ -137,10 +137,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   It returns `start.Offset` plus the number of items processed — the first item it did **not**
   process, which is what makes it a resume point: the page start on a fetch failure, the failing item
-  on a callback failure, so a resume redelivers that item rather than stepping over it. A walk that
-  dies on page 40 of 100 keeps 39 pages of progress. It is **not** a polling cursor — resuming from a
-  successful walk's offset will not find what was created since, because a new row can sort before
-  it.
+  on a callback failure. A walk that dies on page 40 of 100 keeps 39 pages of progress. An offset is a
+  **position, not an identity**, so what a resume does with it is conditional: over a stable,
+  unchanged collection it re-delivers the item that failed, but where rows moved — or on the tags
+  list, where they need not have — it may address a different row, so a resume *may* retry the failed
+  item and may equally skip it. Neither at-least-once nor at-most-once is on offer; only a stable
+  server-side order or a cursor could provide that. It is also not a polling cursor: a row created
+  since that sorts after the old tail turns up, one sorting before it never does.
+
+  A cancelled context is observed **before the next callback**, not only at the next fetch. Handing
+  `ctx` to the page function alone left a real hole on the final page — with no further fetch to
+  notice, a walk cancelled part-way through it delivered the rest of the page and returned a nil
+  error. Caught in review, fixed, and pinned by a test that fails without the check.
 
   The page function must pass through the `ListOptions` it is handed. Ignoring the offset would
   re-fetch page one forever; `Each` detects that from the offset the server echoes and returns an
@@ -158,8 +166,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SQL ends at `GROUP BY` and Django's own `queryset.ordered` reports false. `LIMIT`/`OFFSET` over an
   unordered query is undefined, so a tags walk may repeat or miss rows **with no concurrent writes at
   all**. Documented on `Each` as best-effort, with the mitigation that is actually available: compare
-  the first page's `Pagination.Count` against the number of distinct IDs walked, which detects a short
-  walk even though nothing client-side can prevent one.
+  the first page's `Pagination.Count` against the number of distinct IDs walked. It reads in **one
+  direction only** and only for a complete walk from offset 0 — `Count` is the size of the whole
+  collection, not of the part still ahead, so a resumed walk legitimately sees fewer. Fewer proves
+  rows were missed; equal proves nothing, since a concurrent create and delete cancel out in the
+  total. It detects a short walk; nothing client-side can prevent one.
 
   `DecodeMetadata[T](m)` decodes a resource's `Metadata` into the caller's own struct. It is a
   **function, not a method**: `Metadata` is a type *alias* for `map[string]any` and Go does not allow
@@ -172,20 +183,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Large integers MAY lose precision, and not here.** Where they do, it happened when the *response*
   was decoded into `map[string]any`, whose JSON numbers are `float64` — before `DecodeMetadata` is
-  called and beyond its power to recover. "Above 2^53" is not the rule: float64 holds every even
-  integer well past it, so `2^53+2` survives exactly and `2^53+1` does not, which is precisely why the
-  caveat says *may*. A `Metadata` the caller built holding a real `int64` is unaffected. The issue
-  suggested "decode the raw JSON yourself"; this SDK has no first-class hook for that, though
-  `Config.HTTPClient` does let a custom `RoundTripper` copy the body first. The simple fix is to store
-  such values as **strings** and parse them out. Tests pin the loss at `2^53+1`, the survival of
-  `2^53+2`, the caller-built exactness, and the string workaround.
+  called and beyond its power to recover. "Above 2^53" is not the rule, and neither is the tempting
+  repair "but even numbers survive": float64 loses resolution in **doubling steps** — every integer is
+  exact below 2^53, only the even ones between 2^53 and 2^54, only multiples of four past 2^54. That
+  is precisely why the caveat says *may*. A `Metadata` the caller built holding a real `int64` is
+  unaffected. The issue suggested "decode the raw JSON yourself"; this SDK has no first-class hook for
+  that, though `Config.HTTPClient` does let a custom `RoundTripper` copy the body first. The simple
+  fix is to store such values as **strings** and parse them out. Tests pin the loss at `2^53+1`, the
+  survival of `2^53+2`, the loss of `2^54+2`, the caller-built exactness, and the string workaround.
 
   Both are asserted against a real server in `integration_test.go` as well as against fixtures. The
   fixture reproduces four beliefs about the server's paginator — `count` is the total, `next` goes nil
-  at the end, `limit` is clamped to 200 and echoed, `offset` is echoed — and although `Each` reads
-  only the last two, the other two are what make "advance by what arrived" the correct rule. All four
-  are now asserted against a running server rather than only against the fixture that agrees with
-  them. The real-server walk uses the **alias** route, whose order is total, rather than the tags list
+  at the end, `limit` is clamped to 200 and echoed, `offset` is echoed. `Each` reads two of them:
+  `next` to stop, and the echoed `offset` to catch a dropped `ListOptions`. The clamp is why
+  "advance by what arrived" is the correct rule, and `count` is what a *caller* needs to detect a
+  short walk — neither is read by the walker. All four are now asserted against a running server
+  rather than only against the fixture that agrees with them. The real-server walk uses the **alias** route, whose order is total, rather than the tags list
   that has none.
 
 ### Changed

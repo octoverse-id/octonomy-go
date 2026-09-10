@@ -257,8 +257,14 @@ func TestEach_FailureOffsetIsTheFirstUnprocessedItem(t *testing.T) {
 
 // The contract is only worth anything if the offset actually resumes. This
 // fails a walk, restarts from what it handed back, and asserts the two halves
-// join up with nothing lost -- and that the retried item is redelivered rather
-// than skipped, which is the at-least-once half of the promise.
+// join up with nothing lost, the failed item included.
+//
+// The fixture is a stable, totally ordered collection with nothing writing to
+// it, which is the ONLY condition under which redelivery is guaranteed -- an
+// offset is a position, not an identity, so against a collection that moved
+// (or against the unordered tags list) the same offset may address a different
+// row. The doc comment states it conditionally for that reason, and this test
+// establishes the condition rather than the general claim.
 func TestEach_ReturnedOffsetActuallyResumes(t *testing.T) {
 	c := newTestClient(t, pagedTags(t, 10, nil))
 
@@ -296,8 +302,9 @@ func TestEach_ReturnedOffsetActuallyResumes(t *testing.T) {
 			t.Fatalf("item %d = %q, want %q -- the resume did not join up", i, id, want)
 		}
 	}
-	// tag_6 is the item the callback rejected. It must appear in the second
-	// half: a resume redelivers the failed item, it does not step over it.
+	// tag_6 is the item the callback rejected. Against this stable collection it
+	// must appear in the second half: the resume redelivers it rather than
+	// stepping over it.
 	if second[0] != "tag_6" {
 		t.Errorf("resumed walk began at %q, want tag_6 (the item that failed)", second[0])
 	}
@@ -490,5 +497,32 @@ func TestEach_NilListWithNoError(t *testing.T) {
 	}
 	if offset != 4 {
 		t.Errorf("offset = %d, want 4", offset)
+	}
+}
+
+// Cancelling during the LAST page is the case a per-page check misses: there is
+// no next fetch to notice, so the walk would finish the page and report success.
+func TestEach_CancellationDuringTheFinalPage(t *testing.T) {
+	c := newTestClient(t, pagedTags(t, 5, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var seen []string
+	// One page of five, so nothing fetches again after the cancel.
+	offset, err := Each(ctx, ListOptions{Limit: 50}, walkTags(c), func(tag Tag) error {
+		seen = append(seen, tag.ID)
+		if len(seen) == 2 {
+			cancel()
+		}
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled -- a cancel on the final page was swallowed", err)
+	}
+	if offset != 2 {
+		t.Errorf("offset = %d, want 2", offset)
+	}
+	// The remaining three items of the page must not have been delivered.
+	if len(seen) != 2 {
+		t.Errorf("delivered %d items after cancellation, want 2", len(seen))
 	}
 }
