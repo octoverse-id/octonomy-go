@@ -114,6 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   view is shared by `/api/v1` and `/api/v2`, but namespace is header-set rather than body-set, so
   the three `*Update` structs carry no namespace field for a PATCH to move.
 
+  The 409-versus-`conflict` split is asserted in `integration_test.go` against a real server, not
+  only against a canned fixture: a fixture asserting that `IsScopeImmutable` is true and
+  `IsConflict` is false on the same response is a fixture asserting what this SDK already believes.
+  The smoke step moves a global vocabulary into an application, and also asserts that the refused
+  PATCH left the row unchanged.
+
   **No `Scope` field was added to `TagListParams`.** The parameter belongs to `/tag-resolution` on
   both surfaces and appears exactly once per spec; the tags list route has none.
 
