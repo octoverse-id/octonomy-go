@@ -48,6 +48,19 @@ stays a faithful, ergonomic client.
   server drops the query value on a global create, so the option is refused there rather than
   silently producing a tenant-shared row. `include_global` is a **query** parameter and is
   meaningless on writes.
+- **Request correlation is send-only, per call, and never minted here.** `WithRequestID` sets
+  `X-Request-ID` at the same transport chokepoint the scope options use, and the header goes out
+  **only** when the caller supplied one — the server mints `req_<uuid>` otherwise and threads
+  whichever id it holds into the audit row, the outbox/webhook event, its structured log, and the
+  error envelope. Do **not** add a `Config.RequestID`: a request id names *one* request, so a
+  client-level default would stamp every call the process makes with a single value and correlate
+  nothing. Do **not** mint one client-side: that replaces an id the caller can at least read back off
+  `APIError.RequestID` with one that was never surfaced anywhere. The success path deliberately does
+  not return the server's id — `doRaw` discards `resp.Header` and every method returns `(*T, error)`
+  — and a caller who wants correlation on a success supplies their own. The option validates wire
+  grammar only (non-blank, printable ASCII, because a control byte would surface as `ErrUnreachable`
+  and a high byte as latin-1 mojibake in the audit row); it does **not** enforce the server's
+  100-character column, which is a server rule and stays out of this package.
 - **A scope option that contradicts one already on the request is an error, never last-wins.** This
   holds option-versus-params and option-versus-itself. Last-wins on a scope axis is a silent
   wrong-tenant read, and on `Get`/`Delete` — which have no params struct — option-versus-option is

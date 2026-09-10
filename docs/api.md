@@ -341,9 +341,11 @@ rather than an error.
 and both bulk calls write one row per assignment they touch, all sharing an operation id, so the
 removals and additions of a single replace read as one act rather than as unrelated churn. Read any
 row of an operation, then list by its `OperationID` for the rest. `RequestID` correlates a row with
-the one HTTP request that produced it, and with `APIError.RequestID` for a request that failed; the
-server generates it when the caller sends none, which is what this SDK does today ([#5](https://github.com/octoverse-id/octonomy-go/issues/5)
-sends one).
+the one HTTP request that produced it, and with `APIError.RequestID` for a request that failed. The
+server mints `req_<uuid>` when the caller sends none; pass `WithRequestID` to supply your own and
+join the row to your service's logs ([#5](https://github.com/octoverse-id/octonomy-go/issues/5)).
+The SDK never mints one for you — see the request-correlation section of the README for why, and for
+the 100-character ceiling the server's column imposes.
 
 **`Changes` is `Metadata` — an open object — and it has to be.** The contract gives the field no type
 at all. What the server writes is `{"before": {…}, "after": {…}}`: a create carries `after` alone, an

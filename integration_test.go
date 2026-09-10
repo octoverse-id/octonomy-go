@@ -198,10 +198,16 @@ func TestSmoke_RealServer(t *testing.T) {
 		t.Errorf("tag.Metadata[source] = %v, want v2-smoke", got)
 	}
 
-	// 4. An update, the third doData write path.
+	// 4. An update, the third doData write path -- and the one call in this file
+	// that supplies its own X-Request-ID (#5). Only a real server can show where
+	// that id lands: the audit assertions in step 12 read it back off the row the
+	// SERVER wrote as a side effect of this call. The create above deliberately
+	// sends none, so the two rows together prove both halves -- the caller's id
+	// threads through, and the server still mints its own when there is none.
+	updateRequestID := uniqueSlug("smoke-req")
 	renamed, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{
 		Name: octonomy.String("v2 smoke renamed"),
-	})
+	}, octonomy.WithRequestID(updateRequestID))
 	if err != nil {
 		t.Fatalf("Tags.Update: %v", err)
 	}
@@ -886,10 +892,27 @@ func TestSmoke_RealServer(t *testing.T) {
 	if created.ActorID == nil || *created.ActorID != "v2-smoke" {
 		t.Errorf("ActorID = %v, want v2-smoke (Config.ActorID)", created.ActorID)
 	}
-	// The server generates a request id when the caller sends none, which is
-	// what the SDK does today (#5 sends one).
-	if created.RequestID == nil || *created.RequestID == "" {
-		t.Errorf("RequestID = %v, want the server's generated value", created.RequestID)
+	// Request correlation, both halves, on rows the server wrote itself (#5).
+	// The create sent no X-Request-ID, so the server minted one; the update sent
+	// updateRequestID with WithRequestID, so the row must carry that exact
+	// string. A unit test can assert the header leaves the client and nothing
+	// more -- that it survives the middleware, reaches audit.request_id, and is
+	// stored unmangled is a property of the server, and this is the only place it
+	// is checked.
+	switch {
+	case created.RequestID == nil:
+		t.Errorf("tag.created RequestID is nil, want the server's generated value")
+	case *created.RequestID == "":
+		t.Errorf("tag.created RequestID is empty, want the server's generated value")
+	case *created.RequestID == updateRequestID:
+		t.Errorf("tag.created RequestID = %q, the id sent on the UPDATE: the SDK must send no header at all when the option is absent",
+			*created.RequestID)
+	}
+	switch {
+	case updated.RequestID == nil:
+		t.Errorf("tag.updated RequestID is nil, want the caller-supplied %q", updateRequestID)
+	case *updated.RequestID != updateRequestID:
+		t.Errorf("tag.updated RequestID = %q, want the caller-supplied %q", *updated.RequestID, updateRequestID)
 	}
 	// Rows arrive NEWEST FIRST, which AuditLog documents and offset paging
 	// depends on: the rename happened after the create, so it comes back before

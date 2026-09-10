@@ -95,6 +95,20 @@
 // nested audit routes. A token without it reads and writes tags perfectly well
 // and gets a 403 (IsForbidden) from those three -- never an empty page.
 //
+// # Request correlation
+//
+// WithRequestID sends X-Request-ID for one call, threading the caller's own
+// correlation id into the audit row, the outbox/webhook event, the server's
+// structured log, and the error envelope. It composes with WithActor: actor is
+// who, request id is which call.
+//
+// The SDK never mints an id -- no header is sent unless the option is used, so
+// the server's own minting stays intact -- and there is no Config field for one,
+// since a request id names a single request and a client-level default would
+// stamp every call with one value. Generate one per outbound call and log it on
+// your side; on a success the SDK returns (*T, error) and does not hand back the
+// server's id, while on a failure APIError.RequestID carries it.
+//
 // # Errors
 //
 // Non-2xx responses are returned as *APIError, which exposes the Octonomy error
