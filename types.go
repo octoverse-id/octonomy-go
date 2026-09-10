@@ -46,9 +46,11 @@ func Int(v int) *int { return &v }
 //
 // A nil or empty Metadata yields the zero value of T and a nil error: absent
 // metadata is not a failure. On any error the ZERO value is returned, never a
-// half-populated T -- encoding/json fills fields as it goes and stops at the
-// first type mismatch, and handing back that partial struct beside an error is
-// how a caller ends up trusting three of five fields. Unknown keys are ignored
+// half-populated T. encoding/json does not stop at a bad field: it skips that
+// one, KEEPS DECODING the rest, and returns the earliest type error at the end
+// -- so what it leaves behind is a struct with most fields set and one silently
+// zero. Handing that back beside an error is how a caller ends up trusting
+// three of five fields. Unknown keys are ignored
 // and missing keys are left zero, exactly as encoding/json does elsewhere, so a
 // struct naming a subset of the stored keys is a legal projection.
 //

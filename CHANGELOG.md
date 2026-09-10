@@ -143,8 +143,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list, where they need not have — it may address a different row, so a resume *may* retry the failed
   item and may equally skip it. Neither at-least-once nor at-most-once is on offer, and a stable
   `ORDER BY` would not buy them either — a row inserted or removed *before* the offset shifts
-  everything after it, deterministic sort or not. Only a snapshot, or a keyset cursor naming the last
-  row seen rather than counting past it, makes a resume exact. It is also not a polling cursor: a row created
+  everything after it, deterministic sort or not. Nor would a keyset cursor on its own: it removes
+  the positional shift but is only as stable as the key it seeks on, and these collections sort on
+  `name` and `slug`, which a caller can edit mid-walk. Exactness needs a **snapshot**, which is the
+  server's to offer. It is also not a polling cursor: a row created
   since that sorts after the old tail turns up, one sorting before it never does.
 
   A cancelled context is observed **before the next callback**, not only at the next fetch. Handing

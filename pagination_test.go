@@ -378,9 +378,11 @@ func TestEach_ContextCancellationKeepsTheOffset(t *testing.T) {
 
 // --- Termination guards ---------------------------------------------------
 
-// The one misuse of this API that compiles: a page function that builds its own
-// params and drops the ListOptions it was handed. Every iteration would then
-// re-fetch page one and redeliver it, forever. Each refuses instead.
+// The non-terminating misuse: a page function that builds its own params and
+// drops the Offset it was handed. Every iteration would then re-fetch page one
+// and redeliver it, forever. Each refuses instead. It is not the only misuse
+// that compiles, only the one that cannot terminate --
+// TestEach_GuardDoesNotFireOnASinglePageWalk pins what it lets through.
 func TestEach_RefusesAPageFunctionThatIgnoresItsOptions(t *testing.T) {
 	c := newTestClient(t, pagedTags(t, 100, nil))
 

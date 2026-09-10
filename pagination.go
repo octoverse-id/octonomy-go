@@ -97,9 +97,15 @@ type List[T any] struct {
 // Neither at-least-once nor at-most-once is on offer, and a stable ORDER BY
 // would not buy them either: a row inserted or removed BEFORE the offset shifts
 // everything after it, deterministic sort or not. Ordering removes the separate
-// hazard of an undefined result order, nothing more. Only a snapshot of the
-// collection, or a keyset cursor naming the last row seen rather than counting
-// past it, makes a resume exact -- and both are the server's to offer.
+// hazard of an undefined result order, nothing more.
+//
+// A keyset cursor -- naming the last row seen instead of counting past it --
+// removes the positional shift, but it is not exactness either, and not here:
+// it is only as stable as the key it seeks on, and these collections sort on
+// name and slug, both of which a caller can edit mid-walk. Rename a row you
+// already passed to something later and it comes round again; rename one ahead
+// of you to something earlier and you never see it. Exactness needs a SNAPSHOT
+// of the collection, and that is the server's to offer.
 //
 // IT IS ALSO NOT A POLLING CURSOR. Resuming from the offset a SUCCESSFUL walk
 // returned is not a reliable way to find what has been created since: a new row
@@ -113,9 +119,11 @@ type List[T any] struct {
 // under concurrent writes. A row that sorts before the current page pushes
 // every later row one place right, and Each delivers one item twice; a row
 // removed behind the cursor pulls them one place left, and Each never sees one.
-// Deletion counts here because Octonomy deletes by deactivating and an
-// unfiltered list returns active rows only, so a delete really does remove a
-// row from the walked set.
+//
+// Deletion counts on every list. Assignments and resource tags are removed
+// outright. Tags, vocabularies and aliases are only DEACTIVATED, which would
+// look like a reprieve except that an unfiltered list returns active rows only
+// -- so the row leaves the walked set either way.
 //
 // The sort order is PER ENDPOINT, not one rule. Vocabularies and tag aliases
 // order by (name, slug, id); audit logs by (created_at DESC, id); assignments
@@ -194,9 +202,9 @@ func Each[T any](
 
 		// The server echoes the offset it actually served. If it does not match
 		// the one Each asked for, the page function did not apply the Offset it
-		// was handed -- the one way to misuse this API that still compiles --
-		// and every following iteration would re-fetch this same page forever,
-		// delivering it again each time. Refuse instead of looping.
+		// was handed -- the NON-TERMINATING misuse, the one that would re-fetch
+		// this same page forever and deliver it again each time. Refuse instead
+		// of looping.
 		//
 		// This catches only the non-terminating shape, and deliberately claims
 		// no more. A dropped Limit is invisible here, and a page function that
