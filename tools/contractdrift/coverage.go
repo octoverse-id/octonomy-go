@@ -299,8 +299,12 @@ func LoadCoverage(path string) (*Coverage, error) {
 			return nil, fmt.Errorf("%s: undocumented_inputs needs surface, in, name, and reason on every row", path)
 		case u.Surface != "v1" && u.Surface != "v2":
 			return nil, fmt.Errorf("%s: undocumented_inputs %q: surface is %q, not v1 or v2", path, u.Name, u.Surface)
-		case !unsentLocations[u.In]:
-			return nil, fmt.Errorf("%s: undocumented_inputs %q: `in` is %q, not query, body, or header", path, u.Name, u.In)
+		case u.In != "query":
+			// Only `query` has a consumer. A row saying `body` or `header` loaded,
+			// matched nothing, and was then reported as stale with a message that
+			// misdescribed why -- "that surface documents it now", when it never
+			// could have.
+			return nil, fmt.Errorf("%s: undocumented_inputs %q: `in` is %q; only `query` is compared against a surface's contract", path, u.Name, u.In)
 		}
 	}
 	for _, h := range cov.ClientHeaders {

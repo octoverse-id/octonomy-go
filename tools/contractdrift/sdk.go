@@ -26,15 +26,22 @@ var (
 	// `code = "not_found"` on a DomainError subclass, single or double quoted,
 	// with an optional type annotation (`code: str = "not_found"`).
 	//
+	// ANY plain literal, not just lowercase snake case. The capture was
+	// `[a-z0-9_]+` while the unreadable-form detector accepted any string literal,
+	// so the two predicates disagreed and a code spelled `Brand_New_Thing` was
+	// "not a code" to one and "perfectly readable" to the other: neither extracted
+	// nor reported. A rename was worse -- the removal was reported and the new name
+	// was not mentioned at all.
+	//
 	// NOT anchored to the start of a line. It was, and a one-line class body --
 	// `class InlineError(DomainError): code = "inline"` -- was then invisible to
 	// this AND to the unreadable-form detector below, so a real code vanished from
 	// the comparison while the count floor stayed healthy. `\b` is what keeps it
 	// off `error_code = ...`, where the underscore leaves no word boundary.
-	pyClassCodeRE = regexp.MustCompile(`\bcode\s*(?::[^=\n]*)?=\s*["']([a-z0-9_]+)["']`)
+	pyClassCodeRE = regexp.MustCompile(`\bcode\s*(?::[^=\n]*)?=\s*["']([^"'\n]+)["']`)
 
 	// `error_response("not_found", ...)` in the DRF exception handler.
-	pyCallCodeRE = regexp.MustCompile(`error_response\(\s*["']([a-z0-9_]+)["']`)
+	pyCallCodeRE = regexp.MustCompile(`error_response\(\s*["']([^"'\n]+)["']`)
 
 	// The same two shapes with anything other than a plain string literal where
 	// the code belongs: an enum member, a lookup, an f-string, a constant from

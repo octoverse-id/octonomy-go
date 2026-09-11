@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -157,6 +158,14 @@ const (
 type Conformance struct {
 	Observations map[string]Observation
 
+	// ErrorEnvelope is one extra call per surface, answered with a NON-2xx whose
+	// body is built from the contract's ErrorResponse schema. It is the most
+	// referenced schema in the contract -- 30 `$ref`s -- and nothing offline
+	// compared it, because the stub only ever answered 200 or 204. A refresh that
+	// renamed `error.code` left every Is* helper silently returning false and the
+	// gate said nothing.
+	ErrorEnvelope map[string]ErrorObservation
+
 	// Errors are drivers that could not be run at all: a call that never reached
 	// a request, one that issued several, one whose two executions disagreed
 	// about the route, or a schema the stub could not build a body from. Distinct
@@ -210,13 +219,19 @@ func (rec *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 func RunConformance(vendored map[string]*Spec, cov *Coverage, drivers []Driver) (*Conformance, error) {
 	rows := cov.ByKey()
 	conf := &Conformance{
-		Observations: map[string]Observation{},
-		Errors:       map[string]error{},
+		Observations:  map[string]Observation{},
+		ErrorEnvelope: map[string]ErrorObservation{},
+		Errors:        map[string]error{},
 	}
 	for _, surface := range surfaces {
 		if err := runSurface(vendored[surface], surface, rows, drivers, conf); err != nil {
 			return nil, err
 		}
+		observation, err := runErrorEnvelope(vendored[surface], surface)
+		if err != nil {
+			return nil, err
+		}
+		conf.ErrorEnvelope[surface] = observation
 	}
 	return conf, nil
 }
@@ -360,6 +375,76 @@ func sortedStrings(m map[string]string) []string {
 	return out
 }
 
+// runErrorEnvelope asks the client to read one synthesized error body.
+//
+// A 409, because it is a status the SDK maps to a semantic code, so a renamed
+// property is the difference between IsConflict answering true and answering
+// false. The request itself does not matter here -- any operation reaches
+// parseError -- so this uses the simplest read there is.
+func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
+	inner, err := synthesizeSchema(spec, "ErrorResponse", 0, witnessPopulated)
+	if err != nil {
+		return ErrorObservation{}, fmt.Errorf("the response stub could not build an error envelope: %w", err)
+	}
+	body, err := json.Marshal(inner)
+	if err != nil {
+		return ErrorObservation{}, err
+	}
+
+	rec := &recorder{respond: func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusConflict,
+			Header:        http.Header{"Content-Type": []string{"application/json"}},
+			Body:          io.NopCloser(bytes.NewReader(body)),
+			ContentLength: int64(len(body)),
+			Request:       req,
+		}, nil
+	}}
+
+	apiVersion := octonomy.APIV2
+	if surface == "v1" {
+		apiVersion = octonomy.APIV1
+	}
+	client, err := octonomy.New(octonomy.Config{
+		APIVersion: apiVersion,
+		BaseURL:    "https://contractdrift.invalid",
+		Token:      strings.TrimPrefix(ExpectedValue("authorization", 0), "Bearer "),
+		TenantID:   ExpectedValue("x-tenant-id", 0),
+		HTTPClient: &http.Client{Transport: rec},
+	})
+	if err != nil {
+		return ErrorObservation{}, err
+	}
+
+	_, callErr := client.Tags.Get(context.Background(), "ERRID")
+
+	observation := ErrorObservation{Sent: errorObject(body)}
+	var apiErr *octonomy.APIError
+	if !errors.As(callErr, &apiErr) {
+		observation.NotAPIErr = callErr
+		return observation, nil
+	}
+	observation.Code = apiErr.Code
+	observation.Message = apiErr.Message
+	observation.RequestID = apiErr.RequestID
+	observation.Details = apiErr.Details
+	return observation, nil
+}
+
+// errorObject pulls the inner `error` object out of a synthesized envelope, which
+// is the part the SDK actually decodes.
+func errorObject(body []byte) map[string]json.RawMessage {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil
+	}
+	var inner map[string]json.RawMessage
+	if err := json.Unmarshal(envelope["error"], &inner); err != nil {
+		return nil
+	}
+	return inner
+}
+
 // runDriver executes one driver once and records what it did.
 func runDriver(spec *Spec, surface string, op *Operation, row CoverageOperation, driver Driver, pass int, w witness) (Observation, error) {
 	values := pathValues[pass]
@@ -427,6 +512,22 @@ func runDriver(spec *Spec, surface string, op *Operation, row CoverageOperation,
 		Decoded: remarshalKeys(value),
 	}
 	return observed, nil
+}
+
+// ErrorObservation is what the client made of a synthesized error envelope.
+type ErrorObservation struct {
+	// Sent is the envelope's inner `error` object, as the stub built it.
+	Sent map[string]json.RawMessage
+
+	// Code, Message and RequestID are what the SDK's *APIError carried back, and
+	// Err is the error itself when it was not an *APIError at all -- which is the
+	// failure this exists to catch: a renamed property makes parseError fall
+	// through to CodeUnexpectedStatus and every Is* helper answer false.
+	Code      string
+	Message   string
+	RequestID string
+	Details   map[string]any
+	NotAPIErr error
 }
 
 // Env is what a driver is handed. Two clients, because the health probes are
@@ -737,8 +838,14 @@ func synthesizeBody(spec *Spec, op *Operation, row CoverageOperation, w witness)
 		// client crossing two of them has to change both.
 		payload = map[string]any{
 			"data": []any{object},
+			// `next` and `previous` carry real values, not nil. They used to be the
+			// one pair here sent only as null, so the type BEHIND the pointer was
+			// never exercised -- and `Each` terminates on `Pagination.Next == nil`,
+			// so a mistyped Next breaks every list walk against a real server.
 			"pagination": map[string]any{
-				"limit": 11, "offset": 22, "count": 33, "next": nil, "previous": nil,
+				"limit": 11, "offset": 22, "count": 33,
+				"next":     "https://contractdrift.invalid/next",
+				"previous": "https://contractdrift.invalid/previous",
 			},
 		}
 	}
@@ -835,9 +942,14 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness, property
 			return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).
 				Add(time.Duration(nameOffset(property)) * time.Second).Format(time.RFC3339), nil
 		case "uuid":
-			return "00000000-0000-4000-8000-000000000000", nil
+			// Derived from the property name, like the timestamps and integers
+			// above and for the same reason: Tag.id, Tag.parent_id and
+			// Tag.vocabulary_id are three uuids on one model, and one shared
+			// witness meant crossing any two of them changed nothing compared.
+			return fmt.Sprintf("%08d-0000-4000-8000-000000000000", nameOffset(property)), nil
 		case "date":
-			return "2026-01-02", nil
+			return time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC).
+				AddDate(0, 0, nameOffset(property)).Format(time.DateOnly), nil
 		}
 		// The property's OWN name, in the same form the drivers use, so a response
 		// value that lands in the wrong field says where it came from. Every string

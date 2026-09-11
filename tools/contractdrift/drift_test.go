@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -1824,6 +1825,8 @@ func TestSwappedResponseValuesAreReported(t *testing.T) {
 
 // TestSwappedCompositeCountersAreReported: composites sat outside every value
 // comparison, so swapping two counters left the bytes intact and was invisible.
+// checkDecodedValues owns this now -- the composite-only check it replaced was
+// pinned to v2 and execution 1, and so was strictly weaker.
 func TestSwappedCompositeCountersAreReported(t *testing.T) {
 	in := load(t, repoRoot, "")
 	observed := in.Conformance.Observations["v2 post /tag-assignments/bulk-assign"]
@@ -1831,7 +1834,7 @@ func TestSwappedCompositeCountersAreReported(t *testing.T) {
 		observed.Decoded["existing"], observed.Decoded["created"]
 	in.Conformance.Observations["v2 post /tag-assignments/bulk-assign"] = observed
 
-	assertFinding(t, CheckLocal(in), "the composite body sent `created` as 1")
+	assertFinding(t, CheckLocal(in), "the response sent `created` as 1")
 }
 
 // --- both surfaces ----------------------------------------------------------------
@@ -1993,7 +1996,7 @@ func TestDiscardedCompositeRowsAreReported(t *testing.T) {
 	observed.Decoded["assignments"] = json.RawMessage(`[]`)
 	in.Conformance.Observations["v2 post /tag-assignments/bulk-assign"] = observed
 
-	assertFinding(t, CheckLocal(in), "the composite body sent `assignments` as")
+	assertFinding(t, CheckLocal(in), "the response sent `assignments` as")
 }
 
 // TestCompositeWitnessesAreDistinct guards the numbers the check above rests on:
@@ -2278,4 +2281,215 @@ func TestHealthResponseValueIsChecked(t *testing.T) {
 	in.Conformance.Observations["v2 get /health/live"] = observed
 
 	assertFinding(t, CheckLocal(in), "the response sent `status` as \"ok\"")
+}
+
+// --- the ninth pass ---------------------------------------------------------------
+
+// TestDetectsAddedResponseStatus pins checkResponseDrift, which was the one check
+// of nineteen that no test held.
+//
+// Both workflows run `make contract-test` under a step whose stated purpose is to
+// prove the gate can still fail; that guarantee was 18/19 true. Deleting the check
+// left a green suite, and it is not redundant -- it is the only vendored-versus-
+// upstream comparison of request bodies in the tool.
+func TestDetectsAddedResponseStatus(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"operationId: api_v2_audit_logs_list",
+		"      responses:\n",
+		"      responses:\n        '429':\n          description: ''\n")
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"gained a documented `429` response")
+}
+
+// TestDetectsChangedRequestBody is the other half of the same check, and the part
+// nothing else covers at all.
+func TestDetectsChangedRequestBody(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"operationId: api_v2_tags_create",
+		"$ref: '#/components/schemas/TagWrite'",
+		"$ref: '#/components/schemas/TagRewrite'")
+
+	assertFinding(t, runFull(t, repoRoot, upstream), "request body:")
+}
+
+// TestEveryCheckIsPinnedByATest is the guard that would have found the gap above.
+//
+// It is deliberately coarse: it asserts only that each check function is dispatched
+// from CheckLocal or CheckUpstream, so a check that is written and never wired is
+// caught. Whether each one is exercised is what the rest of this file is for.
+func TestEveryCheckIsPinnedByATest(t *testing.T) {
+	source, err := os.ReadFile("checks.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+
+	declared := regexp.MustCompile(`(?m)^func (check[A-Za-z]+)\(in Inputs, r \*Report\)`).FindAllStringSubmatch(text, -1)
+	if len(declared) < 15 {
+		t.Fatalf("found only %d check functions; the pattern stopped matching", len(declared))
+	}
+	for _, match := range declared {
+		name := match[1]
+		if !strings.Contains(text, "\t"+name+"(in, r)") {
+			t.Errorf("%s is declared and never dispatched from CheckLocal or CheckUpstream", name)
+		}
+	}
+}
+
+// TestDescriptionPropertyIsCompared: `flatten` dropped every mapping key called
+// `description` as prose. Six schemas on both surfaces have a PROPERTY of that
+// name, and the whole subtree went with it -- so retyping it, or withdrawing it,
+// was no upstream drift at all.
+func TestDescriptionPropertyIsCompared(t *testing.T) {
+	upstream := stageUpstream(t)
+	editTagSchema(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"        description:\n          type: string\n",
+		"        description:\n          type: integer\n")
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"schema `Tag`: ~ properties.description.type: string -> integer")
+}
+
+// TestAnnotationDescriptionsAreStillIgnored is the other side of that rule: the
+// server rewords its prose freely, and reporting that would teach everyone to
+// close this job unread.
+func TestAnnotationDescriptionsAreStillIgnored(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"operationId: api_v2_tags_list",
+		"        description: Namespace type for merchant/sub-tenant isolation.",
+		"        description: Reworded entirely by the server's documentation pass.")
+
+	assertClean(t, runFull(t, repoRoot, upstream))
+}
+
+// TestUnusualErrorCodeSpellingIsRead: the extractor captured `[a-z0-9_]+` while
+// the unreadable-form detector accepted any string literal, so the two predicates
+// disagreed and a code spelled otherwise was neither extracted nor reported.
+func TestUnusualErrorCodeSpellingIsRead(t *testing.T) {
+	upstream := stageUpstream(t)
+	write(t, filepath.Join(upstream, "errors.py"), syntheticErrorsPy+`
+
+class BrandNewError(DomainError):
+    code = "Brand_New_Thing"
+
+class DashedError(DomainError):
+    code = "rate-limited"
+`)
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"the server can return `Brand_New_Thing`",
+		"the server can return `rate-limited`")
+}
+
+// TestUUIDWitnessesDiffer: every `format: uuid` property carried one witness, so
+// crossing two of them on a model was invisible -- the same defect the timestamps
+// and integers had already been fixed for.
+func TestUUIDWitnessesDiffer(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	seen := map[string]string{}
+	for _, property := range []string{"id", "parent_id", "vocabulary_id"} {
+		value := string(observed.Sent[property])
+		if value == "" {
+			t.Errorf("%s was not sent", property)
+			continue
+		}
+		if other, clash := seen[value]; clash {
+			t.Errorf("%s and %s share the witness %s; crossing them would change nothing",
+				property, other, value)
+		}
+		seen[value] = property
+	}
+}
+
+// TestPaginationCursorsAreNotOnlyNull: `next` and `previous` were sent only as
+// null, so the type behind the pointer was never exercised -- and `Each`
+// terminates on `Pagination.Next == nil`, so a mistyped Next breaks every walk.
+func TestPaginationCursorsAreNotOnlyNull(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	for _, field := range []string{"pagination.next", "pagination.previous"} {
+		if value := string(observed.Sent[field]); value == "" || value == "null" {
+			t.Errorf("%s was sent as %q; the type behind the pointer is unexercised", field, value)
+		}
+	}
+}
+
+// TestRenamedUnreachableModelIsReported: the five models named by no success
+// schema are hard-coded strings, so renaming the Go type switched off the only
+// check that can see a swapped pair of tags, in silence.
+func TestRenamedUnreachableModelIsReported(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "pagination.go"), "type Pagination struct {",
+		"type Pagination struct {", "type PageInfo struct {")
+
+	assertFinding(t, runLocal(t, repo),
+		"`Pagination` is named here as a model no success schema reaches, and this package no longer declares it")
+}
+
+// --- the error envelope ---------------------------------------------------------
+//
+// `ErrorResponse` is referenced by every failure response in both contracts and
+// was, until these tests, the one schema nothing here exercised: the stub only
+// ever answered 200 or 204, so no drive ever reached parseError. The four tests
+// below are the four ways that mattered.
+
+// TestRenamedErrorCodeIsCaught is the reproduction that opened the hole. Renaming
+// `error.code` in both vendored contracts reported no drift at all, while in the
+// SDK it means parseError never finds a code: every error comes back stamped
+// CodeUnexpectedStatus, and IsNotFound, IsConflict and IsValidation each answer
+// false for the error they are named after.
+func TestRenamedErrorCodeIsCaught(t *testing.T) {
+	repo := stageRepo(t)
+	spec := filepath.Join(repo, "docs", "openapi-v2.yaml")
+	edit(t, spec, "    ErrorResponse:", "            code:\n", "            error_code:\n")
+	edit(t, spec, "    ErrorResponse:", "          - code\n", "          - error_code\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`v2`: `ErrorResponse.error.code` is gone from the contract",
+		"`ErrorResponse.error.error_code` is new in the contract")
+}
+
+// TestRenamedErrorRequestIDIsCaught: the request id is how a caller correlates a
+// failure with the server's logs, and it is decoded by name like the code.
+func TestRenamedErrorRequestIDIsCaught(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "openapi-v2.yaml"), "    ErrorResponse:",
+		"            request_id:\n", "            correlation_id:\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`v2`: `ErrorResponse.error.request_id` is gone from the contract")
+}
+
+// TestRetypedErrorDetailsIsCaught: `details` carries the field-level validation
+// errors, and it is the one envelope property that is not a string. Retyping it
+// makes the whole envelope undecodable -- parseError's json.Unmarshal fails, and
+// the fallback branch answers with a code no server sent.
+func TestRetypedErrorDetailsIsCaught(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "openapi-v2.yaml"), "    ErrorResponse:",
+		"            details:\n              type: object\n              additionalProperties: true\n",
+		"            details:\n              type: string\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`v2`: the envelope carried \"cd~code\" in `error.code` and the returned `*APIError` reports \"unexpected_status\"")
+}
+
+// TestErrorEnvelopeIsDrivenOnBothSurfaces: v1 and v2 document the envelope
+// separately, and only v2 was mutated above. A check that ran on one surface and
+// silently skipped the other would pass every test in this section.
+func TestErrorEnvelopeIsDrivenOnBothSurfaces(t *testing.T) {
+	repo := stageRepo(t)
+	for _, surface := range []string{"openapi.yaml", "openapi-v2.yaml"} {
+		edit(t, filepath.Join(repo, "docs", surface), "    ErrorResponse:",
+			"            message:\n", "            detail:\n")
+	}
+
+	assertFinding(t, runLocal(t, repo),
+		"`v1`: `ErrorResponse.error.message` is gone from the contract",
+		"`v2`: `ErrorResponse.error.message` is gone from the contract")
 }

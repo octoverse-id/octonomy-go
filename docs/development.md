@@ -301,6 +301,17 @@ the stub sends the shape the server really sends, a JSON object, which is enough
 exists and no more. That is the honest boundary; the integration smoke test above is what exercises
 real server payloads.
 
+**The error envelope is driven too.** `ErrorResponse` is the most referenced schema in either
+contract — every operation documents it on every failure — and it was for a while the one schema
+nothing offline compared, because the response stub only ever answered `200` or `204`. So one extra
+drive per surface answers **409** with a body built from `ErrorResponse` the same way every success
+body is built, and the returned `*APIError` is held to it: `code`, `message`, `request_id` and
+`details` must each carry what was sent, and a property the envelope grows that `parseError` has
+nowhere to put is reported. Renaming `error.code` in both vendored contracts used to report **no
+drift at all**, while in the SDK it means `parseError` finds no code, falls through to its
+envelope-less branch, and stamps `CodeUnexpectedStatus` on every error the server sends — so
+`IsNotFound`, `IsConflict` and `IsValidation` each answer `false` for the error they are named after.
+
 **And what the route check proves.** Each driver runs twice per surface with different path values,
 so a route that varies with the value it is given is reported; each placeholder has its own sentinel,
 so two arguments in the wrong order do not produce the expected path; and the `/api/<version>` prefix

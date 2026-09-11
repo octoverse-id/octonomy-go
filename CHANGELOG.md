@@ -35,7 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     twice: once with every property populated and once with every `nullable` property null, so a field
     the model lacks, a type it cannot read, and a nullable state it cannot hold are all reported. And
     because a JSON round trip structurally cannot see two response tags swapped — the same tags decode
-    and re-encode — each model's Go field name is checked against the property it decodes. **This found a real gap on its first run** — `VocabularyListParams` is missing `q` and `slug`
+    and re-encode — each model's Go field name is checked against the property it decodes. One extra
+    drive per surface answers a **409** with an envelope built from `ErrorResponse` — the most
+    referenced schema in either contract, and for a while the one nothing exercised, since the stub
+    only ever answered `200` or `204` — so a renamed `error.code` is reported, instead of silently
+    turning every `IsNotFound`, `IsConflict` and `IsValidation` into `false`. **This found a real gap on its first run** — `VocabularyListParams` is missing `q` and `slug`
     ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)). An earlier draft read the package
     statically instead and was replaced: inferring control flow from an AST answered *clean* for a
     method that stopped passing its query builder, one that branched between two private helpers, and

@@ -421,7 +421,14 @@ func flattenInto(prefix string, node *yaml.Node, out map[string]string) {
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			key := node.Content[i].Value
-			if key == "description" {
+			// `description` is dropped as an ANNOTATION, never as a property NAME.
+			// The distinction is the parent: a key directly under `properties` is
+			// something the server sends, and six schemas on both surfaces have a
+			// property called exactly that. Dropping it deleted the whole subtree --
+			// so retyping `Tag.description`, or withdrawing it entirely, was no
+			// upstream drift at all, which is precisely the early warning the
+			// weekly job exists to give.
+			if key == "description" && !strings.HasSuffix(prefix, "properties") {
 				continue
 			}
 			flattenInto(join(prefix, key), node.Content[i+1], out)

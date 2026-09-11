@@ -197,7 +197,13 @@ operations:
     # numbers are chosen so a decoder crossing two of them changes both, and the
     # array is populated because an empty one lets a decoder that discards every
     # row return exactly what was sent.
-    composite_body: '{"created": 1, "existing": 2, "skipped": 0, "assignments": [{"id": "11111111-1111-4111-8111-111111111111", "tenant_id": "cd~tenant_id", "application_id": "cd~application_id", "namespace_type": "cd~namespace_type", "namespace_id": "cd~namespace_id", "tag_id": "22222222-2222-4222-8222-222222222222", "resource_type": "cd~resource_type", "resource_id": "cd~resource_id", "assigned_by": "cd~assigned_by", "assigned_at": "2026-01-02T03:04:05Z"}]}'
+    #
+    # `skipped` is 3 and not 0 for that same reason: 0 is a counter's zero value,
+    # so a decoder that never assigns it at all returns exactly what was sent. It
+    # therefore differs from what the server produces today, where assignments.go
+    # records that this field is always 0 on 3.1.x — which is the difference
+    # between a witness and a transcript, and the reason this field is the former.
+    composite_body: '{"created": 1, "existing": 2, "skipped": 3, "assignments": [{"id": "11111111-1111-4111-8111-111111111111", "tenant_id": "cd~tenant_id", "application_id": "cd~application_id", "namespace_type": "cd~namespace_type", "namespace_id": "cd~namespace_id", "tag_id": "22222222-2222-4222-8222-222222222222", "resource_type": "cd~resource_type", "resource_id": "cd~resource_id", "assigned_by": "cd~assigned_by", "assigned_at": "2026-01-02T03:04:05Z"}]}'
   - path: /tag-assignments/bulk-remove
     method: post
     # The spec documents NO response schema at all. The server returns

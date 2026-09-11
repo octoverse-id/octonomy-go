@@ -113,9 +113,9 @@ func CheckLocal(in Inputs) *Report {
 	checkEmittedValues(in, r)
 	checkResponseModels(in, r)
 	checkDecodedValues(in, r)
-	checkCompositeResponses(in, r)
 	checkModelFieldNames(in, r)
 	checkErrorCodesImplemented(in, r)
+	checkErrorEnvelope(in, r)
 	return r
 }
 
@@ -625,6 +625,15 @@ func checkResponseModels(in Inputs, r *Report) {
 	r.Add("Response models", dedupe(items))
 }
 
+// unreachableModels are the response models no operation's success schema names,
+// and which the loop in checkModelFieldNames therefore cannot discover: the list
+// envelope's pagination block, the three composite results whose bodies the
+// contract describes wrongly or not at all, and the health payload, which sits
+// outside the API surface.
+var unreachableModels = []string{
+	"Pagination", "BulkAssignResult", "BulkRemoveResult", "ResourceReplaceResult", "HealthStatus",
+}
+
 // fieldNameFindings compares one model's Go field names with the properties they
 // decode.
 func fieldNameFindings(sdk *SDKPackage, model string) []string {
@@ -675,6 +684,89 @@ func checkErrorCodesImplemented(in Inputs, r *Report) {
 		}
 	}
 	r.Add("Error codes", items)
+}
+
+// checkErrorEnvelope proves the client can still read an error.
+//
+// `ErrorResponse` is the most referenced schema in either contract -- every
+// operation documents it on every failure -- and it was the one schema nothing
+// here compared, because the response stub only ever answered 200 or 204. The
+// hole was demonstrated: renaming `error.code` to `error_code` in BOTH vendored
+// contracts produced "No drift". What it produces in the SDK is that parseError
+// finds no code, falls through to its envelope-less branch, and stamps
+// CodeUnexpectedStatus on every error the server sends -- so IsNotFound,
+// IsConflict and IsValidation each answer false for the error they are named
+// after, and Details and RequestID come back empty.
+//
+// The one drive behind this answers 409, a status whose meaning the SDK learns
+// only from the envelope, with a body the stub builds from the contract exactly
+// as it builds every success body. So the comparison is the same comparison the
+// response checks make, pointed at the schema they cannot reach.
+func checkErrorEnvelope(in Inputs, r *Report) {
+	var items []string
+	for _, surface := range surfaces {
+		observation, ok := in.Conformance.ErrorEnvelope[surface]
+		if !ok {
+			items = append(items, fmt.Sprintf("`%s`: no error envelope was driven, so nothing exercised `ErrorResponse` on this surface", surface))
+			continue
+		}
+		if observation.NotAPIErr != nil {
+			items = append(items, fmt.Sprintf("`%s`: a 409 carrying the contract's own `ErrorResponse` came back as %v, which is not an `*APIError` -- callers cannot reach a code, a status or a request id through it",
+				surface, observation.NotAPIErr))
+			continue
+		}
+		if len(observation.Sent) == 0 {
+			items = append(items, fmt.Sprintf("`%s`: `ErrorResponse` no longer describes an `error` object with properties, and that object is the whole of what the SDK decodes an error from", surface))
+			continue
+		}
+
+		// The four properties parseError reads, against the four the contract
+		// documents. A property on one side and not the other is the finding.
+		slots := map[string]string{
+			"code":       observation.Code,
+			"message":    observation.Message,
+			"request_id": observation.RequestID,
+		}
+		for _, property := range []string{"code", "message", "request_id"} {
+			raw, documented := observation.Sent[property]
+			if !documented {
+				items = append(items, fmt.Sprintf("`%s`: `ErrorResponse.error.%s` is gone from the contract, and the SDK decodes that property -- the one it reads and the one the server sends are no longer the same name",
+					surface, property))
+				continue
+			}
+			var want string
+			if err := json.Unmarshal(raw, &want); err != nil {
+				items = append(items, fmt.Sprintf("`%s`: `ErrorResponse.error.%s` is no longer a string, and the SDK decodes it into one", surface, property))
+				continue
+			}
+			if got := slots[property]; got != want {
+				items = append(items, fmt.Sprintf("`%s`: the envelope carried %q in `error.%s` and the returned `*APIError` reports %q",
+					surface, want, property, got))
+			}
+		}
+
+		if raw, documented := observation.Sent["details"]; !documented {
+			items = append(items, fmt.Sprintf("`%s`: `ErrorResponse.error.details` is gone from the contract, and `APIError.Details` is the only place a caller reads a field-level validation error from", surface))
+		} else {
+			got, err := json.Marshal(observation.Details)
+			if err != nil || !sameJSON(raw, got) {
+				items = append(items, fmt.Sprintf("`%s`: the envelope carried %s in `error.details` and the returned `*APIError` reports %s",
+					surface, raw, got))
+			}
+		}
+
+		// A property the envelope grew. parseError reads a fixed four, so anything
+		// else the server starts sending is dropped in silence -- which is worth a
+		// line, because the envelope is where an error explains itself.
+		for property := range observation.Sent {
+			switch property {
+			case "code", "message", "request_id", "details":
+				continue
+			}
+			items = append(items, fmt.Sprintf("`%s`: `ErrorResponse.error.%s` is new in the contract and the SDK's `*APIError` has nowhere to put it", surface, property))
+		}
+	}
+	r.Add("The error envelope", items)
 }
 
 // --- upstream checks -----------------------------------------------------------
@@ -1369,41 +1461,6 @@ func jsonMatchesType(raw json.RawMessage, documented string) bool {
 	return true
 }
 
-// checkCompositeResponses compares what the stub sent with what came back for the
-// rows that have no schema behind them: the bulk composites and the resource-tag
-// replace, whose bodies the contract describes wrongly or not at all.
-//
-// They sit out of checkResponseModels for that reason, and sat out of every value
-// comparison with it -- so swapping two of a composite's counters left the request
-// and response bytes intact and was invisible. Nothing here needs a schema: the
-// stub's own body is the expectation.
-func checkCompositeResponses(in Inputs, r *Report) {
-	const surface = "v2"
-	var items []string
-	for _, row := range in.Coverage.Operations {
-		if row.Unimplemented != "" || row.ActualResponse != "composite-envelope" {
-			continue
-		}
-		observed, ok := in.Conformance.Observations[surface+" "+row.Key()]
-		if !ok || observed.CallErr != nil {
-			continue // reported by checkImplementation
-		}
-		for _, property := range sortedFields(observed.Sent) {
-			sent := observed.Sent[property]
-			decoded, survived := observed.Decoded[property]
-			switch {
-			case !survived:
-				items = append(items, fmt.Sprintf("`%s`: the composite body carries `%s` and `%s` decodes it away",
-					row.Key(), property, row.SDK))
-			case !containsJSON(sent, decoded):
-				items = append(items, fmt.Sprintf("`%s`: the composite body sent `%s` as %s and `%s` returned %s",
-					row.Key(), property, string(sent), row.SDK, string(decoded)))
-			}
-		}
-	}
-	r.Add("Composite responses", items)
-}
-
 // containsJSON reports whether everything SENT survived in what came back.
 //
 // The forward direction, and it has to be containment rather than equality once
@@ -1565,9 +1622,15 @@ func checkModelFieldNames(in Inputs, r *Report) {
 	// original bytes.
 	checked := map[string]bool{}
 	var items []string
-	for _, model := range []string{
-		"Pagination", "BulkAssignResult", "BulkRemoveResult", "ResourceReplaceResult", "HealthStatus",
-	} {
+	for _, model := range unreachableModels {
+		// A name that no longer resolves switches this check off for that model in
+		// silence -- and these five are hard-coded precisely because nothing else
+		// reaches them. Renaming the type was enough to retire the only check that
+		// can see a swapped pair of tags, with nothing said.
+		if _, ok := in.SDK.ModelFields(model); !ok {
+			items = append(items, fmt.Sprintf("`%s` is named here as a model no success schema reaches, and this package no longer declares it -- rename it here too, or drop it if it is gone", model))
+			continue
+		}
 		items = append(items, fieldNameFindings(in.SDK, model)...)
 		checked[model] = true
 	}
