@@ -485,6 +485,30 @@ server_error_codes:
   - tenant_mismatch
   - validation_error
 
+# Code* constants whose Go NAME abbreviates the wire value it carries.
+#
+# Every other constant's name must be its value in Go's spelling: CodeNotFound
+# carries "not_found", and the gate derives one from the other. That is not
+# pedantry about naming — two constants whose VALUES are swapped leave the
+# registry's set identical, so the set comparison below passes while IsNotFound
+# answers true for a forbidden and IsForbidden answers true for a missing row.
+# It is the same symmetric swap that two crossed JSON tags are, and it needs the
+# same kind of check: one that reads the declaration, not the set.
+#
+# Both rows here predate the check and are kept rather than renamed: these are
+# exported constants and renaming one is a breaking change to every caller.
+abbreviated_error_constants:
+  - constant: CodeValidation
+    code: validation_error
+    reason: >-
+      The server's registry spells it validation_error; the constant drops the
+      suffix because IsValidation reads better and the pair has been exported
+      since v1.
+  - constant: CodeAuthRequired
+    code: authentication_required
+    reason: >-
+      Abbreviates "authentication" to "auth", exported since v1.
+
 # Code* constants in errors.go with no counterpart in the registry above. Every
 # other constant must appear there, and every code in it must have a constant —
 # the gate checks both directions, and refuses a code listed in both places.

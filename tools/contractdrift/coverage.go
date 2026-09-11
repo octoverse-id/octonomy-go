@@ -69,6 +69,12 @@ type Coverage struct {
 	// the real registry on the schedule.
 	ServerErrorCodes []string `yaml:"server_error_codes"`
 
+	// AbbreviatedErrorConstants lists the Code* constants whose Go name is not
+	// simply their wire value in Go's spelling. Everything else is held to that
+	// rule, because a set comparison cannot see two constants whose values are
+	// swapped -- the same blind spot two crossed JSON tags exploit.
+	AbbreviatedErrorConstants []AbbreviatedCode `yaml:"abbreviated_error_constants"`
+
 	// SDKOnlyErrorCodes lists Code* constants that exist in errors.go with no
 	// counterpart in the server's error registry, each with the reason it is
 	// legitimate.
@@ -191,6 +197,13 @@ type UndocumentedField struct {
 
 // Key is "Model.field".
 func (u UndocumentedField) Key() string { return u.Model + "." + u.Field }
+
+// AbbreviatedCode is one constant whose Go name abbreviates its wire value.
+type AbbreviatedCode struct {
+	Constant string `yaml:"constant"`
+	Code     string `yaml:"code"`
+	Reason   string `yaml:"reason"`
+}
 
 // SDKOnlyCode records an errors.go constant with no server counterpart.
 type SDKOnlyCode struct {
@@ -327,6 +340,17 @@ func LoadCoverage(path string) (*Coverage, error) {
 			return nil, fmt.Errorf("%s: server_error_codes lists %q twice", path, code)
 		}
 		vendored[code] = true
+	}
+	for _, c := range cov.AbbreviatedErrorConstants {
+		if c.Constant == "" || c.Code == "" || c.Reason == "" {
+			return nil, fmt.Errorf("%s: abbreviated_error_constants needs constant, code, and reason on every row", path)
+		}
+		if !strings.HasPrefix(c.Constant, "Code") {
+			return nil, fmt.Errorf("%s: abbreviated_error_constants lists %q, which is not a Code* constant", path, c.Constant)
+		}
+		if SnakeCase(strings.TrimPrefix(c.Constant, "Code")) == c.Code {
+			return nil, fmt.Errorf("%s: abbreviated_error_constants lists %s, whose name already spells %q -- the row exempts nothing and would outlive its reason", path, c.Constant, c.Code)
+		}
 	}
 	for _, c := range cov.SDKOnlyErrorCodes {
 		if c.Code == "" || c.Reason == "" {

@@ -154,6 +154,22 @@ func (p *SDKPackage) ErrorCodes() map[string]string {
 	return out
 }
 
+// ErrorConstants returns every Code* constant keyed by its NAME.
+//
+// ErrorCodes above is keyed by value, which is what the set comparisons want and
+// is lossy in exactly the way those comparisons are: two constants carrying one
+// value collapse to a single entry, and which name survives depends on map order.
+// The naming check needs each declaration on its own terms, so it reads this.
+func (p *SDKPackage) ErrorConstants() map[string]string {
+	out := map[string]string{}
+	for name, value := range p.consts {
+		if strings.HasPrefix(name, "Code") {
+			out[name] = value
+		}
+	}
+	return out
+}
+
 // Method reports the declaration behind an inventory row's "Receiver.Method".
 func (p *SDKPackage) Method(symbol string) (*sdkMethod, bool) {
 	m, ok := p.methods[symbol]

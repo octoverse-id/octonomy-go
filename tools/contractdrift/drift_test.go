@@ -2688,3 +2688,98 @@ func sortedCodes(codes map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestSwappedErrorCodeConstantsAreCaught is the symmetric swap the set
+// comparisons structurally cannot see. Exchange the values of CodeNotFound and
+// CodeForbidden and the registry still holds exactly the same codes, every one
+// still has a constant and every constant still has a code -- while IsNotFound
+// answers true for a forbidden and IsForbidden answers true for a missing row.
+func TestSwappedErrorCodeConstantsAreCaught(t *testing.T) {
+	repo := stageRepo(t)
+	path := filepath.Join(repo, "errors.go")
+	edit(t, path, "CodeForbidden", `CodeForbidden           = "forbidden"`, `CodeForbidden           = "not_found"`)
+	edit(t, path, "CodeNotFound", `CodeNotFound            = "not_found"`, `CodeNotFound            = "forbidden"`)
+
+	assertFinding(t, runLocal(t, repo),
+		"`CodeForbidden` carries `not_found`, and its name spells `forbidden`",
+		"`CodeNotFound` carries `forbidden`, and its name spells `not_found`")
+}
+
+// TestAbbreviatedConstantIsHeldToItsRecordedCode: the two recorded abbreviations
+// are exemptions from the naming rule, not from the comparison. A recorded
+// constant that starts carrying a different code is still a swap.
+func TestAbbreviatedConstantIsHeldToItsRecordedCode(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "errors.go"), "CodeValidation",
+		`CodeValidation          = "validation_error"`, `CodeValidation          = "conflict"`)
+
+	assertFinding(t, runLocal(t, repo),
+		"`CodeValidation` is recorded as abbreviating `validation_error` and now carries `conflict`")
+}
+
+// TestStaleAbbreviationRowIsReported: a row whose constant is renamed or deleted
+// would otherwise sit in the file exempting nothing.
+func TestStaleAbbreviationRowIsReported(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"), "abbreviated_error_constants",
+		"  - constant: CodeAuthRequired\n", "  - constant: CodeRetired\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`CodeRetired` is recorded in abbreviated_error_constants and errors.go declares no such constant")
+}
+
+// TestVacuousAbbreviationRowIsRefused: a row for a constant whose name already
+// spells its code exempts nothing, so the loader refuses it rather than letting
+// it accumulate.
+func TestVacuousAbbreviationRowIsRefused(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"), "abbreviated_error_constants",
+		"  - constant: CodeAuthRequired\n    code: authentication_required\n",
+		"  - constant: CodeNotFound\n    code: not_found\n")
+
+	if _, err := LoadCoverage(filepath.Join(repo, "docs", "contract-coverage.yaml")); err == nil {
+		t.Fatal("a row that exempts nothing was accepted")
+	}
+}
+
+// TestEscapedQuoteInAServerCodeIsReportedNotGuessed: the capture stops at the
+// first quote, so `code = "tag\"#collision"` yielded `tag\` -- a code the server
+// does not have, demanding a constant that must not exist. Reported as an
+// unreadable spelling and NOT entered into the comparison.
+func TestEscapedQuoteInAServerCodeIsReportedNotGuessed(t *testing.T) {
+	upstream := stageUpstream(t)
+	path := filepath.Join(upstream, "errors.py")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, string(raw)+"\n\nclass EscapedHashError(DomainError):\n    code = \"tag\\\"#collision\"\n")
+
+	codes, unreadable, err := ServerErrorCodes(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for code := range codes {
+		if strings.Contains(code, `\`) {
+			t.Errorf("a truncated code %q was read as a real one", code)
+		}
+	}
+	if len(unreadable) == 0 {
+		t.Error("the escaped-quote spelling was neither read nor reported -- it vanished")
+	}
+}
+
+// TestTwoConstantsForOneCodeAreReported: ErrorCodes is keyed by value, so two
+// constants carrying one code collapse to a single entry and which name survives
+// depends on map order. Every set comparison stays green through it -- the
+// registry has every code, every code has a constant -- while one of the two is
+// dead weight a caller may be switching on.
+func TestTwoConstantsForOneCodeAreReported(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "errors.go"), "CodeConflict",
+		`CodeConflict            = "conflict"`,
+		"CodeConflict            = \"conflict\"\n\tCodeClash               = \"conflict\"")
+
+	assertFinding(t, runLocal(t, repo),
+		"`conflict` is carried by `CodeClash` and `CodeConflict`")
+}

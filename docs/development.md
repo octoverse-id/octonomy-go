@@ -225,6 +225,15 @@ check reports every one of those as green. So the gate compares:
 | **Routes** | each inventory row against the request its method actually issued, on both surfaces |
 | **Error codes** | `server_error_codes` in the inventory against this SDK's `Code*` constants offline, and against the server's `octonomy/core/errors.py` on the schedule — both directions on both hops |
 
+Error codes are compared as sets **and** as declarations. The set comparison runs both ways — every
+code in the vendored registry needs a constant, every constant needs a code or a recorded reason —
+but a set cannot see a *swap*: exchange the values of `CodeNotFound` and `CodeForbidden` and the
+registry still holds exactly the same codes while `IsNotFound` answers true for a forbidden. So each
+constant's **name** is checked against the value it carries (`CodeNotFound` carries `not_found`),
+with the two constants that abbreviate — `CodeValidation`, `CodeAuthRequired` — recorded in
+`contract-coverage.yaml` with their reason, and a row that exempts nothing refused by the loader.
+Two constants carrying one code are reported for the same reason: every set stays intact through it.
+
 The error-code check needs that Python file because the contract cannot answer the question:
 `ErrorResponse` types `code` as a bare string, so every code the envelope can carry is invisible to a
 schema comparison. The registry is therefore **vendored into

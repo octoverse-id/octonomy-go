@@ -683,6 +683,56 @@ func checkErrorCodesImplemented(in Inputs, r *Report) {
 			items = append(items, fmt.Sprintf("`%s` is listed under sdk_only_error_codes and errors.go declares no constant for it -- drop the row", code))
 		}
 	}
+
+	// Each constant's NAME against the value it carries.
+	//
+	// Everything above compares SETS, and a set cannot see a swap. Exchange the
+	// values of CodeNotFound and CodeForbidden and the registry still holds exactly
+	// the same fourteen codes, every one still has a constant, every constant still
+	// has a code -- and IsNotFound answers true for a forbidden while IsForbidden
+	// answers true for a missing row. It is the same defect two crossed JSON tags
+	// are, and it needs the same kind of check: one that reads the declaration.
+	//
+	// The rule is that a constant is named for its value, which this SDK already
+	// obeys everywhere but two places, both recorded with their reason.
+	abbreviated := map[string]string{}
+	for _, row := range in.Coverage.AbbreviatedErrorConstants {
+		abbreviated[row.Constant] = row.Code
+	}
+	named := map[string]bool{}
+	carriers := map[string][]string{}
+	for constant, code := range in.SDK.ErrorConstants() {
+		named[constant] = true
+		carriers[code] = append(carriers[code], constant)
+		if want, recorded := abbreviated[constant]; recorded {
+			if want != code {
+				items = append(items, fmt.Sprintf("`%s` is recorded as abbreviating `%s` and now carries `%s`", constant, want, code))
+			}
+			continue
+		}
+		if spelled := SnakeCase(strings.TrimPrefix(constant, "Code")); spelled != code {
+			items = append(items, fmt.Sprintf("`%s` carries `%s`, and its name spells `%s` -- a constant named for one code and carrying another is what a swap looks like; rename it, or record the abbreviation in `abbreviated_error_constants`",
+				constant, code, spelled))
+		}
+	}
+	// Two constants carrying one value. The set comparisons cannot see it -- the
+	// registry still has every code, and every code still has a constant -- and one
+	// of the two is dead weight a caller may well be switching on.
+	for code, constants := range carriers {
+		if len(constants) > 1 {
+			sort.Strings(constants)
+			for i, name := range constants {
+				constants[i] = "`" + name + "`"
+			}
+			items = append(items, fmt.Sprintf("`%s` is carried by %s -- two constants for one code, and only one of them can be the one callers mean",
+				code, strings.Join(constants, " and ")))
+		}
+	}
+	for constant := range abbreviated {
+		if !named[constant] {
+			items = append(items, fmt.Sprintf("`%s` is recorded in abbreviated_error_constants and errors.go declares no such constant -- drop the row", constant))
+		}
+	}
 	r.Add("Error codes", items)
 }
 

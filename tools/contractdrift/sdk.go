@@ -101,10 +101,14 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 
 	codes = map[string]bool{}
 	for _, m := range pyClassCodeRE.FindAllStringSubmatch(src, -1) {
-		codes[m[1]] = true
+		if readablePyCode(m[1]) {
+			codes[m[1]] = true
+		}
 	}
 	for _, m := range pyCallCodeRE.FindAllStringSubmatch(src, -1) {
-		codes[m[1]] = true
+		if readablePyCode(m[1]) {
+			codes[m[1]] = true
+		}
 	}
 	if len(codes) < minServerErrorCodes {
 		return nil, nil, fmt.Errorf("%s: found only %d error codes (expected at least %d) -- core/errors.py moved or changed shape",
@@ -133,6 +137,18 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 	return codes, unreadable, nil
 }
 
+// readablePyCode rejects a captured value this extractor cannot resolve.
+//
+// The capture stops at the first quote, so `code = "tag\"#collision"` yields
+// `tag\` -- a code the server does not have, demanding a Code* constant that must
+// not exist. isPyStringLiteral already refuses that spelling, so the line is
+// reported as an unreadable form; dropping it here is what keeps the same line
+// from ALSO entering the comparison as a phantom. Reported and not read beats
+// read wrong.
+func readablePyCode(value string) bool {
+	return !strings.Contains(value, `\`)
+}
+
 // stripPyComments blanks out `#` comments, line by line.
 //
 // A commented-out `code = "..."` was read as a live server code, and a phantom
@@ -146,13 +162,22 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 // prose would narrow them to exclude real codes too, and a phantom code fails
 // loudly while a missed one fails silently.
 func stripPyComments(src string) string {
-	var out strings.Builder
-	out.Grow(len(src))
-	for _, line := range strings.Split(src, "\n") {
+	lines := strings.Split(src, "\n")
+	for n, line := range lines {
 		var quote rune
+		escaped := false
 		cut := -1
 		for i, r := range line {
 			switch {
+			case escaped:
+				// The character after a backslash is data, whatever it is. Without
+				// this, `code = "tag\"#collision"` read the escaped quote as closing
+				// the string and everything after `#` as a comment -- which did not
+				// merely lose the code, it recorded `tag\` as one. A wrong code is
+				// worse than an unreadable one: the unreadable ones are reported.
+				escaped = false
+			case quote != 0 && r == '\\':
+				escaped = true
 			case quote != 0:
 				if r == quote {
 					quote = 0
@@ -169,10 +194,9 @@ func stripPyComments(src string) string {
 		if cut >= 0 {
 			line = line[:cut]
 		}
-		out.WriteString(line)
-		out.WriteByte('\n')
+		lines[n] = line
 	}
-	return out.String()
+	return strings.Join(lines, "\n")
 }
 
 // isPyStringLiteral reports whether a Python expression is a plain, single-part
