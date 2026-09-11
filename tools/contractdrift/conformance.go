@@ -379,14 +379,28 @@ func sortedStrings(m map[string]string) []string {
 //
 // A 409, because it is a status the SDK maps to a semantic code, so a renamed
 // property is the difference between IsConflict answering true and answering
-// false. The request itself does not matter here -- any operation reaches
-// parseError -- so this uses the simplest read there is.
+// false -- and IsConflict is asserted, not merely cited. The request itself does
+// not matter here beyond the surface it went to, so this uses the simplest read
+// there is.
 func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
-	inner, err := synthesizeSchema(spec, "ErrorResponse", 0, witnessPopulated)
+	envelope, err := synthesizeSchema(spec, "ErrorResponse", 0, witnessPopulated)
 	if err != nil {
 		return ErrorObservation{}, fmt.Errorf("the response stub could not build an error envelope: %w", err)
 	}
-	body, err := json.Marshal(inner)
+	// `code` is the one property that cannot take a name-shaped witness. It is an
+	// enum in everything but type -- the contract types it `string`, which is why
+	// the server's registry has to be vendored separately -- and a made-up value
+	// proves the property round-trips while proving nothing about what a caller
+	// does with it, since IsConflict answers false for `cd~code` correctly. So the
+	// envelope carries a real code, and the helper named after it is asserted.
+	// A code constant whose VALUE drifts is not a hole here: checkErrorCodesImplemented
+	// compares every Code* constant against the vendored server registry.
+	if inner, ok := envelope["error"].(map[string]any); ok {
+		if _, documented := inner["code"]; documented {
+			inner["code"] = octonomy.CodeConflict
+		}
+	}
+	body, err := json.Marshal(envelope)
 	if err != nil {
 		return ErrorObservation{}, err
 	}
@@ -418,7 +432,13 @@ func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
 
 	_, callErr := client.Tags.Get(context.Background(), "ERRID")
 
-	observation := ErrorObservation{Sent: errorObject(body)}
+	observation := ErrorObservation{
+		Sent:     errorObject(body),
+		Conflict: octonomy.IsConflict(callErr),
+	}
+	if len(rec.requests) > 0 {
+		observation.Prefix = versionPrefix(rec.requests[0].URL.Path)
+	}
 	var apiErr *octonomy.APIError
 	if !errors.As(callErr, &apiErr) {
 		observation.NotAPIErr = callErr
@@ -428,6 +448,7 @@ func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
 	observation.Message = apiErr.Message
 	observation.RequestID = apiErr.RequestID
 	observation.Details = apiErr.Details
+	observation.Status = apiErr.StatusCode
 	return observation, nil
 }
 
@@ -520,14 +541,28 @@ type ErrorObservation struct {
 	Sent map[string]json.RawMessage
 
 	// Code, Message and RequestID are what the SDK's *APIError carried back, and
-	// Err is the error itself when it was not an *APIError at all -- which is the
-	// failure this exists to catch: a renamed property makes parseError fall
+	// NotAPIErr is the error itself when it was not an *APIError at all -- which is
+	// the failure this exists to catch: a renamed property makes parseError fall
 	// through to CodeUnexpectedStatus and every Is* helper answer false.
 	Code      string
 	Message   string
 	RequestID string
 	Details   map[string]any
 	NotAPIErr error
+
+	// Prefix is the /api/<version> the call really went to. Without it the v1
+	// drive is a v1 drive only by intention: changing the surface test in
+	// runErrorEnvelope to something that never matches left both drives on v2 and
+	// nothing said so -- the same shape as the Config.APIVersion that was never
+	// set, recurring in new code.
+	Prefix string
+
+	// Status and Conflict are what a caller actually reaches for. The comment
+	// above picked 409 because it is a status the SDK maps to a semantic code, and
+	// an unasserted claim is not a claim: with these unrecorded, StatusCode: 0 in
+	// parseError and an IsConflict rewired to CodeValidation were both green.
+	Status   int
+	Conflict bool
 }
 
 // Env is what a driver is handed. Two clients, because the health probes are

@@ -2476,7 +2476,7 @@ func TestRetypedErrorDetailsIsCaught(t *testing.T) {
 		"            details:\n              type: string\n")
 
 	assertFinding(t, runLocal(t, repo),
-		"`v2`: the envelope carried \"cd~code\" in `error.code` and the returned `*APIError` reports \"unexpected_status\"")
+		"`v2`: the envelope carried \"conflict\" in `error.code` and the returned `*APIError` reports \"unexpected_status\"")
 }
 
 // TestErrorEnvelopeIsDrivenOnBothSurfaces: v1 and v2 document the envelope
@@ -2492,4 +2492,84 @@ func TestErrorEnvelopeIsDrivenOnBothSurfaces(t *testing.T) {
 	assertFinding(t, runLocal(t, repo),
 		"`v1`: `ErrorResponse.error.message` is gone from the contract",
 		"`v2`: `ErrorResponse.error.message` is gone from the contract")
+}
+
+// envelopeObservation is a clean error drive for one surface: what the stub sends
+// and what a working client makes of it.
+func envelopeObservation(surface string) ErrorObservation {
+	return ErrorObservation{
+		Sent: map[string]json.RawMessage{
+			"code":       json.RawMessage(`"conflict"`),
+			"message":    json.RawMessage(`"cd~message"`),
+			"request_id": json.RawMessage(`"cd~request_id"`),
+			"details":    json.RawMessage(`{"contractdrift":"value"}`),
+		},
+		Code:      "conflict",
+		Message:   "cd~message",
+		RequestID: "cd~request_id",
+		Details:   map[string]any{"contractdrift": "value"},
+		Prefix:    "/api/" + surface,
+		Status:    409,
+		Conflict:  true,
+	}
+}
+
+func envelopeReport(t *testing.T, mutate func(o *ErrorObservation)) *Report {
+	t.Helper()
+	envelope := map[string]ErrorObservation{}
+	for _, surface := range surfaces {
+		observation := envelopeObservation(surface)
+		mutate(&observation)
+		envelope[surface] = observation
+	}
+	r := &Report{}
+	checkErrorEnvelope(Inputs{Conformance: &Conformance{ErrorEnvelope: envelope}}, r)
+	return r
+}
+
+// TestCleanErrorEnvelopeIsSilent anchors the three tests below: without it they
+// would all pass against a check that reports everything.
+func TestCleanErrorEnvelopeIsSilent(t *testing.T) {
+	assertClean(t, envelopeReport(t, func(*ErrorObservation) {}))
+}
+
+// TestErrorDriveAttestsItsSurface: the v1 drive is a v1 drive only by intention
+// until the wire says so. Changing the surface test in runErrorEnvelope to
+// something that never matches left BOTH drives on /api/v2 and nothing said so --
+// the same shape as the Config.APIVersion that was never set, recurring in new
+// code.
+func TestErrorDriveAttestsItsSurface(t *testing.T) {
+	assertFinding(t, envelopeReport(t, func(o *ErrorObservation) { o.Prefix = "/api/v2" }),
+		"`v1`: the error drive went to \"/api/v2\", not \"/api/v1\"")
+}
+
+// TestErrorDriveAttestsItsStatus: `StatusCode: status` in parseError replaced with
+// a zero passed clean, and StatusCode is on the exported *APIError -- a caller
+// switching on it would read 0 for every error the server sends.
+func TestErrorDriveAttestsItsStatus(t *testing.T) {
+	assertFinding(t, envelopeReport(t, func(o *ErrorObservation) { o.Status = 0 }),
+		"the error drive answers 409 and the returned `*APIError` reports status 0")
+}
+
+// TestErrorDriveAssertsTheSemanticHelper: a caller writes IsConflict, not
+// `err.(*APIError).Code == "conflict"`. Rewiring IsConflict to CodeValidation
+// passed clean while the drive's own comment cited that helper as its reason for
+// answering 409 -- an unasserted claim is not a claim.
+func TestErrorDriveAssertsTheSemanticHelper(t *testing.T) {
+	assertFinding(t, envelopeReport(t, func(o *ErrorObservation) { o.Conflict = false }),
+		"`IsConflict` answers false for it")
+}
+
+// TestDetectsWithdrawnRequiredOnErrorEnvelope: requiredness is not exercised by a
+// stub that populates every property, so the OFFLINE half cannot see a withdrawn
+// `required` -- docs/development.md says so. The cross-repository half is where it
+// is compared, and this pins that, because "covered elsewhere" is a claim like any
+// other.
+func TestDetectsWithdrawnRequiredOnErrorEnvelope(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"), "    ErrorResponse:",
+		"      required:\n      - error\n", "")
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"schema `ErrorResponse`: - required: [error]")
 }

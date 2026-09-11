@@ -715,6 +715,24 @@ func checkErrorEnvelope(in Inputs, r *Report) {
 				surface, observation.NotAPIErr))
 			continue
 		}
+		// The surface, before anything else: a v1 drive that silently went to
+		// /api/v2 proves nothing about v1, and says so in v1's voice.
+		if want := "/api/" + surface; observation.Prefix != want {
+			items = append(items, fmt.Sprintf("`%s`: the error drive went to %q, not %q -- this surface is not the one being exercised",
+				surface, observation.Prefix, want))
+		}
+		if observation.Status != http.StatusConflict {
+			items = append(items, fmt.Sprintf("`%s`: the error drive answers 409 and the returned `*APIError` reports status %d -- a caller reading `StatusCode` is reading something the server did not send",
+				surface, observation.Status))
+		}
+		// The semantic helpers are the whole reason a code matters. A caller writes
+		// IsConflict, not `err.(*APIError).Code == "conflict"`, so the helper is
+		// what has to be true.
+		if !observation.Conflict {
+			items = append(items, fmt.Sprintf("`%s`: the envelope carried `%s` and `IsConflict` answers false for it -- the helper and the code it is named after have come apart",
+				surface, observation.Code))
+		}
+
 		if len(observation.Sent) == 0 {
 			items = append(items, fmt.Sprintf("`%s`: `ErrorResponse` no longer describes an `error` object with properties, and that object is the whole of what the SDK decodes an error from", surface))
 			continue

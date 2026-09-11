@@ -310,7 +310,11 @@ body is built, and the returned `*APIError` is held to it: `code`, `message`, `r
 nowhere to put is reported. Renaming `error.code` in both vendored contracts used to report **no
 drift at all**, while in the SDK it means `parseError` finds no code, falls through to its
 envelope-less branch, and stamps `CodeUnexpectedStatus` on every error the server sends — so
-`IsNotFound`, `IsConflict` and `IsValidation` each answer `false` for the error they are named after.
+`IsNotFound`, `IsConflict` and `IsValidation` each answer `false` for the error they are named after. The drive attests what it
+claims: the `/api/<version>` it really went to, the 409 the returned `*APIError` reports, and
+`IsConflict` itself — a caller writes the helper, not `err.(*APIError).Code == "conflict"`, so the
+helper is what has to be true. The envelope therefore carries a **real** code rather than a
+name-shaped witness, since `IsConflict` answers `false` for `cd~code` quite correctly.
 
 **And what the route check proves.** Each driver runs twice per surface with different path values,
 so a route that varies with the value it is given is reported; each placeholder has its own sentinel,
@@ -321,7 +325,12 @@ single fixed input gives.
 
 **Known boundaries**, stated rather than implied: a repeated query parameter or header is compared by
 its first value only; path escaping is not exercised, since every path witness is a safe alphanumeric;
-and `WithActor` / `WithRequestID` have no documented counterpart to compare against.
+`WithActor` / `WithRequestID` have no documented counterpart to compare against; and **`required` is
+not exercised offline** — the stub populates every property, so a property the contract stops
+requiring produces the same body it produced before. That one is compared where it can be: the
+cross-repository half diffs `required` as a set like every other part of a schema, so a server that
+withdraws one is reported there. A test pins that, because "covered elsewhere" is a claim like any
+other.
 
 **Everything the offline half compares is vendored, on purpose.** The two contracts, the error
 registry, the recorded server version: each has a copy in this repository, so each can be checked
