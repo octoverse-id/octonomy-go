@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	octonomy "github.com/octoverse-id/octonomy-go/v2"
@@ -50,9 +51,6 @@ type Observation struct {
 
 	// Query is the set of query parameter names the client actually sent.
 	Query map[string]bool
-
-	// Body reports whether the request carried one.
-	Body bool
 
 	// CallErr is the error the method returned, if any. A decode failure against
 	// a schema-derived response body lands here, and that is the point.
@@ -105,16 +103,26 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 
 	// One stub for the whole run. `current` names the operation being exercised,
 	// so the handler knows which schema to answer with; drivers run one at a time.
+	//
+	// Under a mutex even so. The handler runs on the server's goroutine and these
+	// are written from the caller's, and while the HTTP round trip happens to
+	// order them today, "happens to" is not a synchronization argument -- and the
+	// first driver that retries, or walks a page, would make it untrue.
 	var (
+		mu       sync.Mutex
 		current  Driver
 		observed Observation
+		requests int
 	)
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		requests++
 		observed = Observation{
 			Method: strings.ToLower(r.Method),
 			Path:   normalizeObservedPath(r.URL.Path),
 			Query:  queryNames(r.URL.Query()),
-			Body:   r.ContentLength != 0,
 		}
 		row, ok := rows[current.Op]
 		if !ok {
@@ -149,17 +157,30 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 	env := &Env{Client: client, Health: health}
 
 	for _, driver := range drivers {
-		current = driver
-		observed = Observation{}
+		mu.Lock()
+		current, observed, requests = driver, Observation{}, 0
+		mu.Unlock()
 
 		value, callErr := driver.Call(context.Background(), env)
-		if observed.Method == "" {
+
+		mu.Lock()
+		seen, count := observed, requests
+		mu.Unlock()
+
+		switch {
+		case count == 0:
 			conf.Errors[driver.Op] = fmt.Errorf("the call reached no request: %v", callErr)
 			continue
+		case count > 1:
+			// Only the last request is recorded, so an observation from a driver
+			// that issued several would describe one of them and be read as
+			// describing the operation. A driver calls one method once.
+			conf.Errors[driver.Op] = fmt.Errorf("the call issued %d requests; a driver exercises one operation", count)
+			continue
 		}
-		observed.CallErr = callErr
-		observed.Decoded = remarshalKeys(value)
-		conf.Observations[driver.Op] = observed
+		seen.CallErr = callErr
+		seen.Decoded = remarshalKeys(value)
+		conf.Observations[driver.Op] = seen
 	}
 	return conf, nil
 }

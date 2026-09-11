@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	octonomy "github.com/octoverse-id/octonomy-go/v2"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1186,5 +1188,71 @@ server_error_codes: [a, b, c, d, e, f, g, h, i, j]
 				t.Errorf("error %q does not mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestMultiRequestDriverIsRejected: only the last request is recorded, so a
+// driver that issued several would hand the gate an observation describing one of
+// them and have it read as describing the operation. A driver exercises one
+// operation, once.
+func TestMultiRequestDriverIsRejected(t *testing.T) {
+	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := RunConformance(spec, cov, []Driver{{
+		Op:  "get /tags",
+		SDK: "TagService.List",
+		Call: func(ctx context.Context, env *Env) (any, error) {
+			if _, err := env.Client.Tags.List(ctx, nil); err != nil {
+				return nil, err
+			}
+			return env.Client.Tags.List(ctx, nil)
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := conf.Observations["get /tags"]; ok {
+		t.Error("a driver that issued two requests was recorded as an observation")
+	}
+	if err := conf.Errors["get /tags"]; err == nil || !strings.Contains(err.Error(), "issued 2 requests") {
+		t.Errorf("expected a two-request error, got %v", err)
+	}
+}
+
+// TestDriverThatNeverReachesTheWireIsReported covers the other end: a call the
+// client refuses before sending anything -- an option the transport rejects, say.
+// Silence there would read as an operation with no parameters at all.
+func TestDriverThatNeverReachesTheWireIsReported(t *testing.T) {
+	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := RunConformance(spec, cov, []Driver{{
+		Op:  "post /tags",
+		SDK: "TagService.Create",
+		Call: func(ctx context.Context, env *Env) (any, error) {
+			// WithApplication on a request that carries a body: refused by the
+			// transport, so nothing is ever sent.
+			return env.Client.Tags.Create(ctx, octonomy.TagCreate{Name: "n", Slug: "s", Type: "t"},
+				octonomy.WithApplication("app"))
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conf.Errors["post /tags"]; err == nil || !strings.Contains(err.Error(), "reached no request") {
+		t.Errorf("expected a no-request error, got %v", err)
 	}
 }
