@@ -253,9 +253,11 @@ from a client that actually issues the request.
 The cost is the driver table: one call per operation, which someone has to write and keep compiling.
 That is the deliberate trade — a driver that names the wrong method reports the wrong route on its
 first run, a driver that stops compiling is a build failure, and an operation with no driver is a
-finding. A driver that is merely *wrong* — nil params, a missing option — fails the same way a broken
-client would: the parameters do not reach the wire and the gate says so. There is no shape of driver
-mistake that produces a quieter answer than the truth.
+finding. A driver that is merely *wrong* — nil params, a missing option, a swapped argument, a duplicate
+entry, one that never reaches the wire or reaches it twice, or one whose two executions disagree —
+fails the same way a broken client would, because the gate compares both executions in full. The one
+thing a driver can still fail to do is exercise an option the contract does not document (`WithActor`,
+`WithRequestID`); those have no documented counterpart to compare against.
 
 **What a passing decode does and does not prove.** Each operation is driven twice: once with every
 property populated, once with every `nullable` property set to `null`. Together those prove the model

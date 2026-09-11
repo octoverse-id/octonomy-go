@@ -26,11 +26,16 @@
 // the answer off the wire:
 //
 //	routes             each inventory row against the request its method actually
-//	                   issued
-//	query parameters   per operation, against what the client put on the wire with
-//	                   every parameter it offers populated -- both directions
+//	                   issued, twice, with different path values
+//	request shape      per operation and in both directions: the query parameters,
+//	                   headers and request-body properties on the wire, NAMES AND
+//	                   VALUES -- each driver sends a value naming the field it
+//	                   belongs to, so a value under the wrong name says so
 //	response models    the client decodes a body built FROM the vendored schema,
-//	                   and the gate reports what did not survive the round trip
+//	                   twice -- populated, then with every nullable property null --
+//	                   and the gate reports what did not survive
+//	model field names  each response model's Go field against the property it
+//	                   decodes, which is the one defect a round trip cannot see
 //
 // Reading the source instead was tried first and abandoned: see conformance.go.
 //
@@ -51,6 +56,9 @@
 //	                   nothing to do with the change under review, and a merge
 //	                   gate that does that is a merge gate people learn to
 //	                   route around.
+//
+// Each operation is driven TWICE -- different path values, different response
+// witness -- and the two requests must agree in everything but the path.
 //
 // Fetching is deliberately NOT this program's job. scripts/contract-fetch.sh
 // does it, and this reads plain files -- which is what makes a synthetic
@@ -192,9 +200,9 @@ func render(in Inputs, report *Report, source string, withUpstream bool) string 
 
 	if report.Count() == 0 {
 		if withUpstream {
-			b.WriteString("No drift. The vendored contracts match the server's, and the SDK matches what it vendors.\n")
+			b.WriteString("No drift. The vendored contracts match the server's, and the SDK sends and decodes what they document.\n")
 		} else {
-			b.WriteString("No drift. The SDK matches the contracts it vendors. The cross-repository comparison did not run.\n")
+			b.WriteString("No drift. The SDK sends and decodes what the vendored contracts document. The cross-repository comparison did not run.\n")
 		}
 		return b.String()
 	}

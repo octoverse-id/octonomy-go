@@ -45,8 +45,9 @@ stays a faithful, ergonomic client.
   field on `Client`.
 - **A new endpoint needs three things, and the gate fails until it has all three:** the method, a row
   in `docs/contract-coverage.yaml`, and a driver in `tools/contractdrift/drivers.go` calling it with
-  every parameter populated. The driver is what proves the method sends what the contract documents;
-  a row with no driver is an operation nobody exercises.
+  every documented parameter, property and header populated. The driver is what proves the method
+  sends what the contract documents — names *and* values, since each driver value names the wire
+  field it belongs to — and a row with no driver is an operation nobody exercises.
 - Methods take `context.Context` first and accept variadic `...RequestOption` last.
 - **Scoping is the transport's job, not each resource's.** `WithNamespace`, `WithGlobalNamespace`,
   `WithApplication`, and `WithIncludeGlobal` apply to any method and are enforced at the chokepoint,

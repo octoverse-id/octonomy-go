@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -109,6 +110,7 @@ func CheckLocal(in Inputs) *Report {
 	checkQueryParametersSent(in, r)
 	checkRequestShapes(in, r)
 	checkResponseModels(in, r)
+	checkModelFieldNames(in, r)
 	checkErrorCodesImplemented(in, r)
 	return r
 }
@@ -239,17 +241,17 @@ func checkImplementation(in Inputs, r *Report) {
 			}
 			continue
 		}
-		// The row's `sdk:` and `file:` fields are documentation, and cheap to keep
-		// true: the method has to exist, and to be where the row says it is. A
-		// declaration is the one thing still read out of the source, because it is
-		// not control flow -- everything about what the method DOES comes from
-		// driving it.
-		switch method, ok := in.SDK.Method(row.SDK); {
-		case !ok:
+		// The row's `sdk:` field is documentation, and cheap to keep true: the
+		// method it names has to exist. A declaration is the one thing still read
+		// out of the source, because it is not control flow -- everything about
+		// what the method DOES comes from driving it.
+		//
+		// It used to assert the FILE too. That went: a warning when a working
+		// method moves between source files is not worth a field in a checked
+		// inventory, and the compiled driver plus the observed route prove the
+		// behavior either way.
+		if _, ok := in.SDK.Method(row.SDK); !ok {
 			items = append(items, fmt.Sprintf("`%s` claims `%s`, which this package does not declare", row.Key(), row.SDK))
-		case method.File != row.File:
-			items = append(items, fmt.Sprintf("`%s` says `%s` lives in %s; it is declared in %s",
-				row.Key(), row.SDK, row.File, method.File))
 		}
 		driver, ok := drivers[row.Key()]
 		if !ok {
@@ -370,18 +372,20 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 			documented := map[string]bool{}
 			for _, name := range op.QueryParams() {
 				documented[name] = true
-				if observed.Query[name] {
+				value, sent := observed.Query[name]
+				if !sent {
+					key := row.Key() + " query " + name
+					if _, ok := allowed[key]; ok {
+						used[key] = true
+						continue
+					}
+					items = append(items, fmt.Sprintf("`%s` documents the query parameter `%s` and the client did not send it -- implement it or record it under unsent_query_parameters",
+						row.Key(), name))
 					continue
 				}
-				key := row.Key() + " query " + name
-				if _, ok := allowed[key]; ok {
-					used[key] = true
-					continue
-				}
-				items = append(items, fmt.Sprintf("`%s` documents the query parameter `%s` and the client did not send it -- implement it or record it under unsent_query_parameters",
-					row.Key(), name))
+				items = append(items, valueFindings(row.Key(), "query parameter", name, value, op.ParamSchema("query", name))...)
 			}
-			for _, name := range sortedNames(observed.Query) {
+			for _, name := range sortedStrings(observed.Query) {
 				if !documented[name] {
 					items = append(items, fmt.Sprintf("`%s`: the client sends the query parameter `%s`, which no vendored contract documents -- the server will ignore it",
 						row.Key(), name))
@@ -465,7 +469,8 @@ func checkResponseModels(in Inputs, r *Report) {
 		documentedSet := map[string]bool{}
 		for _, property := range documented {
 			documentedSet[property] = true
-			if _, survived := observed.Decoded[property]; !survived {
+			_, survived := observed.Decoded[property]
+			if !survived {
 				items = append(items, fmt.Sprintf("schema `%s` documents `%s` and it does not survive decoding by `%s` -- the model has no field for it",
 					op.OKModel, property, row.SDK))
 			}
@@ -850,24 +855,45 @@ func checkRequestShapes(in Inputs, r *Report) {
 		for _, name := range op.HeaderParams() {
 			canonical := http.CanonicalHeaderKey(name)
 			documentedHeaders[canonical] = true
-			if observed.Headers[canonical] {
+			value, sent := observed.Headers[canonical]
+			if !sent {
+				key := row.Key() + " header " + name
+				if _, ok := unsent[key]; ok {
+					used[key] = true
+					continue
+				}
+				items = append(items, fmt.Sprintf("`%s` documents the header `%s` and the client did not send it", row.Key(), name))
 				continue
 			}
-			key := row.Key() + " header " + name
-			if _, ok := unsent[key]; ok {
-				used[key] = true
-				continue
-			}
-			items = append(items, fmt.Sprintf("`%s` documents the header `%s` and the client did not send it", row.Key(), name))
+			items = append(items, valueFindings(row.Key(), "header", canonical, value, op.ParamSchema("header", name))...)
 		}
-		for _, name := range sortedNames(observed.Headers) {
-			if clientHeaders[name] {
+
+		// client_headers means EVERY versioned request, and it is checked that way
+		// -- once per operation, not once per run. Requiring each name to have been
+		// seen somewhere let a client drop X-Tenant-ID from every request carrying
+		// a body while the reads kept it, which is every write losing its tenant
+		// scope, reported as nothing at all.
+		//
+		// And forbidden on the unversioned probes, which is the other half of the
+		// same rule: /health authenticates nobody, so an Authorization or
+		// X-Tenant-ID leaking onto it is a finding rather than an absence.
+		versioned := !strings.HasPrefix(row.Path, "/health/")
+		for name := range clientHeaders {
+			switch _, sent := observed.Headers[name]; {
+			case sent && versioned:
 				seenClientHeader[name] = true
+			case !sent && versioned:
+				items = append(items, fmt.Sprintf("`%s` does not carry `%s`, which client_headers records as sent on every versioned request", row.Key(), name))
+			case sent && !versioned:
+				seenClientHeader[name] = true
+				items = append(items, fmt.Sprintf("`%s` carries `%s`, and the unversioned probes authenticate nobody -- it must not be sent there", row.Key(), name))
+			}
+		}
+		for _, name := range sortedStrings(observed.Headers) {
+			if clientHeaders[name] || documentedHeaders[name] {
 				continue
 			}
-			if !documentedHeaders[name] {
-				items = append(items, fmt.Sprintf("`%s`: the client sends the header `%s`, which no vendored contract documents", row.Key(), name))
-			}
+			items = append(items, fmt.Sprintf("`%s`: the client sends the header `%s`, which no vendored contract documents", row.Key(), name))
 		}
 
 		// --- request body ---
@@ -878,7 +904,7 @@ func checkRequestShapes(in Inputs, r *Report) {
 			// the same family as the envelopes, and recorded the same way.
 			if row.UndocumentedRequestBody == "" {
 				items = append(items, fmt.Sprintf("`%s`: the client sends a request body (%s) and the contract documents none -- record it under undocumented_request_body",
-					row.Key(), strings.Join(sortedNames(observed.Body), ", ")))
+					row.Key(), strings.Join(sortedFields(observed.Body), ", ")))
 			}
 			continue
 		case op.RequestModel == "" && row.UndocumentedRequestBody != "":
@@ -904,18 +930,20 @@ func checkRequestShapes(in Inputs, r *Report) {
 		documentedSet := map[string]bool{}
 		for _, property := range documented {
 			documentedSet[property] = true
-			if observed.Body[property] {
+			raw, sent := observed.Body[property]
+			if !sent {
+				key := row.Key() + " body " + property
+				if _, ok := unsent[key]; ok {
+					used[key] = true
+					continue
+				}
+				items = append(items, fmt.Sprintf("`%s`: schema `%s` documents `%s` and the client did not send it -- implement it, or populate it in drivers.go",
+					row.Key(), op.RequestModel, property))
 				continue
 			}
-			key := row.Key() + " body " + property
-			if _, ok := unsent[key]; ok {
-				used[key] = true
-				continue
-			}
-			items = append(items, fmt.Sprintf("`%s`: schema `%s` documents `%s` and the client did not send it -- implement it, or populate it in drivers.go",
-				row.Key(), op.RequestModel, property))
+			items = append(items, jsonValueFindings(row.Key(), "body property", property, raw, spec.PropertySchema(op.RequestModel, property))...)
 		}
-		for _, property := range sortedNames(observed.Body) {
+		for _, property := range sortedFields(observed.Body) {
 			if !documentedSet[property] {
 				items = append(items, fmt.Sprintf("`%s`: the client sends `%s` in its request body, which schema `%s` does not document",
 					row.Key(), property, op.RequestModel))
@@ -934,10 +962,17 @@ func checkRequestShapes(in Inputs, r *Report) {
 		if !ok {
 			continue
 		}
-		carried := map[string]map[string]bool{
-			"query": observed.Query, "body": observed.Body, "header": observed.Headers,
-		}[row.CarriedIn]
-		if !carried[row.Name] {
+		carried := map[string]bool{}
+		for name := range observed.Query {
+			carried["query "+name] = true
+		}
+		for name := range observed.Headers {
+			carried["header "+name] = true
+		}
+		for name := range observed.Body {
+			carried["body "+name] = true
+		}
+		if !carried[row.CarriedIn+" "+row.Name] {
 			items = append(items, fmt.Sprintf("`%s %s` records that `%s` travels in the %s instead, and the request's %s does not carry it",
 				row.Method, row.Path, row.Name, row.CarriedIn, row.CarriedIn))
 		}
@@ -960,4 +995,162 @@ func checkRequestShapes(in Inputs, r *Report) {
 		}
 	}
 	r.Add("Request shapes", dedupe(items))
+}
+
+// --- request values -------------------------------------------------------------
+//
+// Names were not enough. A review sent four requests past this gate with every
+// documented name in place and the wrong thing under it: a parameter the contract
+// had retyped, a params struct wiring `q` to the Slug field, two JSON tags swapped
+// on a write model, and the two namespace headers crossed.
+//
+// What makes a value checkable without a schema validator is that the drivers send
+// SELF-IDENTIFYING values: the string a driver supplies for the field that should
+// arrive as `slug` is the sentinel for `slug` (driverValue in drivers.go). So a
+// value that turns up under another name announces where it came from, and the two
+// halves below are all the checking needed -- the sentinel says the wiring is
+// right, and the type says the contract still describes what is being sent.
+
+// valueFindings checks one emitted string value: query parameter or header.
+func valueFindings(op, kind, name, value string, schema map[string]string) []string {
+	var items []string
+	// Case-insensitive: a header's name is canonicalized on the wire
+	// (X-Namespace-Type) and a sentinel is written as the field it names.
+	if origin, ok := sentinelOrigin(value); ok && !strings.EqualFold(origin, name) {
+		items = append(items, fmt.Sprintf("`%s`: the %s `%s` carries the value the driver supplied for `%s` -- the client is wiring one input to another's name",
+			op, kind, name, origin))
+		return items
+	}
+	if documented := schema["type"]; documented != "" && !valueMatchesType(value, documented) {
+		items = append(items, fmt.Sprintf("`%s`: the %s `%s` is documented as `%s` and the client sends %q",
+			op, kind, name, documented, value))
+	}
+	return items
+}
+
+// jsonValueFindings is the same for a request-body property, whose value arrives
+// as JSON rather than as a string.
+func jsonValueFindings(op, kind, name string, raw json.RawMessage, schema map[string]string) []string {
+	// An array is checked element by element: the sentinel lives inside it.
+	var elements []json.RawMessage
+	if err := json.Unmarshal(raw, &elements); err == nil {
+		var items []string
+		for _, element := range elements {
+			items = append(items, jsonValueFindings(op, kind, name, element, itemSchema(schema))...)
+		}
+		return items
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return valueFindings(op, kind, name, text, schema)
+	}
+	if documented := schema["type"]; documented != "" && !jsonMatchesType(raw, documented) {
+		return []string{fmt.Sprintf("`%s`: the %s `%s` is documented as `%s` and the client sends %s",
+			op, kind, name, documented, string(raw))}
+	}
+	return nil
+}
+
+// itemSchema reduces an array's flattened schema to its element's.
+func itemSchema(schema map[string]string) map[string]string {
+	out := map[string]string{}
+	for key, value := range schema {
+		if rest, ok := strings.CutPrefix(key, "items."); ok {
+			out[rest] = value
+		}
+	}
+	return out
+}
+
+func valueMatchesType(value, documented string) bool {
+	switch documented {
+	case "string":
+		return true
+	case "integer":
+		_, err := strconv.Atoi(value)
+		return err == nil
+	case "number":
+		_, err := strconv.ParseFloat(value, 64)
+		return err == nil
+	case "boolean":
+		_, err := strconv.ParseBool(value)
+		return err == nil
+	}
+	// A type this does not model is not a finding: saying nothing is honest, and
+	// claiming a mismatch would be worse than silence.
+	return true
+}
+
+func jsonMatchesType(raw json.RawMessage, documented string) bool {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return true
+	}
+	switch documented {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "integer", "number":
+		_, ok := value.(float64)
+		return ok || value == nil
+	case "boolean":
+		_, ok := value.(bool)
+		return ok || value == nil
+	case "object":
+		_, ok := value.(map[string]any)
+		return ok || value == nil
+	case "array":
+		_, ok := value.([]any)
+		return ok || value == nil
+	}
+	return true
+}
+
+// checkModelFieldNames asserts each response model's Go field name matches the
+// JSON property it decodes.
+//
+// This is the one defect a round trip structurally cannot see. Swap the tags on
+// two fields and the SAME tags do the decoding and the re-encoding: identical
+// bytes go out, every documented property survives, every value is intact -- and
+// the caller reads the server's `name` out of `Tag.Slug`. No amount of comparing
+// what came back can distinguish that, because nothing about it is different.
+// Only the declaration knows the field called Name is meant to carry `name`.
+//
+// The rule is the SDK's own spelling convention, and it holds today with no
+// exceptions across every model the gate compares: TagID decodes `tag_id`,
+// UsageCount decodes `usage_count`, ID decodes `id`.
+func checkModelFieldNames(in Inputs, r *Report) {
+	spec := in.Vendored["v2"]
+	ops, err := strippedOperations(spec, "v2")
+	if err != nil {
+		return // reported by checkSurfaceParity
+	}
+
+	checked := map[string]bool{}
+	var items []string
+	for _, row := range in.Coverage.Operations {
+		if row.Unimplemented != "" {
+			continue
+		}
+		op, ok := ops[row.Key()]
+		if !ok || op.OKModel == "" || checked[op.OKModel] {
+			continue
+		}
+		fields, ok := in.SDK.ModelFields(op.OKModel)
+		if !ok {
+			continue // the model is named by the contract, not by this package
+		}
+		checked[op.OKModel] = true
+
+		for _, property := range sortedStrings(fields) {
+			field := fields[property]
+			if SnakeCase(field) == property {
+				continue
+			}
+			items = append(items, fmt.Sprintf("model `%s`: the field `%s` decodes `%s` -- a caller reading `%s.%s` would get the contract's `%s`, so rename the field or teach tools/contractdrift the exception",
+				op.OKModel, field, property, op.OKModel, field, property))
+		}
+	}
+	r.Add("Model field names", items)
 }

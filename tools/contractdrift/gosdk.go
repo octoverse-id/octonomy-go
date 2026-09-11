@@ -7,8 +7,10 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // The two things about the SDK worth reading out of the source, and nothing else.
@@ -28,11 +30,18 @@ import (
 // request off the wire. What is left here is the part where the source really is
 // the source of truth:
 //
-//   - the Code* constants, which are declarations and nothing else; and
-//   - whether a method an inventory row names exists at all.
+//   - the Code* constants, which are declarations and nothing else;
+//   - whether a method an inventory row names exists at all; and
+//   - the JSON tag on each response model field, next to the field's own name.
 //
-// Neither involves following a value through the program, which is why neither
+// None of those follows a value through the program, which is why none of them
 // can quietly answer the wrong question.
+//
+// The third is here because a JSON round trip structurally cannot see it. Swap
+// the tags on two fields and the SAME tags do the decoding and the re-encoding,
+// so the bytes that come back are identical while the caller reads the server's
+// name out of Tag.Slug. Only the declaration knows that the field called Name is
+// meant to carry the property called `name`.
 
 // SDKPackage is the parsed SDK package.
 type SDKPackage struct {
@@ -41,9 +50,13 @@ type SDKPackage struct {
 	fset    *token.FileSet
 	files   map[string]*ast.File // by base file name
 	methods map[string]*sdkMethod
+	structs map[string]*ast.StructType
 	consts  map[string]string // identifier -> its string value
 }
 
+// sdkMethod is a method declaration. Its file is kept for error text only: a
+// working method moving between source files is not drift, and the inventory
+// stopped asserting where one lives.
 type sdkMethod struct {
 	File string
 	Recv string
@@ -67,6 +80,7 @@ func LoadSDKPackage(root string) (*SDKPackage, error) {
 		fset:    token.NewFileSet(),
 		files:   map[string]*ast.File{},
 		methods: map[string]*sdkMethod{},
+		structs: map[string]*ast.StructType{},
 		consts:  map[string]string{},
 	}
 	for _, entry := range entries {
@@ -101,6 +115,12 @@ func (p *SDKPackage) index(file string, f *ast.File) {
 			p.methods[recv+"."+d.Name.Name] = &sdkMethod{File: file, Recv: recv, Name: d.Name.Name}
 		case *ast.GenDecl:
 			for _, spec := range d.Specs {
+				if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+					if st, ok := typeSpec.Type.(*ast.StructType); ok {
+						p.structs[typeSpec.Name.Name] = st
+					}
+					continue
+				}
 				value, ok := spec.(*ast.ValueSpec)
 				if !ok {
 					continue
@@ -138,6 +158,68 @@ func (p *SDKPackage) ErrorCodes() map[string]string {
 func (p *SDKPackage) Method(symbol string) (*sdkMethod, bool) {
 	m, ok := p.methods[symbol]
 	return m, ok
+}
+
+// ModelFields returns a struct's exported fields, keyed by the JSON name each one
+// decodes from, with the Go field name as the value. Embedded structs are
+// flattened the way encoding/json flattens them.
+func (p *SDKPackage) ModelFields(typeName string) (map[string]string, bool) {
+	st, ok := p.structs[typeName]
+	if !ok {
+		return nil, false
+	}
+	out := map[string]string{}
+	p.collectFields(st, out, map[string]bool{typeName: true})
+	return out, true
+}
+
+func (p *SDKPackage) collectFields(st *ast.StructType, out map[string]string, seen map[string]bool) {
+	for _, field := range st.Fields.List {
+		tag := ""
+		if field.Tag != nil {
+			if raw, ok := stringLit(field.Tag); ok {
+				tag, _, _ = strings.Cut(reflect.StructTag(raw).Get("json"), ",")
+			}
+		}
+		if len(field.Names) == 0 {
+			embedded := baseTypeName(field.Type)
+			if tag == "" && !seen[embedded] {
+				seen[embedded] = true
+				if inner, ok := p.structs[embedded]; ok {
+					p.collectFields(inner, out, seen)
+				}
+			}
+			continue
+		}
+		name := field.Names[0]
+		if !name.IsExported() || tag == "-" {
+			continue
+		}
+		if tag == "" {
+			tag = name.Name
+		}
+		out[tag] = name.Name
+	}
+}
+
+// SnakeCase renders a Go field name the way this SDK's JSON tags spell it:
+// TagID -> tag_id, UsageCount -> usage_count, ID -> id.
+func SnakeCase(name string) string {
+	var b strings.Builder
+	runes := []rune(name)
+	for i, r := range runes {
+		if unicode.IsUpper(r) {
+			prevLower := i > 0 && !unicode.IsUpper(runes[i-1])
+			nextLower := i+1 < len(runes) && !unicode.IsUpper(runes[i+1])
+			if i > 0 && (prevLower || nextLower) {
+				b.WriteByte('_')
+			}
+			b.WriteRune(unicode.ToLower(r))
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func stringLit(expr ast.Expr) (string, bool) {

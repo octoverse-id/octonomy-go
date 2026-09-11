@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -739,12 +740,12 @@ func TestQueryParametersAreObservedPerOperation(t *testing.T) {
 		t.Fatal("no observation for get /tag-resolution")
 	}
 	for _, name := range []string{"slug", "type", "scope", "application_id", "include_global"} {
-		if !resolution.Query[name] {
+		if _, sent := resolution.Query[name]; !sent {
 			t.Errorf("TagService.Resolve did not send %q", name)
 		}
 	}
 	for _, name := range []string{"limit", "offset"} {
-		if resolution.Query[name] {
+		if _, sent := resolution.Query[name]; sent {
 			t.Errorf("TagService.Resolve sent %q; it does not page", name)
 		}
 	}
@@ -754,7 +755,7 @@ func TestQueryParametersAreObservedPerOperation(t *testing.T) {
 		t.Fatal("no observation for get /tags")
 	}
 	for _, name := range []string{"limit", "offset", "q", "slug", "vocabulary_id"} {
-		if !list.Query[name] {
+		if _, sent := list.Query[name]; !sent {
 			t.Errorf("TagService.List did not send %q", name)
 		}
 	}
@@ -785,7 +786,7 @@ func TestUnsentQueryParameterIsReported(t *testing.T) {
 func TestUndocumentedQueryParameterIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
 	observed := in.Conformance.Observations["get /tags"]
-	observed.Query["colour"] = true
+	observed.Query["colour"] = "x"
 	in.Conformance.Observations["get /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
@@ -1138,19 +1139,6 @@ func TestOrdinaryErrorRegistryShapesAreNotReportedAsUnreadable(t *testing.T) {
 	}
 }
 
-// TestInventoryFileMismatchFails: the row names the file as well as the method,
-// and a row that is wrong about where the code lives is a row nobody can follow.
-func TestInventoryFileMismatchFails(t *testing.T) {
-	repo := stageRepo(t)
-	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
-		"    sdk: TagService.Resolve\n",
-		"    file: resolution.go\n",
-		"    file: tags.go\n")
-
-	assertFinding(t, runLocal(t, repo),
-		"says `TagService.Resolve` lives in tags.go; it is declared in resolution.go")
-}
-
 // TestCoverageValidationRefusesRowsThatWouldDoNothing. Every rule here exists
 // because the row it rejects would otherwise load, match nothing, and leave an
 // endpoint or an allowlist entry silently unchecked -- a gate reporting green over
@@ -1161,7 +1149,6 @@ operations:
   - path: /tags
     method: get
     sdk: TagService.List
-    file: tags.go
     documented_response: array
     actual_response: list-envelope
 server_error_codes: [a, b, c, d, e, f, g, h, i, j]
@@ -1170,7 +1157,7 @@ server_error_codes: [a, b, c, d, e, f, g, h, i, j]
 		{"prefixed path", strings.Replace(valid, "path: /tags", "path: /api/v2/tags", 1), "must not carry the /api/<version> prefix"},
 		{"unknown method", strings.Replace(valid, "method: get", "method: GET", 1), "is not a lowercase HTTP method"},
 		{"bare sdk name", strings.Replace(valid, "sdk: TagService.List", "sdk: List", 1), "must name the method as Receiver.Method"},
-		{"neither implemented nor not", strings.Replace(valid, "    sdk: TagService.List\n    file: tags.go\n", "", 1), "needs either sdk+file or an unimplemented reason"},
+		{"neither implemented nor not", strings.Replace(valid, "    sdk: TagService.List\n", "", 1), "needs either an sdk method or an unimplemented reason"},
 		{"unknown envelope", strings.Replace(valid, "actual_response: list-envelope", "actual_response: list_envelope", 1), "is not one of"},
 		{"unknown documented shape", strings.Replace(valid, "documented_response: array", "documented_response: list", 1), "is not `array`, `none`, `other`, or `ref:<Schema>`"},
 		{"unknown key", valid + "unexpected_key: 1\n", "field unexpected_key not found"},
@@ -1318,7 +1305,7 @@ func TestMissingRequestBodyPropertyIsReported(t *testing.T) {
 func TestEmptyRequestBodyIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
 	observed := in.Conformance.Observations["post /tags"]
-	observed.Body = map[string]bool{}
+	observed.Body = map[string]json.RawMessage{}
 	in.Conformance.Observations["post /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
@@ -1330,7 +1317,7 @@ func TestEmptyRequestBodyIsReported(t *testing.T) {
 func TestUndocumentedRequestBodyPropertyIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
 	observed := in.Conformance.Observations["post /tags"]
-	observed.Body["colour"] = true
+	observed.Body["colour"] = json.RawMessage(`"x"`)
 	in.Conformance.Observations["post /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
@@ -1356,7 +1343,7 @@ func TestMissingDocumentedHeaderIsReported(t *testing.T) {
 func TestUndocumentedHeaderIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
 	observed := in.Conformance.Observations["get /tags"]
-	observed.Headers["X-Invented-Header"] = true
+	observed.Headers["X-Invented-Header"] = "x"
 	in.Conformance.Observations["get /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
@@ -1410,7 +1397,9 @@ func TestSwappedPathArgumentsAreReported(t *testing.T) {
 
 // TestValueDependentRouteIsReported: one execution says what the client did with
 // one input. Two inputs do not prove a route is invariant, but they catch a route
-// that varies with the value -- which one cannot.
+// that varies with the value -- which one cannot. The comparison covers the whole
+// request, not just its route: a driver that passed its options on one execution
+// and not the other used to pass, because the first supplied all the evidence.
 func TestValueDependentRouteIsReported(t *testing.T) {
 	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
 	if err != nil {
@@ -1435,7 +1424,7 @@ func TestValueDependentRouteIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := conf.Errors["get /tags/{tag_id}"]; err == nil || !strings.Contains(err.Error(), "route depends on the values passed") {
+	if err := conf.Errors["get /tags/{tag_id}"]; err == nil || !strings.Contains(err.Error(), "the two executions sent different requests") {
 		t.Errorf("a value-dependent route was accepted: %v", err)
 	}
 }
@@ -1508,7 +1497,6 @@ operations:
   - path: /tags
     method: get
     sdk: TagService.List
-    file: tags.go
     documented_response: array
     actual_response: list-envelope
 server_error_codes: [a, b, c, d, e, f, g, h, i, j]
@@ -1552,4 +1540,201 @@ func TestStaleUndocumentedRequestBodyIsReported(t *testing.T) {
 
 	assertFinding(t, runLocal(t, repo),
 		"`delete /tags/{tag_id}` records an undocumented request body and the client sends no body at all")
+}
+
+// --- values, not just names ------------------------------------------------------
+//
+// A review sent four requests past this gate with every documented name in place
+// and the wrong thing under each: a parameter the contract had retyped, a params
+// struct wiring `q` to the Slug field, two JSON tags swapped on a write model, and
+// the two namespace headers crossed. These are those four, plus the two response
+// cases in the same family.
+
+// TestRetypedQueryParameterIsReported: the contract retypes a parameter and the
+// client keeps sending a string. Both names are present; only the value differs.
+func TestRetypedQueryParameterIsReported(t *testing.T) {
+	repo := stageRepo(t)
+	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
+		surface := "2"
+		if !strings.Contains(spec, "-v2") {
+			surface = "1"
+		}
+		edit(t, filepath.Join(repo, "docs", spec),
+			"operationId: api_v"+surface+"_tags_list",
+			"      - in: query\n        name: q\n        schema:\n          type: string\n",
+			"      - in: query\n        name: q\n        schema:\n          type: integer\n")
+	}
+
+	assertFinding(t, runLocal(t, repo),
+		"the query parameter `q` is documented as `integer` and the client sends")
+}
+
+// TestMiswiredQueryValueIsReported: `q` carries the value the driver supplied for
+// `slug`, so the public Query input is ignored. Every name is still right.
+func TestMiswiredQueryValueIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["get /tags"]
+	observed.Query["q"] = observed.Query["slug"]
+	in.Conformance.Observations["get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"the query parameter `q` carries the value the driver supplied for `slug`")
+}
+
+// TestMiswiredBodyValueIsReported is the same on a write: two JSON tags swapped.
+func TestMiswiredBodyValueIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["post /tags"]
+	observed.Body["name"], observed.Body["slug"] = observed.Body["slug"], observed.Body["name"]
+	in.Conformance.Observations["post /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"the body property `name` carries the value the driver supplied for `slug`",
+		"the body property `slug` carries the value the driver supplied for `name`")
+}
+
+// TestCrossedNamespaceHeadersAreReported: both header names present, each carrying
+// the other's value, so every namespaced call targets the wrong scope pair.
+func TestCrossedNamespaceHeadersAreReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["get /tags"]
+	observed.Headers["X-Namespace-Type"], observed.Headers["X-Namespace-Id"] =
+		observed.Headers["X-Namespace-Id"], observed.Headers["X-Namespace-Type"]
+	in.Conformance.Observations["get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in), "carries the value the driver supplied for `x-namespace-")
+}
+
+// TestMissingClientHeaderOnOneOperationIsReported: client_headers means EVERY
+// versioned request. Requiring each name to have been seen somewhere let a client
+// drop X-Tenant-ID from every request carrying a body while the reads kept it --
+// every write losing its tenant scope, reported as nothing at all.
+func TestMissingClientHeaderOnOneOperationIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["post /tags"]
+	delete(observed.Headers, "X-Tenant-Id")
+	in.Conformance.Observations["post /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"`post /tags` does not carry `X-Tenant-Id`, which client_headers records as sent on every versioned request")
+}
+
+// TestClientHeaderOnHealthIsReported is the other half of that rule: the probes
+// authenticate nobody, so a credential leaking onto them is a finding.
+func TestClientHeaderOnHealthIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["get /health/live"]
+	observed.Headers["Authorization"] = "Bearer leaked"
+	in.Conformance.Observations["get /health/live"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"carries `Authorization`, and the unversioned probes authenticate nobody")
+}
+
+// TestSwappedResponseTagsAreReported is the defect a round trip structurally
+// cannot see: the same tags decode and re-encode, so identical bytes come back
+// while the caller reads the server's name out of Tag.Slug. Only the declaration
+// knows which field is meant to carry which property.
+func TestSwappedResponseTagsAreReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	fields, ok := in.SDK.ModelFields("Tag")
+	if !ok {
+		t.Fatal("no Tag model")
+	}
+	if fields["name"] != "Name" || fields["slug"] != "Slug" {
+		t.Fatalf("the model no longer has the fields this test swaps: %v", fields)
+	}
+	// The check itself, applied to a swapped pair.
+	for property, field := range map[string]string{"name": "Slug", "slug": "Name"} {
+		if SnakeCase(field) == property {
+			t.Errorf("SnakeCase(%q) matched %q; the swap would not be reported", field, property)
+		}
+	}
+}
+
+// TestModelFieldNamesAreNotVacuous: the convention really is checked, over real
+// fields, including the acronym spellings it has to get right.
+func TestModelFieldNamesAreNotVacuous(t *testing.T) {
+	in := load(t, repoRoot, "")
+	checked := 0
+	for _, model := range []string{"Tag", "Vocabulary", "TagAlias", "Assignment", "AuditLog"} {
+		fields, ok := in.SDK.ModelFields(model)
+		if !ok || len(fields) == 0 {
+			t.Errorf("%s has no fields to check", model)
+			continue
+		}
+		checked += len(fields)
+	}
+	if checked < 50 {
+		t.Errorf("only %d fields take part in the name check", checked)
+	}
+	for name, want := range map[string]string{
+		"TagID": "tag_id", "ApplicationID": "application_id", "ID": "id",
+		"UsageCount": "usage_count", "NamespaceType": "namespace_type",
+	} {
+		if got := SnakeCase(name); got != want {
+			t.Errorf("SnakeCase(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestDuplicateDriverIsRejected: indexing drivers by operation let a wrong-route
+// duplicate be overwritten by a correct one, and the gate saw only the correct
+// evidence.
+func TestDuplicateDriverIsRejected(t *testing.T) {
+	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := Driver{
+		Op:  "get /tags",
+		SDK: "TagService.List",
+		Call: func(ctx context.Context, env *Env) (any, error) {
+			return env.Client.Tags.List(ctx, nil)
+		},
+	}
+
+	conf, err := RunConformance(spec, cov, []Driver{driver, driver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conf.Errors["get /tags"]; err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("a duplicate driver was accepted: %v", err)
+	}
+}
+
+// TestDriverWithInconsistentOptionsIsReported: the second execution's request used
+// to be discarded except for its decoded body, so a driver that passed its options
+// once and not the other time was invisible.
+func TestDriverWithInconsistentOptionsIsReported(t *testing.T) {
+	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := RunConformance(spec, cov, []Driver{{
+		Op:  "get /tags/{tag_id}",
+		SDK: "TagService.Get",
+		Call: func(ctx context.Context, env *Env) (any, error) {
+			id := env.Path("tag_id")
+			if id == "TAGID1" {
+				return env.Client.Tags.Get(ctx, id, readScope()...)
+			}
+			return env.Client.Tags.Get(ctx, id)
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conf.Errors["get /tags/{tag_id}"]; err == nil || !strings.Contains(err.Error(), "different requests") {
+		t.Errorf("a driver whose two executions differed was accepted: %v", err)
+	}
 }

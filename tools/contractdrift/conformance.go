@@ -58,18 +58,24 @@ type Observation struct {
 	Method string
 	Path   string
 
-	// Query is the set of query parameter names the client actually sent.
-	Query map[string]bool
+	// Query, Headers and Body are what the client sent, VALUES AND ALL.
+	//
+	// Names alone were not enough, and a review proved it four ways: a parameter
+	// retyped in the contract while the client kept sending a string, a params
+	// struct wired so `q` carried the Slug field, two JSON tags swapped on a write
+	// model, and the two namespace headers crossed. Every one of those keeps every
+	// name in place and sends the wrong thing under it.
+	//
+	// What makes the values checkable is that each driver sends a value naming the
+	// wire field it belongs to -- see driverValue in drivers.go. A value that
+	// arrives under the wrong name says so on sight.
+	Query   map[string]string
+	Headers map[string]string
 
-	// Headers is the set of contract-relevant header names it sent -- the X-*
-	// family, which is where the namespace axis lives.
-	Headers map[string]bool
-
-	// Body is the set of top-level JSON keys the request body carried. Empty for
-	// a bodyless request, and that difference matters: a write that stopped
-	// sending its payload emits the same method, path and query as one that still
-	// does.
-	Body map[string]bool
+	// Body is the top-level JSON of the request body, empty for a bodyless
+	// request. That difference matters on its own: a write that stopped sending
+	// its payload emits the same method, path and query as one that still does.
+	Body map[string]json.RawMessage
 
 	// CallErr is the error the method returned, if any. A decode failure against
 	// a schema-derived response body lands here, and that is the point.
@@ -192,7 +198,17 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 		Errors:       map[string]error{},
 	}
 
+	declared := map[string]bool{}
 	for _, driver := range drivers {
+		// A duplicate silently overwrote the first entry's observation, so a
+		// wrong-route driver followed by a correct one for the same operation
+		// produced green.
+		if declared[driver.Op] {
+			conf.Errors[driver.Op] = fmt.Errorf("drivers.go declares %q more than once; the later call would overwrite the earlier one's evidence", driver.Op)
+			continue
+		}
+		declared[driver.Op] = true
+
 		var (
 			seen    [2]Observation
 			failure error
@@ -210,10 +226,12 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 			continue
 		}
 		// The two executions differ only in the values substituted into the path,
-		// so anything else differing means the client's request depends on them.
-		if seen[0].Key() != seen[1].Key() {
-			conf.Errors[driver.Op] = fmt.Errorf("the route depends on the values passed: %q with one set of ids and %q with another",
-				seen[0].Key(), seen[1].Key())
+		// so ANY other difference means the client's request depends on them --
+		// and comparing only the route let a driver that passed its options on one
+		// execution and not the other go unnoticed, since the first execution
+		// supplied all the request-shape evidence.
+		if diff := requestDiff(seen[0], seen[1]); diff != "" {
+			conf.Errors[driver.Op] = fmt.Errorf("the two executions sent different requests: %s", diff)
 			continue
 		}
 		// The request side is the first pass's; the null witness's decoded value is
@@ -224,6 +242,69 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 		conf.Observations[driver.Op] = observation
 	}
 	return conf, nil
+}
+
+// requestDiff describes the first difference between two executions' requests,
+// ignoring the path values that are supposed to differ.
+func requestDiff(a, b Observation) string {
+	if a.Key() != b.Key() {
+		return fmt.Sprintf("routes %q and %q", a.Key(), b.Key())
+	}
+	if d := diffStringMaps("query parameter", a.Query, b.Query); d != "" {
+		return d
+	}
+	if d := diffStringMaps("header", a.Headers, b.Headers); d != "" {
+		return d
+	}
+	aBody := map[string]string{}
+	for k, v := range a.Body {
+		aBody[k] = string(v)
+	}
+	bBody := map[string]string{}
+	for k, v := range b.Body {
+		bBody[k] = string(v)
+	}
+	return diffStringMaps("body property", aBody, bBody)
+}
+
+func diffStringMaps(what string, a, b map[string]string) string {
+	for _, key := range sortedStrings(a) {
+		bv, ok := b[key]
+		if !ok {
+			return fmt.Sprintf("%s %s sent once and not the second time", what, key)
+		}
+		if a[key] != bv && !pathSentinelValue(a[key]) && !pathSentinelValue(bv) {
+			return fmt.Sprintf("%s %s carried %q then %q", what, key, a[key], bv)
+		}
+	}
+	for _, key := range sortedStrings(b) {
+		if _, ok := a[key]; !ok {
+			return fmt.Sprintf("%s %s sent only the second time", what, key)
+		}
+	}
+	return ""
+}
+
+// pathSentinelValue reports whether a value is one of the per-execution path
+// sentinels, which are meant to differ between the two runs.
+func pathSentinelValue(value string) bool {
+	for _, set := range pathValues {
+		for _, v := range set {
+			if value == v {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sortedStrings(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // runDriver executes one driver once and records what it did.
@@ -326,14 +407,22 @@ func normalizeObservedPath(path string, values map[string]string) string {
 	return strings.Join(parts, "/")
 }
 
-// headerNames records the contract-relevant request headers. The X- family is
-// where the namespace axis lives, and the rest (Authorization, Accept,
-// User-Agent) are transport concerns no operation documents.
-func headerNames(header http.Header) map[string]bool {
-	out := map[string]bool{}
-	for name := range header {
-		if strings.HasPrefix(strings.ToLower(name), "x-") {
-			out[http.CanonicalHeaderKey(name)] = true
+// recordedHeaders are the request headers this gate reasons about: the X- family,
+// where the namespace and tenant axes live, and Authorization -- which no
+// operation documents but which the health probes must NOT carry, and that is a
+// rule worth checking rather than assuming. Accept, Content-Type and User-Agent
+// are transport decoration and are left out.
+func headerNames(header http.Header) map[string]string {
+	out := map[string]string{}
+	for name, values := range header {
+		canonical := http.CanonicalHeaderKey(name)
+		if !strings.HasPrefix(strings.ToLower(name), "x-") && canonical != "Authorization" {
+			continue
+		}
+		if len(values) > 0 {
+			out[canonical] = values[0]
+		} else {
+			out[canonical] = ""
 		}
 	}
 	return out
@@ -341,35 +430,35 @@ func headerNames(header http.Header) map[string]bool {
 
 // bodyKeys reads the top-level JSON keys of a request body. The body is consumed
 // and restored, because the client still owns the request.
-func bodyKeys(req *http.Request) map[string]bool {
+func bodyKeys(req *http.Request) map[string]json.RawMessage {
 	if req.Body == nil || req.GetBody == nil {
-		return map[string]bool{}
+		return map[string]json.RawMessage{}
 	}
 	body, err := req.GetBody()
 	if err != nil {
-		return map[string]bool{}
+		return map[string]json.RawMessage{}
 	}
 	defer func() { _ = body.Close() }()
 
 	raw, err := io.ReadAll(body)
 	if err != nil || len(raw) == 0 {
-		return map[string]bool{}
+		return map[string]json.RawMessage{}
 	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &object); err != nil {
-		return map[string]bool{}
+		return map[string]json.RawMessage{}
 	}
-	out := make(map[string]bool, len(object))
-	for key := range object {
-		out[key] = true
-	}
-	return out
+	return object
 }
 
-func queryNames(values url.Values) map[string]bool {
-	out := map[string]bool{}
-	for name := range values {
-		out[name] = true
+func queryNames(values url.Values) map[string]string {
+	out := map[string]string{}
+	for name, v := range values {
+		if len(v) > 0 {
+			out[name] = v[0]
+		} else {
+			out[name] = ""
+		}
 	}
 	return out
 }
@@ -489,7 +578,7 @@ func synthesizeSchema(spec *Spec, name string, depth int, w witness) (map[string
 	out := map[string]any{}
 	for i := 0; i+1 < len(props.Content); i += 2 {
 		key := props.Content[i].Value
-		value, err := synthesizeValue(spec, props.Content[i+1], depth, w)
+		value, err := synthesizeValue(spec, props.Content[i+1], depth, w, key)
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", name, key, err)
 		}
@@ -498,7 +587,7 @@ func synthesizeSchema(spec *Spec, name string, depth int, w witness) (map[string
 	return out, nil
 }
 
-func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness) (any, error) {
+func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness, property string) (any, error) {
 	// Value yaml.Node fields, never pointers: yaml.v3 leaves a *yaml.Node field
 	// nil rather than filling it, so `items` and `allOf` decoded as absent and
 	// every array and every nullable reference fell through to the unconstrained
@@ -533,7 +622,7 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness) (any, er
 	// that member; more than one is a composition this stub does not model, and
 	// guessing at it would surface as a decode error blamed on the SDK.
 	if len(schema.AllOf) == 1 {
-		return synthesizeValue(spec, &schema.AllOf[0], depth+1, w)
+		return synthesizeValue(spec, &schema.AllOf[0], depth+1, w, property)
 	}
 	if len(schema.AllOf) > 1 {
 		return nil, fmt.Errorf("an allOf of %d members -- the response stub does not compose schemas", len(schema.AllOf))
@@ -552,7 +641,10 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness) (any, er
 		case "date":
 			return "2026-01-02", nil
 		}
-		return "contractdrift", nil
+		// The property's OWN name, in the same self-identifying form the drivers
+		// use. Every string used to be the same word, so two response fields with
+		// swapped JSON tags round-tripped indistinguishably.
+		return driverValue(property), nil
 	case "integer":
 		return 1, nil
 	case "number":
@@ -567,7 +659,7 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness) (any, er
 		if inline := mappingValue(node, "properties"); inline != nil {
 			out := map[string]any{}
 			for i := 0; i+1 < len(inline.Content); i += 2 {
-				value, err := synthesizeValue(spec, inline.Content[i+1], depth+1, w)
+				value, err := synthesizeValue(spec, inline.Content[i+1], depth+1, w, inline.Content[i].Value)
 				if err != nil {
 					return nil, err
 				}
@@ -580,7 +672,7 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness) (any, er
 		if schema.Items.Kind == 0 {
 			return []any{}, nil
 		}
-		item, err := synthesizeValue(spec, &schema.Items, depth+1, w)
+		item, err := synthesizeValue(spec, &schema.Items, depth+1, w, property)
 		if err != nil {
 			return nil, err
 		}
@@ -616,16 +708,6 @@ func mappingValue(node *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
-}
-
-// sortedNames renders a name set for a report line.
-func sortedNames(set map[string]bool) []string {
-	out := make([]string, 0, len(set))
-	for name := range set {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // sortedFields renders a decoded field set for a report line.

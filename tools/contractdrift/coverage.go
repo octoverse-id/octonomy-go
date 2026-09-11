@@ -74,12 +74,10 @@ type CoverageOperation struct {
 	Path   string `yaml:"path"`
 	Method string `yaml:"method"`
 
-	// SDK names the Go method as Receiver.Method, and File the file declaring it.
-	// Both empty when Unimplemented is set. The gate derives that method's real
-	// route and compares it with Path and Method above, so naming the wrong method
-	// is a finding rather than a pass.
-	SDK  string `yaml:"sdk"`
-	File string `yaml:"file"`
+	// SDK names the Go method as Receiver.Method, and is the human-facing label:
+	// the gate checks that the method exists, and drivers.go proves what it does.
+	// Empty when Unimplemented is set.
+	SDK string `yaml:"sdk"`
 
 	// Unimplemented is the recorded reason this operation has no SDK method. Its
 	// presence is what makes the gap a decision instead of an oversight.
@@ -99,13 +97,14 @@ type CoverageOperation struct {
 	UndocumentedRequestBody string `yaml:"undocumented_request_body"`
 
 	// ActualResponse is what the running server really returns, in the SDK's own
-	// vocabulary -- the closed set in actualResponses below. It is checked against
-	// the transport helper the method calls (doList yields a list envelope, doData
-	// a data envelope, and so on), so it states what the code does rather than what
-	// someone remembered. Where it differs from DocumentedResponse the server
-	// wins: every one of these was verified against a booted server, and the
-	// spec's generator cannot see the envelope because a renderer adds it below
-	// the serializers.
+	// vocabulary -- the closed set in actualResponses below.
+	//
+	// It is a REVIEWED FACT, established against a booted server, and it is what
+	// the gate's stub wraps its body in. So a row naming the wrong envelope usually
+	// hands the real client a shape it cannot decode -- but only usually: a method
+	// that decodes no payload is not asked to read one. Where it differs from
+	// DocumentedResponse the server wins, because the spec's generator cannot see
+	// the envelope at all: a renderer adds it below the serializers.
 	ActualResponse string `yaml:"actual_response"`
 }
 
@@ -216,8 +215,8 @@ func LoadCoverage(path string) (*Coverage, error) {
 			return nil, fmt.Errorf("%s: %s: path must not carry the /api/<version> prefix", path, op.Key())
 		case seen[op.Key()]:
 			return nil, fmt.Errorf("%s: %s is listed twice", path, op.Key())
-		case op.Unimplemented == "" && (op.SDK == "" || op.File == ""):
-			return nil, fmt.Errorf("%s: %s: needs either sdk+file or an unimplemented reason", path, op.Key())
+		case op.Unimplemented == "" && op.SDK == "":
+			return nil, fmt.Errorf("%s: %s: needs either an sdk method or an unimplemented reason", path, op.Key())
 		case op.Unimplemented != "" && op.SDK != "":
 			return nil, fmt.Errorf("%s: %s: cannot be both implemented and unimplemented", path, op.Key())
 		case op.SDK != "" && !strings.Contains(op.SDK, "."):

@@ -25,10 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **The SDK side is driven, not read.** For each operation the gate calls the method with every
     parameter populated, against a stub that records the request and answers with a body
     **synthesized from the vendored schema**. The request is what it compares against the contract —
-    route, query parameters, headers, and request-body properties, in both directions — and the
-    response is what it decodes, twice: once with every property populated and once with every
-    `nullable` property null, so a field the model lacks, a type it cannot read, and a nullable state
-    it cannot hold are all reported. **This found a real gap on its first run** — `VocabularyListParams` is missing `q` and `slug`
+    route, query parameters, headers, and request-body properties, **names and values**, in both
+    directions. Values are checkable because each driver sends a value naming the wire field it
+    belongs to, so a parameter retyped in the contract, a params struct wiring one input to another's
+    name, two JSON tags swapped on a write model, and the two namespace headers crossed are each
+    reported — every one of which keeps all the right names in place. The response is what it decodes,
+    twice: once with every property populated and once with every `nullable` property null, so a field
+    the model lacks, a type it cannot read, and a nullable state it cannot hold are all reported. And
+    because a JSON round trip structurally cannot see two response tags swapped — the same tags decode
+    and re-encode — each model's Go field name is checked against the property it decodes. **This found a real gap on its first run** — `VocabularyListParams` is missing `q` and `slug`
     ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)). An earlier draft read the package
     statically instead and was replaced: inferring control flow from an AST answered *clean* for a
     method that stopped passing its query builder, one that branched between two private helpers, and

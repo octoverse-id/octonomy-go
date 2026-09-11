@@ -71,6 +71,23 @@ type Operation struct {
 	RequestModel string
 }
 
+// ParamSchema returns the flattened `schema` of one documented parameter, with
+// the `schema.` prefix stripped -- so `type`, `format` and `items.type` are read
+// the same way wherever they come from.
+func (o *Operation) ParamSchema(in, name string) map[string]string {
+	flat, ok := o.Params[in+" "+name]
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	for key, value := range flat {
+		if rest, found := strings.CutPrefix(key, "schema."); found {
+			out[rest] = value
+		}
+	}
+	return out
+}
+
 // HeaderParams returns the operation's documented header parameter names.
 func (o *Operation) HeaderParams() []string {
 	var out []string
@@ -340,6 +357,29 @@ func refIn(flat map[string]string) string {
 		}
 	}
 	return ""
+}
+
+// PropertySchema returns the flattened schema of one property of a component
+// schema, in the same shape ParamSchema returns.
+func (s *Spec) PropertySchema(schema, property string) map[string]string {
+	node, ok := s.Schemas[schema]
+	if !ok {
+		return nil
+	}
+	root := node
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		root = root.Content[0]
+	}
+	props := mappingValue(root, "properties")
+	if props == nil {
+		return nil
+	}
+	for i := 0; i+1 < len(props.Content); i += 2 {
+		if props.Content[i].Value == property {
+			return flatten(props.Content[i+1])
+		}
+	}
+	return nil
 }
 
 func schemaName(ref string) string {
