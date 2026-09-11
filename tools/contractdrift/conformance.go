@@ -152,11 +152,22 @@ type recorder struct {
 	respond func(*http.Request) (*http.Response, error)
 
 	requests []*http.Request
+
+	// synthErr is the stub's own failure to build a body, kept apart from the
+	// client's failure to read one. Without this the two are indistinguishable
+	// downstream: a schema shape the stub cannot model reaches the SDK as a
+	// transport error and gets reported as the SDK failing to handle a response,
+	// which blames the client for the gate's own gap.
+	synthErr error
 }
 
 func (rec *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	rec.requests = append(rec.requests, req)
-	return rec.respond(req)
+	resp, err := rec.respond(req)
+	if err != nil {
+		rec.synthErr = err
+	}
+	return resp, err
 }
 
 // RunConformance drives the SDK, twice per operation.
@@ -241,6 +252,9 @@ func runDriver(spec *Spec, op *Operation, row CoverageOperation, driver Driver, 
 
 	value, callErr := driver.Call(context.Background(), &Env{Client: client, Health: health, values: values})
 
+	if rec.synthErr != nil {
+		return Observation{}, rec.synthErr
+	}
 	switch {
 	case len(rec.requests) == 0:
 		return Observation{}, fmt.Errorf("the call reached no request: %v", callErr)

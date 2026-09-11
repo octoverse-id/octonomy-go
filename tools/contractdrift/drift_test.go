@@ -1478,3 +1478,21 @@ func editTagSchema(t *testing.T, path, old, replacement string) {
 	}
 	write(t, path, src[:start]+segment+src[end:])
 }
+
+// TestUnsynthesizableSchemaBlamesTheGate: a schema shape the stub cannot build a
+// body from must be reported as the GATE's gap, not as the SDK failing to handle
+// a response. The two reach the client identically -- as a transport error -- and
+// telling them apart is the difference between "teach the tool" and "fix the
+// client".
+func TestUnsynthesizableSchemaBlamesTheGate(t *testing.T) {
+	repo := stageRepo(t)
+	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
+		editTagSchema(t, filepath.Join(repo, "docs", spec),
+			"        usage_count:\n          type: integer\n",
+			"        usage_count:\n          allOf:\n          - type: integer\n          - type: string\n")
+	}
+
+	assertFinding(t, runLocal(t, repo),
+		"the response stub could not build a body",
+		"allOf of 2 members")
+}
