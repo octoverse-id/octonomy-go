@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
-.PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check version-check \
-	dev-server dev-server-down dev-server-logs smoke
+.PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check require-tools \
+	version-check dev-server dev-server-down dev-server-logs smoke
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -23,7 +23,7 @@ fmt-check: ## Fail if any file is not gofmt-clean
 vet: ## Run go vet
 	go vet ./...
 
-lint: ## Run golangci-lint (skipped if not installed; CI runs it)
+lint: ## Run golangci-lint (skipped if not installed; release-check requires it)
 	@if command -v golangci-lint >/dev/null 2>&1; then \
 		golangci-lint run; \
 	else \
@@ -74,7 +74,7 @@ cover: ## Run tests and print total coverage
 	go test -race -coverprofile=coverage.out ./...
 	go tool cover -func=coverage.out | tail -1
 
-vuln: ## Run govulncheck (skipped if not installed; CI runs it)
+vuln: ## Run govulncheck (skipped if not installed; release-check requires it)
 	@if command -v govulncheck >/dev/null 2>&1; then \
 		govulncheck ./...; \
 	else \
@@ -105,5 +105,41 @@ version-check: ## Verify version.go matches the latest CHANGELOG.md release head
 	fi; \
 	echo "version OK: $$code_ver"
 
-release-check: fmt-check vet lint test vuln examples version-check ## Full pre-release gate
-	@echo "release-check passed"
+# The release gate's tool check, deliberately NOT inside `lint` and `vuln`.
+#
+# Those two skip with a notice when their binary is missing, which is right for a
+# fresh clone: `make lint` should not hard-fail a contributor over a dev tool CI
+# installs anyway. What was wrong is that `release-check` INHERITED that skip.
+# Neither `else` branch exits non-zero, so on a machine without the tools a green
+# gate proved that neither ran -- in front of a release that cannot be recalled,
+# since proxy.golang.org keeps a version permanently and `retract` is inert for
+# the Go 1.13 consumers the compat line exists to serve (#53).
+#
+# It is a live case rather than a hypothetical: golangci-lint installs under the
+# active toolchain's GOPATH, so it is off PATH by default in this project's own
+# dev setup and `make lint` printing "skipping" is the normal local experience.
+#
+# Both binaries are reported in one run rather than failing at the first, so you
+# install them once instead of finding the second after fixing the first.
+require-tools: ## Verify the tools release-check needs are on PATH
+	@ok=1; \
+	command -v golangci-lint >/dev/null 2>&1 || { ok=0; \
+		echo "missing: golangci-lint  -- install: https://golangci-lint.run/welcome/install/"; }; \
+	command -v govulncheck >/dev/null 2>&1 || { ok=0; \
+		echo "missing: govulncheck    -- install: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest"; }; \
+	if [ "$$ok" -eq 0 ]; then \
+		echo "release-check runs lint and vuln for real and cannot do so without these."; \
+		echo "A tool installed with \`go install\` lands in \$$(go env GOPATH)/bin -- check that it is on PATH."; \
+		exit 1; \
+	fi; \
+	echo "release tools OK: golangci-lint, govulncheck"
+
+# Staged through a sub-make rather than listed as peer prerequisites, so that
+# require-tools genuinely runs FIRST. Make orders prerequisites only in a serial
+# run: under `make -j release-check` they may all start at once, which would
+# leave the tool check racing the full race-enabled test suite it exists to run
+# ahead of. As a prerequisite of a recipe that then invokes the rest, the
+# ordering is a property of the target rather than of how it was invoked.
+release-check: require-tools ## Full pre-release gate
+	@$(MAKE) --no-print-directory fmt-check vet lint test vuln examples version-check
+	@echo "release-check passed: all seven checks ran"

@@ -38,6 +38,13 @@ type Tag struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// identityFields makes a blank id an error rather than a zero-valued Tag with a
+// nil error (#40). "id" is required on the Tag schema in both vendored
+// contracts.
+func (t Tag) identityFields() []identityField {
+	return []identityField{{name: "id", value: t.ID}}
+}
+
 // TagCreate is the request body for creating a tag. Name, Slug, and Type are
 // required; the remaining fields are optional.
 type TagCreate struct {
@@ -54,15 +61,40 @@ type TagCreate struct {
 
 // TagUpdate is the PATCH body for updating a tag. Only non-nil fields are sent.
 type TagUpdate struct {
-	ApplicationID *string  `json:"application_id,omitempty"`
-	Name          *string  `json:"name,omitempty"`
-	Slug          *string  `json:"slug,omitempty"`
-	Type          *string  `json:"type,omitempty"`
-	Description   *string  `json:"description,omitempty"`
-	ParentID      *string  `json:"parent_id,omitempty"`
-	VocabularyID  *string  `json:"vocabulary_id,omitempty"`
-	Metadata      Metadata `json:"metadata,omitempty"`
-	IsActive      *bool    `json:"is_active,omitempty"`
+	ApplicationID *string `json:"application_id,omitempty"`
+	Name          *string `json:"name,omitempty"`
+	Slug          *string `json:"slug,omitempty"`
+	Type          *string `json:"type,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	ParentID      *string `json:"parent_id,omitempty"`
+	VocabularyID  *string `json:"vocabulary_id,omitempty"`
+
+	// Metadata REPLACES the stored object rather than merging into it, and is a
+	// POINTER so that "clear it" can be said at all:
+	//
+	//	&Metadata{"team": "growth"}  -> replaces the stored object
+	//	&Metadata{}                  -> sends "metadata": {}, emptying it
+	//	nil                          -> omits the key, leaving it untouched
+	//
+	// The pointer is load-bearing, not stylistic. Metadata is map[string]any,
+	// and encoding/json counts a zero-length map as empty under omitempty -- so
+	// while this was a plain Metadata, Metadata{} sent NO metadata key, and a
+	// caller asking to clear the object got a 200 with the old object still in
+	// place and no error: a request that looked like it worked and silently did
+	// nothing, which is the failure this SDK refuses everywhere else (#37).
+	// Dropping omitempty instead is not an option -- it would put
+	// "metadata": null on every PATCH that does not touch metadata.
+	//
+	// A pointer to a NIL map (var m Metadata; u.Metadata = &m) marshals as
+	// "metadata": null, which is neither of the two intents above. Use
+	// &Metadata{} to clear.
+	//
+	// VocabularyUpdate and TagAliasUpdate carry the same field for the same
+	// reason and point here; all three moved together so that no resource is the
+	// pointer-typed outlier.
+	Metadata *Metadata `json:"metadata,omitempty"`
+
+	IsActive *bool `json:"is_active,omitempty"`
 }
 
 // TagListParams filters and pages the tag list. A nil *params lists with server

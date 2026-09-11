@@ -603,3 +603,39 @@ func TestResources_ReplaceTagsAddressesTheNamedResource(t *testing.T) {
 		t.Fatalf("ReplaceTags: %v", err)
 	}
 }
+
+// The row-level half of the replace composite, for the reason given on
+// TestAssignments_BulkAssign_ARowThatWouldBeZeroValuedIsAnError: the counts can
+// be right while a row is blank (#40).
+func TestResources_ReplaceTags_ARowThatWouldBeZeroValuedIsAnError(t *testing.T) {
+	tests := []struct {
+		name string
+		rows any
+		want string
+	}{
+		{"null row", []any{nil}, "element 0 is null"},
+		{"empty row", []any{map[string]any{}}, "element 0 is an empty object"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, http.StatusOK, map[string]any{"data": map[string]any{
+					"created": 1, "removed": 0, "tags": tt.rows,
+				}})
+			})
+
+			res, err := c.Resources.ReplaceTags(context.Background(), "order", "ord_9", ResourceReplace{
+				ApplicationID: "commerce", TagIDs: []string{"tag_1"},
+			})
+			if err == nil {
+				t.Fatalf("expected an error, got %+v", res)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error should say %q, got: %v", tt.want, err)
+			}
+			if !strings.Contains(err.Error(), "tags") {
+				t.Errorf("error should name the array, got: %v", err)
+			}
+		})
+	}
+}

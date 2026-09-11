@@ -30,7 +30,7 @@ make cover       # prints total coverage
 make examples    # go build ./examples/...
 make smoke       # integration smoke test against a booted server (see below)
 make check       # fmt-check + vet + build (fast pre-push gate)
-make release-check  # the full pre-release gate
+make release-check  # the full pre-release gate (requires the tools below)
 ```
 
 Optional local tools (CI installs them automatically):
@@ -41,6 +41,11 @@ go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 # vulnerability scanner
 GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest
 ```
+
+They are optional for day-to-day work — `make lint` and `make vuln` skip with a notice when their
+binary is absent — but **`make release-check` requires both** and fails naming whichever is missing,
+so a green gate means every check in it actually ran (#53). A tool installed this way lands in
+`$(go env GOPATH)/bin`, which is not on `PATH` by default; add it there.
 
 `GOTOOLCHAIN=auto` on that second line is load-bearing whenever the scanner's own
 minimum Go has moved ahead of yours — x/vuln v1.8.0 requires go 1.26, so on a go1.25

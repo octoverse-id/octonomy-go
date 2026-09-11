@@ -104,6 +104,12 @@ type AuditLog struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// identityFields makes a blank id an error, as on Tag (#40). Audit rows arrive
+// only in list pages, where a blank row is least likely to be noticed.
+func (a AuditLog) identityFields() []identityField {
+	return []identityField{{name: "id", value: a.ID}}
+}
+
 // AuditLogListParams filters and pages the audit log collection. A nil *params
 // lists with server defaults.
 //

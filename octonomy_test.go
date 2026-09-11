@@ -622,3 +622,331 @@ func TestBaseURL_WithPathPrefix(t *testing.T) {
 		})
 	}
 }
+
+// --- Envelope CONTENTS ------------------------------------------------------
+//
+// One level in from the envelope tests above. {"data": {}} is well formed and
+// carries the key, so it passes decodeEnvelope; encoding/json then fills in
+// nothing and every single-resource call returns a zero-valued struct with a nil
+// error (#40). The id makes that obvious to a caller who reads it -- which is
+// why the line was originally drawn at the envelope -- but AssignedAt.IsZero(),
+// an empty Slug, or a nil Metadata is a plausible-looking blank instead.
+
+// Every resource this SDK decodes is walked, because the uniformity IS the fix:
+// #40 exists as an issue rather than a line in the PR that found it precisely
+// because fixing one of them would have made the other three the outliers.
+func TestDoData_ContentsThatWouldDecodeToAZeroValue(t *testing.T) {
+	routes := []struct {
+		name string
+		call func(*Client) error
+	}{
+		{"tags", func(c *Client) error {
+			_, err := c.Tags.Get(context.Background(), "tag_1")
+			return err
+		}},
+		{"vocabularies", func(c *Client) error {
+			_, err := c.Vocabularies.Get(context.Background(), "voc_1")
+			return err
+		}},
+		{"tag-aliases", func(c *Client) error {
+			_, err := c.Aliases.Get(context.Background(), "alias_1")
+			return err
+		}},
+		{"tag-assignments", func(c *Client) error {
+			_, err := c.Assignments.Create(context.Background(), AssignmentCreate{
+				ApplicationID: "commerce", TagID: String("tag_1"),
+				ResourceType: "order", ResourceID: "ord_9",
+			})
+			return err
+		}},
+		{"tag-resolution", func(c *Client) error {
+			_, err := c.Tags.Resolve(context.Background(), "on-sale", nil)
+			return err
+		}},
+	}
+
+	bodies := []struct {
+		name string
+		body string
+		want string // a fragment the message must name
+	}{
+		{"empty data object", `{"data":{}}`, "empty object"},
+		{"data is null", `{"data":null}`, "null"},
+		{"data is a string", `{"data":"tag_1"}`, "not a resource object"},
+		{"data is a number", `{"data":0}`, "not a resource object"},
+		// The spec claims a bare array for two of the composite routes, so this
+		// is the shape a spec-faithful server would send (AGENTS.md).
+		{"data is an array", `{"data":[{"id":"tag_1"}]}`, "is an array"},
+		// Whitespace must not smuggle an empty object past a byte check.
+		{"empty data object with whitespace", `{"data": {  }  }`, "empty object"},
+	}
+
+	for _, route := range routes {
+		for _, body := range bodies {
+			t.Run(route.name+"/"+body.name, func(t *testing.T) {
+				c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(body.body))
+				})
+
+				err := route.call(c)
+				if err == nil {
+					t.Fatal("expected an error, got nil")
+				}
+				if !strings.Contains(err.Error(), body.want) {
+					t.Errorf("error should name the shape (%q), got: %v", body.want, err)
+				}
+				if !strings.Contains(err.Error(), "data") {
+					t.Errorf("error should name the position, got: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// A blank row inside an otherwise good page is worse than a blank single
+// resource, not better: the length is right, the pagination is right, and one
+// row among fifty is not something a caller inspects. The message has to name
+// the index, because nothing else in the response points at the bad row.
+func TestDoList_RejectsAnElementThatWouldBeZeroValued(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"null element", `{"data":[null],"pagination":{"limit":50}}`, "element 0 is null"},
+		{"empty object element", `{"data":[{}],"pagination":{"limit":50}}`, "element 0 is an empty object"},
+		{
+			"a good row does not excuse a bad one",
+			`{"data":[{"id":"tag_1"},{}],"pagination":{"limit":50}}`,
+			"element 1 is an empty object",
+		},
+		{"nested array element", `{"data":[[{"id":"tag_1"}]],"pagination":{"limit":50}}`, "element 0 is an array"},
+		{"scalar element", `{"data":["tag_1"],"pagination":{"limit":50}}`, "element 0 is not a resource object"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := tt.body
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(body))
+			})
+
+			page, err := c.Tags.List(context.Background(), nil)
+			if err == nil {
+				t.Fatalf("expected an error, got page %+v", page)
+			}
+			if page != nil {
+				t.Errorf("page = %+v, want nil alongside the error", page)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error should say %q, got: %v", tt.want, err)
+			}
+		})
+	}
+}
+
+// The other half of #40, and the half the shape check cannot do. A NON-empty
+// object is still a well-formed object: {"id": null} and {"wrong": true} both
+// decode to a zero-valued resource with a nil error, because encoding/json
+// ignores a null for a string field and skips unknown keys. Each model names the
+// field that identifies its row, and a blank one after a successful decode means
+// the bytes did not carry it.
+func TestDoData_ContentsThatDecodeToABlankIdentity(t *testing.T) {
+	routes := []struct {
+		name string
+		call func(*Client) error
+	}{
+		{"tags", func(c *Client) error {
+			_, err := c.Tags.Get(context.Background(), "tag_1")
+			return err
+		}},
+		{"vocabularies", func(c *Client) error {
+			_, err := c.Vocabularies.Get(context.Background(), "voc_1")
+			return err
+		}},
+		{"tag-aliases", func(c *Client) error {
+			_, err := c.Aliases.Get(context.Background(), "alias_1")
+			return err
+		}},
+		{"tag-assignments", func(c *Client) error {
+			_, err := c.Assignments.Create(context.Background(), AssignmentCreate{
+				ApplicationID: "commerce", TagID: String("tag_1"),
+				ResourceType: "order", ResourceID: "ord_9",
+			})
+			return err
+		}},
+	}
+
+	bodies := []struct {
+		name string
+		body string
+	}{
+		{"id is null", `{"data":{"id":null,"slug":"featured"}}`},
+		{"id is empty", `{"data":{"id":"","slug":"featured"}}`},
+		{"id renamed", `{"data":{"identifier":"tag_1","slug":"featured"}}`},
+		{"only unknown fields", `{"data":{"wrong":true}}`},
+	}
+
+	for _, route := range routes {
+		for _, body := range bodies {
+			t.Run(route.name+"/"+body.name, func(t *testing.T) {
+				c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(body.body))
+				})
+
+				err := route.call(c)
+				if err == nil {
+					t.Fatal("expected an error, got nil")
+				}
+				if !strings.Contains(err.Error(), `no "id"`) {
+					t.Errorf("error should name the missing identity, got: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// The same check on the list path, and on the three models whose identity is not
+// spelled "id" -- a resource tag is identified by its assignment, and a tag's
+// resource by the resource it names.
+func TestDoList_ElementsThatDecodeToABlankIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+		call func(*Client) error
+	}{
+		{
+			"tag with a null id", `{"data":[{"id":null}],"pagination":{"limit":50}}`, `element 0 decoded with no "id"`,
+			func(c *Client) error {
+				_, err := c.Tags.List(context.Background(), nil)
+				return err
+			},
+		},
+		{
+			"good row then a blank one",
+			`{"data":[{"id":"tag_1"},{"slug":"orphan"}],"pagination":{"limit":50}}`,
+			`element 1 decoded with no "id"`,
+			func(c *Client) error {
+				_, err := c.Tags.List(context.Background(), nil)
+				return err
+			},
+		},
+		{
+			"resource tag with no assignment_id",
+			`{"data":[{"assigned_by":"someone"}],"pagination":{"limit":50}}`,
+			`element 0 decoded with no "assignment_id"`,
+			func(c *Client) error {
+				_, err := c.Resources.ListTags(context.Background(), "order", "ord_9",
+					&ResourceListTagsParams{ApplicationID: String("commerce")})
+				return err
+			},
+		},
+		{
+			"tag resource with no resource_id",
+			`{"data":[{"application_id":"commerce"}],"pagination":{"limit":50}}`,
+			`element 0 decoded with no "resource_id"`,
+			func(c *Client) error {
+				_, err := c.Tags.ListResources(context.Background(), "tag_1", nil)
+				return err
+			},
+		},
+		{
+			// ResourceTag hands back the tag INLINE rather than an id to look up,
+			// and both contracts mark "tag" required on it -- so a row carrying a
+			// blank one answers nothing while looking complete.
+			"resource tag whose inline tag is blank",
+			`{"data":[{"assignment_id":"asg_1","tag":{}}],"pagination":{"limit":50}}`,
+			`element 0 decoded with no "tag.id"`,
+			func(c *Client) error {
+				_, err := c.Resources.ListTags(context.Background(), "order", "ord_9",
+					&ResourceListTagsParams{ApplicationID: String("commerce")})
+				return err
+			},
+		},
+		{
+			"audit row with no id",
+			`{"data":[{"action":"tag.created"}],"pagination":{"limit":50}}`,
+			`element 0 decoded with no "id"`,
+			func(c *Client) error {
+				_, err := c.AuditLogs.List(context.Background(), nil)
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := tt.body
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(body))
+			})
+
+			err := tt.call(c)
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error should say %q, got: %v", tt.want, err)
+			}
+		})
+	}
+}
+
+// A composite's rows go through the same check: BulkAssignResult's counters can
+// all be right while a row it carries is blank.
+func TestComposites_RowsWithABlankIdentityAreErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string]any
+		want string
+		call func(*Client) error
+	}{
+		{
+			"bulk assign row with no id",
+			map[string]any{"created": 1, "existing": 0, "skipped": 0,
+				"assignments": []any{map[string]any{"tag_id": "tag_1"}}},
+			`assignments" element 0 decoded with no "id"`,
+			func(c *Client) error {
+				_, err := c.Assignments.BulkAssign(context.Background(), BulkAssign{
+					ApplicationID: "commerce", ResourceType: "order", ResourceID: "ord_9",
+					TagIDs: []string{"tag_1"},
+				})
+				return err
+			},
+		},
+		{
+			"replace row with no id",
+			map[string]any{"created": 1, "removed": 0,
+				"tags": []any{map[string]any{"slug": "featured"}}},
+			`tags" element 0 decoded with no "id"`,
+			func(c *Client) error {
+				_, err := c.Resources.ReplaceTags(context.Background(), "order", "ord_9", ResourceReplace{
+					ApplicationID: "commerce", TagIDs: []string{"tag_1"},
+				})
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, http.StatusOK, map[string]any{"data": tt.data})
+			})
+
+			err := tt.call(c)
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error should say %q, got: %v", tt.want, err)
+			}
+		})
+	}
+}

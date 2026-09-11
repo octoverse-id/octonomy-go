@@ -105,8 +105,6 @@ Each has an issue; none is a missing endpoint group.
 | Gap | Issue |
 | --- | ----- |
 | **`VocabularyListParams` is missing `q` and `slug`.** Both have been on `GET /vocabularies` since server 1.0.0 — not v2 drift but a gap against the contract the SDK already vendored. `TagListParams` has the matching pair and is complete. | [#36](https://github.com/octoverse-id/octonomy-go/issues/36) |
-| **`*Update.Metadata` cannot clear a metadata object** — `omitempty` swallows an empty map, so there is no way to send `{}`. | [#37](https://github.com/octoverse-id/octonomy-go/issues/37) |
-| **A 2xx whose `data` envelope holds the wrong object decodes to a zero-valued resource.** The envelope assertion catches a missing `data`, not a well-formed one carrying something else. | [#40](https://github.com/octoverse-id/octonomy-go/issues/40) |
 | **The tags-ordering caveats want revisiting** once the server adds an `ORDER BY` to the annotated tags list (upstream `octonomy#162`). | [#49](https://github.com/octoverse-id/octonomy-go/issues/49) |
 
 Deferred by design, not gaps: the webhook typed-event surface and `http.Handler`

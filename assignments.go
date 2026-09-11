@@ -40,6 +40,11 @@ type Assignment struct {
 	AssignedAt   time.Time `json:"assigned_at"`
 }
 
+// identityFields makes a blank id an error, as on Tag (#40).
+func (a Assignment) identityFields() []identityField {
+	return []identityField{{name: "id", value: a.ID}}
+}
+
 // AssignmentCreate is the request body for assigning a tag to a resource.
 // ApplicationID, ResourceType, and ResourceID are required.
 //
@@ -113,16 +118,15 @@ type BulkAssignResult struct {
 // UnmarshalJSON requires the keys a caller acts on, rather than letting an
 // unexpected object shape decode to a zero-valued result with a nil error.
 //
-// doData stops at the data envelope, which is the right line for a RESOURCE: a
-// zero-valued Assignment has an empty ID, and no caller mistakes that for an
-// answer. (It is not a perfect line -- an empty data object decodes to a blank
-// resource on every resource in this SDK, which is #40 -- but it is a uniform
-// one.) A composite of counters is different, and that is the whole reason
-// this method exists -- Created 0, Existing 0, Assignments empty is a perfectly
-// ordinary result, so a body whose keys the server renamed would be read as "the
-// tags were all already there" instead of as the contract break it is. The zero
-// value being indistinguishable from a real answer is exactly the #32 shape,
-// one level in from where doData catches it.
+// doData requires the data envelope to hold a non-empty object, which is the
+// right line for a RESOURCE: past that, a zero-valued Assignment has an empty ID
+// and no caller mistakes it for an answer. A composite of counters is different,
+// and that is the whole reason this method exists -- Created 0, Existing 0,
+// Assignments empty is a perfectly ordinary result, so a body whose keys the
+// server renamed would be read as "the tags were all already there" instead of
+// as the contract break it is. The zero value being indistinguishable from a
+// real answer is exactly the #32 shape, one level in from where doData catches
+// it.
 //
 // Skipped is deliberately NOT required: it is vestigial (always 0 on 3.1.x, see
 // above), so demanding it would turn the server dropping a dead field into a
@@ -160,12 +164,16 @@ func (r *BulkAssignResult) UnmarshalJSON(data []byte) error {
 	// that -- which is exactly why it is worth closing here rather than relying
 	// on every future caller to know.
 	out := BulkAssignResult{Created: *wire.Created, Existing: *wire.Existing}
-	if err := json.Unmarshal(wire.Assignments, &out.Assignments); err != nil {
-		return fmt.Errorf("octonomy: decode bulk assign assignments: %w", err)
+	// decodeResourceArray rather than a plain Unmarshal: an assignments row that
+	// is null or {} decodes to a zero-valued Assignment sitting in an otherwise
+	// good result, which is the same defect the counters above guard against,
+	// one level in (#40). It also normalizes a present-but-null array to an
+	// empty non-nil slice, which is the null handling described above.
+	assignments, err := decodeResourceArray[Assignment](wire.Assignments, `bulk assign "assignments"`)
+	if err != nil {
+		return err
 	}
-	if out.Assignments == nil {
-		out.Assignments = []Assignment{}
-	}
+	out.Assignments = assignments
 	if wire.Skipped != nil {
 		out.Skipped = *wire.Skipped
 	}

@@ -178,6 +178,33 @@ new method is added in one place. Every group the vendored contracts publish is 
 | `Health.Live` | GET | `/health/live` — **server root, no `/api` prefix, no credentials** |
 | `Health.Ready` | GET | `/health/ready` — **server root, no `/api` prefix, no credentials** |
 
+### Update bodies
+
+**A PATCH sends only the fields you set, and each one replaces rather than merges.** `*Update`
+structs use pointer fields with `omitempty`, so a nil field never reaches the wire and the server
+leaves that column alone. Nothing is deep-merged: setting `Metadata` replaces the whole stored object
+rather than adding keys to it.
+
+`Metadata` is a pointer for that reason — it is the one field whose "empty" and "absent" would
+otherwise be the same bytes:
+
+```go
+octonomy.TagUpdate{Metadata: &octonomy.Metadata{"team": "growth"}} // replaces the stored object
+octonomy.TagUpdate{Metadata: &octonomy.Metadata{}}                 // sends {} — clears it
+octonomy.TagUpdate{}                                               // omits the key — untouched
+```
+
+`Metadata` is `map[string]any`, and `encoding/json` counts a zero-length map as empty under
+`omitempty`. While the field was a plain map, `Metadata{}` therefore sent **no** `metadata` key at
+all, and a caller asking to clear the object got a 200 with the old object still in place and no
+error ([#37](https://github.com/octoverse-id/octonomy-go/issues/37)). A pointer to a *nil* map
+(`var m octonomy.Metadata; u.Metadata = &m`) is neither intent and marshals as `"metadata": null`;
+use `&octonomy.Metadata{}` to clear. `TagUpdate`, `VocabularyUpdate`, and `TagAliasUpdate` all carry
+the field this way, so no resource behaves differently from the others.
+
+The server supports the clear: `metadata` is a plain optional JSON field on all three patch
+serializers, and `{}` sets the stored object to `{}`.
+
 ### List parameters
 
 `TagListParams` exposes the full server filter set: `application_id`, `include_shared`, `is_active`,
@@ -268,9 +295,10 @@ A `[]Assignment` decoder written from the spec returns an empty slice and a nil 
 body — #32 in a new place — so both go through `doData` with a result struct, and the envelope
 assertion is what catches a mis-routed decode.
 
-**The bulk results require their keys.** `doData` stops at the `data` envelope, which is the right
-line for a resource: a zero-valued `Assignment` has an empty `ID`, and nobody reads that as an answer.
-A composite of counters is different — `created: 0, existing: 0` with no rows is an ordinary result,
+**The bulk results require their keys.** `doData` requires the `data` envelope to hold an object that
+decodes to a resource with a real identity, which is the right line for a resource: past that, a
+zero-valued `Assignment` has an empty `ID` and nobody reads it as an answer. A composite of counters
+is different — `created: 0, existing: 0` with no rows is an ordinary result,
 and `removed: 0` is the most common answer bulk remove gives — so a body whose keys the server renamed
 would be read as "nothing needed doing" instead of as the contract break it is. A missing `created`,
 `existing`, `assignments`, or `removed` is therefore an error. `Skipped` is exempt (it is vestigial),
@@ -516,14 +544,32 @@ something that looks like data. A missing `data` key, a null `data` where a reso
 empty body, and a list with no usable `pagination` block are all errors. An empty page
 (`"data": []`, or `"data": null`) is not: it decodes to an empty non-nil slice either way.
 
-**The guarantee stops at the envelope, and that boundary is a known gap.** `doData` asserts that
-`data` is present and non-null, then unmarshals it into `T`; a *well-formed* envelope carrying the
-**wrong object** — `{"data": {"wrong": true}}` — still decodes to a zero-valued resource with a nil
-error, because unknown JSON fields are ignored and no field is required. The class of failure #32
-closed is "the envelope is missing"; "the envelope holds something else" is
-[#40](https://github.com/octoverse-id/octonomy-go/issues/40) and is still open. The composite results
-are the exception — `BulkAssignResult`, `BulkRemoveResult`, and `ResourceReplaceResult` require their
-keys on decode, for the reason given [above](#assignments).
+**The guarantee reaches one level into the envelope.** A `data` object that is empty (`{}`), null, or
+not an object is an error, and so is such an element inside a list page or inside a composite's array
+of rows — `{"data": [null]}` and `{"data": {"assignments": [{}]}}` included. Each would otherwise
+hand back a zero-valued resource with a nil error, and only the id makes that obvious: an empty
+`Slug`, a nil `Metadata`, or an `AssignedAt.IsZero()` reads as a plausible value
+([#40](https://github.com/octoverse-id/octonomy-go/issues/40)). Errors on a list element name its
+index, since nothing else in the response points at the bad row.
+
+**Every decoded model must also carry its identity.** A non-empty object is still a well-formed one:
+`{"data": {"id": null}}` and `{"data": {"identifier": "tag_1"}}` both decode to a blank resource with
+a nil error, because `encoding/json` ignores a null for a string field and skips unknown keys. So
+each model names the field that identifies its row — `id` everywhere except `assignment_id` on
+`ResourceTag` and `resource_id` on `TagResource` — and a blank one after a successful decode is an
+error naming the field. Two models also name a nested resource, because the contracts mark it
+required and the route exists to deliver it: `ResourceTag.tag.id` (a resource tag hands back the tag
+inline rather than an id to look up) and `TagResolution.tag.id`. The lists come from the vendored
+schemas' `required:` entries.
+
+It stops short of requiring every field a resource documents. That is the server's validation, not
+the client's, and a contract that added a required field would otherwise break this SDK on a response
+it can read perfectly well; a drift against the published schema is the gate's job
+([#18](https://github.com/octoverse-id/octonomy-go/issues/18)), from the other side.
+
+The composites are the exception, and require their keys on decode: `BulkAssignResult`,
+`BulkRemoveResult`, `ResourceReplaceResult`, and `TagResolution` carry no id of their own, so nothing
+about them looks wrong when they arrive blank — see the reason given [above](#assignments).
 
 ## Error codes
 

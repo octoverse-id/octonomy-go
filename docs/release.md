@@ -21,18 +21,21 @@ See [versioning.md](versioning.md). `Version` in `version.go` is canonical and m
 make release-check
 ```
 
-This runs `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`, `examples`, and `version-check`.
+This runs `require-tools`, `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`, `examples`, and
+`version-check`.
 
-> **`lint` and `vuln` skip silently when their tool is missing**, printing a notice and returning
-> success — see the `lint` and `vuln` targets in the `Makefile`. On a machine without
-> `golangci-lint` and `govulncheck` installed, a green `release-check` therefore proves neither.
-> Confirm both binaries are on your `PATH` before trusting the gate, or read the output rather than
-> the exit status. CI installs both, so the `lint` and `vuln` jobs are the real enforcement; this
-> local gate is a fast pre-check, not a substitute for them.
+**A green `release-check` means all seven ran.** `require-tools` goes first and fails the gate when
+`golangci-lint` or `govulncheck` is missing, naming each absent binary and its install command, so
+the exit status can be trusted without reading the output. Standalone `make lint` and `make vuln`
+still skip with a notice when their tool is absent — the strictness belongs to the release gate, not
+to the everyday targets (#53).
 
-```bash
-command -v golangci-lint && command -v govulncheck   # both must print a path
-```
+A tool installed with `go install` lands in `$(go env GOPATH)/bin`, which is not on `PATH` by
+default here. If `require-tools` reports a binary you believe you have installed, that is the first
+thing to check.
+
+CI installs both tools and runs them as separate jobs; that remains the enforcement of record, and
+this gate is the fast local pre-check for it.
 
 ## Two release lines — read this before starting
 

@@ -2,6 +2,7 @@ package octonomy
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -408,5 +409,191 @@ func TestTags_Resolve_MerchantScopeIsUnreachableOnV1(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "APIV2") {
 		t.Errorf("error should name the fix, got: %v", err)
+	}
+}
+
+// TagResolution is a COMPOSITE, not a resource: it carries no id, so the
+// blankness that gives a zero-valued Tag away is not visible on it. A renamed or
+// absent "tag" key would decode to an empty Tag with a nil error, delivered from
+// the one call whose entire purpose is to return that tag (#40).
+//
+// All three keys are required by both vendored contracts, matched_alias
+// included -- required as a KEY, whose value is nullable.
+func TestTags_Resolve_CompositeKeysAreRequired(t *testing.T) {
+	tests := []struct {
+		name string
+		data any
+		want string
+	}{
+		{
+			"no tag key",
+			map[string]any{"matched_type": "tag", "matched_alias": nil},
+			`has no "tag"`,
+		},
+		{
+			"tag renamed",
+			map[string]any{
+				"matched_type":  "tag",
+				"matched_alias": nil,
+				"resolved_tag":  map[string]any{"id": "tag_1"},
+			},
+			`has no "tag"`,
+		},
+		{
+			"tag is an empty object",
+			map[string]any{"matched_type": "tag", "matched_alias": nil, "tag": map[string]any{}},
+			"empty object",
+		},
+		{
+			// Present-but-null is a different failure from absent, and says so:
+			// the key arrived, it just carries no tag.
+			"tag is null",
+			map[string]any{"matched_type": "tag", "matched_alias": nil, "tag": nil},
+			`"tag" is null`,
+		},
+		{
+			// A non-empty object that carries no id decodes to a zero-valued Tag
+			// exactly as {} does -- the shape check cannot see the difference, and
+			// the identity check is what closes it.
+			"tag carries no id",
+			map[string]any{
+				"matched_type":  "tag",
+				"matched_alias": nil,
+				"tag":           map[string]any{"slug": "on-sale"},
+			},
+			`no "tag.id"`,
+		},
+		{
+			// "" is not one of the two legal values, and a caller branching on
+			// MatchedTypeAlias reads it as a direct tag match -- a plausible
+			// answer rather than a visible failure.
+			"no matched_type",
+			map[string]any{"matched_alias": nil, "tag": map[string]any{"id": "tag_1"}},
+			`has no "matched_type"`,
+		},
+		{
+			"empty matched_type",
+			map[string]any{
+				"matched_type":  "",
+				"matched_alias": nil,
+				"tag":           map[string]any{"id": "tag_1"},
+			},
+			`empty "matched_type"`,
+		},
+		{
+			// Both contracts mark the key required; null is how a tag match
+			// reports "no alias", so absence is a contract break rather than the
+			// ordinary case.
+			"no matched_alias key",
+			map[string]any{"matched_type": "tag", "tag": map[string]any{"id": "tag_1"}},
+			`has no "matched_alias" key`,
+		},
+		{
+			"matched_alias is an empty object",
+			map[string]any{
+				"matched_type":  "alias",
+				"matched_alias": map[string]any{},
+				"tag":           map[string]any{"id": "tag_1"},
+			},
+			"empty object",
+		},
+		{
+			"matched_alias carries no id",
+			map[string]any{
+				"matched_type":  "alias",
+				"matched_alias": map[string]any{"slug": "on-sale"},
+				"tag":           map[string]any{"id": "tag_1"},
+			},
+			`no "matched_alias.id"`,
+		},
+		{
+			// TagResolution documents MatchedAlias as non-nil whenever the match
+			// is an alias, and a caller writing the obvious
+			// res.MatchedAlias.Slug against that invariant would panic. This
+			// library never panics, so it must not hand back the combination that
+			// makes the caller do it.
+			"alias match with a null alias",
+			map[string]any{
+				"matched_type":  "alias",
+				"matched_alias": nil,
+				"tag":           map[string]any{"id": "tag_1"},
+			},
+			`matched an alias but its "matched_alias" is null`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, http.StatusOK, map[string]any{"data": tt.data})
+			})
+
+			res, err := c.Tags.Resolve(context.Background(), "on-sale", nil)
+			if err == nil {
+				t.Fatalf("expected an error, got %+v", res)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error should say %q, got: %v", tt.want, err)
+			}
+		})
+	}
+}
+
+// The converse. A null matched_alias is the ordinary tag match, and an unknown
+// matched_type is preserved rather than rejected -- the same rule this SDK
+// applies to an error code it has no constant for, so a third match type the
+// server adds later does not turn every resolution into a client error.
+func TestTags_Resolve_LegalShapes(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string]any
+		want MatchedType
+	}{
+		{"tag match, null alias", map[string]any{
+			"matched_type": "tag", "matched_alias": nil,
+			"tag": map[string]any{"id": "tag_1", "slug": "on-sale"},
+		}, MatchedTypeTag},
+		{"a matched_type this SDK has no constant for", map[string]any{
+			"matched_type": "synonym", "matched_alias": nil,
+			"tag": map[string]any{"id": "tag_1", "slug": "on-sale"},
+		}, MatchedType("synonym")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, http.StatusOK, map[string]any{"data": tt.data})
+			})
+
+			res, err := c.Tags.Resolve(context.Background(), "on-sale", nil)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if res.MatchedAlias != nil {
+				t.Errorf("MatchedAlias = %+v, want nil", res.MatchedAlias)
+			}
+			if res.Tag.ID != "tag_1" || res.MatchedType != tt.want {
+				t.Errorf("unexpected resolution: %+v", res)
+			}
+		})
+	}
+}
+
+// UnmarshalJSON is exported, so it must fully define what it decodes into: a
+// reused value must not keep the alias from a previous resolution.
+func TestTagResolution_UnmarshalIntoAReusedValueIsTotal(t *testing.T) {
+	res := TagResolution{
+		MatchedType:  MatchedTypeAlias,
+		MatchedAlias: &TagAlias{ID: "stale"},
+		Tag:          Tag{ID: "stale"},
+	}
+
+	body := `{"matched_type":"tag","matched_alias":null,"tag":{"id":"tag_9"}}`
+	if err := json.Unmarshal([]byte(body), &res); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if res.MatchedAlias != nil {
+		t.Errorf("MatchedAlias = %+v, want nil -- the stale alias survived", res.MatchedAlias)
+	}
+	if res.Tag.ID != "tag_9" || res.MatchedType != MatchedTypeTag {
+		t.Errorf("decoded fields did not replace the stale ones: %+v", res)
 	}
 }

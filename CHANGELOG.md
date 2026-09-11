@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no error at all. Codes that *do* arrive in an envelope are preserved verbatim, including ones
   this SDK has no constant for, so a `503 namespace_api_disabled` stays distinguishable from an
   infrastructure 503.
+- **`Metadata` on the three `*Update` structs is now `*Metadata`.** `TagUpdate`, `VocabularyUpdate`,
+  and `TagAliasUpdate` change the field's type so that clearing a metadata object can be expressed at
+  all: `&octonomy.Metadata{}` sends `"metadata": {}`, and `nil` still omits the key
+  ([#37](https://github.com/octoverse-id/octonomy-go/issues/37)). `Metadata` is `map[string]any` and
+  `encoding/json` counts a zero-length map as empty under `omitempty`, so `Metadata{}` previously
+  sent **no** `metadata` key — a caller asking to clear the stored object got a 200 with the old
+  object still in place and no error, which is the silent-success failure this SDK refuses
+  everywhere else. Dropping `omitempty` instead would have put `"metadata": null` on every PATCH that
+  does not touch metadata. Callers setting metadata on an update take the address of the literal
+  (`&octonomy.Metadata{"team": "growth"}`); the `*Create` structs and every response model are
+  unchanged. All three structs moved together so that no resource is the pointer-typed outlier.
 
 ### Added
 - **`/api/v2` and namespace scoping** ([#7](https://github.com/octoverse-id/octonomy-go/issues/7)).
@@ -217,6 +228,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the branches read clearly inline.
 
 ### Fixed
+- **A 2xx whose `data` envelope held the wrong object decoded to a zero-valued resource.** The
+  envelope assertion stopped at "is `data` present and non-null", so `{"data": {}}` filled in nothing
+  and every single-resource call returned a blank struct with a **nil error** — verified on tags,
+  vocabularies, tag aliases, and tag assignments alike. The check now reaches one level in: a `data`
+  object that is empty, null, or not an object is an error, and so is such an element inside a list
+  page (`{"data": [null]}`) or inside a composite's array of rows
+  ([#40](https://github.com/octoverse-id/octonomy-go/issues/40)). List-element errors name the index.
+  A NON-empty object needed a second check, because it is still a well-formed one: `{"id": null}` and
+  `{"identifier": "tag_1"}` both decode to a blank resource with a nil error, since `encoding/json`
+  ignores a null for a string field and skips unknown keys. So every decoded model now has to carry
+  the field that identifies its row — `id`, except `assignment_id` on `ResourceTag` and `resource_id`
+  on `TagResource` — and a blank one after a successful decode is an error. `ResourceTag` and
+  `TagResolution` additionally require their nested `tag.id`, since both contracts mark `tag`
+  required there and both routes exist to deliver it inline. The lists are the vendored schemas' own
+  `required:` entries. That closes the runtime half no contract gate can see.
+  The id made the defect self-evident to anyone who read it, which is why the line was drawn where it
+  was; every other field — an empty `Slug`, a nil `Metadata`, an `AssignedAt.IsZero()` — makes it a
+  plausible-looking blank instead. `TagResolution` gains the required-keys treatment the other
+  composites already had, since it carries no id of its own and its entire purpose is to hand back a
+  tag: `matched_type`, `matched_alias`, and `tag` are all required keys (as both contracts mark them
+  — `matched_alias` required as a key, whose value is nullable), an empty `matched_type` is an error
+  while an unknown one is preserved verbatim as an unknown error code is, and a `matched_type` of
+  `alias` with a null `matched_alias` is refused because `TagResolution` documents the alias as
+  non-nil whenever the match is an alias, and a caller writing `res.MatchedAlias.Slug` against that
+  invariant would panic. The guarantee stops short of requiring every field a resource documents: that is the server's
+  validation rather than the client's, and drift against the published schema is the contract gate's
+  job ([#18](https://github.com/octoverse-id/octonomy-go/issues/18)), from the other side. Found by an independent Codex review of
+  [#10](https://github.com/octoverse-id/octonomy-go/issues/10).
+- **`make release-check` reported success without running `lint` or `vuln`.** Both targets skip with
+  a notice when their binary is missing and neither `else` branch exits non-zero, so on a machine
+  without `golangci-lint` and `govulncheck` a green gate proved that neither ran — in front of a
+  release that cannot be recalled. A new `require-tools` target runs first in `release-check` and
+  fails naming each absent binary and its install command; standalone `make lint` and `make vuln`
+  still skip, since hard-failing a fresh clone over an optional dev tool is what that behavior is
+  for ([#53](https://github.com/octoverse-id/octonomy-go/issues/53)). It was a live case rather than
+  a hypothetical: `golangci-lint` installs under the active toolchain's `GOPATH` and is off `PATH` by
+  default in this project's own dev setup. The caveat `docs/release.md` carried is replaced by a
+  statement of what the gate now guarantees.
 - **A nil `RequestOption` panicked instead of returning an error.** The transport now refuses one by
   name (`RequestOption 2 is nil`) before anything is sent, as `NewHealthClient` does for a nil
   `HealthOption`. Conditionally assembled option slices are where a nil comes from, and this library
@@ -249,9 +298,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoded to a zero value with a nil error is an error instead: a 2xx with no `data` key, a null
   `data` where a resource was expected, an empty body, a list response with no usable `pagination`
   block, and a non-204 answer to `Delete`. A present-but-null `"data"` on a list normalizes to an
-  empty non-nil slice, identical to `"data": []`. The check stops at the envelope: a well-formed
-  envelope carrying the *wrong object* still decodes to a zero value, which is
-  [#40](https://github.com/octoverse-id/octonomy-go/issues/40) and remains open.
+  empty non-nil slice, identical to `"data": []`. The check stopped at the envelope, which left a
+  well-formed envelope carrying the *wrong object* decoding to a zero value; that is
+  [#40](https://github.com/octoverse-id/octonomy-go/issues/40), fixed in this same set — see above.
 
 ### Added
 - `integration_test.go` (build tag `integration`, `make smoke`): a smoke test against a real server,
@@ -313,8 +362,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WithIncludeGlobal` beside it: the server widens the authorized set for this route only when it
   sees `scope=global`.
 - `MatchedType` (`MatchedTypeTag`, `MatchedTypeAlias`) types the response's `matched_type`.
-  `MatchedAlias` is non-nil exactly when the match came through an alias, and `Tag` is the canonical
-  tag either way.
+  `MatchedAlias` is non-nil whenever the match came through an alias — required on decode, so the
+  branch that reads it cannot nil-deref — and `Tag` is the canonical tag either way.
 - **An unmatched slug is a `400 validation_error`, not a `404`.** `IsValidation` is the branch that
   means "nothing is called that"; `IsNotFound` reports false. A `scope=global` resolution by a caller
   without the authority to see global rows returns that same error, indistinguishable on purpose, so
@@ -364,9 +413,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead. An id outside the request's namespace reports identically to one that exists nowhere, so
   the response cannot be used to probe for tags in namespaces the caller cannot read.
 - **The bulk results require the keys a caller acts on**, rather than letting an unexpected object
-  shape decode to a zero-valued result with a nil error. `doData` stops at the `data` envelope, which
-  is the right line for a *resource* — a zero-valued `Assignment` has an empty `ID` and no caller
-  mistakes it for an answer — but a composite of counters is different: `created: 0, existing: 0` with
+  shape decode to a zero-valued result with a nil error. `doData` validates the `data` envelope's own
+  shape and identity, which is the right line for a *resource* — past that, a zero-valued
+  `Assignment` has an empty `ID` and no caller mistakes it for an answer — but a composite of
+  counters is different: `created: 0, existing: 0` with
   no rows is an ordinary result, and `removed: 0` is the single most common one there is. So a renamed
   or missing `created`, `existing`, `assignments`, or `removed` is an error. `Skipped` is exempt,
   being vestigial; a present-but-null `assignments` normalizes to an empty non-nil slice, exactly as
@@ -551,8 +601,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `compat guard` and `go1.13` jobs prove it, since a modern toolchain enforces the language version
     from `go.mod` but not the standard library.
   - **`docs/roadmap.md`** stops restating what exists and becomes the recipe plus a register of known
-    gaps, each against its issue (#36, #37, #40, #49) with the two deliberate deferrals (#20, #22)
-    named as such.
+    gaps, each against its issue (#36 and #49, after #37 and #40 were closed in this same set) with
+    the two deliberate deferrals (#20, #22) named as such.
 - **The `http.RoundTripper` extension point is documented** in the README, `doc.go`, and
   `docs/architecture.md`. Since `AGENTS.md` forbids logging in the library, a `RoundTripper` on the
   caller's `*http.Client` is the sanctioned path for metrics, tracing, request logging, retries, and

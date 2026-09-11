@@ -33,6 +33,11 @@ type Vocabulary struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// identityFields makes a blank id an error, as on Tag (#40).
+func (v Vocabulary) identityFields() []identityField {
+	return []identityField{{name: "id", value: v.ID}}
+}
+
 // VocabularyCreate is the request body for creating a vocabulary. Name and Slug
 // are required; the remaining fields are optional.
 type VocabularyCreate struct {
@@ -47,12 +52,16 @@ type VocabularyCreate struct {
 // VocabularyUpdate is the PATCH body for updating a vocabulary. Only non-nil
 // fields are sent, so the server updates exactly what you set.
 type VocabularyUpdate struct {
-	ApplicationID *string  `json:"application_id,omitempty"`
-	Name          *string  `json:"name,omitempty"`
-	Slug          *string  `json:"slug,omitempty"`
-	Description   *string  `json:"description,omitempty"`
-	Metadata      Metadata `json:"metadata,omitempty"`
-	IsActive      *bool    `json:"is_active,omitempty"`
+	ApplicationID *string `json:"application_id,omitempty"`
+	Name          *string `json:"name,omitempty"`
+	Slug          *string `json:"slug,omitempty"`
+	Description   *string `json:"description,omitempty"`
+
+	// Metadata replaces the stored object; &Metadata{} clears it and nil omits
+	// the key. See TagUpdate.Metadata for why this one field is a pointer (#37).
+	Metadata *Metadata `json:"metadata,omitempty"`
+
+	IsActive *bool `json:"is_active,omitempty"`
 }
 
 // VocabularyListParams filters and pages the vocabulary list. A nil *params lists
