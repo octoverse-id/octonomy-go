@@ -1438,3 +1438,43 @@ func TestValueDependentRouteIsReported(t *testing.T) {
 		t.Errorf("a value-dependent route was accepted: %v", err)
 	}
 }
+
+// TestNullableContainerRoundTripsAsAbsent: a nullable property whose Go field is a
+// map or a slice carrying `omitempty` vanishes from the round trip when it is
+// null -- and that is correct, because nil is exactly the absent state for those.
+// The null witness must not report it.
+//
+// Found by a review's own experiment, which marked `Tag.metadata` nullable and
+// walked straight into the skip that used to cover BOTH this case and the one
+// below.
+func TestNullableContainerRoundTripsAsAbsent(t *testing.T) {
+	repo := stageRepo(t)
+	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
+		editTagSchema(t, filepath.Join(repo, "docs", spec),
+			"        metadata: {}\n",
+			"        metadata:\n          nullable: true\n")
+	}
+
+	assertClean(t, runLocal(t, repo))
+}
+
+// editTagSchema applies a replacement inside the Tag schema only. Several schemas
+// share property spellings, and an unanchored edit lands on whichever comes first.
+func editTagSchema(t *testing.T, path, old, replacement string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	start := strings.Index(src, "\n    Tag:\n")
+	end := strings.Index(src, "\n    TagAlias:\n")
+	if start < 0 || end < start {
+		t.Fatal("the Tag schema is no longer where this fixture looks for it")
+	}
+	segment := strings.Replace(src[start:end], old, replacement, 1)
+	if segment == src[start:end] {
+		t.Fatalf("%q not found in the Tag schema", old)
+	}
+	write(t, path, src[:start]+segment+src[end:])
+}

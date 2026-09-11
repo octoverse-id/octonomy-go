@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -483,7 +484,22 @@ func checkResponseModels(in Inputs, r *Report) {
 		for _, property := range nullableProperties(spec, op.OKModel) {
 			value, survived := observed.NullWitness[property]
 			if !survived {
-				continue // already reported above
+				// The field carries `omitempty`, so null came back as the zero
+				// value and the key was dropped entirely. Whether that is a
+				// problem depends on what the zero value IS, and the populated
+				// witness says: a field that marshals as an object or an array is
+				// a Go map or slice, whose nil is exactly the absent state; a
+				// field that marshals as a scalar has a zero value indistinguishable
+				// from a real one, and the null is lost.
+				//
+				// This was a silent pass until a review's own experiment walked
+				// into it -- the skip here read "already reported above", and
+				// above only reports what the POPULATED witness dropped.
+				if populated, ok := observed.Decoded[property]; ok && !isJSONContainer(populated) {
+					items = append(items, fmt.Sprintf("schema `%s` marks `%s` nullable and `%s` decodes null into a field that omits it -- a scalar with `omitempty` cannot tell an absent value from a zero one",
+						op.OKModel, property, row.SDK))
+				}
+				continue
 			}
 			if string(value) != "null" {
 				items = append(items, fmt.Sprintf("schema `%s` marks `%s` nullable and `%s` decodes null as `%s` -- the model cannot represent the absent state, so a null from the server reads as a value",
@@ -695,6 +711,23 @@ func checkErrorCodeDrift(in Inputs, r *Report) {
 		items = append(items, fmt.Sprintf("the server's registry produces a code in a form this gate cannot read: `%s` -- teach tools/contractdrift to read it", line))
 	}
 	r.Add("Error codes", items)
+}
+
+// isJSONContainer reports whether a marshalled value is an object or an array --
+// which is to say, whether the Go field behind it is a map or a slice, whose nil
+// really does mean absent.
+func isJSONContainer(raw json.RawMessage) bool {
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '{', '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // nullableProperties returns the properties a component schema marks nullable.
