@@ -251,7 +251,18 @@ from a client that actually issues the request.
 The cost is the driver table: one call per operation, which someone has to write and keep compiling.
 That is the deliberate trade — a driver that names the wrong method reports the wrong route on its
 first run, a driver that stops compiling is a build failure, and an operation with no driver is a
-finding.
+finding. A driver that is merely *wrong* — nil params, a missing option — fails the same way a broken
+client would: the parameters do not reach the wire and the gate says so. There is no shape of driver
+mistake that produces a quieter answer than the truth.
+
+**What a passing decode does and does not prove.** It proves the model accepts a body the contract
+permits: every documented property survives the round trip, and none of them has a type the model
+cannot read. It does not prove the Go types are the *tightest* fit — a property documented `integer`
+decoded into a `float64` passes, as does anything at all decoded into `any`. And where the contract
+constrains nothing (`metadata: {}`, `changes: {readOnly: true}`) there is nothing to check: the stub
+sends the shape the server really sends, a JSON object, which is enough to prove a field exists and
+no more. That is the honest boundary of this check; the integration smoke test above is what exercises
+real server payloads.
 
 **Everything the offline half compares is vendored, on purpose.** The two contracts, the error
 registry, the recorded server version: each has a copy in this repository, so each can be checked

@@ -300,17 +300,18 @@ unsent_query_parameters:
       The other half of the same gap. See the row above and
       https://github.com/octoverse-id/octonomy-go/issues/36.
 
-  # The rest of this list is one rule, applied eleven times, and it is a DECISION
+  # The rest of this list is ONE RULE, applied eleven times, and it is a decision
   # rather than a gap: every write documents `application_id` as a query parameter
-  # and the SDK sends it in the body instead. See AGENTS.md, "Application scope
-  # follows the body". These rows exist because the gate reads the wire, so the
-  # rule has to be stated somewhere it can be checked — and if the SDK ever starts
-  # sending it on the query string, every one of them turns into a stale-row
-  # finding.
+  # and the SDK sends it in the body instead. The rows exist because the gate reads
+  # the wire — so the rule has to be stated somewhere it can be checked, and if the
+  # SDK ever starts putting it on the query string, all eleven turn into stale-row
+  # findings at once.
+  #
+  # The reason is written once and referenced, so it cannot rot in ten copies.
   - path: /tags
     method: post
     name: application_id
-    reason: >-
+    reason: &application_id_in_body >-
       Application scope follows the body on a request that has one, so the SDK
       refuses WithApplication here and the value travels in the write struct's
       ApplicationID instead. Probed against 3.1.0: the server keeps a query
@@ -321,102 +322,39 @@ unsent_query_parameters:
   - path: /tags/{tag_id}
     method: patch
     name: application_id
-    reason: >-
-      Application scope follows the body on a request that has one, so the SDK
-      refuses WithApplication here and the value travels in the write struct's
-      ApplicationID instead. Probed against 3.1.0: the server keeps a query
-      application_id on a namespaced create and DROPS it on a global one, while a
-      body application_id wins in both — so honoring the option would silently
-      produce a tenant-shared row for a caller who asked for application scope.
-      The parameter is reachable, just not through the query string.
+    reason: *application_id_in_body
   - path: /vocabularies
     method: post
     name: application_id
-    reason: >-
-      Application scope follows the body on a request that has one, so the SDK
-      refuses WithApplication here and the value travels in the write struct's
-      ApplicationID instead. Probed against 3.1.0: the server keeps a query
-      application_id on a namespaced create and DROPS it on a global one, while a
-      body application_id wins in both — so honoring the option would silently
-      produce a tenant-shared row for a caller who asked for application scope.
-      The parameter is reachable, just not through the query string.
+    reason: *application_id_in_body
   - path: /vocabularies/{vocabulary_id}
     method: patch
     name: application_id
-    reason: >-
-      Application scope follows the body on a request that has one, so the SDK
-      refuses WithApplication here and the value travels in the write struct's
-      ApplicationID instead. Probed against 3.1.0: the server keeps a query
-      application_id on a namespaced create and DROPS it on a global one, while a
-      body application_id wins in both — so honoring the option would silently
-      produce a tenant-shared row for a caller who asked for application scope.
-      The parameter is reachable, just not through the query string.
+    reason: *application_id_in_body
   - path: /tag-aliases
     method: post
     name: application_id
-    reason: >-
-      Application scope follows the body on a request that has one, so the SDK
-      refuses WithApplication here and the value travels in the write struct's
-      ApplicationID instead. Probed against 3.1.0: the server keeps a query
-      application_id on a namespaced create and DROPS it on a global one, while a
-      body application_id wins in both — so honoring the option would silently
-      produce a tenant-shared row for a caller who asked for application scope.
-      The parameter is reachable, just not through the query string.
+    reason: *application_id_in_body
   - path: /tag-aliases/{alias_id}
     method: patch
     name: application_id
-    reason: >-
-      Application scope follows the body on a request that has one, so the SDK
-      refuses WithApplication here and the value travels in the write struct's
-      ApplicationID instead. Probed against 3.1.0: the server keeps a query
-      application_id on a namespaced create and DROPS it on a global one, while a
-      body application_id wins in both — so honoring the option would silently
-      produce a tenant-shared row for a caller who asked for application scope.
-      The parameter is reachable, just not through the query string.
+    reason: *application_id_in_body
   - path: /tag-assignments
     method: post
     name: application_id
-    reason: >-
-      Application scope follows the body on a request that has one, so the SDK
-      refuses WithApplication here and the value travels in the write struct's
-      ApplicationID instead. Probed against 3.1.0: the server keeps a query
-      application_id on a namespaced create and DROPS it on a global one, while a
-      body application_id wins in both — so honoring the option would silently
-      produce a tenant-shared row for a caller who asked for application scope.
-      The parameter is reachable, just not through the query string.
+    reason: *application_id_in_body
   - path: /tag-assignments/bulk-assign
     method: post
     name: application_id
-    reason: >-
-      Application scope follows the body on a request that has one, so the SDK
-      refuses WithApplication here and the value travels in the write struct's
-      ApplicationID instead. Probed against 3.1.0: the server keeps a query
-      application_id on a namespaced create and DROPS it on a global one, while a
-      body application_id wins in both — so honoring the option would silently
-      produce a tenant-shared row for a caller who asked for application scope.
-      The parameter is reachable, just not through the query string.
+    reason: *application_id_in_body
   - path: /tag-assignments/bulk-remove
     method: post
     name: application_id
-    reason: >-
-      Application scope follows the body on a request that has one, so the SDK
-      refuses WithApplication here and the value travels in the write struct's
-      ApplicationID instead. Probed against 3.1.0: the server keeps a query
-      application_id on a namespaced create and DROPS it on a global one, while a
-      body application_id wins in both — so honoring the option would silently
-      produce a tenant-shared row for a caller who asked for application scope.
-      The parameter is reachable, just not through the query string.
+    reason: *application_id_in_body
   - path: /resources/{resource_type}/{resource_id}/tags
     method: post
     name: application_id
-    reason: >-
-      Application scope follows the body on a request that has one, so the SDK
-      refuses WithApplication here and the value travels in the write struct's
-      ApplicationID instead. Probed against 3.1.0: the server keeps a query
-      application_id on a namespaced create and DROPS it on a global one, while a
-      body application_id wins in both — so honoring the option would silently
-      produce a tenant-shared row for a caller who asked for application scope.
-      The parameter is reachable, just not through the query string.
+    reason: *application_id_in_body
   - path: /tag-assignments
     method: delete
     name: application_id
