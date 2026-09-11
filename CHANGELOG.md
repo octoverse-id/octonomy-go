@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     operations, per-operation parameters (by location *and* name), responses and request bodies,
     `components.schemas` property by property, and — from the server's `core/errors.py`, because
     `ErrorResponse` types `code` as a bare string and a schema comparison therefore cannot see it —
-    the error-code registry against this SDK's `Code*` constants.
+    the error-code registry against this SDK's `Code*` constants, as a set in both directions **and**
+    as declarations, since a set cannot see two constants whose values are swapped.
   - **The SDK side is driven, not read.** For each operation the gate calls the method with every
     parameter populated, against a stub that records the request and answers with a body
     **synthesized from the vendored schema**. The request is what it compares against the contract —
