@@ -18,6 +18,11 @@ import (
 // An endpoint the SDK simply never noticed and an endpoint the SDK decided to
 // skip look identical from the outside, and that is precisely how this SDK sat
 // on a server 1.0.0 contract while the server shipped 3.1.0.
+//
+// Every row is asserted against the contracts AND against the Go sources, so a
+// row cannot drift into fiction: the gate derives each method's route, transport
+// helper, query parameters, and decoded model from the code itself and compares
+// them with what the row claims.
 type Coverage struct {
 	Path string `yaml:"-"`
 
@@ -26,9 +31,15 @@ type Coverage struct {
 	Operations []CoverageOperation `yaml:"operations"`
 
 	// UnsentQueryParameters lists query parameters the contracts document that the
-	// SDK deliberately never sends. Each needs a reason; the check that consults
-	// this list is what would have caught `scope` on /tag-resolution.
+	// SDK deliberately never sends, PER OPERATION. Scoped that way because a name
+	// is not a decision: `limit` would be legitimately unsent on /tag-resolution
+	// and is legitimately sent on every list route, and a name-keyed allowlist
+	// would silence both.
 	UnsentQueryParameters []UnsentParameter `yaml:"unsent_query_parameters"`
+
+	// UndocumentedModelFields lists JSON fields an SDK response model decodes that
+	// the contract's schema does not document, each with the reason it is there.
+	UndocumentedModelFields []UndocumentedField `yaml:"undocumented_model_fields"`
 
 	// SDKOnlyErrorCodes lists Code* constants that exist in errors.go with no
 	// counterpart in the server's error registry, each with the reason it is
@@ -48,7 +59,9 @@ type CoverageOperation struct {
 	Method string `yaml:"method"`
 
 	// SDK names the Go method as Receiver.Method, and File the file declaring it.
-	// Both empty when Unimplemented is set.
+	// Both empty when Unimplemented is set. The gate derives that method's real
+	// route and compares it with Path and Method above, so naming the wrong method
+	// is a finding rather than a pass.
 	SDK  string `yaml:"sdk"`
 	File string `yaml:"file"`
 
@@ -64,21 +77,41 @@ type CoverageOperation struct {
 	DocumentedResponse string `yaml:"documented_response"`
 
 	// ActualResponse is what the running server really returns, in the SDK's own
-	// vocabulary -- the closed set in actualResponses below. Where it differs from
-	// DocumentedResponse the server wins: every one of these was verified against a
-	// booted server, and the spec's generator cannot see the envelope because a
-	// renderer adds it below the serializers.
+	// vocabulary -- the closed set in actualResponses below. It is checked against
+	// the transport helper the method calls (doList yields a list envelope, doData
+	// a data envelope, and so on), so it states what the code does rather than what
+	// someone remembered. Where it differs from DocumentedResponse the server
+	// wins: every one of these was verified against a booted server, and the
+	// spec's generator cannot see the envelope because a renderer adds it below
+	// the serializers.
 	ActualResponse string `yaml:"actual_response"`
 }
 
 // Key matches Operation.Key once the surface prefix is stripped.
 func (c CoverageOperation) Key() string { return c.Method + " " + c.Path }
 
-// UnsentParameter records a documented query parameter the SDK does not send.
+// UnsentParameter records a documented query parameter one operation does not
+// send.
 type UnsentParameter struct {
+	Path   string `yaml:"path"`
+	Method string `yaml:"method"`
 	Name   string `yaml:"name"`
 	Reason string `yaml:"reason"`
 }
+
+// Key is the operation key plus the parameter name.
+func (u UnsentParameter) Key() string { return u.Method + " " + u.Path + " " + u.Name }
+
+// UndocumentedField records a JSON field an SDK model decodes that the contract
+// does not document.
+type UndocumentedField struct {
+	Model  string `yaml:"model"`
+	Field  string `yaml:"field"`
+	Reason string `yaml:"reason"`
+}
+
+// Key is "Model.field".
+func (u UndocumentedField) Key() string { return u.Model + "." + u.Field }
 
 // SDKOnlyCode records an errors.go constant with no server counterpart.
 type SDKOnlyCode struct {
@@ -100,6 +133,11 @@ var (
 		"none":               true, // no body -- 204
 	}
 	actualResponseList = "list-envelope, data-envelope, composite-envelope, bare, none"
+
+	httpMethodNames = map[string]bool{
+		"get": true, "put": true, "post": true, "delete": true,
+		"options": true, "head": true, "patch": true, "trace": true,
+	}
 )
 
 // LoadCoverage reads and validates the inventory.
@@ -127,6 +165,8 @@ func LoadCoverage(path string) (*Coverage, error) {
 		switch {
 		case op.Path == "" || op.Method == "":
 			return nil, fmt.Errorf("%s: an operation row is missing path or method", path)
+		case !httpMethodNames[op.Method]:
+			return nil, fmt.Errorf("%s: %s: %q is not a lowercase HTTP method", path, op.Key(), op.Method)
 		case !strings.HasPrefix(op.Path, "/"):
 			return nil, fmt.Errorf("%s: %s: path must be the version-independent suffix, starting with /", path, op.Key())
 		case strings.HasPrefix(op.Path, "/api/"):
@@ -137,6 +177,8 @@ func LoadCoverage(path string) (*Coverage, error) {
 			return nil, fmt.Errorf("%s: %s: needs either sdk+file or an unimplemented reason", path, op.Key())
 		case op.Unimplemented != "" && op.SDK != "":
 			return nil, fmt.Errorf("%s: %s: cannot be both implemented and unimplemented", path, op.Key())
+		case op.SDK != "" && !strings.Contains(op.SDK, "."):
+			return nil, fmt.Errorf("%s: %s: sdk must name the method as Receiver.Method", path, op.Key())
 		case op.DocumentedResponse == "" || op.ActualResponse == "":
 			return nil, fmt.Errorf("%s: %s: needs documented_response and actual_response", path, op.Key())
 		case !documentedResponseRE.MatchString(op.DocumentedResponse):
@@ -146,9 +188,18 @@ func LoadCoverage(path string) (*Coverage, error) {
 		}
 		seen[op.Key()] = true
 	}
+
 	for _, p := range cov.UnsentQueryParameters {
-		if p.Name == "" || p.Reason == "" {
-			return nil, fmt.Errorf("%s: unsent_query_parameters needs a name and a reason on every row", path)
+		if p.Path == "" || p.Method == "" || p.Name == "" || p.Reason == "" {
+			return nil, fmt.Errorf("%s: unsent_query_parameters needs path, method, name, and reason on every row", path)
+		}
+		if !seen[p.Method+" "+p.Path] {
+			return nil, fmt.Errorf("%s: unsent_query_parameters names %q, which is not an operation in this file", path, p.Method+" "+p.Path)
+		}
+	}
+	for _, f := range cov.UndocumentedModelFields {
+		if f.Model == "" || f.Field == "" || f.Reason == "" {
+			return nil, fmt.Errorf("%s: undocumented_model_fields needs model, field, and reason on every row", path)
 		}
 	}
 	for _, c := range cov.SDKOnlyErrorCodes {
@@ -168,11 +219,20 @@ func (c *Coverage) ByKey() map[string]CoverageOperation {
 	return out
 }
 
-// UnsentNames returns the allowlisted parameter names as a set.
-func (c *Coverage) UnsentNames() map[string]string {
+// UnsentIndex returns the allowlisted operation+parameter pairs and their reasons.
+func (c *Coverage) UnsentIndex() map[string]string {
 	out := make(map[string]string, len(c.UnsentQueryParameters))
 	for _, p := range c.UnsentQueryParameters {
-		out[p.Name] = p.Reason
+		out[p.Key()] = p.Reason
+	}
+	return out
+}
+
+// UndocumentedFieldIndex returns the allowlisted model fields and their reasons.
+func (c *Coverage) UndocumentedFieldIndex() map[string]string {
+	out := make(map[string]string, len(c.UndocumentedModelFields))
+	for _, f := range c.UndocumentedModelFields {
+		out[f.Key()] = f.Reason
 	}
 	return out
 }

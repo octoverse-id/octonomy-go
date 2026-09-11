@@ -18,23 +18,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **It compares schemas and parameters, not just paths.** A path-to-method inventory reports the
     drift that prompted this as green: what actually changed was query parameters, error codes,
     response schemas, and the arrival of a second surface. The gate compares the contract version,
-    operations, per-operation query parameters, responses and request bodies, `components.schemas`
-    property by property, and — from the server's `core/errors.py`, because `ErrorResponse` types
-    `code` as a bare string and a schema comparison therefore cannot see it — the error-code registry
-    against this SDK's `Code*` constants.
+    operations, per-operation parameters (by location *and* name), responses and request bodies,
+    `components.schemas` property by property, and — from the server's `core/errors.py`, because
+    `ErrorResponse` types `code` as a bare string and a schema comparison therefore cannot see it —
+    the error-code registry against this SDK's `Code*` constants.
+  - **The SDK side is read as Go.** `tools/contractdrift` parses the package and derives, per method,
+    the route it requests, the transport helper it decodes through, the query parameters its params
+    struct builds, and the model its `doData[T]` / `doList[T]` names. So the gate compares the
+    contract against *the code*: a schema field the decoded struct has no place for, a query
+    parameter that operation's own method never sends, an inventory row whose method now requests a
+    different route. **This found a real gap on its first run** — `VocabularyListParams` is missing
+    `q` and `slug` ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)), which a
+    name-matching check called implemented because `tags.go` sends both.
   - **Two halves, only one of which gates a pull request.** The offline half (`make contract-check`,
-    CI job `contract inventory`) compares the *vendored* contracts against this repository and
-    blocks; it catches a contract refresh that landed without the follow-through, including a
-    documented query parameter the client never learned to send. The cross-repository half
-    (`make contract-drift`) runs **weekly** and never gates a merge — a job that reaches into another
-    repository can go red for reasons unrelated to the change under review.
+    CI job `contract inventory`) compares the *vendored* contracts against this repository and fails
+    the PR; it catches a contract refresh that landed without the follow-through, which the
+    cross-repository half structurally cannot see, since after a refresh both its sides are the same
+    file. The cross-repository half (`make contract-drift`) runs **weekly** and never gates a merge —
+    a job that reaches into another repository can go red for reasons unrelated to the change under
+    review.
   - **`docs/contract-coverage.yaml`** is the new inventory: every published operation, each naming
     the Go method that implements it or carrying a written reason it does not. An operation missing
     from it fails the gate, which is what turns "not implemented" into a decision rather than an
     oversight.
   - **The spec-versus-server envelope divergence is recorded, not suppressed.** Each row carries what
-    the spec documents and what the server really returns; the gate asserts the first still holds, so
-    it stays quiet while the divergence does and speaks up the day it ends.
+    the spec documents and what the server really returns; the recorded envelope is checked against
+    the transport helper the method calls, and the documented one against the spec — so the gate stays
+    quiet while the divergence holds and speaks up the day it ends.
   - `docs/versioning.md` gained a `<!-- contract-version: X.Y.Z -->` marker so the contract version in
     prose can be checked against the vendored specs.
 

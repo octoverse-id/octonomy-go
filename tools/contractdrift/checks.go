@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // surfaces are the two REST contracts this SDK speaks, in report order.
@@ -14,10 +16,16 @@ type Inputs struct {
 	Vendored map[string]*Spec
 	Upstream map[string]*Spec
 
-	Coverage        *Coverage
-	Sources         GoSources
-	SDKCodes        map[string]string // wire code -> Go constant name
-	ServerCodes     map[string]bool   // nil on a local-only run
+	Coverage *Coverage
+	SDK      *SDKPackage
+
+	SDKCodes    map[string]string // wire code -> Go constant name
+	ServerCodes map[string]bool   // nil on a local-only run
+	// UnreadableCodes are code-producing lines in the server's registry that the
+	// extractor could not read. They are reported rather than ignored: a code the
+	// gate cannot see is a hole in the comparison, not an absence.
+	UnreadableCodes []string
+
 	RecordedVersion string
 }
 
@@ -63,12 +71,22 @@ func stripSurface(path, surface string) string {
 }
 
 // strippedOperations indexes a spec by its version-independent operation key.
-func strippedOperations(spec *Spec, surface string) map[string]*Operation {
+//
+// A collision is returned rather than resolved. Today none exists, but an
+// unversioned route that shadows a versioned one -- /foo alongside /api/v2/foo --
+// would otherwise drop an operation out of the inventory comparison entirely, and
+// a dropped operation is one this gate reports as accounted for.
+func strippedOperations(spec *Spec, surface string) (map[string]*Operation, error) {
 	out := make(map[string]*Operation, len(spec.Operations))
 	for _, op := range spec.Operations {
-		out[op.Method+" "+stripSurface(op.Path, surface)] = op
+		key := op.Method + " " + stripSurface(op.Path, surface)
+		if clash, ok := out[key]; ok {
+			return nil, fmt.Errorf("%s: %s and %s both reduce to %q once the surface prefix is stripped",
+				spec.Path, clash.Path, op.Path, key)
+		}
+		out[key] = op
 	}
-	return out
+	return out, nil
 }
 
 // CheckLocal compares the vendored contracts against the SDK itself. Every check
@@ -79,10 +97,11 @@ func CheckLocal(in Inputs) *Report {
 	checkRecordedVersion(in, r)
 	checkSurfaceParity(in, r)
 	checkInventory(in, r)
-	checkImplementedSymbols(in, r)
+	checkImplementation(in, r)
 	checkDocumentedResponses(in, r)
 	checkQueryParametersSent(in, r)
-	checkStaleErrorCodeAllowlist(in, r)
+	checkResponseModels(in, r)
+	checkStaleAllowlists(in, r)
 	return r
 }
 
@@ -130,18 +149,25 @@ func checkRecordedVersion(in Inputs, r *Report) {
 // to a semantic code, so it surfaces as IsUnexpectedStatus rather than as an empty
 // result, but surfaces late either way.
 func checkSurfaceParity(in Inputs, r *Report) {
-	v1 := strippedOperations(in.Vendored["v1"], "v1")
-	v2 := strippedOperations(in.Vendored["v2"], "v2")
+	v1, err1 := strippedOperations(in.Vendored["v1"], "v1")
+	v2, err2 := strippedOperations(in.Vendored["v2"], "v2")
 
 	var items []string
-	for key := range v2 {
-		if _, ok := v1[key]; !ok {
-			items = append(items, fmt.Sprintf("`%s` is published on v2 only -- one inventory row cannot be true of both surfaces", key))
+	for _, err := range []error{err1, err2} {
+		if err != nil {
+			items = append(items, err.Error())
 		}
 	}
-	for key := range v1 {
-		if _, ok := v2[key]; !ok {
-			items = append(items, fmt.Sprintf("`%s` is published on v1 only -- one inventory row cannot be true of both surfaces", key))
+	if err1 == nil && err2 == nil {
+		for key := range v2 {
+			if _, ok := v1[key]; !ok {
+				items = append(items, fmt.Sprintf("`%s` is published on v2 only -- one inventory row cannot be true of both surfaces", key))
+			}
+		}
+		for key := range v1 {
+			if _, ok := v2[key]; !ok {
+				items = append(items, fmt.Sprintf("`%s` is published on v1 only -- one inventory row cannot be true of both surfaces", key))
+			}
 		}
 	}
 	r.Add("Surface parity", items)
@@ -162,7 +188,11 @@ func checkInventory(in Inputs, r *Report) {
 	declared := make(map[string]bool)
 	for _, surface := range surfaces {
 		spec := in.Vendored[surface]
-		for key := range strippedOperations(spec, surface) {
+		ops, err := strippedOperations(spec, surface)
+		if err != nil {
+			continue // reported by checkSurfaceParity
+		}
+		for key := range ops {
 			declared[key] = true
 			if _, ok := byKey[key]; !ok {
 				items = append(items, fmt.Sprintf("`%s` (%s, %s) is in the contract and not in %s -- implement it or record why not",
@@ -179,22 +209,63 @@ func checkInventory(in Inputs, r *Report) {
 	r.Add("Inventory", items)
 }
 
-// checkImplementedSymbols keeps the inventory honest about the code. A row that
-// claims an operation is implemented names the Go method; if that method is gone
-// or renamed, the row is asserting something false and the endpoint is quietly
-// uncovered again.
-func checkImplementedSymbols(in Inputs, r *Report) {
+// checkImplementation reads what each implemented row's method actually does and
+// compares it with what the row claims.
+//
+// The first version of this checked only that a function with the right name
+// existed, which proves very little: a row could name an unrelated method, or the
+// method could have been repointed at a different route, and the gate would agree
+// the operation was covered. So the route -- HTTP method, path, and the transport
+// helper that determines the response envelope -- is derived from the method body
+// and compared instead.
+//
+// A route that cannot be derived is a FINDING, not a pass. "I could not tell" and
+// "it is fine" are different answers, and only one of them is safe to act on.
+func checkImplementation(in Inputs, r *Report) {
 	var items []string
-	for _, op := range in.Coverage.Operations {
-		if op.Unimplemented != "" {
+	for _, row := range in.Coverage.Operations {
+		if row.Unimplemented != "" {
 			continue
 		}
-		if !in.Sources.HasMethod(op.File, op.SDK) {
-			items = append(items, fmt.Sprintf("`%s` claims `%s` in %s, which declares no such method",
-				op.Key(), op.SDK, op.File))
+		method, ok := in.SDK.Method(row.SDK)
+		if !ok {
+			items = append(items, fmt.Sprintf("`%s` claims `%s`, which this package does not declare", row.Key(), row.SDK))
+			continue
+		}
+		if method.File != row.File {
+			items = append(items, fmt.Sprintf("`%s` says `%s` lives in %s; it is declared in %s",
+				row.Key(), row.SDK, row.File, method.File))
+		}
+
+		route, err := in.SDK.Route(row.SDK)
+		if err != nil {
+			items = append(items, fmt.Sprintf("`%s`: cannot read the route out of `%s`: %v -- teach tools/contractdrift the new shape, or keep the one AGENTS.md asks resource files to hold",
+				row.Key(), row.SDK, err))
+			continue
+		}
+		if route.Method != row.Method {
+			items = append(items, fmt.Sprintf("`%s`: `%s` issues a %s, not a %s", row.Key(), row.SDK, strings.ToUpper(route.Method), strings.ToUpper(row.Method)))
+		}
+		if want := normalizePath(row.Path); route.Path != want {
+			items = append(items, fmt.Sprintf("`%s`: `%s` requests `%s`, not `%s`", row.Key(), row.SDK, route.Path, want))
+		}
+		if envelope, ok := transportHelpers[route.Helper]; ok && !envelopeAllows(envelope, row.ActualResponse) {
+			items = append(items, fmt.Sprintf("`%s`: `%s` decodes through %s, which yields `%s`, but the row records `%s`",
+				row.Key(), row.SDK, route.Helper, envelope, row.ActualResponse))
 		}
 	}
-	r.Add("Inventory symbols", items)
+	r.Add("Implementation", items)
+}
+
+// envelopeAllows maps a transport helper's envelope to the `actual_response`
+// values a row may record for it. The one place two values are legal is doData:
+// it unwraps `{"data": ...}` whether what is inside is a resource or one of the
+// bulk composites, and the distinction between those two is documentary.
+func envelopeAllows(envelope, recorded string) bool {
+	if envelope == recorded {
+		return true
+	}
+	return envelope == "data-envelope" && recorded == "composite-envelope"
 }
 
 // checkDocumentedResponses asserts each recorded divergence between the generated
@@ -203,22 +274,26 @@ func checkImplementedSymbols(in Inputs, r *Report) {
 // This is the list-envelope exception, and it is written as an assertion rather
 // than a suppression on purpose. The spec documents list responses as bare arrays
 // while the server returns {data, pagination}; nothing in this gate flags that,
-// because both sides of every comparison read the same spec. What would be
-// genuinely useful to know is the day it stops being true -- the day the server's
-// generator learns about the renderer and the SDK can stop carrying a documented
-// workaround. So the inventory records the shape the spec documents, and this
-// check reports when the spec changes out from under it.
+// because the SDK side of the comparison is the transport helper the method calls
+// (checkImplementation above), which is the server's shape and not the spec's.
+// What is genuinely useful to know is the day it stops being true -- the day the
+// server's generator learns about the renderer and the SDK can stop carrying a
+// documented workaround. So the inventory records the shape the spec documents,
+// and this check reports when the spec changes out from under it.
 func checkDocumentedResponses(in Inputs, r *Report) {
 	var items []string
 	for _, surface := range surfaces {
-		ops := strippedOperations(in.Vendored[surface], surface)
+		ops, err := strippedOperations(in.Vendored[surface], surface)
+		if err != nil {
+			continue
+		}
 		for _, row := range in.Coverage.Operations {
 			op, ok := ops[row.Key()]
 			if !ok {
 				continue // reported by checkInventory
 			}
 			if op.OKSchema != row.DocumentedResponse {
-				items = append(items, fmt.Sprintf("`%s` (%s): %s now documents a `%s` 200 body, recorded as `%s` -- the server really returns `%s`, so re-check which side moved",
+				items = append(items, fmt.Sprintf("`%s` (%s): %s now documents a `%s` success body, recorded as `%s` -- the server really returns `%s`, so re-check which side moved",
 					row.Key(), surface, in.Vendored[surface].Path, op.OKSchema, row.DocumentedResponse, row.ActualResponse))
 			}
 		}
@@ -227,53 +302,154 @@ func checkDocumentedResponses(in Inputs, r *Report) {
 }
 
 // checkQueryParametersSent is the parameter half of the gate, pointed at the SDK
-// rather than at the server.
+// rather than at the server, and it is PER OPERATION.
+//
+// Per operation is the whole point and the first draft got it wrong: it asked
+// whether a parameter name appeared anywhere in the package, so `limit` on
+// /tag-resolution counted as implemented because pagination.go sets `limit` on
+// the list routes. What it asks now is whether THIS method's params struct builds
+// it -- following the struct in the method's signature into its query builder and
+// anything it embeds -- or whether the transport sets it at the chokepoint for
+// every call, which `application_id` and `include_global` genuinely are.
 //
 // The upstream comparison catches the server adding a parameter. This catches the
 // step after it: a vendored contract refreshed to include that parameter while no
-// resource ever learned to send it. That is exactly how `scope` on
-// /tag-resolution could have been missed, and an upstream-versus-vendored diff
-// alone goes green the moment the files are refreshed.
+// resource ever learned to send it. That is how `scope` on /tag-resolution could
+// have been missed, and an upstream-versus-vendored diff alone goes green the
+// moment the files are refreshed.
 func checkQueryParametersSent(in Inputs, r *Report) {
-	sent := in.Sources.QueryParams()
-	allowed := in.Coverage.UnsentNames()
-	documented := make(map[string][]string)
+	allowed := in.Coverage.UnsentIndex()
+	used := map[string]bool{}
+	var items []string
 
 	for _, surface := range surfaces {
-		for _, op := range in.Vendored[surface].Operations {
-			for name, param := range op.Params {
-				if param["in"] != "query" {
+		ops, err := strippedOperations(in.Vendored[surface], surface)
+		if err != nil {
+			continue
+		}
+		for _, row := range in.Coverage.Operations {
+			op, ok := ops[row.Key()]
+			if !ok || row.Unimplemented != "" {
+				continue
+			}
+			sent, err := in.SDK.QueryParams(row.SDK)
+			if err != nil {
+				continue // reported by checkImplementation
+			}
+			for _, name := range op.QueryParams() {
+				if sent[name] {
 					continue
 				}
-				documented[name] = append(documented[name], surface+" "+op.Key())
+				key := row.Key() + " " + name
+				if _, ok := allowed[key]; ok {
+					used[key] = true
+					continue
+				}
+				// No surface in the message: both contracts document the same
+				// parameters, so naming one would suggest the gap is
+				// version-specific when it is not. dedupe collapses the pair.
+				items = append(items, fmt.Sprintf("`%s` documents the query parameter `%s` and `%s` never sends it -- implement it or record it under unsent_query_parameters",
+					row.Key(), name, row.SDK))
 			}
 		}
 	}
 
-	var items []string
-	for _, name := range sortedKeys(documented) {
-		if _, ok := sent[name]; ok {
-			continue
-		}
-		if _, ok := allowed[name]; ok {
-			continue
-		}
-		sort.Strings(documented[name])
-		items = append(items, fmt.Sprintf("`%s` is documented as a query parameter on %d operation(s) (e.g. %s) and the client never sends it -- implement it or record it under unsent_query_parameters",
-			name, len(documented[name]), documented[name][0]))
-	}
-	for name := range allowed {
-		if _, ok := documented[name]; !ok {
-			items = append(items, fmt.Sprintf("`%s` is listed under unsent_query_parameters but no vendored contract documents it -- drop the row", name))
+	for key := range allowed {
+		if !used[key] {
+			items = append(items, fmt.Sprintf("`%s` is listed under unsent_query_parameters and no vendored contract documents it there -- drop the row", key))
 		}
 	}
-	r.Add("Query parameters the client does not send", items)
+	r.Add("Query parameters the client does not send", dedupe(items))
 }
 
-// checkStaleErrorCodeAllowlist keeps sdk_only_error_codes pointed at constants
-// that exist. The rest of the error-code comparison needs the server's registry
-// and lives in checkErrorCodeDrift.
-func checkStaleErrorCodeAllowlist(in Inputs, r *Report) {
+// checkResponseModels compares the contract's response schema with the Go struct
+// the method decodes into, field by field.
+//
+// This is "added or changed fields on models the SDK decodes", and it is the half
+// a spec-to-spec diff cannot do at all: once someone refreshes the vendored files,
+// an upstream comparison is green by construction, while the Go model still has no
+// field for the property that arrived. The decoded type comes from the method's
+// own `doData[T]` / `doList[T]`, so it is what the code really does rather than
+// what a table says.
+//
+// Only rows whose server shape is a plain resource take part. The composites --
+// bulk assign, bulk remove, the resource-tag replace -- decode into result structs
+// the contract does not describe (it claims a bare array, or nothing at all), and
+// the health probes answer outside the API surface entirely; all of those are
+// recorded divergences, and comparing them against the spec would report the
+// divergence as drift on every run.
+func checkResponseModels(in Inputs, r *Report) {
+	spec := in.Vendored["v2"]
+	ops, err := strippedOperations(spec, "v2")
+	if err != nil {
+		return // reported by checkSurfaceParity
+	}
+	undocumented := in.Coverage.UndocumentedFieldIndex()
+	used := map[string]bool{}
+	var items []string
+
+	for _, row := range in.Coverage.Operations {
+		if row.Unimplemented != "" {
+			continue
+		}
+		if row.ActualResponse != "list-envelope" && row.ActualResponse != "data-envelope" {
+			continue
+		}
+		op, ok := ops[row.Key()]
+		if !ok || op.OKModel == "" {
+			continue
+		}
+		route, err := in.SDK.Route(row.SDK)
+		if err != nil || route.Model == "" {
+			continue // reported by checkImplementation
+		}
+		documented, ok := spec.SchemaProperties(op.OKModel)
+		if !ok {
+			items = append(items, fmt.Sprintf("`%s`: the contract's success body references schema `%s`, which components.schemas does not define", row.Key(), op.OKModel))
+			continue
+		}
+		decoded, ok := in.SDK.JSONFields(route.Model)
+		if !ok {
+			items = append(items, fmt.Sprintf("`%s`: `%s` decodes into `%s`, which is not a struct this package declares", row.Key(), row.SDK, route.Model))
+			continue
+		}
+
+		for _, property := range documented {
+			if _, has := decoded[property]; !has {
+				items = append(items, fmt.Sprintf("schema `%s` documents `%s` and the Go model `%s` has no field for it -- %s decodes it away",
+					op.OKModel, property, route.Model, row.SDK))
+			}
+		}
+		documentedSet := map[string]bool{}
+		for _, property := range documented {
+			documentedSet[property] = true
+		}
+		for _, field := range sortedKeys(decoded) {
+			if documentedSet[field] {
+				continue
+			}
+			key := route.Model + "." + field
+			if _, ok := undocumented[key]; ok {
+				used[key] = true
+				continue
+			}
+			items = append(items, fmt.Sprintf("the Go model `%s` decodes `%s`, which schema `%s` does not document -- the server withdrew it, or it belongs under undocumented_model_fields",
+				route.Model, field, op.OKModel))
+		}
+	}
+
+	for key := range undocumented {
+		if !used[key] {
+			items = append(items, fmt.Sprintf("`%s` is listed under undocumented_model_fields and is either documented now or no longer decoded -- drop the row", key))
+		}
+	}
+	r.Add("Response models", dedupe(items))
+}
+
+// checkStaleAllowlists keeps sdk_only_error_codes pointed at constants that
+// exist. The rest of the error-code comparison needs the server's registry and
+// lives in checkErrorCodeDrift.
+func checkStaleAllowlists(in Inputs, r *Report) {
 	var items []string
 	for code := range in.Coverage.SDKOnlyCodeSet() {
 		if _, ok := in.SDKCodes[code]; !ok {
@@ -325,20 +501,18 @@ func checkParameterDrift(in Inputs, r *Report) {
 				continue // reported by checkOperationDrift
 			}
 			now := upstream.Operations[key]
-			for name := range now.Params {
-				if _, had := was.Params[name]; !had {
-					items = append(items, fmt.Sprintf("%s: `%s` gained %s parameter `%s`",
-						surface, key, now.Params[name]["in"], name))
+			for _, param := range sortedKeys(now.Params) {
+				if _, had := was.Params[param]; !had {
+					items = append(items, fmt.Sprintf("%s: `%s` gained parameter `%s`", surface, key, param))
 					continue
 				}
-				for _, line := range diffFlat(was.Params[name], now.Params[name]) {
-					items = append(items, fmt.Sprintf("%s: `%s` parameter `%s`: %s", surface, key, name, line))
+				for _, line := range diffFlat(was.Params[param], now.Params[param]) {
+					items = append(items, fmt.Sprintf("%s: `%s` parameter `%s`: %s", surface, key, param, line))
 				}
 			}
-			for name := range was.Params {
-				if _, still := now.Params[name]; !still {
-					items = append(items, fmt.Sprintf("%s: `%s` lost %s parameter `%s`",
-						surface, key, was.Params[name]["in"], name))
+			for _, param := range sortedKeys(was.Params) {
+				if _, still := now.Params[param]; !still {
+					items = append(items, fmt.Sprintf("%s: `%s` lost parameter `%s`", surface, key, param))
 				}
 			}
 		}
@@ -356,7 +530,7 @@ func checkResponseDrift(in Inputs, r *Report) {
 				continue
 			}
 			now := upstream.Operations[key]
-			for status := range now.Responses {
+			for _, status := range sortedKeys(now.Responses) {
 				if _, had := was.Responses[status]; !had {
 					items = append(items, fmt.Sprintf("%s: `%s` gained a documented `%s` response", surface, key, status))
 					continue
@@ -365,7 +539,7 @@ func checkResponseDrift(in Inputs, r *Report) {
 					items = append(items, fmt.Sprintf("%s: `%s` response `%s`: %s", surface, key, status, line))
 				}
 			}
-			for status := range was.Responses {
+			for _, status := range sortedKeys(was.Responses) {
 				if _, still := now.Responses[status]; !still {
 					items = append(items, fmt.Sprintf("%s: `%s` lost its documented `%s` response", surface, key, status))
 				}
@@ -426,5 +600,60 @@ func checkErrorCodeDrift(in Inputs, r *Report) {
 		items = append(items, fmt.Sprintf("`%s` (%s) is not in the server's error registry -- it was removed upstream, or it belongs under sdk_only_error_codes with a reason",
 			constant, code))
 	}
+	// A form the extractor cannot read is reported rather than passed over. The
+	// count floor in ServerErrorCodes catches a regexp that stopped matching
+	// wholesale; this catches the quieter case of one new code written in a
+	// spelling the extractor does not understand, which leaves the count healthy
+	// and the comparison one code short.
+	for _, line := range in.UnreadableCodes {
+		items = append(items, fmt.Sprintf("the server's registry produces a code in a form this gate cannot read: `%s` -- teach tools/contractdrift to read it", line))
+	}
 	r.Add("Error codes", items)
+}
+
+// SchemaProperties returns the property names a component schema documents.
+func (s *Spec) SchemaProperties(name string) ([]string, bool) {
+	node, ok := s.Schemas[name]
+	if !ok {
+		return nil, false
+	}
+	root := node
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		root = root.Content[0]
+	}
+	if root.Kind != yaml.MappingNode {
+		return nil, false
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "properties" {
+			continue
+		}
+		props := root.Content[i+1]
+		if props.Kind != yaml.MappingNode {
+			return nil, false
+		}
+		out := make([]string, 0, len(props.Content)/2)
+		for j := 0; j < len(props.Content); j += 2 {
+			out = append(out, props.Content[j].Value)
+		}
+		sort.Strings(out)
+		return out, true
+	}
+	return nil, true
+}
+
+// dedupe collapses identical findings. One inventory row is checked against both
+// surfaces, and an unimplemented parameter is unimplemented on both.
+func dedupe(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	sort.Strings(items)
+	out := items[:1]
+	for _, item := range items[1:] {
+		if item != out[len(out)-1] {
+			out = append(out, item)
+		}
+	}
+	return out
 }

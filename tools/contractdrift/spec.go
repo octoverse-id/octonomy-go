@@ -9,8 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// httpMethods is the set of path-item keys that are operations. A path item may
-// also carry non-operation keys (`parameters`, `summary`, vendor extensions), so
+// httpMethods is the set of path-item keys that are operations. A path item also
+// carries non-operation keys -- `parameters`, `summary`, vendor extensions -- so
 // the loader selects rather than assumes: an unknown key must not be read as an
 // operation with no responses and reported as a vanished endpoint.
 var httpMethods = map[string]bool{
@@ -46,7 +46,9 @@ type Operation struct {
 	// removed and another added. Path and method are the stable identity.
 	ID string
 
-	// Params maps a parameter name to its flattened definition.
+	// Params maps a parameter's identity to its flattened definition. OpenAPI
+	// identifies a parameter by `in` AND `name` -- a header and a query parameter
+	// may share a name -- so the key is "<in> <name>" and never the name alone.
 	Params map[string]map[string]string
 
 	// Responses maps a status code to its flattened definition.
@@ -55,13 +57,30 @@ type Operation struct {
 	// RequestBody is the flattened requestBody node, nil when absent.
 	RequestBody map[string]string
 
-	// OKSchema describes what the spec documents as the 200 response body, in the
-	// vocabulary docs/contract-coverage.yaml uses: "array", "ref:Tag", or "none".
+	// OKSchema describes what the spec documents as the success response body, in
+	// the vocabulary docs/contract-coverage.yaml uses: "array", "ref:Tag",
+	// "none", or "other".
 	OKSchema string
+
+	// OKModel is the component schema name behind the success body -- the `$ref`
+	// itself, or an array's item `$ref`. Empty when the body is neither.
+	OKModel string
 }
 
 // Key is the operation's identity in reports and in coverage lookups.
 func (o *Operation) Key() string { return o.Method + " " + o.Path }
+
+// QueryParams returns the operation's query parameter names.
+func (o *Operation) QueryParams() []string {
+	var out []string
+	for key := range o.Params {
+		if in, name, ok := strings.Cut(key, " "); ok && in == "query" {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // document is the minimal typed shape needed to walk to the interesting nodes.
 // Everything below those nodes stays a yaml.Node.
@@ -71,7 +90,8 @@ type document struct {
 	} `yaml:"info"`
 	Paths      map[string]map[string]yaml.Node `yaml:"paths"`
 	Components struct {
-		Schemas map[string]yaml.Node `yaml:"schemas"`
+		Schemas    map[string]yaml.Node `yaml:"schemas"`
+		Parameters map[string]yaml.Node `yaml:"parameters"`
 	} `yaml:"components"`
 }
 
@@ -103,11 +123,20 @@ func LoadSpec(path string) (*Spec, error) {
 		Schemas:    make(map[string]*yaml.Node),
 	}
 	for p, item := range doc.Paths {
+		// Parameters declared on the PATH ITEM apply to every operation under it.
+		// OpenAPI allows this and drf-spectacular does not currently emit it --
+		// which is exactly why it is handled here rather than when it first
+		// appears: a parameter this loader cannot see is a parameter the gate
+		// reports as absent from a contract that documents it.
+		shared, err := collectParams(&doc, item["parameters"])
+		if err != nil {
+			return nil, fmt.Errorf("%s: %s: path-item parameters: %w", path, p, err)
+		}
 		for method, node := range item {
 			if !httpMethods[strings.ToLower(method)] {
 				continue
 			}
-			op, err := newOperation(strings.ToLower(method), p, node)
+			op, err := newOperation(&doc, strings.ToLower(method), p, node, shared)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %s %s: %w", path, method, p, err)
 			}
@@ -120,7 +149,7 @@ func LoadSpec(path string) (*Spec, error) {
 	return spec, nil
 }
 
-func newOperation(method, path string, node yaml.Node) (*Operation, error) {
+func newOperation(doc *document, method, path string, node yaml.Node, shared map[string]map[string]string) (*Operation, error) {
 	op := &Operation{
 		Method:    method,
 		Path:      path,
@@ -128,12 +157,15 @@ func newOperation(method, path string, node yaml.Node) (*Operation, error) {
 		Responses: make(map[string]map[string]string),
 		OKSchema:  "none",
 	}
+	for key, value := range shared {
+		op.Params[key] = value
+	}
 
 	var body struct {
-		ID          string      `yaml:"operationId"`
-		Parameters  []yaml.Node `yaml:"parameters"`
-		Responses   yaml.Node   `yaml:"responses"`
-		RequestBody yaml.Node   `yaml:"requestBody"`
+		ID          string    `yaml:"operationId"`
+		Parameters  yaml.Node `yaml:"parameters"`
+		Responses   yaml.Node `yaml:"responses"`
+		RequestBody yaml.Node `yaml:"requestBody"`
 	}
 	// A path item that will not decode fails the run rather than yielding an
 	// operation with no parameters and no responses. The first draft of this
@@ -146,18 +178,13 @@ func newOperation(method, path string, node yaml.Node) (*Operation, error) {
 	}
 	op.ID = body.ID
 
-	for i := range body.Parameters {
-		var p struct {
-			Name string `yaml:"name"`
-		}
-		if err := body.Parameters[i].Decode(&p); err != nil || p.Name == "" {
-			continue
-		}
-		flat := flatten(&body.Parameters[i])
-		// `name` is the map key; leaving it in the value too would report every
-		// rename twice.
-		delete(flat, "name")
-		op.Params[p.Name] = flat
+	own, err := collectParams(doc, body.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range own {
+		// An operation's own parameter overrides the path item's, per OpenAPI.
+		op.Params[key] = value
 	}
 
 	if body.Responses.Kind == yaml.MappingNode {
@@ -169,8 +196,72 @@ func newOperation(method, path string, node yaml.Node) (*Operation, error) {
 	if body.RequestBody.Kind != 0 {
 		op.RequestBody = flatten(&body.RequestBody)
 	}
-	op.OKSchema = okSchema(op.successResponse())
+	op.OKSchema, op.OKModel = okSchema(op.successResponse())
 	return op, nil
+}
+
+// collectParams flattens a `parameters` list, resolving component references and
+// keying each entry by "<in> <name>".
+//
+// It fails on a parameter it cannot identify. A `$ref` that does not resolve, or
+// an entry with no `name`, used to be skipped silently -- and a skipped parameter
+// is one the gate reports as neither added, removed, nor unimplemented.
+func collectParams(doc *document, node yaml.Node) (map[string]map[string]string, error) {
+	out := map[string]map[string]string{}
+	if node.Kind == 0 {
+		return out, nil // absent, which is ordinary
+	}
+	if node.Kind != yaml.SequenceNode {
+		// Present and not a list. Returning an empty set here would report every
+		// parameter on the operation as removed, or as never implemented, from a
+		// document the gate simply failed to read.
+		return nil, fmt.Errorf("`parameters` is not a list")
+	}
+	for i, entry := range node.Content {
+		resolved, err := resolveParam(doc, entry)
+		if err != nil {
+			return nil, fmt.Errorf("parameter %d: %w", i, err)
+		}
+		var head struct {
+			Name string `yaml:"name"`
+			In   string `yaml:"in"`
+		}
+		if err := resolved.Decode(&head); err != nil {
+			return nil, fmt.Errorf("parameter %d: %w", i, err)
+		}
+		if head.Name == "" || head.In == "" {
+			return nil, fmt.Errorf("parameter %d has no name or no `in` -- the gate cannot identify it", i)
+		}
+		flat := flatten(resolved)
+		// `name` and `in` are the map key; leaving them in the value too would
+		// report every rename twice.
+		delete(flat, "name")
+		delete(flat, "in")
+		out[head.In+" "+head.Name] = flat
+	}
+	return out, nil
+}
+
+// resolveParam follows a local `#/components/parameters/...` reference. A
+// reference anywhere else is an error rather than a shrug: this gate compares two
+// documents it can read in full, or it says it could not.
+func resolveParam(doc *document, entry *yaml.Node) (*yaml.Node, error) {
+	var head struct {
+		Ref string `yaml:"$ref"`
+	}
+	if err := entry.Decode(&head); err != nil || head.Ref == "" {
+		return entry, nil
+	}
+	const prefix = "#/components/parameters/"
+	if !strings.HasPrefix(head.Ref, prefix) {
+		return nil, fmt.Errorf("cannot resolve %q -- only local component parameters are supported", head.Ref)
+	}
+	name := strings.TrimPrefix(head.Ref, prefix)
+	target, ok := doc.Components.Parameters[name]
+	if !ok {
+		return nil, fmt.Errorf("%q does not resolve: components.parameters has no %q", head.Ref, name)
+	}
+	return &target, nil
 }
 
 // successResponse is the documented 2xx body, lowest status first. Creates
@@ -185,34 +276,46 @@ func (o *Operation) successResponse() map[string]string {
 	return nil
 }
 
-// okSchema names the shape the spec documents for a 200 body, in the vocabulary
-// docs/contract-coverage.yaml records under `documented_response`.
+// okSchema names the shape the spec documents for a success body, in the
+// vocabulary docs/contract-coverage.yaml records under `documented_response`, and
+// the component schema behind it.
 //
 // It reads the FLATTENED response, so it sees `content.application/json.schema.*`
 // whatever media type wrapper the server generates around it.
-func okSchema(resp map[string]string) string {
+func okSchema(resp map[string]string) (shape, model string) {
 	if resp == nil {
-		return "none"
+		return "none", ""
 	}
 	// Sorted, so a body documented under two media types resolves the same way
 	// on every run.
 	keys := sortedKeys(resp)
 	for _, k := range keys {
 		if strings.HasSuffix(k, ".schema.$ref") {
-			return "ref:" + strings.TrimPrefix(resp[k], "#/components/schemas/")
+			return "ref:" + schemaName(resp[k]), schemaName(resp[k])
 		}
 	}
 	for _, k := range keys {
 		if strings.HasSuffix(k, ".schema.type") && resp[k] == "array" {
-			return "array"
+			// The item reference, when there is one: a list of Tag decodes into
+			// the same model a single Tag does.
+			for _, item := range keys {
+				if strings.HasSuffix(item, ".schema.items.$ref") {
+					return "array", schemaName(resp[item])
+				}
+			}
+			return "array", ""
 		}
 	}
 	for _, k := range keys {
 		if strings.Contains(k, ".schema.") {
-			return "other"
+			return "other", ""
 		}
 	}
-	return "none"
+	return "none", ""
+}
+
+func schemaName(ref string) string {
+	return strings.TrimPrefix(ref, "#/components/schemas/")
 }
 
 // flatten renders a yaml.Node as a sorted, comparable set of "path=value" pairs,
@@ -225,9 +328,11 @@ func okSchema(resp map[string]string) string {
 //   - `description` is dropped at every level. Descriptions are prose, and the
 //     server rewords them freely; reporting that as contract drift is the fastest
 //     way to teach everyone to ignore this job.
-//   - a sequence whose items are all scalars is compared as a SORTED set, because
-//     the two places the specs use one -- `required` and `enum` -- are sets whose
-//     generated order is incidental. Sequences of mappings keep their index.
+//   - SEQUENCES ARE COMPARED AS SETS. A scalar sequence is sorted -- `required`
+//     and `enum` are sets whose generated order is incidental -- and a sequence of
+//     mappings is sorted by its own rendered content before being indexed, so a
+//     generator that reorders `oneOf` or `allOf` members reports nothing while a
+//     genuine change to one of them still reports.
 func flatten(node *yaml.Node) map[string]string {
 	out := make(map[string]string)
 	flattenInto("", node, out)
@@ -259,12 +364,30 @@ func flattenInto(prefix string, node *yaml.Node, out map[string]string) {
 			out[prefix] = "[" + strings.Join(scalars, ", ") + "]"
 			return
 		}
-		for i, child := range node.Content {
+		for i, child := range sortedSequence(node) {
 			flattenInto(fmt.Sprintf("%s[%d]", prefix, i), child, out)
 		}
 	default:
 		out[prefix] = node.Value
 	}
+}
+
+// sortedSequence orders a sequence of non-scalars by its own rendered content, so
+// position in the list stops being part of the comparison.
+func sortedSequence(node *yaml.Node) []*yaml.Node {
+	items := make([]*yaml.Node, len(node.Content))
+	copy(items, node.Content)
+	rendered := make(map[*yaml.Node]string, len(items))
+	for _, item := range items {
+		flat := flatten(item)
+		parts := make([]string, 0, len(flat))
+		for _, k := range sortedKeys(flat) {
+			parts = append(parts, k+"="+flat[k])
+		}
+		rendered[item] = strings.Join(parts, "\x00")
+	}
+	sort.SliceStable(items, func(i, j int) bool { return rendered[items[i]] < rendered[items[j]] })
+	return items
 }
 
 func scalarSequence(node *yaml.Node) ([]string, bool) {

@@ -249,14 +249,46 @@ operations:
     documented_response: none
     actual_response: bare
 
-# Query parameters the vendored contracts document that the client deliberately
-# never sends. Each needs a reason, because the alternative reading — nobody
-# implemented it — is the failure this gate exists to catch. `scope` on
-# /tag-resolution is the worked example: it belonged in the client, it is
+# Query parameters the vendored contracts document that the client does not send.
+# Each needs a reason, because the alternative reading — nobody implemented it —
+# is the failure this gate exists to catch. `scope` on /tag-resolution is the
+# worked example of the other outcome: it belonged in the client, it is
 # implemented, and it is correctly absent from this list.
 #
-# Empty today. Every documented query parameter is sent.
-unsent_query_parameters: []
+# Rows are keyed by OPERATION, not by name. A name is not a decision: `limit` is
+# legitimately unsent on /tag-resolution and legitimately sent on every list
+# route, so a name-keyed allowlist would silence both.
+#
+# The two below are a real gap, not a decision — and this gate found them. The
+# first draft compared parameter names against the whole package, which read `q`
+# and `slug` as implemented because tags.go sends them; the per-operation check
+# that replaced it surfaced exactly the gap #36 already records. They stay listed
+# rather than fixed here because adding two exported fields is a client change,
+# not a CI one.
+unsent_query_parameters:
+  - path: /vocabularies
+    method: get
+    name: q
+    reason: >-
+      VocabularyListParams has no free-text search field. On GET /vocabularies
+      since server 1.0.0, so this is a gap against a contract the SDK already
+      vendored rather than v2 drift; TagListParams carries the matching pair.
+      Tracked in https://github.com/octoverse-id/octonomy-go/issues/36 and in
+      docs/roadmap.md.
+  - path: /vocabularies
+    method: get
+    name: slug
+    reason: >-
+      The other half of the same gap. See the row above and
+      https://github.com/octoverse-id/octonomy-go/issues/36.
+
+# JSON fields an SDK response model decodes that the contract's schema does not
+# document. The gate compares each decoded model with the schema behind the
+# operation's success body, so a field on one side and not the other is reported
+# unless it is recorded here.
+#
+# Empty today: every field the models decode is documented.
+undocumented_model_fields: []
 
 # Code* constants in errors.go with no counterpart in the server's error registry
 # (octonomy/core/errors.py). Every other constant must appear there, and every code

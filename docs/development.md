@@ -217,20 +217,34 @@ check reports every one of those as green. So the gate compares:
 | --- | --- |
 | **Contract version** | `info.version` on both surfaces, against the marker in `versioning.md` |
 | **Operations** | path + method, both directions, against the inventory |
-| **Query parameters** | per operation, by name, with `in`, `required`, and the parameter's schema — *and* against the parameter names the client actually puts on the wire |
+| **Query parameters** | per operation, by `in` + name, with `required` and the parameter's schema — *and* against the parameters that operation's own method really sends |
 | **Responses** | per operation, per status, including request bodies |
 | **Schemas** | `components.schemas`, property by property, including the `required` set |
+| **Response models** | each schema against the Go struct the method decodes into, field by field |
+| **Routes** | each inventory row against the HTTP method, path, and transport helper its Go method actually uses |
 | **Error codes** | the server's registry in `octonomy/core/errors.py` against this SDK's `Code*` constants, both directions |
 
 The error-code check needs that Python file because the contract cannot answer the question:
 `ErrorResponse` types `code` as a bare string, so every code the envelope can carry is invisible to a
 schema comparison.
 
+**The SDK side is read as Go, not as text.** `tools/contractdrift` parses the package with `go/parser`
+and derives, per method, the route it requests, the transport helper it decodes through, the query
+parameters its params struct builds (following embedded types, and adding the two the transport sets
+for every call), and the model its `doData[T]` / `doList[T]` names. That is what makes the checks
+above assertions about the code rather than about a table someone maintains beside it — and it is
+what caught `q` and `slug` missing from `VocabularyListParams`
+([#36](https://github.com/octoverse-id/octonomy-go/issues/36)), which a comparison of parameter names
+against the whole package reported as implemented because `tags.go` sends both.
+
 ### Two modes, and why only one runs on a pull request
 
 `make contract-check` is **offline**: vendored contracts, the inventory, the Go sources, the recorded
 version. It runs on every pull request as the **`contract inventory`** job and is safe to block a
-merge, because it can only fail on something in this repository.
+merge, because it can only fail on something in this repository. It does not block one *yet* — that
+needs its check context added to main's branch protection, which today requires `lint`, `test (1.24)`,
+`test (1.25)`, and `vuln`. Until then it fails the PR and nothing more, exactly as the
+`integration smoke test` job does.
 
 `make contract-drift` adds the cross-repository comparison and runs **weekly**, in
 [`contract-drift.yml`](../.github/workflows/contract-drift.yml). It is deliberately not a pull-request

@@ -105,11 +105,13 @@ func run(repo, upstream, summary, source string) (int, error) {
 	if in.Coverage, err = LoadCoverage(filepath.Join(repo, "docs", "contract-coverage.yaml")); err != nil {
 		return 0, err
 	}
-	if in.Sources, err = LoadGoSources(repo); err != nil {
+	if in.SDK, err = LoadSDKPackage(repo); err != nil {
 		return 0, err
 	}
-	if in.SDKCodes, err = SDKErrorCodes(filepath.Join(repo, "errors.go")); err != nil {
-		return 0, err
+	in.SDKCodes = in.SDK.ErrorCodes()
+	if len(in.SDKCodes) < minSDKErrorCodes {
+		return 0, fmt.Errorf("%s: found only %d Code* constants (expected at least %d) -- errors.go moved or changed shape",
+			filepath.Join(repo, "errors.go"), len(in.SDKCodes), minSDKErrorCodes)
 	}
 	if in.RecordedVersion, err = RecordedContractVersion(filepath.Join(repo, "docs", "versioning.md")); err != nil {
 		return 0, err
@@ -123,7 +125,7 @@ func run(repo, upstream, summary, source string) (int, error) {
 		if in.Upstream["v2"], err = LoadSpec(filepath.Join(upstream, "openapi-v2.yaml")); err != nil {
 			return 0, err
 		}
-		if in.ServerCodes, err = ServerErrorCodes(filepath.Join(upstream, "errors.py")); err != nil {
+		if in.ServerCodes, in.UnreadableCodes, err = ServerErrorCodes(filepath.Join(upstream, "errors.py")); err != nil {
 			return 0, err
 		}
 	}

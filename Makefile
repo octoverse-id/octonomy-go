@@ -75,9 +75,15 @@ cover: ## Run tests and print total coverage
 	go test -race -coverprofile=coverage.out ./...
 	go tool cover -func=coverage.out | tail -1
 
-vuln: ## Run govulncheck (skipped if not installed; release-check requires it)
+# Both modules. The SDK module has no dependencies, so its scan covers the
+# standard library it builds against; the drift gate's nested module has one, and
+# `govulncheck ./...` at the root stops at that go.mod and never sees it. Nothing
+# there ships to a consumer -- it is CI tooling -- but an unscanned directory is
+# an unscanned directory, and this is the target that says otherwise.
+vuln: ## Run govulncheck on the SDK and on the contract gate's module
 	@if command -v govulncheck >/dev/null 2>&1; then \
 		govulncheck ./...; \
+		(cd tools/contractdrift && govulncheck ./...); \
 	else \
 		echo "govulncheck not installed; skipping. Install: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest"; \
 	fi
@@ -110,8 +116,22 @@ dev-server-logs: ## Dump container logs from the Octonomy container harness
 # YAML parser, is not the SDK's. `go run` from inside that directory is what keeps
 # it out of `go build ./...`, `go.sum`, and anything a consumer resolves.
 
+# `go build` then run, never `go run`. The tool exits 0 clean, 1 drift found, 2
+# comparison could not be made, and `go run` collapses that 2 into a shell exit of
+# 1 while printing "exit status 2" -- so a caller that reads the code learns the
+# opposite of what happened.
+#
+# Note what this does and does not buy. Make flattens ANY failed recipe to its own
+# exit 2, so these targets cannot pass the distinction on; it survives for anyone
+# invoking the binary directly, which is the case worth protecting. In CI the two
+# outcomes are told apart by shape instead: a fetch that could not complete
+# annotates `::error::contract-fetch:` and leaves the job summary empty, while
+# drift leaves the whole report in it.
 contract-check: ## Offline contract gate: vendored contracts vs this repository
-	@cd tools/contractdrift && go run . -repo ../.. -local
+	@set -e; \
+	dir=$$(mktemp -d); trap 'rm -rf "$$dir"' EXIT; \
+	(cd tools/contractdrift && go build -o "$$dir/contractdrift" .); \
+	"$$dir/contractdrift" -repo . -local
 
 # `-summary` always gets a path so CI and a laptop run the same command: in CI it
 # is the job summary, locally it is /dev/null. A conditional flag here would mean
@@ -119,13 +139,17 @@ contract-check: ## Offline contract gate: vendored contracts vs this repository
 contract-drift: ## Full contract gate: fetch the server's contract and report drift (network)
 	@set -e; \
 	dir=$$(mktemp -d); trap 'rm -rf "$$dir"' EXIT; \
-	scripts/contract-fetch.sh "$$dir"; \
-	cd tools/contractdrift && go run . -repo ../.. -upstream "$$dir" \
-		-source "$$(cat "$$dir/source.txt")" \
+	(cd tools/contractdrift && go build -o "$$dir/contractdrift" .); \
+	scripts/contract-fetch.sh "$$dir/upstream"; \
+	"$$dir/contractdrift" -repo . -upstream "$$dir/upstream" \
+		-source "$$(cat "$$dir/upstream/source.txt")" \
 		-summary "$${GITHUB_STEP_SUMMARY:-/dev/null}"
 
+# -race like every other suite here (AGENTS.md), and vet because the root
+# `go vet ./...` stops at the nested module's go.mod and never sees this
+# directory.
 contract-test: ## Run the contract gate's own tests (proves the gate can still fail)
-	@cd tools/contractdrift && go vet ./... && go test ./...
+	@cd tools/contractdrift && go vet ./... && go test -race ./...
 
 version-check: ## Verify version.go matches the latest CHANGELOG.md release heading
 	@code_ver=$$(grep -E '^const Version = ' version.go | sed -E 's/.*"([^"]+)".*/\1/'); \

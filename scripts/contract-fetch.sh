@@ -73,7 +73,30 @@ else
 fi
 log "fetching $REPO@$REF via $MODE"
 
+# resolve_sha_once prints the commit the ref currently points at.
+resolve_sha_once() {
+    case "$MODE" in
+        gh)
+            gh api "repos/$REPO/commits/$REF" --jq .sha
+            ;;
+        curl)
+            # No jq dependency: the commit object's own sha is the first "sha"
+            # key in the response, and the -m1 makes that explicit rather than
+            # incidental.
+            curl -fsS --max-time "$TIMEOUT" "https://api.github.com/repos/$REPO/commits/$REF" \
+                | grep -m1 '"sha"' \
+                | sed -E 's/.*"sha"[[:space:]]*:[[:space:]]*"([0-9a-f]{7,40})".*/\1/'
+            ;;
+    esac
+}
+
 # fetch_once PATH DEST-FILE
+#
+# Every file is fetched at the RESOLVED COMMIT, never at the ref. Three requests
+# against a moving branch can straddle a push and produce a snapshot that never
+# existed -- v1 from before it, errors.py from after -- which shows up as drift
+# nobody can reproduce, or worse, hides real drift. It also makes source.txt
+# true: the commit in the report is the commit the bytes came from.
 fetch_once() {
     case "$MODE" in
         gh)
@@ -81,11 +104,11 @@ fetch_once() {
             # renamed path in three different ways, and the retry loop below
             # would otherwise reduce all three to "attempt 1/3 failed".
             gh api -H "Accept: application/vnd.github.raw" \
-                "repos/$REPO/contents/$1?ref=$REF" >"$2"
+                "repos/$REPO/contents/$1?ref=$SHA" >"$2"
             ;;
         curl)
             curl -fsS --max-time "$TIMEOUT" \
-                "https://raw.githubusercontent.com/$REPO/$REF/$1" -o "$2"
+                "https://raw.githubusercontent.com/$REPO/$SHA/$1" -o "$2"
             ;;
     esac
 }
@@ -119,23 +142,33 @@ fetch() {
         fi
     done
     rm -f "$dest"
-    fail "could not fetch $path from $REPO@$REF -- the comparison did not run"
+    fail "could not fetch $path from $REPO@$SHA -- the comparison did not run"
 }
+
+# Resolve first, then fetch -- see fetch_once. An unresolvable ref fails the run
+# rather than falling back to the moving branch: a snapshot this script cannot
+# name is one nobody can reproduce, and "could not compare" is a different
+# outcome from "compared and found a difference".
+SHA=""
+attempt=1
+while [ "$attempt" -le "$ATTEMPTS" ]; do
+    SHA=$(resolve_sha_once 2>/dev/null || true)
+    case "$SHA" in
+        *[!0-9a-f]* | "") SHA="" ;;
+        *) break ;;
+    esac
+    log "attempt $attempt/$ATTEMPTS failed to resolve $REF"
+    attempt=$((attempt + 1))
+    if [ "$attempt" -le "$ATTEMPTS" ]; then
+        sleep "$RETRY_SLEEP"
+    fi
+done
+[ -n "$SHA" ] || fail "could not resolve $REPO@$REF to a commit -- the comparison did not run"
+log "resolved $REF to $SHA"
 
 fetch "docs/openapi.yaml" "$DEST/openapi.yaml" "^openapi:"
 fetch "docs/openapi-v2.yaml" "$DEST/openapi-v2.yaml" "^openapi:"
 fetch "octonomy/core/errors.py" "$DEST/errors.py" "class DomainError"
 
-# Resolve the ref to a commit so a drift report names something reproducible.
-# A failure here is not fatal: the comparison is what matters, and an unresolved
-# ref costs a line of provenance rather than the run.
-SHA=""
-if [ "$MODE" = gh ]; then
-    SHA=$(gh api "repos/$REPO/commits/$REF" --jq .sha 2>/dev/null || true)
-fi
-if [ -n "$SHA" ]; then
-    printf '%s@%s\n' "$REPO" "$SHA" >"$DEST/source.txt"
-else
-    printf '%s@%s (commit unresolved)\n' "$REPO" "$REF" >"$DEST/source.txt"
-fi
+printf '%s@%s\n' "$REPO" "$SHA" >"$DEST/source.txt"
 log "source: $(cat "$DEST/source.txt")"

@@ -183,12 +183,10 @@ func load(t *testing.T, repo, upstream string) Inputs {
 	if in.Coverage, err = LoadCoverage(filepath.Join(repo, "docs", "contract-coverage.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	if in.Sources, err = LoadGoSources(repo); err != nil {
+	if in.SDK, err = LoadSDKPackage(repo); err != nil {
 		t.Fatal(err)
 	}
-	if in.SDKCodes, err = SDKErrorCodes(filepath.Join(repo, "errors.go")); err != nil {
-		t.Fatal(err)
-	}
+	in.SDKCodes = in.SDK.ErrorCodes()
 	if in.RecordedVersion, err = RecordedContractVersion(filepath.Join(repo, "docs", "versioning.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +198,7 @@ func load(t *testing.T, repo, upstream string) Inputs {
 		if in.Upstream["v2"], err = LoadSpec(filepath.Join(upstream, "openapi-v2.yaml")); err != nil {
 			t.Fatal(err)
 		}
-		if in.ServerCodes, err = ServerErrorCodes(filepath.Join(upstream, "errors.py")); err != nil {
+		if in.ServerCodes, in.UnreadableCodes, err = ServerErrorCodes(filepath.Join(upstream, "errors.py")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -297,7 +295,7 @@ func TestDetectsAddedQueryParameter(t *testing.T) {
 		"      parameters:\n      - in: query\n        name: scope_hint\n        schema:\n          type: string\n")
 
 	assertFinding(t, runFull(t, repoRoot, upstream),
-		"gained query parameter `scope_hint`",
+		"gained parameter `query scope_hint`",
 		"get /api/v2/tag-resolution")
 }
 
@@ -311,8 +309,8 @@ func TestDetectsChangedQueryParameter(t *testing.T) {
 		"      - in: query\n        name: is_active\n        required: true\n        schema:\n          type: string\n")
 
 	assertFinding(t, runFull(t, repoRoot, upstream),
-		"parameter `is_active`: + required: true",
-		"parameter `is_active`: ~ schema.type: boolean -> string")
+		"parameter `query is_active`: + required: true",
+		"parameter `query is_active`: ~ schema.type: boolean -> string")
 }
 
 // TestDetectsNewErrorCode is the second acceptance criterion. The spec cannot
@@ -476,8 +474,8 @@ func TestUnsentQueryParameterFails(t *testing.T) {
 		"      parameters:\n      - in: query\n        name: scope_hint\n        schema:\n          type: string\n")
 
 	assertFinding(t, runLocal(t, repo),
-		"`scope_hint` is documented as a query parameter",
-		"the client never sends it")
+		"documents the query parameter `scope_hint`",
+		"`TagService.Resolve` never sends it")
 }
 
 // TestAllowlistedUnsentQueryParameterPasses is that allowlist working.
@@ -488,9 +486,13 @@ func TestAllowlistedUnsentQueryParameterPasses(t *testing.T) {
 		"      parameters:\n",
 		"      parameters:\n      - in: query\n        name: scope_hint\n        schema:\n          type: string\n")
 	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
-		"unsent_query_parameters:",
-		"unsent_query_parameters: []",
-		"unsent_query_parameters:\n  - name: scope_hint\n    reason: server-side ranking hint, not a client concern\n")
+		"\nunsent_query_parameters:\n",
+		"\nunsent_query_parameters:\n",
+		"\nunsent_query_parameters:\n"+`  - path: /tag-resolution
+    method: get
+    name: scope_hint
+    reason: server-side ranking hint, not a client concern
+`)
 
 	assertClean(t, runLocal(t, repo))
 }
@@ -499,12 +501,16 @@ func TestAllowlistedUnsentQueryParameterPasses(t *testing.T) {
 func TestStaleUnsentAllowlistFails(t *testing.T) {
 	repo := stageRepo(t)
 	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
-		"unsent_query_parameters:",
-		"unsent_query_parameters: []",
-		"unsent_query_parameters:\n  - name: nothing_documents_this\n    reason: left behind by an earlier refresh\n")
+		"\nunsent_query_parameters:\n",
+		"\nunsent_query_parameters:\n",
+		"\nunsent_query_parameters:\n"+`  - path: /tag-resolution
+    method: get
+    name: nothing_documents_this
+    reason: left behind by an earlier refresh
+`)
 
 	assertFinding(t, runLocal(t, repo),
-		"`nothing_documents_this` is listed under unsent_query_parameters",
+		"`get /tag-resolution nothing_documents_this` is listed under unsent_query_parameters",
 		"drop the row")
 }
 
@@ -519,7 +525,7 @@ func TestChangedDocumentedResponseFails(t *testing.T) {
 		"              schema:\n                $ref: '#/components/schemas/TagPage'\n")
 
 	assertFinding(t, runLocal(t, repo),
-		"documents a `ref:TagPage` 200 body, recorded as `array`")
+		"documents a `ref:TagPage` success body, recorded as `array`")
 }
 
 // TestRenamedMethodFailsInventory keeps a row from asserting something false about
@@ -532,7 +538,7 @@ func TestRenamedMethodFailsInventory(t *testing.T) {
 		"func (s *TagService) ListEverything(")
 
 	assertFinding(t, runLocal(t, repo),
-		"claims `TagService.List` in tags.go, which declares no such method")
+		"claims `TagService.List`, which this package does not declare")
 }
 
 // TestRecordedVersionMismatchFails covers the prose in docs/versioning.md, which
@@ -555,12 +561,8 @@ func TestRecordedVersionMismatchFails(t *testing.T) {
 func TestExtractorFloors(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "errors.py"), "class Nothing:\n    pass\n")
-	if _, err := ServerErrorCodes(filepath.Join(dir, "errors.py")); err == nil {
+	if _, _, err := ServerErrorCodes(filepath.Join(dir, "errors.py")); err == nil {
 		t.Error("a file with no error codes was accepted")
-	}
-	write(t, filepath.Join(dir, "errors.go"), "package octonomy\n\nconst CodeOne = \"one\"\n")
-	if _, err := SDKErrorCodes(filepath.Join(dir, "errors.go")); err == nil {
-		t.Error("a file with one error code was accepted")
 	}
 	write(t, filepath.Join(dir, "versioning.md"), "# no marker here\n")
 	if _, err := RecordedContractVersion(filepath.Join(dir, "versioning.md")); err == nil {
@@ -572,14 +574,27 @@ func TestExtractorFloors(t *testing.T) {
 // it sets the scope parameters through constants rather than inline literals, and
 // an extractor that only matched the inline form would report them as never sent.
 func TestQueryParametersResolveThroughConstants(t *testing.T) {
-	sources, err := LoadGoSources(repoRoot)
+	sdk, err := LoadSDKPackage(repoRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sent := sources.QueryParams()
-	for _, name := range []string{"application_id", "include_global", "scope", "limit", "offset"} {
-		if _, ok := sent[name]; !ok {
-			t.Errorf("%q is set by the SDK and the extractor did not find it", name)
+	sent, err := sdk.QueryParams("TagService.Resolve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// `scope` is set through a constant declared in transport.go and used in
+	// resolution.go; `application_id` and `include_global` are set by the
+	// transport itself, for every call.
+	for _, name := range []string{"scope", "slug", "type", "application_id", "include_global"} {
+		if !sent[name] {
+			t.Errorf("TagService.Resolve sends %q and the analysis did not find it", name)
+		}
+	}
+	// And the point of doing this per operation: the resolution route does NOT
+	// page, even though pagination.go sets limit and offset for the list routes.
+	for _, name := range []string{"limit", "offset"} {
+		if sent[name] {
+			t.Errorf("TagService.Resolve does not send %q; the analysis leaked it from another route", name)
 		}
 	}
 }
@@ -631,5 +646,316 @@ func TestWriteOperationsCarryTheirContract(t *testing.T) {
 	// envelopes -- recorded here rather than asserted away.
 	if op := spec.Operations["delete /api/v2/tag-assignments"]; op == nil || op.ID == "" || len(op.Responses) == 0 {
 		t.Error("delete /api/v2/tag-assignments decoded as an empty shell")
+	}
+}
+
+// --- the SDK side, which is where the first review found the hole ---------------
+//
+// The gate shipped its first draft comparing YAML with YAML and asserting only
+// that a function with the right name existed. An outside review reproduced the
+// consequence exactly: add a property to a vendored schema, change no Go, and the
+// blocking gate was green -- so a contract refresh could land while the SDK still
+// implemented the old contract, which is the one thing this gate is for. The
+// tests below are that reproduction, kept.
+
+// TestDetectsFieldAddedToVendoredSchema is the review's own repro: the contract
+// grows a field, the Go model does not, and the OFFLINE gate says so. The
+// upstream comparison cannot: once the YAML is refreshed, both sides of it agree.
+func TestDetectsFieldAddedToVendoredSchema(t *testing.T) {
+	repo := stageRepo(t)
+	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
+		edit(t, filepath.Join(repo, "docs", spec), "\n    Tag:\n",
+			"      properties:\n",
+			"      properties:\n        colour:\n          type: string\n")
+	}
+
+	assertFinding(t, runLocal(t, repo),
+		"schema `Tag` documents `colour` and the Go model `Tag` has no field for it")
+}
+
+// TestDetectsFieldWithdrawnFromVendoredSchema is the other direction: the SDK
+// keeps decoding something the contract no longer documents.
+func TestDetectsFieldWithdrawnFromVendoredSchema(t *testing.T) {
+	repo := stageRepo(t)
+	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
+		edit(t, filepath.Join(repo, "docs", spec), "\n    Tag:\n",
+			"        usage_count:\n", "        usage_count_renamed:\n")
+	}
+
+	assertFinding(t, runLocal(t, repo),
+		"the Go model `Tag` decodes `usage_count`, which schema `Tag` does not document")
+}
+
+// TestResponseModelCheckIsNotVacuous guards the check above from quietly
+// comparing nothing -- an empty property set on either side would make every
+// model "match".
+func TestResponseModelCheckIsNotVacuous(t *testing.T) {
+	in := load(t, repoRoot, "")
+	spec := in.Vendored["v2"]
+
+	compared := 0
+	for _, model := range []string{"Tag", "Vocabulary", "TagAlias", "Assignment", "AuditLog", "ResourceTag", "TagResource", "TagResolution"} {
+		documented, ok := spec.SchemaProperties(model)
+		if !ok || len(documented) == 0 {
+			t.Errorf("schema %s documents no properties", model)
+			continue
+		}
+		decoded, ok := in.SDK.JSONFields(model)
+		if !ok || len(decoded) == 0 {
+			t.Errorf("the Go model %s decodes no JSON fields", model)
+			continue
+		}
+		compared += len(documented)
+	}
+	if compared < 50 {
+		t.Errorf("only %d properties take part in the model comparison; it is close to vacuous", compared)
+	}
+}
+
+// TestQueryParameterCheckIsPerOperation is the review's second repro. `limit` is
+// set by pagination.go for every list route, so a check that asked whether the
+// NAME appeared anywhere in the package called it implemented on /tag-resolution
+// too -- which does not page at all.
+func TestQueryParameterCheckIsPerOperation(t *testing.T) {
+	repo := stageRepo(t)
+	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
+		edit(t, filepath.Join(repo, "docs", spec),
+			"operationId: api_v"+surfaceDigit(spec)+"_tag_resolution_retrieve",
+			"      parameters:\n",
+			"      parameters:\n      - in: query\n        name: limit\n        schema:\n          type: integer\n")
+	}
+
+	assertFinding(t, runLocal(t, repo),
+		"`get /tag-resolution` documents the query parameter `limit` and `TagService.Resolve` never sends it")
+}
+
+// surfaceDigit picks the operationId prefix for a vendored spec file.
+func surfaceDigit(spec string) string {
+	if strings.Contains(spec, "-v2") {
+		return "2"
+	}
+	return "1"
+}
+
+// TestUnsentAllowlistDoesNotLeakAcrossOperations pins the reason that allowlist
+// is keyed by operation. `q` is recorded as unsent on /vocabularies; that must
+// not excuse it anywhere else.
+func TestUnsentAllowlistDoesNotLeakAcrossOperations(t *testing.T) {
+	repo := stageRepo(t)
+	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
+		edit(t, filepath.Join(repo, "docs", spec),
+			"operationId: api_v"+surfaceDigit(spec)+"_tag_resolution_retrieve",
+			"      parameters:\n",
+			"      parameters:\n      - in: query\n        name: q\n        schema:\n          type: string\n")
+	}
+
+	assertFinding(t, runLocal(t, repo),
+		"`get /tag-resolution` documents the query parameter `q` and `TagService.Resolve` never sends it")
+}
+
+// TestRoutesAreDerivedFromTheCode is what turns the inventory from a claim into
+// an assertion: the row says `get /tags`, and the method really does issue a GET
+// to /tags through doList.
+func TestRoutesAreDerivedFromTheCode(t *testing.T) {
+	sdk, err := LoadSDKPackage(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		symbol string
+		want   Route
+	}{
+		{"TagService.List", Route{Method: "get", Path: "/tags", Helper: "doList", Model: "Tag"}},
+		{"TagService.Get", Route{Method: "get", Path: "/tags/{}", Helper: "doData", Model: "Tag"}},
+		{"TagService.Delete", Route{Method: "delete", Path: "/tags/{}", Helper: "do"}},
+		{"ResourceService.ListTags", Route{Method: "get", Path: "/resources/{}/{}/tags", Helper: "doList", Model: "ResourceTag"}},
+		// The health probes reach the transport through a shared helper that takes
+		// the path as a parameter and fixes the method itself; both indirections
+		// have to resolve or the row cannot be checked at all.
+		{"HealthService.Live", Route{Method: "get", Path: "/health/live", Helper: "doUnversioned"}},
+	} {
+		got, err := sdk.Route(tc.symbol)
+		if err != nil {
+			t.Errorf("%s: %v", tc.symbol, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s: got %+v, want %+v", tc.symbol, got, tc.want)
+		}
+	}
+}
+
+// TestRepointedMethodFailsInventory: the named method exists and does something
+// else. The name-only check this replaced agreed the operation was covered.
+func TestRepointedMethodFailsInventory(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "tags.go"),
+		"func (s *TagService) Get(",
+		`"/tags/"+url.PathEscape(id), nil, nil, opts...)`,
+		`"/vocabularies/"+url.PathEscape(id), nil, nil, opts...)`)
+
+	assertFinding(t, runLocal(t, repo),
+		"`TagService.Get` requests `/vocabularies/{}`, not `/tags/{}`")
+}
+
+// TestWrongActualResponseFails ties the recorded envelope to the transport helper
+// the method actually calls, rather than to whatever someone typed.
+func TestWrongActualResponseFails(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
+		"  - path: /tags\n    method: get\n",
+		"    actual_response: list-envelope\n",
+		"    actual_response: data-envelope\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`TagService.List` decodes through doList, which yields `list-envelope`, but the row records `data-envelope`")
+}
+
+// TestTypedConstantsResolve covers the spelling that broke the regexp this
+// replaced: `scopeParam string = "scope"` is the same declaration to a reader and
+// must be the same to the gate.
+func TestTypedConstantsResolve(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "transport.go"),
+		"\tscopeParam ",
+		`scopeParam            = "scope"`,
+		`scopeParam     string = "scope"`)
+
+	assertClean(t, runLocal(t, repo))
+}
+
+// --- spec-reading corners the review found ---------------------------------------
+
+// TestPathItemParametersAreMerged covers a parameter form OpenAPI allows and this
+// server does not currently emit: declared once on the path item, inherited by
+// every operation under it. Skipping it silently would have made an entire class
+// of added parameters invisible.
+func TestPathItemParametersAreMerged(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"  /api/v2/tag-resolution:\n",
+		"  /api/v2/tag-resolution:\n",
+		"  /api/v2/tag-resolution:\n    parameters:\n    - in: query\n      name: shared_hint\n      schema:\n        type: string\n")
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"gained parameter `query shared_hint`")
+}
+
+// TestComponentParameterRefsResolve covers the other form: a parameter written as
+// a reference, which carries no inline name.
+func TestComponentParameterRefsResolve(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"operationId: api_v2_tag_resolution_retrieve",
+		"      parameters:\n",
+		"      parameters:\n      - $ref: '#/components/parameters/SharedHint'\n")
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"components:\n",
+		"components:\n",
+		"components:\n  parameters:\n    SharedHint:\n      in: query\n      name: shared_hint\n      schema:\n        type: string\n")
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"gained parameter `query shared_hint`")
+}
+
+// TestUnresolvableParameterRefFailsLoudly is the same form pointed at nothing.
+// A parameter the gate cannot identify must stop the run, not vanish from it.
+func TestUnresolvableParameterRefFailsLoudly(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"operationId: api_v2_tag_resolution_retrieve",
+		"      parameters:\n",
+		"      parameters:\n      - $ref: '#/components/parameters/NotThere'\n")
+
+	if _, err := LoadSpec(filepath.Join(upstream, "openapi-v2.yaml")); err == nil {
+		t.Fatal("a parameter reference that resolves to nothing was accepted")
+	}
+}
+
+// TestParameterIdentityIncludesIn: OpenAPI identifies a parameter by name AND
+// location, so a header may share a query parameter's name without being it.
+func TestParameterIdentityIncludesIn(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"operationId: api_v2_tags_list",
+		"      parameters:\n",
+		"      parameters:\n      - in: header\n        name: slug\n        schema:\n          type: string\n")
+
+	report := runFull(t, repoRoot, upstream)
+	assertFinding(t, report, "gained parameter `header slug`")
+	for _, item := range findings(report) {
+		if strings.Contains(item, "lost parameter `query slug`") {
+			t.Errorf("the header displaced the query parameter of the same name: %s", item)
+		}
+	}
+}
+
+// TestReorderedSequenceIsNotDrift keeps a generator's incidental ordering out of
+// the report. A scheduled job that goes red for a reshuffle is a job people learn
+// to close unread.
+func TestReorderedSequenceIsNotDrift(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"operationId: api_v2_tags_list",
+		"      - in: query\n        name: is_active\n        schema:\n          type: boolean\n      - in: query\n        name: limit\n",
+		"      - in: query\n        name: limit\n")
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"operationId: api_v2_tags_list",
+		"      tags:\n",
+		"      - in: query\n        name: is_active\n        schema:\n          type: boolean\n      tags:\n")
+
+	assertClean(t, runFull(t, repoRoot, upstream))
+}
+
+// TestUnreadableServerErrorCodeIsReported is the answer to "the extractor only
+// understands one spelling". It still only understands one -- but it now says so
+// when the registry uses another, instead of comparing against a set that is
+// quietly one code short while the count floor stays healthy.
+func TestUnreadableServerErrorCodeIsReported(t *testing.T) {
+	upstream := stageUpstream(t)
+	write(t, filepath.Join(upstream, "errors.py"), syntheticErrorsPy+`
+
+class VocabularyLockedError(ConflictError):
+    code = ErrorCodes.VOCABULARY_LOCKED
+`)
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"produces a code in a form this gate cannot read",
+		"ErrorCodes.VOCABULARY_LOCKED")
+}
+
+// TestAnnotatedServerErrorCodeIsRead covers the spelling that IS understood but
+// that the first pattern missed: `code: str = "..."`.
+func TestAnnotatedServerErrorCodeIsRead(t *testing.T) {
+	upstream := stageUpstream(t)
+	write(t, filepath.Join(upstream, "errors.py"), syntheticErrorsPy+`
+
+class VocabularyLockedError(ConflictError):
+    code: str = "vocabulary_locked"
+`)
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"the server can return `vocabulary_locked` and errors.go has no constant for it")
+}
+
+// TestNonListParametersFailLoudly: a `parameters` key that is not a list would
+// otherwise yield an operation with no parameters at all, and report every one of
+// them as removed.
+func TestNonListParametersFailLoudly(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "broken.yaml"), `openapi: 3.0.3
+info:
+  version: 3.1.1
+paths:
+  /api/v2/tags:
+    get:
+      operationId: api_v2_tags_list
+      parameters: "not a list"
+      responses:
+        '200':
+          description: ''
+`)
+	if _, err := LoadSpec(filepath.Join(dir, "broken.yaml")); err == nil {
+		t.Fatal("an operation whose parameters are not a list was accepted")
 	}
 }
