@@ -58,7 +58,12 @@ class AmbiguousResolutionError(DomainError):
 class ScopeImmutableError(ConflictError):
     code = "scope_immutable"
 
+def error_response(code: str, message: str, details: Any, request, http_status: int) -> Response:
+    return Response({"error": {"code": code}}, status=http_status)
+
 def exception_handler(exc, context):
+    if isinstance(exc, DomainError):
+        return error_response(exc.code, exc.message, exc.details, request, exc.status_code)
     if isinstance(exc, Http404):
         return error_response("not_found", "Resource not found.", {}, request, 404)
     code = "validation_error"
@@ -1002,4 +1007,30 @@ func TestPathHelpersAreRenderedFromTheirBody(t *testing.T) {
 
 	assertFinding(t, runLocal(t, repo),
 		"requests `/things/{}/{}/tags`, not `/resources/{}/{}/tags`")
+}
+
+// TestOrdinaryErrorRegistryShapesAreNotReportedAsUnreadable is the nag guard on
+// the unreadable-form report. Run against the server's real errors.py it first
+// produced two findings a reader could do nothing with: the definition line of
+// `error_response` itself, and `error_response(exc.code, ...)`, whose code the
+// class-attribute pattern had already read. A scheduled job that reports those
+// every week is one people stop opening.
+func TestOrdinaryErrorRegistryShapesAreNotReportedAsUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "errors.py"), syntheticErrorsPy)
+
+	codes, unreadable, err := ServerErrorCodes(filepath.Join(dir, "errors.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unreadable) != 0 {
+		t.Errorf("ordinary registry shapes were reported as unreadable: %v", unreadable)
+	}
+	// And the shapes it does read are all there -- including the one the DRF
+	// handler assigns to a local before passing it on.
+	for _, code := range []string{"validation_error", "not_found", "authentication_required", "forbidden", "scope_immutable"} {
+		if !codes[code] {
+			t.Errorf("%q was not extracted from the registry", code)
+		}
+	}
 }

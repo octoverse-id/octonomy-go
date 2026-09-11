@@ -13,20 +13,35 @@
 //	contract version   the spec's info.version, on both surfaces, against the
 //	                   version recorded in docs/versioning.md
 //	operations         path + method, in both directions
-//	parameters         per operation, by name, including `in`, `required`, and
-//	                   the parameter's own schema
+//	parameters         per operation, keyed by `in` AND name, including
+//	                   `required` and the parameter's own schema
 //	responses          per operation, per status, including the request body
 //	schemas            components.schemas, property by property
 //	error codes        the server's registry in core/errors.py against the SDK's
 //	                   Code* constants -- invisible to a schema comparison,
 //	                   because ErrorResponse types `code` as a bare string
 //
+// And, because the question is what the SDK IMPLEMENTS and not what it vendors,
+// three comparisons that read the Go package itself (gosdk.go):
+//
+//	routes             each inventory row against the method, path, and transport
+//	                   helper its Go method really uses
+//	query parameters   per operation, against the parameters that operation's own
+//	                   params struct builds, plus the transport's chokepoint ones
+//	response models    each schema against the struct doData[T]/doList[T] names,
+//	                   field by field
+//
 // TWO MODES, because only one of them can be trusted on a pull request:
 //
 //	-local             compares the VENDORED contracts against this repository:
-//	                   the inventory, the Go methods it names, the query
-//	                   parameters the client actually sends, and the recorded
-//	                   contract version. Offline and deterministic.
+//	                   the inventory, the routes and models of the Go methods it
+//	                   names, the query parameters each of those methods sends,
+//	                   and the recorded contract version. Offline, deterministic,
+//	                   and the only half safe to gate a pull request -- it can
+//	                   fail only on something in this checkout. It is also the
+//	                   only half that can see a vendored contract refreshed
+//	                   without the follow-through, since after a refresh both
+//	                   sides of the cross-repository comparison are one file.
 //	-upstream DIR      adds the cross-repository comparison against a fetched
 //	                   copy of the server's contracts. Scheduled only: a job that
 //	                   reaches across repositories can fail for reasons that have

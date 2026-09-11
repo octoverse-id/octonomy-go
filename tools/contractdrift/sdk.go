@@ -31,11 +31,25 @@ var (
 	pyCallCodeRE = regexp.MustCompile(`error_response\(\s*["']([a-z0-9_]+)["']`)
 
 	// The same two shapes with anything other than a plain string literal where
-	// the code belongs: an enum member, a constant, a lookup, an f-string, a
-	// variable. Each match that the two extractors above did not already account
+	// the code belongs: an enum member, a lookup, an f-string, a constant from
+	// somewhere else. Each match the two extractors above did not already account
 	// for is reported as a form the gate cannot read.
+	//
+	// `(?m)^(?:(?!def )...)` is not available here (Go's regexp has no lookahead),
+	// so the definition line -- `def error_response(code: str, ...)` -- is filtered
+	// by the caller instead. It has to be filtered somewhere: reporting a
+	// function's own signature as an unreadable code is the kind of noise that
+	// teaches everyone to stop reading a scheduled job's output.
 	pyClassCodeAnyRE = regexp.MustCompile(`(?m)^(\s*code\s*(?::[^=\n]*)?=\s*)(.+)$`)
-	pyCallCodeAnyRE  = regexp.MustCompile(`error_response\(\s*([^,\s][^,]*)`)
+	pyCallCodeAnyRE  = regexp.MustCompile(`(?m)^(.*?)error_response\(\s*([^,\s][^,]*)`)
+
+	// An argument that resolves to a DomainError's own `code` attribute, which the
+	// class pattern above has already read: the local `code` the DRF handler
+	// assigns, and `exc.code` / `error.code` on a raised domain error. Suppressed
+	// rather than reported, because the code it names IS in the extracted set.
+	// The limit is worth knowing: a `.code` attribute on something that is not a
+	// DomainError would be suppressed here too.
+	pyResolvedCodeRE = regexp.MustCompile(`^(?:[A-Za-z_][A-Za-z0-9_]*\.)?code$`)
 
 	// The machine-readable marker in docs/versioning.md.
 	versioningMarkerRE = regexp.MustCompile(`<!--\s*contract-version:\s*([0-9][^\s]*)\s*-->`)
@@ -92,11 +106,11 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 		}
 	}
 	for _, m := range pyCallCodeAnyRE.FindAllStringSubmatch(src, -1) {
-		value := strings.TrimSpace(m[1])
-		// `error_response(code, ...)` inside the handler passes the local it just
-		// assigned, and those assignments are already read by the class-shape
-		// pattern above. Anything else is a form this cannot follow.
-		if isPyStringLiteral(value) || value == "code" || seen[value] {
+		if strings.Contains(m[1], "def ") {
+			continue // the function's own definition, not a call
+		}
+		value := strings.TrimSpace(m[2])
+		if isPyStringLiteral(value) || pyResolvedCodeRE.MatchString(value) || seen[value] {
 			continue
 		}
 		seen[value] = true
