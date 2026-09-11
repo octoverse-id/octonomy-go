@@ -31,6 +31,22 @@ type ResourceTag struct {
 	Tag           Tag       `json:"tag"`
 }
 
+// identityFields names assignment_id, which is this row's identity -- it has no
+// "id" of its own -- and the embedded tag's id (#40).
+//
+// The nested tag is named here and not on other models because BOTH vendored
+// contracts mark "tag" required on this schema, and because it is the whole
+// point of the route: ResourceTag exists to hand back the tag inline rather than
+// a tag id to look up, so {"assignment_id": "asg_1", "tag": {}} is a row that
+// answers nothing while looking complete. A nested resource is not automatically
+// part of a row's identity; this one is, because the contract says so.
+func (r ResourceTag) identityFields() []identityField {
+	return []identityField{
+		{name: "assignment_id", value: r.AssignmentID},
+		{name: "tag.id", value: r.Tag.ID},
+	}
+}
+
 // TagResource is one resource as seen FROM a tag -- the mirror of ResourceTag,
 // and the reason the two exist separately. It carries no tag, because the tag is
 // what you started from, and no assignment id, because the route answers "what
@@ -46,6 +62,12 @@ type TagResource struct {
 	ResourceID    string    `json:"resource_id"`
 	AssignedBy    *string   `json:"assigned_by"`
 	AssignedAt    time.Time `json:"assigned_at"`
+}
+
+// identityFields names resource_id: a TagResource carries no id of its own, and
+// the contract marks resource_id required (#40).
+func (r TagResource) identityFields() []identityField {
+	return []identityField{{name: "resource_id", value: r.ResourceID}}
 }
 
 // ResourceReplace is the request body for replacing a resource's whole tag set.
@@ -106,12 +128,14 @@ func (r *ResourceReplaceResult) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf(`octonomy: replace response has no "tags" array`)
 	}
 	out := ResourceReplaceResult{Created: *wire.Created, Removed: *wire.Removed}
-	if err := json.Unmarshal(wire.Tags, &out.Tags); err != nil {
-		return fmt.Errorf("octonomy: decode replace tags: %w", err)
+	// decodeResourceArray, for the reason given on BulkAssignResult: a null or
+	// {} row decodes to a blank Tag in an otherwise good result (#40), and a
+	// present-but-null array normalizes to an empty non-nil slice.
+	tags, err := decodeResourceArray[Tag](wire.Tags, `replace "tags"`)
+	if err != nil {
+		return err
 	}
-	if out.Tags == nil {
-		out.Tags = []Tag{}
-	}
+	out.Tags = tags
 	*r = out
 	return nil
 }

@@ -852,12 +852,15 @@ func doData[T any](ctx context.Context, c *Client, method, path string, query ur
 	if err != nil {
 		return nil, err
 	}
-	if string(data) == "null" {
-		return nil, fmt.Errorf(`octonomy: response "data" envelope is null, expected a resource`)
+	if err := requireResourceObject(data, `response "data" envelope`); err != nil {
+		return nil, err
 	}
 	var out T
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("octonomy: decode response data: %w", err)
+	}
+	if err := requireIdentity(out, `response "data" envelope`); err != nil {
+		return nil, err
 	}
 	return &out, nil
 }
@@ -898,13 +901,12 @@ func doList[T any](ctx context.Context, c *Client, method, path string, query ur
 		return nil, fmt.Errorf(`octonomy: list response has no "pagination" block`)
 	}
 
-	out := &List[T]{}
-	if err := json.Unmarshal(data, &out.Data); err != nil {
-		return nil, fmt.Errorf("octonomy: decode response data: %w", err)
+	items, err := decodeResourceArray[T](data, `list response "data"`)
+	if err != nil {
+		return nil, err
 	}
-	if out.Data == nil {
-		out.Data = []T{}
-	}
+
+	out := &List[T]{Data: items}
 	if err := json.Unmarshal(pagination, &out.Pagination); err != nil {
 		return nil, fmt.Errorf("octonomy: decode response pagination: %w", err)
 	}
@@ -936,6 +938,133 @@ func decodeEnvelope(body []byte) (data, pagination json.RawMessage, err error) {
 		return nil, nil, fmt.Errorf(`octonomy: response body has no "data" envelope`)
 	}
 	return envelope.Data, envelope.Pagination, nil
+}
+
+// requireResourceObject rejects a payload position that must hold a resource but
+// holds something that would decode to a zero value with a nil error.
+//
+// It is the rule decodeEnvelope enforces, moved one level in. decodeEnvelope
+// catches a body with no "data" key at all; this catches a well-formed envelope
+// whose contents are not a resource -- {} above all, which fills in nothing and
+// yields a Tag with an empty ID, a Vocabulary with no Slug, an Assignment whose
+// AssignedAt.IsZero() is true (#40). The id makes that self-evident, which is
+// why the line was drawn at the envelope originally; every OTHER field makes it
+// a plausible-looking blank instead, and a caller reading one cannot tell it
+// from a real value.
+//
+// It deliberately knows NOTHING about T, which is what lets every resource this
+// SDK decodes be checked by the same three lines rather than by four slightly
+// different validations -- being the outlier is what made #40 an issue rather
+// than a line in the PR that found it. What it cannot see is a NON-empty object
+// carrying the wrong thing, since {"id": null} is as well formed as any other;
+// identifiedResource below is the half that closes that, and the two are
+// deliberately separate because only the second needs to know the model.
+//
+// The what argument names the position -- `response "data" envelope`, or
+// `list response "data" element 2` -- because by the time this fails a caller
+// has no other way to learn which part of the body was wrong.
+func requireResourceObject(raw json.RawMessage, what string) error {
+	trimmed := bytes.TrimSpace(raw)
+	switch {
+	case len(trimmed) == 0 || string(trimmed) == "null":
+		return fmt.Errorf("octonomy: %s is null, expected a resource object", what)
+	case trimmed[0] == '[':
+		return fmt.Errorf("octonomy: %s is an array, expected a single resource object", what)
+	case trimmed[0] != '{':
+		return fmt.Errorf("octonomy: %s is not a resource object", what)
+	}
+	// An object carrying any key has a quote after the brace; only an empty one
+	// has '}' there. That is exact for well-formed JSON, and the decode that
+	// follows every call to this is what establishes the body IS well-formed --
+	// so this stays a byte check rather than a second full parse of every
+	// element of every page.
+	if rest := bytes.TrimSpace(trimmed[1:]); len(rest) > 0 && rest[0] == '}' {
+		return fmt.Errorf("octonomy: %s is an empty object, which would decode to a zero-valued resource", what)
+	}
+	return nil
+}
+
+// decodeResourceArray decodes a JSON array of resources, requiring each element
+// to be one.
+//
+// A zero-valued element is the same defect as a zero-valued resource, one level
+// in: "data": [null] gives a page whose length is right and whose row is blank,
+// and a caller ranging over it has nothing to branch on. Because it is a page
+// rather than a single read, it is also worse -- one bad row among fifty is not
+// something anyone inspects for.
+//
+// A null array normalizes to an EMPTY NON-NIL slice, matching "[]" -- both wire
+// spellings mean "no rows", and range and len behave the same either way, so
+// callers should not have to handle two of them. raw must be present: every
+// caller establishes that first, since an ABSENT array is the contract break
+// each of them reports in its own words.
+func decodeResourceArray[T any](raw json.RawMessage, what string) ([]T, error) {
+	var elements []json.RawMessage
+	if err := json.Unmarshal(raw, &elements); err != nil {
+		return nil, fmt.Errorf("octonomy: decode %s: %w", what, err)
+	}
+	out := make([]T, 0, len(elements))
+	for i, element := range elements {
+		if err := requireResourceObject(element, fmt.Sprintf("%s element %d", what, i)); err != nil {
+			return nil, err
+		}
+		var item T
+		if err := json.Unmarshal(element, &item); err != nil {
+			return nil, fmt.Errorf("octonomy: decode %s element %d: %w", what, i, err)
+		}
+		if err := requireIdentity(item, fmt.Sprintf("%s element %d", what, i)); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+// identityField is one field a decoded model requires to be non-blank, paired
+// with its name on the wire so a failure can say which one was missing.
+type identityField struct {
+	name  string
+	value string
+}
+
+// identifiedResource is implemented by every model this SDK decodes from a
+// resource position. It is the second half of the #40 fix, and the half that
+// requireResourceObject cannot do on its own.
+//
+// The shape check rejects a "data" that is empty, null, or not an object. It
+// cannot reject a NON-empty object carrying the wrong thing: {"id": null} and
+// {"wrong": true} are both well-formed objects that encoding/json fills nothing
+// in from, so both decoded to a zero-valued resource with a nil error. A drift
+// gate catches the second of those from the other side -- the server's contract
+// changed -- but the first is malformed runtime data that no contract check can
+// see, so the client has to.
+//
+// Each model names only the field(s) that identify the ROW, which is what the
+// vendored contracts mark required, and not every field they document. This
+// stays a decode guarantee about identity rather than a client-side re-run of
+// the server's validation, which AGENTS.md puts out of bounds.
+//
+// The method is unexported, so implementing it adds no public API; a model that
+// does not implement it -- the composites, which require their own keys instead
+// -- is skipped.
+type identifiedResource interface {
+	identityFields() []identityField
+}
+
+// requireIdentity rejects a decoded value whose identity did not survive the
+// decode. A blank id after a successful unmarshal means the bytes did not carry
+// one, whatever else they carried.
+func requireIdentity(v any, what string) error {
+	resource, ok := v.(identifiedResource)
+	if !ok {
+		return nil
+	}
+	for _, field := range resource.identityFields() {
+		if field.value == "" {
+			return fmt.Errorf("octonomy: %s decoded with no %q, so it would be a zero-valued resource", what, field.name)
+		}
+	}
+	return nil
 }
 
 func (c *Client) resolveActor(rc requestConfig) string {

@@ -171,6 +171,31 @@ func TestSmoke_RealServer(t *testing.T) {
 		t.Errorf("Description did not round-trip: %v", fetched.Description)
 	}
 
+	// 2b. VocabularyUpdate's metadata pointer, set and then cleared. The three
+	// *Update structs were changed together (#37), so all three are proved
+	// against a real server rather than one standing in for the others -- the
+	// server's patch serializers are separate code paths, and the docs claim all
+	// three accept {}. The vocabulary was created with no metadata, so this
+	// exercises the replace half from empty as well.
+	vocabMeta, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{
+		Metadata: &octonomy.Metadata{"source": "v2-smoke"},
+	})
+	if err != nil {
+		t.Fatalf("Vocabularies.Update setting metadata: %v", err)
+	}
+	if got := vocabMeta.Metadata["source"]; got != "v2-smoke" {
+		t.Errorf("vocabulary Metadata[source] = %v, want v2-smoke", got)
+	}
+	vocabCleared, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{
+		Metadata: &octonomy.Metadata{},
+	})
+	if err != nil {
+		t.Fatalf("Vocabularies.Update clearing metadata: %v", err)
+	}
+	if len(vocabCleared.Metadata) != 0 {
+		t.Errorf("vocabulary Metadata = %v after &Metadata{}, want it cleared", vocabCleared.Metadata)
+	}
+
 	// 3. The same on the other resource, with metadata, which is the field most
 	// likely to be silently dropped by a wrong envelope assumption.
 	tagSlug := uniqueSlug("smoke-tag")
@@ -196,6 +221,39 @@ func TestSmoke_RealServer(t *testing.T) {
 	}
 	if got := tag.Metadata["source"]; got != "v2-smoke" {
 		t.Errorf("tag.Metadata[source] = %v, want v2-smoke", got)
+	}
+
+	// 3b. Clearing a metadata object, which only a real server can demonstrate
+	// (#37). A canned test can prove that "metadata": {} leaves the client; that
+	// the server then EMPTIES the stored object is its behavior, not the SDK's --
+	// and the defect this fixes was precisely a call that looked like it worked:
+	// while the field was a plain map, encoding/json omitted an empty one under
+	// omitempty, so the request carried no metadata key and the server answered
+	// 200 with the old object still in place and no error.
+	//
+	// It runs BEFORE the rename in step 4 deliberately. The audit assertions in
+	// step 12 read the NEWEST tag.updated row and require it to carry the
+	// caller-supplied request id and the rename in its changes, so the rename has
+	// to stay the last update on this tag.
+	metaCleared, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{
+		Metadata: &octonomy.Metadata{},
+	})
+	if err != nil {
+		t.Fatalf("Tags.Update clearing metadata: %v", err)
+	}
+	if len(metaCleared.Metadata) != 0 {
+		t.Errorf("Metadata = %v after &Metadata{}, want the stored object cleared", metaCleared.Metadata)
+	}
+	// Put it back, so the rest of the walk sees the tag it was written against.
+	// That also exercises the replace half through the same pointer field.
+	metaRestored, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{
+		Metadata: &octonomy.Metadata{"source": "v2-smoke"},
+	})
+	if err != nil {
+		t.Fatalf("Tags.Update restoring metadata: %v", err)
+	}
+	if got := metaRestored.Metadata["source"]; got != "v2-smoke" {
+		t.Errorf("restored Metadata[source] = %v, want v2-smoke", got)
 	}
 
 	// 4. An update, the third doData write path -- and the one call in this file
@@ -635,6 +693,29 @@ func TestSmoke_RealServer(t *testing.T) {
 		t.Errorf("Tags.ListAliases returned %d rows, none of them the created alias %s", len(nested.Data), alias.ID)
 	}
 
+	// TagAliasUpdate's metadata pointer, the third of the three (#37). The alias
+	// was created carrying {"source": "v2-smoke"}, so there is a real stored
+	// object here for {} to clear -- see step 3b for why only a real server
+	// settles this.
+	aliasCleared, err := client.Aliases.Update(ctx, alias.ID, octonomy.TagAliasUpdate{
+		Metadata: &octonomy.Metadata{},
+	})
+	if err != nil {
+		t.Fatalf("Aliases.Update clearing metadata: %v", err)
+	}
+	if len(aliasCleared.Metadata) != 0 {
+		t.Errorf("alias Metadata = %v after &Metadata{}, want it cleared", aliasCleared.Metadata)
+	}
+	aliasRestored, err := client.Aliases.Update(ctx, alias.ID, octonomy.TagAliasUpdate{
+		Metadata: &octonomy.Metadata{"source": "v2-smoke"},
+	})
+	if err != nil {
+		t.Fatalf("Aliases.Update restoring metadata: %v", err)
+	}
+	if got := aliasRestored.Metadata["source"]; got != "v2-smoke" {
+		t.Errorf("restored alias Metadata[source] = %v, want v2-smoke", got)
+	}
+
 	// The namespace fields on TagAlias are server-set from the request headers,
 	// so only a real server can populate them -- a fixture would assert that the
 	// SDK echoes a value it wrote itself. The target is the namespaced tag from
@@ -1052,13 +1133,19 @@ func TestSmoke_RealServer(t *testing.T) {
 		}
 		t.Fatalf("Tags.ListAuditLogs: %v", err)
 	}
+	// Rows arrive NEWEST FIRST, so the first match of each action is the most
+	// recent one -- for tag.updated that is the rename in step 4, which is the
+	// call that carried the caller-supplied request id. Taking the LAST match
+	// instead would read step 3b's metadata writes, which happen to the same tag
+	// and would be indistinguishable here; it worked only while exactly one
+	// update existed, which is not a property this walk can promise.
 	var created, updated *octonomy.AuditLog
 	createdIdx, updatedIdx := -1, -1
 	for i, row := range tagAudit.Data {
-		switch row.Action {
-		case "tag.created":
+		switch {
+		case row.Action == "tag.created" && created == nil:
 			created, createdIdx = &tagAudit.Data[i], i
-		case "tag.updated":
+		case row.Action == "tag.updated" && updated == nil:
 			updated, updatedIdx = &tagAudit.Data[i], i
 		}
 	}

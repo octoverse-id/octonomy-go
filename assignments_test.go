@@ -516,11 +516,12 @@ func TestAssignments_OnV1(t *testing.T) {
 	}
 }
 
-// doData stops at the data envelope, which is right for a resource: a
-// zero-valued Assignment has an empty ID and no caller mistakes it for an
-// answer. A composite of counters is different -- created:0 existing:0 with no
-// rows is an ordinary result -- so a renamed or missing key must be an error
-// rather than "the tags were all already there".
+// doData validates the data envelope's shape and the decoded row's identity,
+// which is right for a resource: past that, a zero-valued Assignment has an
+// empty ID and no caller mistakes it for an answer. A composite of counters is
+// different -- created:0 existing:0 with no rows is an ordinary result -- so a
+// renamed or missing key must be an error rather than "the tags were all
+// already there".
 func TestAssignments_BulkAssign_MissingKeysAreErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -686,5 +687,47 @@ func TestAssignment_DecodesTheWiresFieldNames(t *testing.T) {
 	}
 	if got.AssignedAt.IsZero() {
 		t.Error("AssignedAt did not decode")
+	}
+}
+
+// The composite guards the counters; decodeResourceArray guards the ROWS. A null
+// or empty row decodes to a zero-valued Assignment inside a result whose counts
+// all look right, so nothing a caller checks would give it away (#40).
+func TestAssignments_BulkAssign_ARowThatWouldBeZeroValuedIsAnError(t *testing.T) {
+	tests := []struct {
+		name string
+		rows any
+		want string
+	}{
+		{"null row", []any{nil}, "element 0 is null"},
+		{"empty row", []any{map[string]any{}}, "element 0 is an empty object"},
+		{
+			"one good row does not excuse the next",
+			[]any{map[string]any{"id": "asg_1"}, nil},
+			"element 1 is null",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, http.StatusOK, map[string]any{"data": map[string]any{
+					"created": 1, "existing": 0, "skipped": 0, "assignments": tt.rows,
+				}})
+			})
+
+			res, err := c.Assignments.BulkAssign(context.Background(), BulkAssign{
+				ApplicationID: "commerce", ResourceType: "order", ResourceID: "ord_9",
+				TagIDs: []string{"tag_1"},
+			})
+			if err == nil {
+				t.Fatalf("expected an error, got %+v", res)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error should say %q, got: %v", tt.want, err)
+			}
+			if !strings.Contains(err.Error(), "assignments") {
+				t.Errorf("error should name the array, got: %v", err)
+			}
+		})
 	}
 }

@@ -150,12 +150,25 @@
 // error at all. A genuinely empty page is not an error and yields an empty
 // non-nil Data slice.
 //
-// The check stops at the envelope. A well-formed envelope carrying the WRONG
-// object -- {"data": {"wrong": true}} -- still decodes to a zero-valued resource
-// with a nil error, since unknown fields are ignored and none is required. That
-// remaining gap is issue #40; the composite results (BulkAssignResult,
-// BulkRemoveResult, ResourceReplaceResult) are the exception and require their
-// keys.
+// The check reaches one level INTO the envelope. A "data" object that is empty,
+// null, or not an object at all is an error, and so is such an element inside a
+// list or inside a composite's array of rows -- each of those would otherwise
+// decode to a zero-valued resource with a nil error, and every field but the id
+// makes that look like a real value rather than a blank (#40).
+//
+// Every decoded model must also carry the field that identifies its row -- "id",
+// or "assignment_id" on ResourceTag and "resource_id" on TagResource, plus the
+// nested "tag" that ResourceTag and TagResolution exist to deliver. A non-empty
+// object is still a well-formed one, and {"id": null} or a renamed id would
+// otherwise decode to a blank resource with a nil error.
+//
+// It stops short of requiring every field a resource documents: that is the
+// server's validation rather than the client's, and drift against the published
+// schema is the contract gate's job. The composites are the exception and
+// require their keys:
+// BulkAssignResult, BulkRemoveResult, ResourceReplaceResult, and TagResolution
+// carry no id of their own, so nothing about them looks wrong when they arrive
+// blank.
 //
 // # Health probes
 //

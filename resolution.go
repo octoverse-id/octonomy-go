@@ -2,6 +2,8 @@ package octonomy
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 )
@@ -55,10 +57,16 @@ const (
 // TagResolution is the result of resolving a slug (GET /tag-resolution).
 //
 // Tag is the canonical tag either way, so a caller that only wants the tag can
-// ignore the other two fields. MatchedAlias is non-nil exactly when MatchedType
-// is MatchedTypeAlias, and it is what says the slug the caller passed is an
-// alternate identifier rather than the tag's own slug -- useful for nudging a
-// caller's stored slug towards the canonical one.
+// ignore the other two fields. MatchedAlias is non-nil WHENEVER MatchedType is
+// MatchedTypeAlias -- required on decode, so the branch that reads it cannot
+// nil-deref -- and it is what says the slug the caller passed is an alternate
+// identifier rather than the tag's own slug, useful for nudging a caller's
+// stored slug towards the canonical one.
+//
+// Test for MatchedType rather than for a non-nil MatchedAlias. The server sends
+// an alias only on an alias match, but the decoder does not enforce the converse:
+// a matched_type this SDK has no constant for is preserved rather than rejected
+// (see UnmarshalJSON), so a future match kind could in principle carry one.
 //
 // Canonical tags win over aliases for the same slug, and within an application a
 // tag scoped to that application wins over a tenant-shared one, so local
@@ -67,6 +75,89 @@ type TagResolution struct {
 	MatchedType  MatchedType `json:"matched_type"`
 	MatchedAlias *TagAlias   `json:"matched_alias"`
 	Tag          Tag         `json:"tag"`
+}
+
+// UnmarshalJSON requires the keys a caller acts on, for the reason given on
+// BulkAssignResult: this is a COMPOSITE, not a resource, so it carries no id
+// whose blankness would give the problem away.
+//
+// A resolution whose "tag" key the server renamed would otherwise decode to a
+// zero-valued Tag with a nil error -- an empty ID, an empty Slug, and
+// IsActive false -- delivered from the one call whose entire purpose is to hand
+// back that tag (#40). MatchedType is required for the same reason one step
+// down: "" is not one of the two legal values, and a caller branching on
+// MatchedTypeAlias reads it as "the slug named a tag directly", which is a
+// plausible answer rather than a visible failure.
+//
+// Both vendored contracts mark all THREE keys required, "matched_alias"
+// included -- required as a key, whose value is nullable -- so an absent one is
+// a contract break and is reported as such.
+//
+// An UNKNOWN matched_type is preserved verbatim rather than rejected, exactly as
+// an error code this SDK has no constant for is (AGENTS.md). A third match type
+// the server adds later must not turn every resolution into a client error. What
+// is rejected is "", which is not a value at all.
+//
+// A matched_type of "alias" with a null matched_alias IS rejected, because
+// TagResolution documents MatchedAlias as non-nil whenever the match is an alias
+// -- and a caller who writes the obvious res.MatchedAlias.Slug against that
+// documented invariant would panic. This library never panics, and that promise is worth little if
+// what it hands back makes the caller do it. The converse (a "tag" match
+// carrying an alias) is left alone: it breaks nothing a caller does, so
+// rejecting it would be strictness with no failure mode behind it.
+func (r *TagResolution) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		MatchedType  *MatchedType    `json:"matched_type"`
+		MatchedAlias json.RawMessage `json:"matched_alias"`
+		Tag          json.RawMessage `json:"tag"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	switch {
+	case wire.MatchedType == nil:
+		return fmt.Errorf(`octonomy: resolution response has no "matched_type"`)
+	case *wire.MatchedType == "":
+		return fmt.Errorf(`octonomy: resolution response has an empty "matched_type"`)
+	case wire.Tag == nil:
+		return fmt.Errorf(`octonomy: resolution response has no "tag"`)
+	case wire.MatchedAlias == nil:
+		return fmt.Errorf(`octonomy: resolution response has no "matched_alias" key (null is how a tag match reports one)`)
+	}
+	if err := requireResourceObject(wire.Tag, `resolution response "tag"`); err != nil {
+		return err
+	}
+
+	// Built whole and assigned in one go, as BulkAssignResult is and for the
+	// same reason: UnmarshalJSON is exported, so it must fully define what it
+	// decodes into rather than leaving a reused value's old alias in place.
+	out := TagResolution{MatchedType: *wire.MatchedType}
+	if err := json.Unmarshal(wire.Tag, &out.Tag); err != nil {
+		return fmt.Errorf("octonomy: decode resolution tag: %w", err)
+	}
+	if string(wire.MatchedAlias) != "null" {
+		if err := requireResourceObject(wire.MatchedAlias, `resolution response "matched_alias"`); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(wire.MatchedAlias, &out.MatchedAlias); err != nil {
+			return fmt.Errorf("octonomy: decode resolution matched_alias: %w", err)
+		}
+	} else if out.MatchedType == MatchedTypeAlias {
+		return fmt.Errorf(`octonomy: resolution response matched an alias but its "matched_alias" is null`)
+	}
+	*r = out
+	return nil
+}
+
+// identityFields requires the resolution to carry a real tag, and a real alias
+// when it reports one. TagResolution has no id of its own, so these are the
+// fields whose blankness would otherwise pass for an answer (#40).
+func (r TagResolution) identityFields() []identityField {
+	fields := []identityField{{name: "tag.id", value: r.Tag.ID}}
+	if r.MatchedAlias != nil {
+		fields = append(fields, identityField{name: "matched_alias.id", value: r.MatchedAlias.ID})
+	}
+	return fields
 }
 
 // TagResolveParams narrows a resolution. A nil *params resolves the slug alone,

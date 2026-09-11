@@ -1,9 +1,12 @@
 package octonomy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
+	"net/http"
 	"reflect"
 	"strconv"
 	"testing"
@@ -261,5 +264,103 @@ func TestMetadataIsStillAnAlias(t *testing.T) {
 	}
 	if want := reflect.TypeOf(map[string]any{}); got != want {
 		t.Errorf("Metadata is %v, want the identical type %v", got, want)
+	}
+}
+
+// --- Metadata on PATCH bodies ---------------------------------------------
+
+// nilMetadata returns a pointer to a nil Metadata, the one spelling that is
+// neither "clear it" nor "leave it alone". It exists as a helper because
+// &Metadata(nil) is not addressable.
+func nilMetadata() *Metadata {
+	var m Metadata
+	return &m
+}
+
+// The three PATCH bodies that carry Metadata must agree on what each spelling
+// of the field puts on the wire.
+//
+// The pointer exists for exactly this. While Metadata was a plain map,
+// encoding/json counted a zero-length one as empty under omitempty, so
+// Metadata{} sent NO metadata key: "clear the stored object" was
+// indistinguishable from "leave it alone", and the caller got a 200 with the old
+// object still in place and no error (#37). That is the silent-success shape
+// this SDK refuses everywhere else.
+//
+// All three resources are walked rather than one sampled, because what the fix
+// promises is that none of them is the outlier -- and the assertion is on the
+// RAW bytes of the key, since the absent / {} / null distinction is precisely
+// what a decoded map[string]any would flatten.
+func TestUpdateMetadata_OmitClearAndReplaceOnEveryPatchBody(t *testing.T) {
+	resources := []struct {
+		name string
+		path string
+		resp any
+		call func(*Client, *Metadata) error
+	}{
+		{"tags", "/api/v2/tags/tag_1", Tag{ID: "tag_1"}, func(c *Client, m *Metadata) error {
+			_, err := c.Tags.Update(context.Background(), "tag_1", TagUpdate{Metadata: m})
+			return err
+		}},
+		{"vocabularies", "/api/v2/vocabularies/voc_1", Vocabulary{ID: "voc_1"}, func(c *Client, m *Metadata) error {
+			_, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{Metadata: m})
+			return err
+		}},
+		{"tag-aliases", "/api/v2/tag-aliases/alias_1", TagAlias{ID: "alias_1"}, func(c *Client, m *Metadata) error {
+			_, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{Metadata: m})
+			return err
+		}},
+	}
+
+	bodies := []struct {
+		name string
+		meta *Metadata
+		// want is the raw JSON expected under "metadata"; empty means the key
+		// must not be on the wire at all.
+		want string
+	}{
+		{"nil omits the key", nil, ""},
+		{"empty map clears the stored object", &Metadata{}, `{}`},
+		{"populated map replaces it", &Metadata{"team": "growth"}, `{"team":"growth"}`},
+		// Documented on TagUpdate.Metadata: a pointer to a NIL map is neither
+		// intent and marshals as null. Pinned so the doc comment stays true.
+		{"pointer to a nil map is null", nilMetadata(), `null`},
+	}
+
+	for _, res := range resources {
+		for _, body := range bodies {
+			t.Run(res.name+"/"+body.name, func(t *testing.T) {
+				c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != http.MethodPatch || r.URL.Path != res.path {
+						t.Errorf("got %s %s, want PATCH %s", r.Method, r.URL.Path, res.path)
+					}
+					raw, err := io.ReadAll(r.Body)
+					if err != nil {
+						// Errorf, not Fatalf: this runs on the server's goroutine.
+						t.Errorf("read body: %v", err)
+						return
+					}
+					var in map[string]json.RawMessage
+					if err := json.Unmarshal(raw, &in); err != nil {
+						t.Errorf("decode body %s: %v", raw, err)
+						return
+					}
+					got, present := in["metadata"]
+					switch {
+					case body.want == "" && present:
+						t.Errorf("metadata = %s, want the key absent (body: %s)", got, raw)
+					case body.want != "" && !present:
+						t.Errorf("metadata key absent, want %s (body: %s)", body.want, raw)
+					case body.want != "" && string(got) != body.want:
+						t.Errorf("metadata = %s, want %s", got, body.want)
+					}
+					writeData(t, w, http.StatusOK, res.resp)
+				})
+
+				if err := res.call(c, body.meta); err != nil {
+					t.Fatalf("Update: %v", err)
+				}
+			})
+		}
 	}
 }

@@ -130,6 +130,19 @@ stays a faithful, ergonomic client.
     got no HTTP response wraps `ErrUnreachable` and produces no `*APIError`; a probe the server
     *answered* with a non-2xx and its own `{"status": …}` body is an `*APIError` carrying
     `CodeNotReady`. They mean different things operationally and must never collapse into one error.
+- **A new response model must implement `identityFields()`** (`transport.go`), naming the field that
+  identifies its row — `id` for most, `assignment_id` on `ResourceTag`, `resource_id` on
+  `TagResource`, matching what the vendored contracts mark required. `doData` and the list/composite
+  array decoder call it on every decoded value and reject a blank one. Without it a model is silently
+  skipped, and `{"data": {"id": null}}` or a renamed id decodes to a zero-valued resource with a nil
+  error again — #40, which is the same silent-zero family as #32. Name only the ROW's identity, never
+  every field the schema documents: re-running the server's validation here is out of bounds by the
+  first rule in this file. A nested resource counts only where the contract marks it required and the
+  route exists to deliver it — `ResourceTag.Tag` and `TagResolution.Tag` both qualify, and **read the
+  schema's `required:` list rather than assuming**, which is where the first draft of this rule got
+  `ResourceTag` wrong. A composite carries no identity of its own and requires its keys in
+  `UnmarshalJSON` instead; `TagResolution` does both, since the tag it exists to deliver is a
+  resource.
 - Non-2xx responses become `*APIError` carrying the `{error:{code,message,details,request_id}}`
   envelope. Add `Is<Code>` helpers for common error codes.
 - **Every non-2xx becomes an `*APIError`, including one whose body could not be read.** An
