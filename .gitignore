@@ -1,6 +1,9 @@
 # Compiled binaries and the example binary
 /quickstart
 examples/quickstart/quickstart
+# The contract drift gate is invoked with `go run`; a stray `go build ./...` in
+# its directory leaves this behind.
+/tools/contractdrift/contractdrift
 *.exe
 *.test
 *.out

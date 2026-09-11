@@ -1,0 +1,635 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// These tests are the gate's own proof. A drift gate that has never been shown to
+// fail is indistinguishable from a drift gate that cannot fail, and this one runs
+// weekly against a repository that is usually in step -- so a regexp that stops
+// matching, or a comparison that silently drops half the contract, would show up
+// as a permanently green job rather than as a broken one. Each test below feeds a
+// deliberately modified copy of the real contracts and asserts the finding.
+//
+// The fixtures are mutations of the vendored specs rather than hand-written
+// miniatures on purpose: a miniature proves the checker works on the shape its
+// author imagined, and this gate exists because the contract stopped being the
+// shape its author imagined.
+
+// --- fixtures ------------------------------------------------------------------
+
+// syntheticErrorsPy stands in for the server's octonomy/core/errors.py. It carries
+// the real 3.1.1 code set, in the two shapes that file writes them: a `code`
+// attribute per DomainError subclass, and bare literals in the DRF handler.
+const syntheticErrorsPy = `
+class DomainError(Exception):
+    code = "validation_error"
+
+class ConflictError(DomainError):
+    code = "conflict"
+
+class TenantMismatchError(DomainError):
+    code = "tenant_mismatch"
+
+class ApplicationMismatchError(DomainError):
+    code = "application_mismatch"
+
+class InactiveTagError(DomainError):
+    code = "inactive_tag"
+
+class NamespaceNotSupportedError(DomainError):
+    code = "namespace_not_supported"
+
+class NamespaceHeaderError(DomainError):
+    code = "namespace_invalid"
+
+class NamespacedWritesDisabledError(DomainError):
+    code = "namespaced_writes_disabled"
+
+class NamespaceApiDisabledError(DomainError):
+    code = "namespace_api_disabled"
+
+class AmbiguousResolutionError(DomainError):
+    code = "ambiguous_resolution"
+
+class ScopeImmutableError(ConflictError):
+    code = "scope_immutable"
+
+def exception_handler(exc, context):
+    if isinstance(exc, Http404):
+        return error_response("not_found", "Resource not found.", {}, request, 404)
+    code = "validation_error"
+    if isinstance(exc, exceptions.NotAuthenticated):
+        code = "authentication_required"
+    elif isinstance(exc, exceptions.PermissionDenied):
+        code = "forbidden"
+    return error_response(code, message, response.data, request, response.status_code)
+`
+
+// repoRoot is this tool's view of the SDK it checks.
+const repoRoot = "../.."
+
+// stageRepo copies the inputs a local run reads into a temp directory, so a test
+// can modify one of them without touching the working tree.
+func stageRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := os.ReadDir(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		copyFile(t, filepath.Join(repoRoot, name), filepath.Join(dir, name))
+		copied++
+	}
+	if copied == 0 {
+		t.Fatalf("staged no Go sources from %s", repoRoot)
+	}
+	for _, name := range []string{"openapi.yaml", "openapi-v2.yaml", "contract-coverage.yaml", "versioning.md"} {
+		copyFile(t, filepath.Join(repoRoot, "docs", name), filepath.Join(dir, "docs", name))
+	}
+	return dir
+}
+
+// stageUpstream writes a fetched-upstream directory whose contents match the
+// vendored ones exactly -- the no-drift baseline every upstream test mutates.
+func stageUpstream(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	copyFile(t, filepath.Join(repoRoot, "docs", "openapi.yaml"), filepath.Join(dir, "openapi.yaml"))
+	copyFile(t, filepath.Join(repoRoot, "docs", "openapi-v2.yaml"), filepath.Join(dir, "openapi-v2.yaml"))
+	write(t, filepath.Join(dir, "errors.py"), syntheticErrorsPy)
+	return dir
+}
+
+func copyFile(t *testing.T, from, to string) {
+	t.Helper()
+	raw, err := os.ReadFile(from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(to, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func write(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// edit replaces old with new in the file, after the first occurrence of anchor.
+// The anchor is what keeps a mutation aimed at one operation from landing on the
+// half-dozen others that share the same generated block.
+func edit(t *testing.T, path, anchor, old, replacement string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	at := strings.Index(src, anchor)
+	if at < 0 {
+		t.Fatalf("%s: anchor %q not found -- the fixture no longer matches the contract", path, anchor)
+	}
+	rest := strings.Replace(src[at:], old, replacement, 1)
+	if rest == src[at:] {
+		t.Fatalf("%s: %q not found after %q -- the fixture no longer matches the contract", path, old, anchor)
+	}
+	write(t, path, src[:at]+rest)
+}
+
+// --- helpers -------------------------------------------------------------------
+
+// runLocal runs the offline checks over a staged repository.
+func runLocal(t *testing.T, repo string) *Report {
+	t.Helper()
+	return CheckLocal(load(t, repo, ""))
+}
+
+// runFull runs every check, offline and cross-repository.
+func runFull(t *testing.T, repo, upstream string) *Report {
+	t.Helper()
+	in := load(t, repo, upstream)
+	report := CheckLocal(in)
+	report.Sections = append(report.Sections, CheckUpstream(in).Sections...)
+	return report
+}
+
+func load(t *testing.T, repo, upstream string) Inputs {
+	t.Helper()
+	in := Inputs{Vendored: map[string]*Spec{}}
+	var err error
+	if in.Vendored["v1"], err = LoadSpec(filepath.Join(repo, "docs", "openapi.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if in.Vendored["v2"], err = LoadSpec(filepath.Join(repo, "docs", "openapi-v2.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if in.Coverage, err = LoadCoverage(filepath.Join(repo, "docs", "contract-coverage.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if in.Sources, err = LoadGoSources(repo); err != nil {
+		t.Fatal(err)
+	}
+	if in.SDKCodes, err = SDKErrorCodes(filepath.Join(repo, "errors.go")); err != nil {
+		t.Fatal(err)
+	}
+	if in.RecordedVersion, err = RecordedContractVersion(filepath.Join(repo, "docs", "versioning.md")); err != nil {
+		t.Fatal(err)
+	}
+	if upstream != "" {
+		in.Upstream = map[string]*Spec{}
+		if in.Upstream["v1"], err = LoadSpec(filepath.Join(upstream, "openapi.yaml")); err != nil {
+			t.Fatal(err)
+		}
+		if in.Upstream["v2"], err = LoadSpec(filepath.Join(upstream, "openapi-v2.yaml")); err != nil {
+			t.Fatal(err)
+		}
+		if in.ServerCodes, err = ServerErrorCodes(filepath.Join(upstream, "errors.py")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return in
+}
+
+// findings flattens a report for assertion.
+func findings(r *Report) []string {
+	var all []string
+	for _, section := range r.Sections {
+		for _, item := range section.Items {
+			all = append(all, section.Title+": "+item)
+		}
+	}
+	return all
+}
+
+func assertClean(t *testing.T, r *Report) {
+	t.Helper()
+	if r.Count() != 0 {
+		t.Fatalf("expected no findings, got %d:\n%s", r.Count(), strings.Join(findings(r), "\n"))
+	}
+}
+
+func assertFinding(t *testing.T, r *Report, substrings ...string) {
+	t.Helper()
+	all := findings(r)
+	for _, want := range substrings {
+		found := false
+		for _, item := range all {
+			if strings.Contains(item, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("no finding contains %q; got:\n%s", want, strings.Join(all, "\n"))
+		}
+	}
+}
+
+// --- the working tree itself ----------------------------------------------------
+
+// TestWorkingTreeIsClean is the check CI runs on every pull request, asserted here
+// too so a failure names the specific inconsistency rather than an exit code.
+func TestWorkingTreeIsClean(t *testing.T) {
+	assertClean(t, runLocal(t, repoRoot))
+}
+
+// TestKnownEnvelopeDivergenceIsNotFlagged is the acceptance criterion that the
+// gate must not nag. The specs document every list response as a bare array while
+// the server returns {data, pagination}; the same holds for single resources, the
+// bulk composites, and the health probes. All four are recorded in
+// docs/contract-coverage.yaml and none of them may produce a finding.
+func TestKnownEnvelopeDivergenceIsNotFlagged(t *testing.T) {
+	in := load(t, repoRoot, "")
+
+	divergent := 0
+	for _, row := range in.Coverage.Operations {
+		if row.DocumentedResponse == "array" && row.ActualResponse == "list-envelope" {
+			divergent++
+		}
+	}
+	if divergent == 0 {
+		t.Fatal("the inventory records no list-envelope divergence -- this test is asserting nothing")
+	}
+
+	report := CheckLocal(in)
+	for _, item := range findings(report) {
+		if strings.Contains(item, "list-envelope") {
+			t.Errorf("the recorded divergence was reported as drift: %s", item)
+		}
+	}
+	assertClean(t, report)
+}
+
+// TestUpstreamInStepIsClean is the other half: an upstream copy identical to the
+// vendored one produces nothing, so every finding below is caused by its mutation
+// and not by a comparison that reports noise.
+func TestUpstreamInStepIsClean(t *testing.T) {
+	assertClean(t, runFull(t, repoRoot, stageUpstream(t)))
+}
+
+// --- cross-repository drift -----------------------------------------------------
+
+// TestDetectsAddedQueryParameter is the epic's own drift, reproduced: the server
+// added `scope` to /tag-resolution and nothing said so. A path inventory reports
+// this as green.
+func TestDetectsAddedQueryParameter(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"operationId: api_v2_tag_resolution_retrieve",
+		"      parameters:\n",
+		"      parameters:\n      - in: query\n        name: scope_hint\n        schema:\n          type: string\n")
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"gained query parameter `scope_hint`",
+		"get /api/v2/tag-resolution")
+}
+
+// TestDetectsChangedQueryParameter covers the quieter half: a parameter that keeps
+// its name and changes what it means.
+func TestDetectsChangedQueryParameter(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"operationId: api_v2_tags_list",
+		"      - in: query\n        name: is_active\n        schema:\n          type: boolean\n",
+		"      - in: query\n        name: is_active\n        required: true\n        schema:\n          type: string\n")
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"parameter `is_active`: + required: true",
+		"parameter `is_active`: ~ schema.type: boolean -> string")
+}
+
+// TestDetectsNewErrorCode is the second acceptance criterion. The spec cannot
+// answer this one at all: ErrorResponse types `code` as a bare string, so a new
+// code is invisible to every schema comparison.
+func TestDetectsNewErrorCode(t *testing.T) {
+	upstream := stageUpstream(t)
+	write(t, filepath.Join(upstream, "errors.py"), syntheticErrorsPy+`
+
+class VocabularyLockedError(ConflictError):
+    code = "vocabulary_locked"
+`)
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"the server can return `vocabulary_locked` and errors.go has no constant for it")
+}
+
+// TestDetectsWithdrawnErrorCode covers the other direction: a constant this SDK
+// still exports for a code the server no longer has.
+func TestDetectsWithdrawnErrorCode(t *testing.T) {
+	upstream := stageUpstream(t)
+	write(t, filepath.Join(upstream, "errors.py"),
+		strings.Replace(syntheticErrorsPy, `code = "scope_immutable"`, `code = "scope_frozen"`, 1))
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"`CodeScopeImmutable` (scope_immutable) is not in the server's error registry")
+}
+
+// TestSDKOnlyCodesAreNotFlagged guards the allowlist that keeps the check above
+// from firing every run on the two codes the server never sends.
+func TestSDKOnlyCodesAreNotFlagged(t *testing.T) {
+	in := load(t, repoRoot, stageUpstream(t))
+	if len(in.Coverage.SDKOnlyErrorCodes) == 0 {
+		t.Fatal("no sdk_only_error_codes recorded -- this test is asserting nothing")
+	}
+	for _, item := range findings(CheckUpstream(in)) {
+		if strings.Contains(item, "unexpected_status") || strings.Contains(item, "not_ready") {
+			t.Errorf("an allowlisted SDK-only code was reported: %s", item)
+		}
+	}
+}
+
+// TestDetectsAddedSchemaField covers "added or changed fields on models the SDK
+// decodes" -- the class of change that grows a response the client silently drops.
+func TestDetectsAddedSchemaField(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"\n    Tag:\n",
+		"      properties:\n",
+		"      properties:\n        colour:\n          type: string\n          maxLength: 32\n")
+
+	assertFinding(t, runFull(t, repoRoot, upstream),
+		"schema `Tag`: + properties.colour.type: string")
+}
+
+// TestDetectsChangedRequiredSet catches a field becoming required, which a
+// property-by-property comparison alone would miss.
+func TestDetectsChangedRequiredSet(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
+		"\n    Tag:\n",
+		"      required:\n",
+		"      required:\n      - namespace_type\n")
+
+	assertFinding(t, runFull(t, repoRoot, upstream), "schema `Tag`: ~ required:")
+}
+
+// TestDetectsNewOperationUpstream is the paths check, and the one an inventory on
+// its own would have covered.
+func TestDetectsNewOperationUpstream(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"), "paths:\n", "paths:\n", "paths:\n"+syntheticPath)
+
+	assertFinding(t, runFull(t, repoRoot, upstream), "`get /api/v2/tag-suggestions` is new upstream")
+}
+
+// TestDetectsContractVersionBump is the cheapest signal and the one that says
+// "read the rest of this report".
+func TestDetectsContractVersionBump(t *testing.T) {
+	upstream := stageUpstream(t)
+	edit(t, filepath.Join(upstream, "openapi-v2.yaml"), "info:", "version: ", "version: 9.9.9 # ")
+
+	assertFinding(t, runFull(t, repoRoot, upstream), "server publishes contract 9.9.9, this SDK vendors")
+}
+
+// --- the offline half ------------------------------------------------------------
+
+const syntheticPath = `  /api/v2/tag-suggestions:
+    get:
+      operationId: api_v2_tag_suggestions_list
+      tags:
+      - api
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tag'
+          description: ''
+`
+
+// TestUnlistedOperationFails is what makes "not implemented" a decision: an
+// operation the vendored contract publishes and the inventory does not list fails
+// the offline gate, whether or not anyone means to implement it.
+func TestUnlistedOperationFails(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "openapi-v2.yaml"), "paths:\n", "paths:\n", "paths:\n"+syntheticPath)
+
+	assertFinding(t, runLocal(t, repo),
+		"`get /tag-suggestions` (v2",
+		"implement it or record why not")
+}
+
+// TestRecordedUnimplementedOperationPasses is the allowlist working: the same
+// operation, with a written reason, is silent.
+func TestRecordedUnimplementedOperationPasses(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "openapi-v2.yaml"), "paths:\n", "paths:\n", "paths:\n"+syntheticPath)
+	edit(t, filepath.Join(repo, "docs", "openapi.yaml"), "paths:\n", "paths:\n",
+		"paths:\n"+strings.ReplaceAll(syntheticPath, "/api/v2/", "/api/v1/"))
+	// Inserted at the head of `operations:` rather than appended to the file, whose
+	// last key is a different list entirely.
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
+		"\noperations:\n", "\noperations:\n",
+		"\noperations:\n"+`  - path: /tag-suggestions
+    method: get
+    unimplemented: >-
+      Deliberately out of scope while the server's ranking is unstable.
+    documented_response: array
+    actual_response: list-envelope
+`)
+
+	in := load(t, repo, "")
+	if _, ok := in.Coverage.ByKey()["get /tag-suggestions"]; !ok {
+		t.Fatal("the fixture row did not parse -- the append landed outside operations:")
+	}
+	assertClean(t, CheckLocal(in))
+}
+
+// TestSurfaceAsymmetryFails guards the assumption one inventory row rests on:
+// that both contracts publish the same operations, so one row can name one Go
+// method for both. An operation on v2 alone breaks that, and the gate says so
+// rather than leaving the row quietly half-true.
+func TestSurfaceAsymmetryFails(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "openapi-v2.yaml"), "paths:\n", "paths:\n", "paths:\n"+syntheticPath)
+
+	assertFinding(t, runLocal(t, repo), "`get /tag-suggestions` is published on v2 only")
+}
+
+// TestUnsentQueryParameterFails is the check the upstream comparison cannot make.
+// A refreshed contract that nobody implemented passes an upstream-versus-vendored
+// diff by construction: both sides are then the same file.
+func TestUnsentQueryParameterFails(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "openapi-v2.yaml"),
+		"operationId: api_v2_tag_resolution_retrieve",
+		"      parameters:\n",
+		"      parameters:\n      - in: query\n        name: scope_hint\n        schema:\n          type: string\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`scope_hint` is documented as a query parameter",
+		"the client never sends it")
+}
+
+// TestAllowlistedUnsentQueryParameterPasses is that allowlist working.
+func TestAllowlistedUnsentQueryParameterPasses(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "openapi-v2.yaml"),
+		"operationId: api_v2_tag_resolution_retrieve",
+		"      parameters:\n",
+		"      parameters:\n      - in: query\n        name: scope_hint\n        schema:\n          type: string\n")
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
+		"unsent_query_parameters:",
+		"unsent_query_parameters: []",
+		"unsent_query_parameters:\n  - name: scope_hint\n    reason: server-side ranking hint, not a client concern\n")
+
+	assertClean(t, runLocal(t, repo))
+}
+
+// TestStaleUnsentAllowlistFails keeps the allowlist from outliving its parameter.
+func TestStaleUnsentAllowlistFails(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
+		"unsent_query_parameters:",
+		"unsent_query_parameters: []",
+		"unsent_query_parameters:\n  - name: nothing_documents_this\n    reason: left behind by an earlier refresh\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`nothing_documents_this` is listed under unsent_query_parameters",
+		"drop the row")
+}
+
+// TestChangedDocumentedResponseFails is the day the divergence ends. The spec
+// starts documenting the envelope, the recorded shape no longer matches, and the
+// gate says so instead of staying quiet about a workaround nobody needs any more.
+func TestChangedDocumentedResponseFails(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "openapi-v2.yaml"),
+		"operationId: api_v2_tags_list",
+		"              schema:\n                type: array\n                items:\n                  $ref: '#/components/schemas/Tag'\n",
+		"              schema:\n                $ref: '#/components/schemas/TagPage'\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"documents a `ref:TagPage` 200 body, recorded as `array`")
+}
+
+// TestRenamedMethodFailsInventory keeps a row from asserting something false about
+// the code it names.
+func TestRenamedMethodFailsInventory(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "tags.go"),
+		"func (s *TagService) List(",
+		"func (s *TagService) List(",
+		"func (s *TagService) ListEverything(")
+
+	assertFinding(t, runLocal(t, repo),
+		"claims `TagService.List` in tags.go, which declares no such method")
+}
+
+// TestRecordedVersionMismatchFails covers the prose in docs/versioning.md, which
+// nothing else checks.
+func TestRecordedVersionMismatchFails(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "versioning.md"),
+		"<!-- contract-version:",
+		"<!-- contract-version: 3.1.1 -->",
+		"<!-- contract-version: 2.0.0 -->")
+
+	assertFinding(t, runLocal(t, repo), "docs/versioning.md records server 2.0.0")
+}
+
+// --- extractors ------------------------------------------------------------------
+
+// TestExtractorFloors is the guard against the quietest failure this tool has: a
+// regexp that stops matching reports "no codes" rather than "cannot read", and
+// "no codes" compares clean in one direction and floods in the other.
+func TestExtractorFloors(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "errors.py"), "class Nothing:\n    pass\n")
+	if _, err := ServerErrorCodes(filepath.Join(dir, "errors.py")); err == nil {
+		t.Error("a file with no error codes was accepted")
+	}
+	write(t, filepath.Join(dir, "errors.go"), "package octonomy\n\nconst CodeOne = \"one\"\n")
+	if _, err := SDKErrorCodes(filepath.Join(dir, "errors.go")); err == nil {
+		t.Error("a file with one error code was accepted")
+	}
+	write(t, filepath.Join(dir, "versioning.md"), "# no marker here\n")
+	if _, err := RecordedContractVersion(filepath.Join(dir, "versioning.md")); err == nil {
+		t.Error("a document with no contract-version marker was accepted")
+	}
+}
+
+// TestQueryParametersResolveThroughConstants covers the transport's own spelling:
+// it sets the scope parameters through constants rather than inline literals, and
+// an extractor that only matched the inline form would report them as never sent.
+func TestQueryParametersResolveThroughConstants(t *testing.T) {
+	sources, err := LoadGoSources(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := sources.QueryParams()
+	for _, name := range []string{"application_id", "include_global", "scope", "limit", "offset"} {
+		if _, ok := sent[name]; !ok {
+			t.Errorf("%q is set by the SDK and the extractor did not find it", name)
+		}
+	}
+}
+
+// TestOperationDecodeFailsLoudly pins the bug this tool shipped with in its first
+// draft: a path item that would not decode was swallowed, and every POST, PATCH,
+// and body-carrying DELETE lost its parameters and responses while the run stayed
+// green.
+func TestOperationDecodeFailsLoudly(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "broken.yaml"), `openapi: 3.0.3
+info:
+  version: 3.1.1
+paths:
+  /api/v2/tags:
+    get:
+      operationId: api_v2_tags_list
+      parameters: "not a list"
+      responses:
+        '200':
+          description: ''
+`)
+	if _, err := LoadSpec(filepath.Join(dir, "broken.yaml")); err == nil {
+		t.Fatal("an undecodable operation was accepted")
+	}
+}
+
+// TestWriteOperationsCarryTheirContract is the regression test for the same bug,
+// from the other side: the real contract's write operations must come back with
+// parameters and responses, not as empty shells.
+func TestWriteOperationsCarryTheirContract(t *testing.T) {
+	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"post /api/v2/tags", "patch /api/v2/tags/{tag_id}", "post /api/v2/tag-assignments/bulk-assign"} {
+		op, ok := spec.Operations[key]
+		if !ok {
+			t.Fatalf("%s is missing from the contract", key)
+		}
+		if op.ID == "" || len(op.Responses) == 0 || len(op.RequestBody) == 0 {
+			t.Errorf("%s decoded as an empty shell: id=%q responses=%d body=%d",
+				key, op.ID, len(op.Responses), len(op.RequestBody))
+		}
+	}
+	// The body-carrying DELETE is checked without a request body on purpose: the
+	// SDK sends one on /tag-assignments (the ids travel in it) and the generated
+	// spec documents none, which is a fourth divergence in the same family as the
+	// envelopes -- recorded here rather than asserted away.
+	if op := spec.Operations["delete /api/v2/tag-assignments"]; op == nil || op.ID == "" || len(op.Responses) == 0 {
+		t.Error("delete /api/v2/tag-assignments decoded as an empty shell")
+	}
+}

@@ -35,6 +35,18 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+      # The drift gate is a nested module, so the run above cannot see it: `./...`
+      # stops at a go.mod boundary, and so do `go vet ./...` and `go build ./...`
+      # in the test job. Only `gofmt -l .` above crosses it, because it walks the
+      # filesystem rather than the package graph. AGENTS.md asks for a
+      # golangci-lint-clean tree, and a directory nothing lints is where that stops
+      # being true quietly. Same config, second invocation.
+      - name: golangci-lint (contract drift gate)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          working-directory: tools/contractdrift
+          args: --config ../../.golangci.yml
 
   test:
     runs-on: ubuntu-latest
@@ -55,6 +67,48 @@ jobs:
         run: go build ./examples/...
       - name: Test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
+
+  # The offline half of the contract drift gate (#18).
+  #
+  # BLOCKING, and safe to be: it compares the VENDORED contracts against this
+  # repository and touches nothing outside the checkout. The cross-repository half
+  # -- the same program with -upstream -- runs on a schedule in
+  # contract-drift.yml, because a job that reaches into octoverse-id/octonomy can
+  # go red for reasons that have nothing to do with the change under review, and a
+  # merge gate that does that is one people learn to route around.
+  #
+  # What it catches on a pull request: an endpoint the vendored contract publishes
+  # that docs/contract-coverage.yaml does not account for, an inventory row naming
+  # a Go method that no longer exists, a documented query parameter the client
+  # never sends, a recorded response shape the spec no longer matches, and
+  # docs/versioning.md disagreeing with the specs about which server this SDK
+  # targets. A contract refresh that lands without the follow-through fails here.
+  #
+  # NOTE: the required-context name is the display name, "contract inventory", not
+  # the job id `contract`. Today main requires lint, test (1.24), test (1.25), and
+  # vuln; add this one to make it block the merge rather than only the PR.
+  contract:
+    name: contract inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache: true
+          # The gate lives in its own module (tools/contractdrift) so its YAML
+          # parser is not a dependency of the SDK. That module's go.sum is the only
+          # one in the repository.
+          cache-dependency-path: tools/contractdrift/go.sum
+      # First that the gate still works, then what it says. A drift gate that has
+      # never been shown to fail cannot be told apart from one that cannot fail,
+      # and these tests assert findings against deliberately modified contracts.
+      - name: Test the gate
+        run: make contract-test
+      - name: Check the vendored contract against the SDK
+        run: make contract-check
 
   vuln:
     runs-on: ubuntu-latest

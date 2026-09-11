@@ -146,6 +146,13 @@ individual resources, and occasionally a route, only where they are making some 
 new method is added in one place. Every group the vendored contracts publish is implemented; paths are relative to
 `BaseURL + /api/<version>` except the two health routes, which sit at the server root.
 
+> **One machine-checked sibling.** [`contract-coverage.yaml`](contract-coverage.yaml) carries the
+> same operations in a form `make contract-check` asserts on every pull request — each row naming the
+> Go method that implements it, and failing when the vendored contract publishes something the file
+> does not account for. It is the enforcement; this table is the explanation, with the request and
+> response detail a YAML row has nowhere to put. Adding a method means editing both, and the gate
+> fails if you skip the other one.
+
 | SDK method | HTTP | Path |
 | ---------- | ---- | ---- |
 | `Vocabularies.Create` | POST | `/vocabularies` |
@@ -640,3 +647,9 @@ worth preserving.
 
 Every endpoint group the vendored contracts publish is implemented. Remaining gaps are within
 implemented resources — see [roadmap.md](roadmap.md), which tracks them against their issues.
+
+That emptiness is now checked rather than asserted. `unimplemented:` in
+[`contract-coverage.yaml`](contract-coverage.yaml) is where a deliberate gap is recorded, with its
+reason, and the drift gate fails on any published operation that has neither a Go method nor such a
+row — so this section cannot quietly go stale the way it did while the server moved from 1.0.0 to
+3.1.0. See [development.md](development.md#contract-drift).

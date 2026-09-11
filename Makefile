@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check require-tools \
-	version-check dev-server dev-server-down dev-server-logs smoke
+	version-check dev-server dev-server-down dev-server-logs smoke \
+	contract-check contract-drift contract-test
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -97,6 +98,35 @@ dev-server-down: ## Tear down the Octonomy container harness
 dev-server-logs: ## Dump container logs from the Octonomy container harness
 	@scripts/octonomy-harness.sh logs
 
+# --- Contract drift (#18) ------------------------------------------------------
+#
+# Three targets, and the split between the first two is the whole design. The
+# offline half compares the VENDORED contracts against this repository and is a
+# pull-request gate; the cross-repository half reaches into octoverse-id/octonomy
+# and runs on a schedule only, because a check that can fail for network reasons
+# must never stand between a correct change and its merge.
+#
+# The tool lives in its own module (tools/contractdrift) so its one dependency, a
+# YAML parser, is not the SDK's. `go run` from inside that directory is what keeps
+# it out of `go build ./...`, `go.sum`, and anything a consumer resolves.
+
+contract-check: ## Offline contract gate: vendored contracts vs this repository
+	@cd tools/contractdrift && go run . -repo ../.. -local
+
+# `-summary` always gets a path so CI and a laptop run the same command: in CI it
+# is the job summary, locally it is /dev/null. A conditional flag here would mean
+# the two diverge in the one place nobody re-reads.
+contract-drift: ## Full contract gate: fetch the server's contract and report drift (network)
+	@set -e; \
+	dir=$$(mktemp -d); trap 'rm -rf "$$dir"' EXIT; \
+	scripts/contract-fetch.sh "$$dir"; \
+	cd tools/contractdrift && go run . -repo ../.. -upstream "$$dir" \
+		-source "$$(cat "$$dir/source.txt")" \
+		-summary "$${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+contract-test: ## Run the contract gate's own tests (proves the gate can still fail)
+	@cd tools/contractdrift && go vet ./... && go test ./...
+
 version-check: ## Verify version.go matches the latest CHANGELOG.md release heading
 	@code_ver=$$(grep -E '^const Version = ' version.go | sed -E 's/.*"([^"]+)".*/\1/'); \
 	log_ver=$$(grep -m1 -E '^## \[[0-9]' CHANGELOG.md | sed -E 's/^## \[([^]]+)\].*/\1/'); \
@@ -140,6 +170,11 @@ require-tools: ## Verify the tools release-check needs are on PATH
 # leave the tool check racing the full race-enabled test suite it exists to run
 # ahead of. As a prerequisite of a recipe that then invokes the rest, the
 # ordering is a property of the target rather than of how it was invoked.
+# contract-check, not contract-drift: the release gate asserts that this tree is
+# internally consistent -- the inventory, the methods it names, the parameters the
+# client sends, the recorded contract version. Whether the SERVER has moved since
+# is a different question, it is the scheduled job's, and a release must not be
+# blocked by a network round trip to another repository.
 release-check: require-tools ## Full pre-release gate
-	@$(MAKE) --no-print-directory fmt-check vet lint test vuln examples version-check
-	@echo "release-check passed: all seven checks ran"
+	@$(MAKE) --no-print-directory fmt-check vet lint test vuln examples version-check contract-check
+	@echo "release-check passed: all eight checks ran"
