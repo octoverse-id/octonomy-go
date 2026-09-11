@@ -420,13 +420,28 @@ that layer is your `*http.Client`, which means the sanctioned extension point fo
 and request logging is an **`http.RoundTripper`**:
 
 ```go
+// observe is your own metrics or tracing sink.
+func observe(method, path string, status int, err error, d time.Duration, requestID string) { /* ... */ }
+
 type instrumented struct{ next http.RoundTripper }
 
 func (t instrumented) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
 	resp, err := t.next.RoundTrip(req)
-	// record req.Method, req.URL.Path, resp.StatusCode, time.Since(start) —
-	// and req.Header.Get("X-Request-ID") to join this span to the server's record.
+
+	// A transport failure — DNS, TLS, connection refused, timeout, a cancelled
+	// context — returns a NIL *Response with a non-nil error. Reading
+	// resp.StatusCode unguarded panics on exactly the failures you added this
+	// wrapper to see.
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+	}
+
+	// X-Request-ID is present only when the call used WithRequestID; it is what
+	// joins this span to the server's audit row and log line.
+	observe(req.Method, req.URL.Path, status, err, time.Since(start), req.Header.Get("X-Request-ID"))
+
 	return resp, err
 }
 
@@ -440,6 +455,11 @@ client, err := octonomy.New(octonomy.Config{
 	},
 })
 ```
+
+**Return the response and error through unchanged, and guard every read of `resp`.** A
+`RoundTripper` that swallows an error, or that dereferences a nil `*Response`, breaks the caller
+rather than the request it was watching — and this package's no-panic guarantee stops at the
+transport you supply.
 
 A `RoundTripper` sees the fully assembled request — headers, query, body — and the raw response, so
 it is also where retries, circuit breaking, and rate limiting belong. (`net/http`'s own transport

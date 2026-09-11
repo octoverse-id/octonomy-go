@@ -214,6 +214,13 @@
 // REUSED connection -- recovery from a half-closed idle socket, not a retry
 // policy, and not something this package adds to.)
 //
+// GUARD EVERY READ OF THE RESPONSE IN SUCH A WRAPPER. A transport failure -- DNS,
+// TLS, connection refused, timeout, a cancelled context -- returns a nil
+// *http.Response with a non-nil error, so an unguarded resp.StatusCode panics on
+// exactly the failures the wrapper was added to observe. This package's no-panic
+// guarantee covers its own code, not the transport you supply. See the README for
+// a worked example.
+//
 // Config.HTTPClient REPLACES the default (&http.Client{Timeout: 30 * time.Second})
 // rather than decorating it, so set a Timeout on any client you pass.
 //

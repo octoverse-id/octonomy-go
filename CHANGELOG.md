@@ -557,6 +557,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/architecture.md`. Since `AGENTS.md` forbids logging in the library, a `RoundTripper` on the
   caller's `*http.Client` is the sanctioned path for metrics, tracing, request logging, retries, and
   rate limiting — and it pairs with `WithRequestID` to join a client span to the server's audit row.
+  The worked example **guards its read of the response**: a transport failure returns a nil
+  `*http.Response` with a non-nil error, so an unguarded `resp.StatusCode` panics on exactly the
+  failures the wrapper exists to observe. This package's no-panic guarantee covers its own code, not
+  the transport you supply.
 - **`MaxIdleConnsPerHost` is documented, and deliberately not tuned.** It caps how many **idle**
   connections to one host are kept for reuse; `http.DefaultTransport` leaves it unset, so it falls
   back to `http.DefaultMaxIdleConnsPerHost` — **2**. Check whether it applies before acting on it:
