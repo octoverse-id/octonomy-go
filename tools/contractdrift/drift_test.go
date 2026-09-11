@@ -2512,8 +2512,17 @@ func envelopeObservation(surface string) ErrorObservation {
 		Details:   map[string]any{"contractdrift": "value"},
 		Prefix:    "/api/" + surface,
 		Status:    409,
-		Conflict:  true,
+		Helpers:   cleanHelpers(),
 	}
+}
+
+// cleanHelpers is every helper answering for itself and nothing else.
+func cleanHelpers() map[string][]string {
+	out := map[string][]string{}
+	for _, helper := range semanticHelpers {
+		out[helper.Name] = []string{helper.Name}
+	}
+	return out
 }
 
 func envelopeReport(t *testing.T, mutate func(o *ErrorObservation)) *Report {
@@ -2558,8 +2567,9 @@ func TestErrorDriveAttestsItsStatus(t *testing.T) {
 // passed clean while the drive's own comment cited that helper as its reason for
 // answering 409 -- an unasserted claim is not a claim.
 func TestErrorDriveAssertsTheSemanticHelper(t *testing.T) {
-	assertFinding(t, envelopeReport(t, func(o *ErrorObservation) { o.Conflict = false }),
-		"`IsConflict` answers false for it")
+	assertFinding(t, envelopeReport(t, func(o *ErrorObservation) {
+		o.Helpers["IsConflict"] = nil
+	}), "makes `IsConflict` answer false")
 }
 
 // TestDetectsWithdrawnRequiredOnErrorEnvelope: requiredness is not exercised by a
@@ -2972,5 +2982,100 @@ func TestSuppressedAliasesAreExactlyThese(t *testing.T) {
 	sort.Strings(got)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the suppressed spellings are %v, not %v -- each one is a place a code can go unseen, so growing the list is a decision, not a detail", got, want)
+	}
+}
+
+// TestEveryHelperIsDriven: the helper table is a list of claims, and a claim
+// nobody makes is the one that goes wrong. errors.go declares sixteen exported
+// Is* predicates; if it grows a seventeenth, this fails until the table covers
+// it, so a new helper cannot arrive unexercised the way fifteen of them did.
+func TestEveryHelperIsDriven(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "errors.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := regexp.MustCompile(`(?m)^func (Is[A-Za-z]+)\(err error\) bool`).FindAllStringSubmatch(string(raw), -1)
+	if len(declared) < 10 {
+		t.Fatalf("found only %d Is* helpers; the pattern stopped matching", len(declared))
+	}
+	driven := map[string]bool{}
+	for _, helper := range semanticHelpers {
+		driven[helper.Name] = true
+	}
+	for _, match := range declared {
+		if !driven[match[1]] {
+			t.Errorf("errors.go declares %s and semanticHelpers does not drive it -- a helper nobody exercises is one that can be rewired in silence", match[1])
+		}
+	}
+}
+
+// TestRewiredHelperIsCaught is round 15's reproduction: IsNotFound pointed at
+// CodeForbidden. Every set stays intact through it, the constants are all still
+// correctly named, and a caller asking "was that a 404?" gets the wrong answer.
+func TestRewiredHelperIsCaught(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "errors.go"), "func IsNotFound",
+		"func IsNotFound(err error) bool { return hasCode(err, CodeNotFound) }",
+		"func IsNotFound(err error) bool { return hasCode(err, CodeForbidden) }")
+
+	// The conformance run drives the SDK compiled into this binary, so a staged
+	// source edit cannot change what runs. Drive the table directly instead: this
+	// is what checkErrorEnvelope compares, and the rewiring is what it must see.
+	answered := map[string][]string{}
+	for _, helper := range semanticHelpers {
+		if helper.Name == "IsNotFound" {
+			answered[helper.Name] = []string{"IsForbidden"}
+			continue
+		}
+		answered[helper.Name] = []string{helper.Name}
+	}
+	r := &Report{}
+	checkErrorEnvelope(Inputs{Conformance: &Conformance{ErrorEnvelope: map[string]ErrorObservation{
+		"v1": withHelpers(envelopeObservation("v1"), answered),
+		"v2": withHelpers(envelopeObservation("v2"), answered),
+	}}}, r)
+
+	assertFinding(t, r, "makes `IsForbidden` answer true, and only `IsNotFound` should")
+}
+
+func withHelpers(o ErrorObservation, helpers map[string][]string) ErrorObservation {
+	o.Helpers = helpers
+	return o
+}
+
+// TestSemicolonClassBodyIsRead: a statement can begin after a semicolon as well
+// as after a colon. `class E(DomainError): description = "x"; code = "lost"` is
+// valid Python whose code matched nothing at all.
+func TestSemicolonClassBodyIsRead(t *testing.T) {
+	codes, unreadable := pyRegistry(t, "\nclass SemicolonError(DomainError): description = \"x\"; code = \"after_semicolon\"\n")
+	if !codes["after_semicolon"] {
+		t.Errorf("a code after a semicolon was lost; unreadable=%v", unreadable)
+	}
+}
+
+// TestParenthesizedCallIsRead: `(error_response)("x", ...)` is the same call.
+func TestParenthesizedCallIsRead(t *testing.T) {
+	codes, unreadable := pyRegistry(t, "\ndef handler(exc):\n    return (error_response)(\"parenthesized\", \"x\", {}, None, 400)\n")
+	if !codes["parenthesized"] {
+		t.Errorf("a parenthesized call was lost; unreadable=%v", unreadable)
+	}
+}
+
+// TestAsyncDefinitionIsNotACall: matching only "def " reported the server's own
+// signature as an unreadable code the moment it became async.
+func TestAsyncDefinitionIsNotACall(t *testing.T) {
+	_, unreadable := pyRegistry(t, "\nasync def error_response(code: str, message: str):\n    return None\n")
+	if len(unreadable) != 0 {
+		t.Errorf("an async definition was reported as an unreadable call: %v", unreadable)
+	}
+}
+
+// TestSimilarlyNamedFunctionIsNotACall: `custom_error_response` ends in this
+// function's name, and the underscore is a word character, so only a word
+// boundary tells them apart.
+func TestSimilarlyNamedFunctionIsNotACall(t *testing.T) {
+	_, unreadable := pyRegistry(t, "\ndef custom_error_response(code: str):\n    return code\n")
+	if len(unreadable) != 0 {
+		t.Errorf("an unrelated function was reported as an unreadable call: %v", unreadable)
 	}
 }

@@ -433,8 +433,8 @@ func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
 	_, callErr := client.Tags.Get(context.Background(), "ERRID")
 
 	observation := ErrorObservation{
-		Sent:     errorObject(body),
-		Conflict: octonomy.IsConflict(callErr),
+		Sent:    errorObject(body),
+		Helpers: map[string][]string{},
 	}
 	if len(rec.requests) > 0 {
 		observation.Prefix = versionPrefix(rec.requests[0].URL.Path)
@@ -449,7 +449,59 @@ func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
 	observation.RequestID = apiErr.RequestID
 	observation.Details = apiErr.Details
 	observation.Status = apiErr.StatusCode
+
+	// One drive per helper, each answered with that helper's own code.
+	for _, helper := range semanticHelpers {
+		err := driveHelperCode(spec, apiVersion, helper.Code)
+		if err == nil {
+			observation.Helpers[helper.Name] = []string{"<no error at all>"}
+			continue
+		}
+		var answered []string
+		for _, other := range semanticHelpers {
+			if other.Is(err) {
+				answered = append(answered, other.Name)
+			}
+		}
+		observation.Helpers[helper.Name] = answered
+	}
 	return observation, nil
+}
+
+// driveHelperCode answers one call with an envelope carrying exactly `code`, and
+// returns the error the client produced from it.
+func driveHelperCode(spec *Spec, apiVersion octonomy.APIVersion, code string) error {
+	envelope, err := synthesizeSchema(spec, "ErrorResponse", 0, witnessPopulated)
+	if err != nil {
+		return err
+	}
+	if inner, ok := envelope["error"].(map[string]any); ok {
+		inner["code"] = code
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	client, err := octonomy.New(octonomy.Config{
+		APIVersion: apiVersion,
+		BaseURL:    "https://contractdrift.invalid",
+		Token:      strings.TrimPrefix(ExpectedValue("authorization", 0), "Bearer "),
+		TenantID:   ExpectedValue("x-tenant-id", 0),
+		HTTPClient: &http.Client{Transport: &recorder{respond: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusConflict,
+				Header:        http.Header{"Content-Type": []string{"application/json"}},
+				Body:          io.NopCloser(bytes.NewReader(body)),
+				ContentLength: int64(len(body)),
+				Request:       req,
+			}, nil
+		}}},
+	})
+	if err != nil {
+		return err
+	}
+	_, callErr := client.Tags.Get(context.Background(), "ERRID")
+	return callErr
 }
 
 // errorObject pulls the inner `error` object out of a synthesized envelope, which
@@ -561,8 +613,43 @@ type ErrorObservation struct {
 	// above picked 409 because it is a status the SDK maps to a semantic code, and
 	// an unasserted claim is not a claim: with these unrecorded, StatusCode: 0 in
 	// parseError and an IsConflict rewired to CodeValidation were both green.
-	Status   int
-	Conflict bool
+	Status int
+
+	// Helpers maps each semantic helper's name to the names of ALL the helpers that
+	// answered true when that helper's own code was sent. Each must answer for
+	// itself and nothing else.
+	//
+	// One helper was asserted at first -- IsConflict, because it was the code the
+	// drive happened to send -- and rewiring IsNotFound to CodeForbidden stayed
+	// clean. A caller reaches for the helper, not the constant, so each of the
+	// sixteen is a claim and each one gets driven.
+	Helpers map[string][]string
+}
+
+// semanticHelpers pairs each exported Is* predicate with the code it is named
+// after. TestEveryHelperIsDriven fails if errors.go grows one this does not list,
+// so a new helper cannot arrive uncovered.
+var semanticHelpers = []struct {
+	Name string
+	Code string
+	Is   func(error) bool
+}{
+	{"IsNotFound", octonomy.CodeNotFound, octonomy.IsNotFound},
+	{"IsConflict", octonomy.CodeConflict, octonomy.IsConflict},
+	{"IsValidation", octonomy.CodeValidation, octonomy.IsValidation},
+	{"IsAuthError", octonomy.CodeAuthRequired, octonomy.IsAuthError},
+	{"IsForbidden", octonomy.CodeForbidden, octonomy.IsForbidden},
+	{"IsTenantMismatch", octonomy.CodeTenantMismatch, octonomy.IsTenantMismatch},
+	{"IsApplicationMismatch", octonomy.CodeApplicationMismatch, octonomy.IsApplicationMismatch},
+	{"IsInactiveTag", octonomy.CodeInactiveTag, octonomy.IsInactiveTag},
+	{"IsScopeImmutable", octonomy.CodeScopeImmutable, octonomy.IsScopeImmutable},
+	{"IsNamespaceNotSupported", octonomy.CodeNamespaceNotSupported, octonomy.IsNamespaceNotSupported},
+	{"IsNamespaceInvalid", octonomy.CodeNamespaceInvalid, octonomy.IsNamespaceInvalid},
+	{"IsNamespacedWritesDisabled", octonomy.CodeNamespacedWritesDisabled, octonomy.IsNamespacedWritesDisabled},
+	{"IsNamespaceAPIDisabled", octonomy.CodeNamespaceAPIDisabled, octonomy.IsNamespaceAPIDisabled},
+	{"IsAmbiguousResolution", octonomy.CodeAmbiguousResolution, octonomy.IsAmbiguousResolution},
+	{"IsNotReady", octonomy.CodeNotReady, octonomy.IsNotReady},
+	{"IsUnexpectedStatus", octonomy.CodeUnexpectedStatus, octonomy.IsUnexpectedStatus},
 }
 
 // Env is what a driver is handed. Two clients, because the health probes are

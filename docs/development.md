@@ -342,9 +342,12 @@ drift at all**, while in the SDK it means `parseError` finds no code, falls thro
 envelope-less branch, and stamps `CodeUnexpectedStatus` on every error the server sends — so
 `IsNotFound`, `IsConflict` and `IsValidation` each answer `false` for the error they are named after. The drive attests what it
 claims: the `/api/<version>` it really went to, the 409 the returned `*APIError` reports, and
-`IsConflict` itself — a caller writes the helper, not `err.(*APIError).Code == "conflict"`, so the
-helper is what has to be true. The envelope therefore carries a **real** code rather than a
-name-shaped witness, since `IsConflict` answers `false` for `cd~code` quite correctly.
+**every** semantic helper — a caller writes `IsNotFound`, not `err.(*APIError).Code == "not_found"`,
+so each of the sixteen is a claim. Each is driven with its own code and must answer for itself and
+nothing else, which is what catches `IsNotFound` pointed at `CodeForbidden`: every set stays intact
+through that, and both helpers then answer true for one envelope. A test fails if `errors.go` grows
+a helper the table does not drive. The envelope carries **real** codes rather than name-shaped
+witnesses, since a helper answers `false` for `cd~code` quite correctly.
 
 **And what the route check proves.** Each driver runs twice per surface with different path values,
 so a route that varies with the value it is given is reported; each placeholder has its own sentinel,

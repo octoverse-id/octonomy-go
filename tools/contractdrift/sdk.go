@@ -42,11 +42,12 @@ var (
 	// first `=` of `==` and was reported as an unreadable assignment. Three
 	// ordinary comparisons in a handler produced three findings, and a scheduled
 	// job nobody reads catches nothing.
-	// `(?:^|:)` and not `\b`, because `\bcode` matched `response.code = "x"` -- an
-	// attribute on an unrelated object, read as a server error code that does not
-	// exist. A code is the first thing on its line, or it follows the colon of a
-	// one-line class body; nothing else is one.
-	pyClassCodeRE = regexp.MustCompile(`(?m)(?:^|:)\s*code\s*(?::[^=\n]*)?=([^=].*)$`)
+	// `(?:^|[:;])` and not `\b`, because `\bcode` matched `response.code = "x"` --
+	// an attribute on an unrelated object, read as a server error code that does
+	// not exist. A code is the first thing in its STATEMENT: the start of a line,
+	// after the colon of a one-line class body, or after a semicolon separating two
+	// statements on one line. Nothing else is one.
+	pyClassCodeRE = regexp.MustCompile(`(?m)(?:^|[:;])\s*code\s*(?::[^=\n]*)?=([^=].*)$`)
 
 	// `error_response("not_found", ...)` in the DRF exception handler, capturing
 	// the first argument whatever it is.
@@ -59,10 +60,15 @@ var (
 	// the caller, since Go's regexp has no lookahead. It has to be filtered
 	// somewhere: reporting a function's own signature as an unreadable code is the
 	// kind of noise that teaches everyone to stop reading a scheduled job.
-	// `[\s\\]*` before the paren covers both `error_response ("x", ...)` and a
-	// backslash line continuation, each of which is valid Python that matched
-	// nothing at all.
-	pyCallCodeRE = regexp.MustCompile(`(?m)^(.*?)error_response[\s\\]*\(\s*([^,\n]*)`)
+	// `[\s\\)]*` before the paren covers `error_response ("x", ...)`, a backslash
+	// line continuation, and `(error_response)("x", ...)` -- each valid Python that
+	// matched nothing at all.
+	//
+	// `\b` in front, because without it `custom_error_response(code: str)` matched:
+	// an unrelated function whose name ends in this one, reported as an unreadable
+	// call. The underscore is a word character, so the boundary is exactly the
+	// thing that distinguishes them.
+	pyCallCodeRE = regexp.MustCompile(`(?m)^(.*?)\berror_response[\s\\)]*\(\s*([^,\n]*)`)
 
 	// The argument spellings that resolve to a DomainError's own `code`, which the
 	// class pattern above has already read: the local `code` the DRF handler
@@ -144,7 +150,10 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 		// The function's own definition, not a call -- and matched on the LINE's
 		// shape rather than on the text containing "def " anywhere, which suppressed
 		// a real call on any line that happened to mention it.
-		if prefix := strings.TrimSpace(m[1]); prefix == "def" || strings.HasPrefix(prefix, "def ") {
+		// `async def error_response(...)` is a definition too, and matching only
+		// "def " reported the server's own signature as an unreadable code.
+		prefix := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m[1]), "async"))
+		if prefix == "def" || strings.HasPrefix(prefix, "def ") {
 			continue
 		}
 		record("error_response("+trimPyExpr(m[2])+", ...)", m[2])

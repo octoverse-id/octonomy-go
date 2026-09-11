@@ -746,6 +746,15 @@ func checkErrorCodesImplemented(in Inputs, r *Report) {
 	r.Add("Error codes", items)
 }
 
+// quoted wraps each name in backticks for a report line.
+func quoted(names []string) []string {
+	out := make([]string, len(names))
+	for i, name := range names {
+		out[i] = "`" + name + "`"
+	}
+	return out
+}
+
 // checkErrorEnvelope proves the client can still read an error.
 //
 // `ErrorResponse` is the most referenced schema in either contract -- every
@@ -786,11 +795,24 @@ func checkErrorEnvelope(in Inputs, r *Report) {
 				surface, observation.Status))
 		}
 		// The semantic helpers are the whole reason a code matters. A caller writes
-		// IsConflict, not `err.(*APIError).Code == "conflict"`, so the helper is
-		// what has to be true.
-		if !observation.Conflict {
-			items = append(items, fmt.Sprintf("`%s`: the envelope carried `%s` and `IsConflict` answers false for it -- the helper and the code it is named after have come apart",
-				surface, observation.Code))
+		// IsNotFound, not `err.(*APIError).Code == "not_found"`, so each helper is
+		// driven with its OWN code and must answer for itself and nothing else.
+		// Asserting one of them -- IsConflict, because it was the code this drive
+		// already sent -- left the other fifteen unexercised, and rewiring
+		// IsNotFound to CodeForbidden was clean.
+		for _, helper := range semanticHelpers {
+			answered := observation.Helpers[helper.Name]
+			if len(answered) == 1 && answered[0] == helper.Name {
+				continue
+			}
+			switch {
+			case len(answered) == 0:
+				items = append(items, fmt.Sprintf("`%s`: an envelope carrying `%s` makes `%s` answer false -- the helper and the code it is named after have come apart",
+					surface, helper.Code, helper.Name))
+			default:
+				items = append(items, fmt.Sprintf("`%s`: an envelope carrying `%s` makes %s answer true, and only `%s` should",
+					surface, helper.Code, strings.Join(quoted(answered), " and "), helper.Name))
+			}
 		}
 
 		if len(observation.Sent) == 0 {
