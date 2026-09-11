@@ -9,7 +9,14 @@ go build ./...
 make test
 ```
 
-Requires Go 1.24+. There are **no runtime dependencies** — keep `go.mod` free of a runtime `require`
+Requires **Go 1.24+** — the floor for `main`, which is the module
+`github.com/octoverse-id/octonomy-go/v2`. The frozen compat line on `support/go1.13` is the module
+`github.com/octoverse-id/octonomy-go` and targets **Go 1.13**: no generics, no `any`, no post-1.13
+standard library, and it must compile *and test* under a real `go1.13` toolchain. This page describes
+`main`; see [versioning.md](versioning.md) for the two-line policy and [release.md](release.md) for
+the backport step.
+
+There are **no runtime dependencies** on either line — keep `go.mod` free of a runtime `require`
 block.
 
 ## Quality gates
@@ -68,12 +75,18 @@ depends on the server's real response shape needs the smoke test below.
 
 ### Integration smoke test
 
-`integration_test.go` (build tag `integration`) is the only test that talks to a real server. It is
-six assertions, deliberately — the full suite is
-[#17](https://github.com/octoverse-id/octonomy-go/issues/17): the single-resource `{data}` envelope
-on a write and on a read, an update, the `{data, pagination}` list envelope on both resources, and
-one real error envelope. It gates on `OCTONOMY_TEST_BASE_URL` and skips when that is empty, so
-`go test ./...` stays hermetic.
+`integration_test.go` (build tag `integration`) is the only test that talks to a real server. It has
+grown with each resource into a single ordered walk — `TestSmoke_RealServer` — covering what a unit
+suite structurally cannot: both response envelopes on writes and reads, list pagination and an `Each`
+walk, `DecodeMetadata` against metadata the server itself stored, real error envelopes including
+`409 scope_immutable`, the namespace axis on every model that carries it, aliases and resolution,
+assignments including both bulk composites, the resource-tag replace composite, audit rows written as
+a side effect of the mutations above, and request-id correlation. The steps share state deliberately,
+so read it top to bottom rather than treating any one as standalone.
+
+It is still a **smoke** test, not the full suite — that is
+[#17](https://github.com/octoverse-id/octonomy-go/issues/17). It gates on `OCTONOMY_TEST_BASE_URL`
+and skips when that is empty, so `go test ./...` stays hermetic.
 
 ```bash
 make dev-server   # boots a real Octonomy, writes .octonomy-harness.env
@@ -161,6 +174,8 @@ drift apart on setup. CI reaches it through the `.github/actions/octonomy-harnes
 
 ## Keeping the contract current
 
-`docs/openapi.yaml` is vendored from the Octonomy server. When targeting a new server contract,
-refresh it (regenerate on the server with `make openapi`, copy the file here), reconcile any type
-changes, and note the server version in [versioning.md](versioning.md).
+`docs/openapi-v2.yaml` (`/api/v2`) and `docs/openapi.yaml` (`/api/v1`) are vendored from the Octonomy
+server, both at release **3.1.1**. When targeting a new server contract, refresh **both** (the server
+generates one per `--api-version` with `make openapi`; copy the files here), reconcile any type
+changes, and note the server version in [versioning.md](versioning.md). The drift gate that would
+catch a stale copy automatically is [#18](https://github.com/octoverse-id/octonomy-go/issues/18).

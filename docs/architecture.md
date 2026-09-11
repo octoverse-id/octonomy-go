@@ -10,12 +10,13 @@ existing resource file and changing the types and paths.
 | File | Responsibility |
 | ---- | -------------- |
 | `octonomy.go` | `Config`, `Client`, `New()` (validation + service wiring). |
-| `transport.go` | `doRaw` (URL building under `/api/<version>`, header assembly, option-contributed query params, the scope-coherence guard, bounded response reads, non-2xx → `*APIError`) plus the three decoders that sit on it: `do`, `doData[T]`, `doList[T]`. Also `RequestOption` and the options: `WithActor`, `WithNamespace`, `WithGlobalNamespace`, `WithApplication`, `WithIncludeGlobal`. |
-| `errors.go` | `APIError`, error `Code*` constants, and `Is*` / `AsAPIError` helpers. |
-| `pagination.go` | `ListOptions`, `Pagination`, and the generic `List[T]` envelope. |
-| `types.go` | Shared `Metadata` alias and the `String`/`Bool`/`Int` pointer helpers. |
+| `transport.go` | `doRaw` (URL building under `/api/<version>`, header assembly, option-contributed query params, the scope-coherence guard, bounded response reads, non-2xx → `*APIError`) plus the three decoders that sit on it: `do`, `doData[T]`, `doList[T]`. Also `doUnversioned`, the separate request path health uses, and `RequestOption` with `WithActor`, `WithNamespace`, `WithGlobalNamespace`, `WithApplication`, `WithIncludeGlobal`, `WithRequestID`. |
+| `errors.go` | `APIError`, error `Code*` constants, `ErrUnreachable`, `ErrResponseTooLarge`, and the `Is*` / `AsAPIError` helpers. |
+| `pagination.go` | `ListOptions`, `Pagination`, the generic `List[T]` envelope, and `Each` — the offset walk. |
+| `types.go` | Shared `Metadata` alias, `DecodeMetadata[T]`, and the `String`/`Bool`/`Int` pointer helpers. |
+| `health.go` | `HealthClient`, `NewHealthClient`, `HealthOption`, and `decodeHealthStatus` — the one group outside the API surface. |
 | `version.go` | `Version` constant (single source of truth) and the default User-Agent. |
-| `<resource>.go` | One file per resource: the model, `*Create`/`*Update` write structs, `*ListParams`, and the `*Service` with CRUD methods. |
+| `<resource>.go` | One file per resource: the model, `*Create`/`*Update` write structs, `*ListParams`, and the `*Service` with its methods. [`api.md`](api.md#implemented) is the canonical list of which files exist and what each exposes. |
 
 ## Request lifecycle
 
@@ -51,21 +52,34 @@ turns each of those into an error ([#32](https://github.com/octoverse-id/octonom
 
 ## Conventions that keep it faithful
 
-- **Contract reference:** `docs/openapi.yaml` is vendored from the server. Types mirror it
-  field-for-field. The deliberate divergences are the **two response envelopes** the generated spec
-  omits: the server wraps lists in `{data, pagination}` (`octonomy/core/pagination.py` upstream) and
-  single resources in `{data}` (`octonomy/core/responses.py`, present since the server's first
-  commit). The spec shows a bare array and a bare object respectively. The SDK follows the server;
-  both divergences are noted in code. Only the list half was known before #32 — the other was found
-  by running against a real container, which is now `make smoke`.
+- **Contract reference:** `docs/openapi-v2.yaml` (`/api/v2`, the default surface) and
+  `docs/openapi.yaml` (`/api/v1`) are vendored from the server, both at release 3.1.1. Types mirror
+  them field-for-field; read the **v2** spec when adding a resource, since v1's schemas have no
+  namespace fields. Where they disagree with the running server, the server wins and the SDK follows
+  it. The divergences **begin** with the two response envelopes the generated spec omits — the server
+  wraps lists in `{data, pagination}` (`octonomy/core/pagination.py` upstream) and single resources in
+  `{data}` (`octonomy/core/responses.py`, present since the server's first commit), where the spec
+  shows a bare array and a bare object — but they do not end there: the two bulk-assignment responses
+  and the resource-tag replace are composites the spec describes wrongly or not at all.
+  **[`api.md`](api.md) carries the complete list**; each is also noted in code. Only the list envelope
+  was known before #32 — the rest were found by running against a real container, which is now
+  `make smoke`.
 - **Pointers for optionality:** nullable server fields decode into `*string`; write structs use
   pointers + `omitempty` so PATCH only sends what the caller set.
-- **No hidden behavior:** the client never retries, panics, logs, or mutates global state. Retries,
-  timeouts, and transport tuning are the caller's `*http.Client`.
+- **No hidden behavior:** the client never panics, never logs, never mutates global state, and adds
+  no retry loop of its own. Retries, timeouts, and transport tuning are the caller's `*http.Client`. That
+  makes an **`http.RoundTripper`** the sanctioned extension point for metrics, tracing, and request
+  logging — it sees the assembled request and the raw response — and it is why the SDK does not touch
+  `MaxIdleConnsPerHost`, which `http.DefaultTransport` leaves at `http.DefaultMaxIdleConnsPerHost`
+  (2) and which matters only on HTTP/1.1: a library that silently changed a connection limit would be
+  making a capacity decision inside the caller's process. Both are documented for callers in the
+  [README](../README.md#maxidleconnsperhost-and-http11-connection-churn).
 
 ## Multi-tenancy
 
-Every request is scoped to one tenant via `X-Tenant-ID` (`Config.TenantID`, required). Tags and
+Every request on the versioned API is scoped to one tenant via `X-Tenant-ID` (`Config.TenantID`,
+required); the unauthenticated health probes, which sit outside `/api/<version>`, are the exception.
+Tags and
 vocabularies may be shared (`application_id == nil`) or application-specific; assignments always carry
 an `application_id`. The SDK passes these through faithfully — the server enforces isolation.
 
@@ -74,7 +88,7 @@ an `application_id`. The SDK passes these through faithfully — the server enfo
 To add a resource, follow `tags.go`:
 
 1. Define the model, `*Create`/`*Update`, and `*ListParams` (with a `query()` method) from the
-   matching `docs/openapi.yaml` schema.
+   matching `docs/openapi-v2.yaml` schema.
 2. Add a `*Service` with `context.Context`-first, `...RequestOption`-last methods, each delegating
    to the transport helper matching its **response shape**: `doData[T]` for a single resource,
    `doList[T]` for a paginated list, `client.do` for a 204 with no body. Picking by convenience
@@ -82,5 +96,7 @@ To add a resource, follow `tags.go`:
    [#32](https://github.com/octoverse-id/octonomy-go/issues/32).
 3. Wire the service onto `Client` in `New()`.
 4. Add table-driven `httptest` tests and a CHANGELOG entry.
+5. Add the new methods to the inventory in [`api.md`](api.md#implemented) — the one place it is kept.
 
-See [roadmap.md](roadmap.md) for the queued resources.
+Every group the vendored contracts publish is already implemented; [roadmap.md](roadmap.md) carries
+the recipe in full and tracks the gaps that remain *within* those resources.

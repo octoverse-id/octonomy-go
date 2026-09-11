@@ -12,7 +12,22 @@ go build ./...
 make test
 ```
 
-Requires Go 1.24+. The SDK has **no runtime dependencies** — `go.mod` must stay free of a `require`
+Requires **Go 1.24+** on `main`, which is the module `github.com/octoverse-id/octonomy-go/v2`.
+
+**Check which line you are on before you write anything.** This repository publishes two modules from
+two branches, and they have different Go floors and different rules:
+
+| Branch | Module | Go | Takes |
+| ------ | ------ | -- | ----- |
+| `main` | `github.com/octoverse-id/octonomy-go/v2` | 1.24+ | Everything — features, fixes, security |
+| `support/go1.13` | `github.com/octoverse-id/octonomy-go` | 1.13 | **Security fixes only**, until its 2027-08-31 sunset |
+
+The compat line has **no generics, no `any`, and no post-1.13 standard library**, and it must compile
+*and test* under a real `go1.13` toolchain. A fix that applies to both lands on `main` first and is
+cherry-picked — see [docs/release.md](docs/release.md) for the backport step and
+[docs/versioning.md](docs/versioning.md) for the policy. Everything below describes `main`.
+
+The SDK has **no runtime dependencies** on either line — `go.mod` must stay free of a `require`
 block for runtime packages. Dev tools (`golangci-lint`, `govulncheck`) are installed separately.
 
 ## Quality gates
@@ -37,12 +52,16 @@ These mirror [AGENTS.md](AGENTS.md):
 - **One file per resource** (`tags.go`, `vocabularies.go`, …), each exposing a `*Service` reached
   from a field on `Client`.
 - Methods take `context.Context` first and `...RequestOption` last.
-- List methods return `*List[T]` and decode the `{data, pagination}` envelope.
+- List methods return `*List[T]` and decode the `{data, pagination}` envelope. That spelling is
+  specific to this line; `support/go1.13` has no type parameters and declares a `*TagList` /
+  `*VocabularyList` per resource instead.
 - Non-2xx responses become `*APIError`; add `Is<Code>` helpers for common codes.
 - Write structs use pointer fields with `omitempty` so PATCH sends only what is set; server
   read-only fields are decode-only.
 - The library never panics, exits, or logs — it returns wrapped errors (`octonomy:` prefix, `%w`).
-- Keep types faithful to `docs/openapi.yaml`. Document any deliberate divergence from the spec.
+- Keep types faithful to the vendored contracts — `docs/openapi-v2.yaml` (`/api/v2`, the default
+  surface) and `docs/openapi.yaml` (`/api/v1`), both at server 3.1.1. Read the **v2** spec when
+  adding a resource. Document any deliberate divergence.
 - Every exported symbol has a doc comment.
 
 ## Testing expectations
@@ -55,7 +74,10 @@ These mirror [AGENTS.md](AGENTS.md):
 ## Branches, commits, and PRs
 
 - Branch names follow [Conventional Branch](https://conventional-branch.github.io/):
-  `<type>/<description>`, types `feature|feat|bugfix|fix|hotfix|release|chore`.
+  `<type>/<description>`, types `feature|feat|bugfix|fix|hotfix|release|support|chore`.
+  `support/<description>` names a **long-lived** maintenance line (`support/go1.13`) rather than a
+  unit of work, so it closes no issue and is exempt from the issue-number rule below; work targeting
+  it still branches off it with an ordinary issue-numbered branch.
 - For planned work tracked by an issue, use `<type>/<issue-number>-<description>` and put
   `Closes #<n>` in the PR body.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g.

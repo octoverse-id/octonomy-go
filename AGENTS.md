@@ -21,14 +21,19 @@ stays a faithful, ergonomic client.
   belong there.** The server rejects all of them by name too, so the guard buys a round trip and a
   better-targeted error — except `include_global` on a write, which the server silently ignores, and
   silence is the failure mode this SDK refuses.
-- Every request is tenant-scoped via the `X-Tenant-ID` header; `Config.TenantID` is required.
+- Every request **on the versioned API** is tenant-scoped via the `X-Tenant-ID` header;
+  `Config.TenantID` is required. The health probes are the documented exception — see the health
+  rules below.
 - `application_id` is optional on tags and vocabularies (`nil` = shared across the tenant) and is
   required for assignments.
 - Tag deletion is **deactivation** on the server, not hard delete. `Delete` methods call HTTP
   `DELETE` and must document the deactivation semantics rather than implying data loss.
 - Tag aliases are alternate identifiers that resolve to canonical tags and follow tenant/application
   compatibility rules.
-- Keep the SDK faithful to `docs/openapi.yaml`, the bundled contract reference. Where the live server
+- Keep the SDK faithful to the bundled contract references: `docs/openapi-v2.yaml` (`/api/v2`, the
+  default surface) and `docs/openapi.yaml` (`/api/v1`), both vendored at server **3.1.1**. Read the
+  **v2** spec when adding a resource — v1 has no namespace axis, so its schemas omit the
+  `namespace_type` / `namespace_id` fields every model needs. Where the live server
   diverges from the generated spec — notably the **two response envelopes** the spec omits:
   `{data, pagination}` on lists and `{data}` on single resources — trust the server's real behavior
   and document the divergence in a comment. Both were verified against a running server, not read
@@ -72,8 +77,11 @@ stays a faithful, ergonomic client.
   `NamespaceID` as `*string`, **decode-only**. The server sets them from the `X-Namespace-*` headers
   and never from a request body, so they must not appear on `*Create` / `*Update` — see
   `docs/roadmap.md` for the list and which issue owns each.
-- List methods return `*List[T]` and decode the `{data, pagination}` envelope; embed `ListOptions`
-  in each resource's `*ListParams`.
+- **On this line** list methods return `*List[T]` and decode the `{data, pagination}` envelope; embed
+  `ListOptions` in each resource's `*ListParams`. That shape is line-specific: `support/go1.13` has no
+  type parameters, so it declares a two-field `*TagList` / `*VocabularyList` per resource instead.
+  `ListOptions` and `Pagination` are identical on both. Write the generic form here and do not
+  reach for the compat spelling.
 - **Pick the transport helper by response shape, and never by convenience.** `doData[T]` for a call
   returning a single resource (it unwraps the server's `{"data": {...}}`), `doList[T]` for a list
   envelope, `client.do` for a call with no payload to decode — DELETE's 204. `doRaw` is the shared
@@ -142,7 +150,15 @@ stays a faithful, ergonomic client.
 
 ## Go Conventions
 
-- Target Go **1.24+**. **Standard library only** — no third-party runtime dependencies. Dev tools
+- **Two lines, two Go floors — check which one you are on before you write anything.** This branch
+  (`main`, module `github.com/octoverse-id/octonomy-go/v2`) targets Go **1.24+**: generics, `any`,
+  and the modern standard library are all in bounds. The frozen compat line (`support/go1.13`,
+  module `github.com/octoverse-id/octonomy-go`) targets Go **1.13** — no type parameters, no `any`
+  alias, no post-1.13 standard library — and takes **security fixes only**. A fix that must reach
+  both lands here first and is cherry-picked, where it has to compile and test under a real
+  `go1.13` toolchain. See [`docs/versioning.md`](docs/versioning.md) for the policy and the compat
+  line's sunset date, and [`docs/release.md`](docs/release.md) for the backport step.
+- **Standard library only** on both lines — no third-party runtime dependencies. Dev tools
   (`golangci-lint`, `govulncheck`) are not module dependencies.
 - Keep the tree `gofmt`-clean, `go vet`-clean, and `golangci-lint`-clean.
 - The library never panics, never calls `os.Exit`, and never logs. It returns errors.

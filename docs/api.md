@@ -7,10 +7,14 @@ parameters, and field names; this page is the client-side view.
 - [`openapi.yaml`](openapi.yaml) — `/api/v1`, server **3.1.1**. Both specs now track the same server
   release.
 
-**One exception, and it is load-bearing: the vendored spec is wrong about response envelopes.** The
-server wraps every payload under `data` — lists as `{"data": [...], "pagination": {...}}` and single
-resources as `{"data": {...}}` — and the generated spec documents neither. Where the two disagree the
-running server wins. See [Responses](#responses).
+**One exception, and it is load-bearing: the vendored spec is wrong about response envelopes.** On
+the versioned API surface the server wraps every payload under `data` — lists as
+`{"data": [...], "pagination": {...}}` and single resources as `{"data": {...}}` — and the generated
+spec documents neither. Where the two disagree the running server wins. See
+[Responses](#responses).
+
+**The health probes are outside that rule**, as they are outside `/api/<version>` itself: they answer
+with a bare `{"status": "ok"}` and no envelope at all. See [Health probes](#health-probes).
 
 ## Base URL and headers
 
@@ -27,7 +31,7 @@ can be created through `Assignments.Create`, whose id travels in the body, and t
 through the `/resources` routes.
 
 The client targets `Config.BaseURL + /api/<version>`, where the version comes from
-`Config.APIVersion` and defaults to `APIV2`. Every request carries:
+`Config.APIVersion` and defaults to `APIV2`. Every request **on that versioned surface** carries:
 
 | Header | Source | Required |
 | ------ | ------ | -------- |
@@ -38,11 +42,14 @@ The client targets `Config.BaseURL + /api/<version>`, where the version comes fr
 | `Content-Type: application/json` | requests with a body | — |
 | `User-Agent` | `Config.UserAgent` (default `octonomy-go/<version>`) | — |
 | `X-Namespace-Type` / `X-Namespace-ID` | `WithNamespace(...)` | no — **v2 only**, all-or-nothing |
+| `X-Request-ID` | `WithRequestID(...)` | no — sent **only** when you supply one; the server mints `req_<uuid>` otherwise |
 
-**The health probes carry none of it.** `/health/live` and `/health/ready` sit at the server root,
-outside `/api/<version>`, and authenticate nobody, so the SDK sends them no `Authorization`, no
-`X-Tenant-ID`, and no namespace headers — from a fully configured `Client` just as from a
-credential-free one. See [Health probes](#health-probes).
+**That table describes the versioned API surface.** `/health/live` and `/health/ready` sit at the
+server root, outside `/api/<version>`, and authenticate nobody, so the SDK sends them **no
+`Authorization`, no `X-Tenant-ID`, no `X-Actor-ID`, and no namespace or request-id headers** — from a
+fully configured `Client` just as from a credential-free one. They do still carry `Accept` and
+`User-Agent`, which identify the client rather than authorize it. See
+[Health probes](#health-probes).
 
 ## API version and namespace scoping
 
@@ -100,8 +107,11 @@ see no sign the option did nothing — so the SDK makes it loud.
 
 ### Response fields
 
-`Tag`, `Vocabulary`, and `TagAlias` carry `NamespaceType` and `NamespaceID` (`*string`,
-decode-only). Both are nil for a global row, and on every `/api/v1` response. Scope is fixed at
+**All seven** v2 response schemas that carry namespace identity have `NamespaceType` and
+`NamespaceID` (`*string`, decode-only): `Tag`, `Vocabulary`, `TagAlias`, `Assignment`, `TagResource`,
+`ResourceTag`, and `AuditLog`. Both are nil for a global row, and on every `/api/v1` response. They
+are server-set from the `X-Namespace-*` headers and never accepted in a write body, so they appear on
+no `*Create` / `*Update`. Scope is fixed at
 creation: changing `application_id`, `namespace_type`, or `namespace_id` on a PATCH is a
 `409 scope_immutable`.
 
@@ -129,6 +139,12 @@ empty page. It is a token misconfiguration rather than a caller mistake, so retr
 filters will not help.
 
 ## Implemented
+
+**This table is the only complete resource inventory for the SDK.** The README,
+`architecture.md`, `roadmap.md`, and `versioning.md` link here rather than reproducing it — they name
+individual resources, and occasionally a route, only where they are making some other point — so a
+new method is added in one place. Every group the vendored contracts publish is implemented; paths are relative to
+`BaseURL + /api/<version>` except the two health routes, which sit at the server root.
 
 | SDK method | HTTP | Path |
 | ---------- | ---- | ---- |
@@ -393,9 +409,11 @@ probe, err := octonomy.NewHealthClient("https://octonomy.example.com",
 st, err := probe.Health.Ready(ctx)
 ```
 
-A caller who already holds a full `client` reaches the same code through `client.Health.Ready(ctx)`,
-and the request is byte-for-byte identical: the token is not sent to a route that does not
-authenticate. A `HealthClient` exposes `Health` and nothing else, and the transport refuses a
+A caller who already holds a full `client` reaches the same code through `client.Health.Ready(ctx)`:
+same path, same method, and the same credential behavior — the token is not sent to a route that does
+not authenticate. The one header that can differ between the two entry points is `User-Agent`, since
+`Config.UserAgent` and `WithHealthUserAgent` are set independently; leave both at their defaults and
+the requests are byte-for-byte identical. A `HealthClient` exposes `Health` and nothing else, and the transport refuses a
 credential-free client outright rather than sending a blank `Authorization` header.
 
 `Live` and `Ready` take **no** `RequestOption`, and the option set splits in two on why.
@@ -408,8 +426,8 @@ middleware runs on these routes too — probed against 3.1.0, `/health/ready` ec
 `X-Request-ID` back and mints one when there is none. But a probe mutates nothing, so it writes no
 audit row and emits no event, and its non-2xx carries `{"status": …}` rather than the error envelope:
 of the four sinks that make a correlation id worth sending, a probe reaches only the server's log
-line. Options on that path would cost the byte-for-byte-identical property above, which is what lets
-both entry points share one code path and one test suite.
+line. Options on that path would cost the identical-request property above, which is what lets both
+entry points share one code path and one test suite.
 
 ### Unreachable and unready are different failures
 
@@ -455,12 +473,13 @@ answered" from "the server answered and said no" on any method. The cause surviv
 
 ## Responses
 
-Every 2xx that carries a payload is wrapped in a `data` envelope. The SDK unwraps it for you; the
+Every 2xx **on the versioned API** that carries a payload is wrapped in a `data` envelope; the health
+probes, outside `/api/<version>`, are the exception and carry none. The SDK unwraps it for you; the
 wire column is what the server actually sends.
 
 | Call | On the wire | You get |
 | ---- | ----------- | ------- |
-| Single resource (`Create`/`Get`/`Update`) | `{"data": {...}}` | `*Tag`, `*Vocabulary`, `*TagAlias` |
+| Single resource (`Create`/`Get`/`Update`) | `{"data": {...}}` | the resource — `*Tag`, `*Vocabulary`, `*TagAlias`, `*Assignment` |
 | Composite (`Tags.Resolve`) | `{"data": {...}}` | `*TagResolution` — a payload, not a resource |
 | Composite (`Assignments.BulkAssign`) | `{"data": {"created", "existing", "skipped", "assignments"}}` | `*BulkAssignResult` |
 | Composite (`Assignments.BulkRemove`) | `{"data": {"removed"}}` | `*BulkRemoveResult` |
@@ -490,11 +509,21 @@ and Django drops `Meta.ordering` from aggregate queries — the emitted SQL ends
 Django's own `queryset.ordered` reports false. `LIMIT`/`OFFSET` over an unordered query is undefined,
 so paging the tags list can repeat or miss rows even with no concurrent writes.
 
-A 2xx whose body does not match the shape above is an **error**, never a zero value. Decoding a
+A 2xx whose **envelope** does not match the shape above is an error, never a zero value. Decoding a
 wrapped body straight into a `*Tag` yields an empty struct with a nil error, and an unexpected list
 shape is indistinguishable from an empty page — so the client rejects both instead of returning
-something that looks like data. An empty page (`"data": []`, or `"data": null`) is not an error: it
-decodes to an empty non-nil slice either way.
+something that looks like data. A missing `data` key, a null `data` where a resource was expected, an
+empty body, and a list with no usable `pagination` block are all errors. An empty page
+(`"data": []`, or `"data": null`) is not: it decodes to an empty non-nil slice either way.
+
+**The guarantee stops at the envelope, and that boundary is a known gap.** `doData` asserts that
+`data` is present and non-null, then unmarshals it into `T`; a *well-formed* envelope carrying the
+**wrong object** — `{"data": {"wrong": true}}` — still decodes to a zero-valued resource with a nil
+error, because unknown JSON fields are ignored and no field is required. The class of failure #32
+closed is "the envelope is missing"; "the envelope holds something else" is
+[#40](https://github.com/octoverse-id/octonomy-go/issues/40) and is still open. The composite results
+are the exception — `BulkAssignResult`, `BulkRemoveResult`, and `ResourceReplaceResult` require their
+keys on decode, for the reason given [above](#assignments).
 
 ## Error codes
 
@@ -564,4 +593,4 @@ worth preserving.
 ## Not yet implemented
 
 Every endpoint group the vendored contracts publish is implemented. Remaining gaps are within
-implemented resources — see [roadmap.md](roadmap.md).
+implemented resources — see [roadmap.md](roadmap.md), which tracks them against their issues.

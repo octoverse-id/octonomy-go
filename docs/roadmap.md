@@ -1,12 +1,21 @@
 # Roadmap
 
 The foundation (transport, auth, errors, pagination, API version selection, namespace scoping) and
-every endpoint group the vendored contracts publish are implemented: **Vocabularies**, **Tags**,
-**Tag aliases**, **Tag resolution**, **Tag assignments**, **Resource tags**, **Audit logs**, and
-**Health**. What is left are the gaps *within* implemented resources, at the bottom of this page.
+every endpoint group the vendored contracts publish are implemented.
+**[`api.md`](api.md#implemented) holds the only complete inventory** — every SDK method, verb, and
+path — and is the one place to update when a method is added. This page names a route only where it
+is making some other point (the health section below does). What is left are the gaps *within*
+implemented resources, at the bottom of this page.
 
-**Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint,
-parameter, and response shape below was enumerated from the vendored v2 spec. The previous revision
+This page is therefore two things: the **recipe** for adding the next resource the server ships, and
+the **register of known gaps**. Neither is a list of what exists.
+
+**Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint
+and parameter below was enumerated from the vendored v2 spec. **Response shapes are a different
+matter** and were verified against a running server: the spec omits both `data` envelopes, describes
+the two bulk composites and the resource-tag replace wrongly or not at all, and carries no schema for
+the health probes, which are outside the API surface entirely. Where spec and server disagree, the
+server wins — see [`api.md`](api.md). The previous revision
 of this file was written against server 1.0.0 and had drifted — most visibly, it documented
 `Tags.Resolve` as taking `slug` + `application_id` when the endpoint takes four parameters. Since
 #8–#13 delegate to this file, that drift would have been copied into six resources. Re-derive rather
@@ -33,28 +42,29 @@ well as the collection — then:
 4. Wire the service onto `Client` in `New()` (`octonomy.go`).
 5. Add table-driven `httptest` tests (assert method/path/headers/query/body server-side; assert
    decoded values client-side; cover the error envelope).
-6. Add a `## [Unreleased]` CHANGELOG entry and update [`api.md`](api.md).
+6. Add a `## [Unreleased]` CHANGELOG entry and add every new method to the inventory table in
+   [`api.md`](api.md#implemented) — the one place the complete list is kept.
 
 Scoping is already handled by the transport and needs no per-resource work: `WithNamespace`,
 `WithApplication`, and `WithIncludeGlobal` apply to any method, and the guards in
 `checkScopeCoherence` cover every resource at the chokepoint.
 
-The queue this section fed is empty; what follows is reference for the next resource the server adds,
-plus the two sections below on what is already here.
+The queue this section fed is empty; what follows is reference for the next resource the server adds
+— the namespace-field register, the one group the recipe does not cover, and the known gaps.
 
 ## Namespace fields
 
 Seven v2 response schemas carry `namespace_type` / `namespace_id`, and all seven are implemented:
 
-| Schema | Owner | Status |
-| ------ | ----- | ------ |
-| `Tag` | implemented | ✅ `tags.go` |
-| `Vocabulary` | implemented | ✅ `vocabularies.go` |
-| `TagAlias` | implemented | ✅ `aliases.go` |
-| `Assignment` | implemented | ✅ `assignments.go` |
-| `TagResource` | implemented | ✅ `resources.go` |
-| `ResourceTag` | implemented | ✅ `resources.go` |
-| `AuditLog` | implemented | ✅ `audit.go` |
+| Schema | Declared in |
+| ------ | ----------- |
+| `Tag` | `tags.go` |
+| `Vocabulary` | `vocabularies.go` |
+| `TagAlias` | `aliases.go` |
+| `Assignment` | `assignments.go` |
+| `TagResource` | `resources.go` |
+| `ResourceTag` | `resources.go` |
+| `AuditLog` | `audit.go` |
 
 Six mark both fields `required`; `Assignment` carries them without. A drift check that keys on
 `required` will therefore see six, not seven — the runtime emits them on all seven. All seven are now
@@ -90,7 +100,28 @@ What landed, and the constraints that shaped it — all four still bind anyone e
 
 ## Known gaps in implemented resources
 
-- **`VocabularyListParams` is missing `q` and `slug`.** Both have been on `GET /vocabularies` since
-  server 1.0.0 — this is not v2 drift but a gap against the contract the SDK already vendored.
-  `TagListParams` has the matching pair and is complete. Not fixed under #7, which owns the version
-  and namespace axes; it wants its own issue.
+Each has an issue; none is a missing endpoint group.
+
+| Gap | Issue |
+| --- | ----- |
+| **`VocabularyListParams` is missing `q` and `slug`.** Both have been on `GET /vocabularies` since server 1.0.0 — not v2 drift but a gap against the contract the SDK already vendored. `TagListParams` has the matching pair and is complete. | [#36](https://github.com/octoverse-id/octonomy-go/issues/36) |
+| **`*Update.Metadata` cannot clear a metadata object** — `omitempty` swallows an empty map, so there is no way to send `{}`. | [#37](https://github.com/octoverse-id/octonomy-go/issues/37) |
+| **A 2xx whose `data` envelope holds the wrong object decodes to a zero-valued resource.** The envelope assertion catches a missing `data`, not a well-formed one carrying something else. | [#40](https://github.com/octoverse-id/octonomy-go/issues/40) |
+| **The tags-ordering caveats want revisiting** once the server adds an `ORDER BY` to the annotated tags list (upstream `octonomy#162`). | [#49](https://github.com/octoverse-id/octonomy-go/issues/49) |
+
+Deferred by design, not gaps: the webhook typed-event surface and `http.Handler`
+([#22](https://github.com/octoverse-id/octonomy-go/issues/22) — no deployment emits webhooks, since
+`OUTBOX_TRANSPORT` defaults to `logging`) and the client-side tag-tree helper
+([#20](https://github.com/octoverse-id/octonomy-go/issues/20) — needs consumer-defined semantics).
+
+## What is planned that is not a resource
+
+An empty resource queue is not an empty backlog. The
+[v2.0.0-alpha.2 milestone](https://github.com/octoverse-id/octonomy-go/milestone/3) is additive work
+alongside the client rather than inside it: `octonomy/webhook` with HMAC `Verify` and signature test
+vectors ([#16](https://github.com/octoverse-id/octonomy-go/issues/16)), the full integration suite
+against the published container ([#17](https://github.com/octoverse-id/octonomy-go/issues/17)), the
+OpenAPI contract drift gate that would have caught this documentation's own drift automatically
+([#18](https://github.com/octoverse-id/octonomy-go/issues/18)), and a runnable example per resource
+group ([#19](https://github.com/octoverse-id/octonomy-go/issues/19)). Cutting
+`v2.0.0-alpha.1` itself is [#29](https://github.com/octoverse-id/octonomy-go/issues/29).

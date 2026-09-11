@@ -46,8 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authorized for (`include_global`, a query parameter — fail-closed on the server). It is refused on
   writes, where the server ignores it, rather than being sent to do nothing.
 - `NamespaceType` / `NamespaceID` on `Tag` and `Vocabulary` — decode-only, nil on a global row and on
-  every `/api/v1` response. The five remaining v2 schemas that carry them arrive with their resources
-  (see [`docs/roadmap.md`](docs/roadmap.md)).
+  every `/api/v1` response. All **seven** v2 schemas that carry namespace identity now have them:
+  the five remaining (`TagAlias`, `Assignment`, `TagResource`, `ResourceTag`, `AuditLog`) landed with
+  their resources later in this same unreleased set (see [`docs/roadmap.md`](docs/roadmap.md)).
 - Error codes and helpers for the namespace surface: `namespace_not_supported`, `namespace_invalid`,
   `namespaced_writes_disabled`, `namespace_api_disabled`, `ambiguous_resolution`, each with an `Is*`
   helper. `namespaced_writes_disabled` and `namespace_api_disabled` are **operator** states — rollout
@@ -244,15 +245,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The transport is now one request path (`doRaw`) and three decoders chosen by response shape:
   `doData[T]` unwraps the single-resource envelope, `doList[T]` decodes the list envelope, and
-  `Client.do` handles a call with no payload. Every shape that would previously have decoded to a
-  zero value with a nil error is an error instead: a 2xx with no `data` key, a null `data` where a
-  resource was expected, an empty body, a list response with no usable `pagination` block, and a
-  non-204 answer to `Delete`. A present-but-null `"data"` on a list normalizes to an empty non-nil
-  slice, identical to `"data": []`.
+  `Client.do` handles a call with no payload. Every **envelope** shape that would previously have
+  decoded to a zero value with a nil error is an error instead: a 2xx with no `data` key, a null
+  `data` where a resource was expected, an empty body, a list response with no usable `pagination`
+  block, and a non-204 answer to `Delete`. A present-but-null `"data"` on a list normalizes to an
+  empty non-nil slice, identical to `"data": []`. The check stops at the envelope: a well-formed
+  envelope carrying the *wrong object* still decodes to a zero value, which is
+  [#40](https://github.com/octoverse-id/octonomy-go/issues/40) and remains open.
 
 ### Added
-- `integration_test.go` (build tag `integration`, `make smoke`): a six-assertion smoke test against
-  a real server, covering both response envelopes on both resources. Wired into CI as a
+- `integration_test.go` (build tag `integration`, `make smoke`): a smoke test against a real server,
+  covering both response envelopes on both resources. It has grown with each resource landed in this
+  same set and is now an ordered walk over every group. Wired into CI as a
   non-advisory `smoke` job running `make smoke` with `OCTONOMY_SMOKE_REQUIRED=1`, so neither a
   harness that failed to export its credentials nor a test that no longer runs can report a vacuous
   green. It replaces the advisory bootstrap-only `harness` job, keeping that job's cross-step
@@ -404,7 +408,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answering with a bare `{"status": "ok"}` that carries **no `data` envelope**, and authenticating
   nobody. They are reachable two ways — `client.Health` for a caller who already has a full client,
   and the new credential-free constructor for one who has no credentials at all — and both run the
-  same code and send the same request.
+  same code, hit the same path, and send no credentials. `Config.UserAgent` and `WithHealthUserAgent`
+  are set independently, so `User-Agent` is the one header that can differ between them.
 - **`NewHealthClient(baseURL, ...HealthOption)`**, a constructor requiring **only a base URL**, with
   `WithHealthHTTPClient` (the knob a probe loop wants: the 30s default timeout is rarely right for
   one) and `WithHealthUserAgent`. It exists because `New` rejects a blank `Token` or `TenantID`, so
@@ -501,6 +506,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the wire's own key names, and namespaced live calls checking what the server populates. Neither
   alone suffices: renaming the tags left the entire unit suite green until the raw-body test existed,
   because every other fixture is marshalled from the struct it is decoded into.
+
+### Documentation
+- **Documentation truth pass across the whole tree**
+  ([#15](https://github.com/octoverse-id/octonomy-go/issues/15)). Every file that asserted a Go
+  floor, an API version, a list-type shape, or a release state that is false for the line it
+  describes is corrected, and the facts the two-line split created are written down for the first
+  time.
+  - **Two Go floors, stated as two.** `AGENTS.md`, `CONTRIBUTING.md`, `docs/development.md`, and the
+    README said "Go 1.24+" flatly. Each now names the line it is describing: `main` is
+    `.../octonomy-go/v2` at Go 1.24+, `support/go1.13` is `.../octonomy-go` at Go 1.13 with no
+    generics, no `any`, and no post-1.13 standard library. `AGENTS.md` and `CONTRIBUTING.md` said
+    "List methods return `*List[T]`" as an unqualified rule; that spelling is `main`-only, and the
+    compat line's per-resource `*TagList` / `*VocabularyList` is now recorded next to it.
+  - **A published sunset date with a named owner: 2027-08-31.** It was previously a rule ("12 months
+    from the `v1.0.0` tag") rather than a date, which is not something a blocked team can plan
+    against. The date, its derivation from the 2026-08-26 tag, and its owner now appear in
+    `SECURITY.md`, `docs/versioning.md`, the README, and `doc.go`, matching the copies already on
+    `support/go1.13`.
+  - **`SECURITY.md` on `main` reflects both lines.** It claimed security fixes go to "the latest
+    `0.x` release" and listed only `0.1.x` — a version that does not exist. It now carries the
+    two-module supported-versions table, the sunset, the backport rule, and the two facts a Go 1.13
+    consumer needs: that toolchain is itself unpatched past `go1.13.15` (August 2020), and `retract`
+    cannot recall a release for it.
+  - **The release record is accurate.** `README.md` and `docs/versioning.md` said the repository had
+    no git tags and nothing published. `v1.0.0` was tagged on `support/go1.13` on 2026-08-26.
+    `docs/versioning.md` now carries a Release state section covering both lines, why `v1.0.0` is not
+    an ancestor of `main`, and why `git describe` here will not find it.
+  - **One live versioning policy.** The `0.3.0`-minor framing an earlier plan carried is recorded as
+    settled: v2 support ships on a new module path at `v2.x`, a major, which is what the
+    major-effort rule in `docs/versioning.md` already required.
+  - **The consumer-side `exclude` snippet is documented as unnecessary**, not omitted. The `/v2`
+    module path made Go itself the enforcement, so a reader following an older plan document is told
+    so explicitly rather than left hunting for a snippet that no longer exists.
+  - **One complete resource inventory.** It was restated in five places and drifting. `docs/api.md`
+    now holds the only complete method-to-endpoint mapping and is the one place to update; the
+    README, `docs/roadmap.md`, `docs/architecture.md`, and `docs/versioning.md` link to it, naming
+    individual routes only where they are making some other point. `docs/versioning.md` still claimed only Vocabularies and Tags
+    were implemented, and `docs/api.md` still listed three namespace-carrying schemas rather than
+    seven.
+  - **`docs/release.md`** gains the three branch roles (`support/` line, `<type>/<issue>-`
+    implementation, `release/vX.Y.Z` tag PR) and a worked backport procedure — branch off the support
+    line, expect the cherry-pick to need rewriting against a tree with no generics, and let the
+    `compat guard` and `go1.13` jobs prove it, since a modern toolchain enforces the language version
+    from `go.mod` but not the standard library.
+  - **`docs/roadmap.md`** stops restating what exists and becomes the recipe plus a register of known
+    gaps, each against its issue (#36, #37, #40, #49) with the two deliberate deferrals (#20, #22)
+    named as such.
+- **The `http.RoundTripper` extension point is documented** in the README, `doc.go`, and
+  `docs/architecture.md`. Since `AGENTS.md` forbids logging in the library, a `RoundTripper` on the
+  caller's `*http.Client` is the sanctioned path for metrics, tracing, request logging, retries, and
+  rate limiting — and it pairs with `WithRequestID` to join a client span to the server's audit row.
+  The worked example **guards its read of the response**: a transport failure returns a nil
+  `*http.Response` with a non-nil error, so an unguarded `resp.StatusCode` panics on exactly the
+  failures the wrapper exists to observe. This package's no-panic guarantee covers its own code, not
+  the transport you supply.
+- **`MaxIdleConnsPerHost` is documented, and deliberately not tuned.** It caps how many **idle**
+  connections to one host are kept for reuse; `http.DefaultTransport` leaves it unset, so it falls
+  back to `http.DefaultMaxIdleConnsPerHost` — **2**. Check whether it applies before acting on it:
+  `DefaultTransport` sets `ForceAttemptHTTP2`, so against an HTTPS endpoint that negotiates h2 the
+  requests multiplex and pool size largely stops mattering. On HTTP/1.1, surplus connections beyond
+  two in flight are closed on completion rather than pooled, so the symptom is handshake churn rather
+  than a ceiling — nothing blocks. Sequential work never reaches it on either protocol (`Each` issues
+  its pages one at a time); a fan-out across goroutines sharing one `*Client` is what produces the
+  churn. Raising it silently would be a capacity decision taken inside the caller's process, so the
+  README shows the `http.DefaultTransport.Clone()` recipe instead — `Clone` keeps the tuned defaults
+  a bare `&http.Transport{}` starts without, though a bare transport does still negotiate HTTP/2. The
+  pool belongs to the **transport**, not the client, which is what makes sharing one `*Client` the
+  simple correct default.
+- **The library "adds no retry loop of its own"**, stated that way rather than as "never retries":
+  `net/http`'s transport already retries a request it failed to write on a *reused* connection, which
+  is recovery from a half-closed idle socket rather than a retry policy.
+- **`version.go`'s `0.1.0` is disclosed as a pre-release placeholder** rather than left to surprise.
+  The `Version` constant on `main` still reads `0.1.0`, so the default User-Agent is
+  `octonomy-go/0.1.0`. No tag anywhere corresponds to it — `v1.0.0` belongs to the other module — and
+  the first `/v2` release PR replaces it, since `version.go` is bumped there and nowhere else. The
+  claim that no `v0.x` was published is now backed by a re-runnable `proxy.golang.org` query rather
+  than by assertion, framed as the proxy's current set of tag-resolvable versions.
+- **The "two response envelopes" framing is corrected where it implied a closed set.**
+  `docs/architecture.md` said the envelopes *are* the deliberate divergences; the two bulk-assignment
+  responses and the resource-tag replace are three more, and `docs/api.md` — which carries the
+  complete list — is now what it points to. `docs/api.md` also no longer says the server wraps
+  *every* payload under `data`: the health probes answer with a bare `{"status": "ok"}`, as the same
+  page says further down, and its request-header table was missing `X-Request-ID` entirely.
+- **`docs/release.md`** no longer says `go get` resolves tags "directly from GitHub" — the default
+  path is `proxy.golang.org`, whose permanent cache is precisely why a tag cannot be unpublished —
+  and it now distinguishes what the two compat checks actually do: `go1.13` builds, vets, and runs
+  `go test -race` under a real toolchain, while `compat guard` never compiles the package and asserts
+  the `go.mod` invariants.
+- The bug-report template asked for a version "e.g. `v0.1.0`", which was never released, and did not
+  ask which of the two modules the reporter imports — the first thing triage needs. Both fixed. The
+  PR template now checks the base branch against the line and the no-version-bump rule, and both
+  templates cite `openapi-v2.yaml` alongside `openapi.yaml`.
 
 ## [0.1.0] - 2026-06-08
 

@@ -25,11 +25,21 @@ body:
       render: text
     validations:
       required: false
+  - type: dropdown
+    id: module-line
+    attributes:
+      label: Which module are you importing?
+      description: The two release lines are different modules with different Go floors and support policies.
+      options:
+        - github.com/octoverse-id/octonomy-go/v2 (modern line, Go 1.24+)
+        - github.com/octoverse-id/octonomy-go (compat line, v1.x, Go 1.13, security fixes only)
+    validations:
+      required: true
   - type: input
     id: sdk-version
     attributes:
       label: SDK version / commit
-      description: e.g. v0.1.0 or a commit SHA.
+      description: 'e.g. v1.0.0, v2.0.0-alpha.1, a pseudo-version, or a commit SHA. There has never been a v0.x.'
     validations:
       required: false
   - type: textarea

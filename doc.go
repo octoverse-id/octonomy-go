@@ -21,8 +21,23 @@
 //   - github.com/octoverse-id/octonomy-go/v2   v2.x, Go 1.24+, active development
 //
 // Because the paths differ, version selection cannot move a consumer between the
-// two lines. If you are on Go 1.13, use the unsuffixed path; it receives security
-// fixes only and has a published sunset date. See docs/versioning.md.
+// two lines, and a consumer needs no exclude, pin, or build tag of their own. If
+// you are on Go 1.13, use the unsuffixed path: it carries Vocabularies and Tags
+// on /api/v1 only, receives security fixes and nothing else, and sunsets on
+// 2027-08-31, after which it receives nothing at all. Go 1.13 is itself unpatched
+// (go1.13.15, August 2020, was its last release), so pinning there is an informed
+// trade rather than a safe harbour. See docs/versioning.md and SECURITY.md.
+//
+// This line is not yet tagged: v2.0.0-alpha.1 is unreleased, so go get on the /v2
+// path resolves a pseudo-version. The compat line is released at v1.0.0. No v0.x
+// of either line was ever published -- proxy.golang.org lists v1.0.0 alone for
+// the unsuffixed path and nothing at all for /v2.
+//
+// Note that the Version constant still reads "0.1.0" on this branch, so the
+// default User-Agent is octonomy-go/0.1.0. It is a leftover placeholder from
+// before anything was released, kept to match the historical CHANGELOG heading;
+// the first /v2 release PR replaces it (docs/release.md). No tag on this line
+// corresponds to it, and v1.0.0 belongs to the other module entirely.
 //
 // # Quickstart
 //
@@ -86,8 +101,9 @@
 //
 // # Authentication and scope
 //
-// Every request carries the service token (Authorization: Bearer) and the tenant
-// (X-Tenant-ID) from Config. Set Config.ActorID (or pass WithActor per call) to
+// Every request on the versioned API carries the service token
+// (Authorization: Bearer) and the tenant (X-Tenant-ID) from Config; the health
+// probes below carry neither. Set Config.ActorID (or pass WithActor per call) to
 // populate X-Actor-ID for audit trails. Tokens are scoped to tags:read,
 // tags:write, and audit:read on the server side.
 //
@@ -127,12 +143,19 @@
 // derived from its status. IsNotFound is therefore true only for a real Octonomy
 // not_found, never for a bare 404.
 //
-// A 2xx whose body does not match the expected shape is an error too. The server
-// wraps single resources in {"data": {...}} and lists in
+// A 2xx whose ENVELOPE does not match the expected shape is an error too. The
+// server wraps single resources in {"data": {...}} and lists in
 // {"data": [...], "pagination": {...}}; a body missing that envelope would
 // otherwise decode into a zero-valued struct, or an empty-looking page, with no
 // error at all. A genuinely empty page is not an error and yields an empty
 // non-nil Data slice.
+//
+// The check stops at the envelope. A well-formed envelope carrying the WRONG
+// object -- {"data": {"wrong": true}} -- still decodes to a zero-valued resource
+// with a nil error, since unknown fields are ignored and none is required. That
+// remaining gap is issue #40; the composite results (BulkAssignResult,
+// BulkRemoveResult, ResourceReplaceResult) are the exception and require their
+// keys.
 //
 // # Health probes
 //
@@ -178,6 +201,56 @@
 // the first item it did not process, so a failed walk resumes instead of
 // starting over. Its doc comment covers the offset drift that limit/offset
 // paging cannot avoid.
+//
+// # Transport, observability, and connection reuse
+//
+// This package never logs, never mutates global state, and adds no retry loop of
+// its own, so the sanctioned extension point for metrics, tracing, request
+// logging, retries, and rate limiting is an http.RoundTripper on the *http.Client
+// you supply through Config.HTTPClient (or WithHealthHTTPClient). A RoundTripper
+// sees the fully assembled request and the raw response; read X-Request-ID off
+// the request to join your span to the server's record of the same call.
+// (net/http's own transport already retries a request it failed to write on a
+// REUSED connection -- recovery from a half-closed idle socket, not a retry
+// policy, and not something this package adds to.)
+//
+// GUARD EVERY READ OF THE RESPONSE IN SUCH A WRAPPER. A transport failure -- DNS,
+// TLS, connection refused, timeout, a cancelled context -- returns a nil
+// *http.Response with a non-nil error, so an unguarded resp.StatusCode panics on
+// exactly the failures the wrapper was added to observe. This package's no-panic
+// guarantee covers its own code, not the transport you supply. See the README for
+// a worked example.
+//
+// Config.HTTPClient REPLACES the default (&http.Client{Timeout: 30 * time.Second})
+// rather than decorating it, so set a Timeout on any client you pass.
+//
+// MaxIdleConnsPerHost caps how many IDLE connections to one host are kept for
+// reuse. It does not cap in-flight requests and nothing blocks on it. Check
+// whether it applies before acting on it: http.DefaultTransport sets
+// ForceAttemptHTTP2, so against an HTTPS endpoint that negotiates h2 the requests
+// multiplex and the pool size largely stops mattering.
+//
+// On HTTP/1.1 -- plaintext, or a proxy that terminates at 1.1 -- DefaultTransport
+// leaves the field unset and it falls back to http.DefaultMaxIdleConnsPerHost,
+// which is 2. Octonomy is a single host, so with more than two calls in flight the
+// surplus connections are closed on completion rather than returned to the pool,
+// and the next call pays a fresh handshake. The symptom is latency and socket
+// churn, not a ceiling.
+//
+// Sequential work never reaches it on either protocol: one goroutine in a loop,
+// Each included, reuses a single connection whatever the setting. It is a
+// fan-out across goroutines sharing one Client that produces the churn.
+//
+// This package does not tune it: transport configuration belongs to the caller.
+// Raise it by cloning DefaultTransport -- Clone starts from its configured
+// defaults (ProxyFromEnvironment, the dialer and handshake timeouts,
+// MaxIdleConns: 100, IdleConnTimeout: 90s), where a bare &http.Transport{} starts
+// from the zero value and has none of them, though it does still negotiate HTTP/2
+// on its own. See the README for a worked example.
+//
+// A Client is safe for concurrent use, and sharing one is the simplest way to get
+// this right. The pool belongs to the TRANSPORT, not the Client, so a per-request
+// Client defeats pooling only when it also builds a new *http.Transport each time.
 //
 // # Typed metadata
 //
