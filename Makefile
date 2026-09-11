@@ -112,9 +112,11 @@ dev-server-logs: ## Dump container logs from the Octonomy container harness
 # and runs on a schedule only, because a check that can fail for network reasons
 # must never stand between a correct change and its merge.
 #
-# The tool lives in its own module (tools/contractdrift) so its one dependency, a
-# YAML parser, is not the SDK's. `go run` from inside that directory is what keeps
-# it out of `go build ./...`, `go.sum`, and anything a consumer resolves.
+# The tool lives in its own module (tools/contractdrift) so its dependencies are
+# not the SDK's: a YAML parser, and the SDK itself, which it imports through a
+# replace in order to CALL the client and read the request off the wire. The
+# module boundary is what keeps both out of `go build ./...`, out of `go.sum`, and
+# out of anything a consumer resolves -- nothing flows back the other way.
 
 # `go build` then run, never `go run`. The tool exits 0 clean, 1 drift found, 2
 # comparison could not be made, and `go run` collapses that 2 into a shell exit of

@@ -217,11 +217,11 @@ check reports every one of those as green. So the gate compares:
 | --- | --- |
 | **Contract version** | `info.version` on both surfaces, against the marker in `versioning.md` |
 | **Operations** | path + method, both directions, against the inventory |
-| **Query parameters** | per operation, by `in` + name, with `required` and the parameter's schema — *and* against the parameters that operation's own method really sends |
+| **Query parameters** | per operation, by `in` + name, with `required` and the parameter's schema — *and*, in both directions, against what that operation's method actually puts on the wire |
 | **Responses** | per operation, per status, including request bodies |
 | **Schemas** | `components.schemas`, property by property, including the `required` set |
-| **Response models** | each schema against the Go struct the method decodes into, field by field |
-| **Routes** | each inventory row against the HTTP method, path, and transport helper its Go method actually uses |
+| **Response models** | the client decodes a body built **from** the vendored schema; the gate reports what did not survive the round trip |
+| **Routes** | each inventory row against the request its method actually issued |
 | **Error codes** | `server_error_codes` in the inventory against this SDK's `Code*` constants offline, and against the server's `octonomy/core/errors.py` on the schedule — both directions on both hops |
 
 The error-code check needs that Python file because the contract cannot answer the question:
@@ -232,14 +232,26 @@ the SDK's constants can be checked against it without the network. Without that 
 would have been the one item on this list where "refresh now, implement later" was still a state the
 repository could be left in.
 
-**The SDK side is read as Go, not as text.** `tools/contractdrift` parses the package with `go/parser`
-and derives, per method, the route it requests, the transport helper it decodes through, the query
-parameters its params struct builds (following embedded types, and adding the two the transport sets
-for every call), and the model its `doData[T]` / `doList[T]` names. That is what makes the checks
-above assertions about the code rather than about a table someone maintains beside it — and it is
-what caught `q` and `slug` missing from `VocabularyListParams`
-([#36](https://github.com/octoverse-id/octonomy-go/issues/36)), which a comparison of parameter names
-against the whole package reported as implemented because `tags.go` sends both.
+**The SDK side is driven, not read.** For each operation, `tools/contractdrift/drivers.go` calls the
+method with every parameter it offers populated, against a stub server that records the request and
+answers with a body **synthesized from the vendored schema**. The request is the answer: the route,
+the query parameters, no inference. The response is the other half: a property the Go model has no
+field for is dropped on the way back out, and a property whose *type* changed fails to decode at all.
+
+That is what caught `q` and `slug` missing from `VocabularyListParams`
+([#36](https://github.com/octoverse-id/octonomy-go/issues/36)).
+
+This replaced a 700-line static reader of the same package, and the reason is worth keeping: that
+reader had to infer control flow — which call is the transport call, which struct builds the query,
+which type argument decodes the body — and it grew a special case for every Go shape it met while
+still answering **clean** for a method that stopped passing its query builder, a method that branched
+between two private helpers, and a schema property whose type changed. None of those three can hide
+from a client that actually issues the request.
+
+The cost is the driver table: one call per operation, which someone has to write and keep compiling.
+That is the deliberate trade — a driver that names the wrong method reports the wrong route on its
+first run, a driver that stops compiling is a build failure, and an operation with no driver is a
+finding.
 
 **Everything the offline half compares is vendored, on purpose.** The two contracts, the error
 registry, the recorded server version: each has a copy in this repository, so each can be checked
@@ -284,9 +296,16 @@ it, because the envelope is added by a renderer below the serializers. The gate 
 it asserts the spec still says what the row recorded, so the day the divergence *ends* is the day it
 speaks up, and the workaround can come out.
 
-### Adding to the gate
+### Adding a resource, or adding to the gate
 
-The gate's tests (`tools/contractdrift/drift_test.go`) mutate real copies of the vendored contracts
-and assert the finding — a new query parameter, a new error code, a changed `required` set. Keep new
-checks in that shape. A miniature fixture proves a checker works on the shape its author imagined,
-and this gate exists because the contract stopped being the shape its author imagined.
+**A new endpoint needs three things**: the method, a row in
+[`contract-coverage.yaml`](contract-coverage.yaml), and a driver in
+`tools/contractdrift/drivers.go` that calls it with every parameter populated. The gate fails until
+all three exist — a row with no driver is an operation nobody exercises, and a driver with no row is
+a call nobody declared.
+
+**New checks** belong in the same shape as the existing ones: mutate a real copy of the vendored
+contract and assert the finding. A miniature fixture proves a checker works on the shape its author
+imagined, and this gate exists because the contract stopped being the shape its author imagined.
+Note which half you are testing — the client under test is the one compiled into the test binary, so
+a test that needs the *SDK* to be wrong synthesizes the observation instead of editing Go source.

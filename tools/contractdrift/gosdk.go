@@ -7,48 +7,32 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 )
 
-// The SDK side of the gate, read as Go rather than as text.
+// The two things about the SDK worth reading out of the source, and nothing else.
 //
-// The first draft of this file was regexps, and the review that killed it was
-// right: `CodeFoo ErrorCode = "foo"` stops matching a pattern that assumes an
-// untyped constant, `scopeParam string = "scope"` stops resolving a setter, and
-// both failures are SILENT -- the tool reports a comparison it did not make.
-// go/parser has none of those failure modes and is in the standard library.
+// An earlier version of this file was 700 lines and tried to answer the real
+// questions statically: which route does this method request, which query
+// parameters does its params struct build, which type does it decode into. It
+// grew a special case for every Go shape it met -- generic instantiation, path
+// helpers, embedded structs, one level of delegation, constant resolution -- and
+// a review pass still reproduced three confident green answers against it: a
+// method that stopped passing `params.query()`, a method that branched between
+// two private helpers, a schema property whose type changed. Inferring control
+// flow from an AST is the wrong tool for "what does this client do", and every
+// repair made the wrong tool bigger.
 //
-// What this buys, beyond robustness, is the two comparisons the issue asks for
-// that a spec-to-spec diff structurally cannot make:
+// conformance.go answers those questions by calling the client and reading the
+// request off the wire. What is left here is the part where the source really is
+// the source of truth:
 //
-//   - Query parameters PER OPERATION. A parameter is not "implemented" because
-//     its name appears somewhere in the package: `limit` on /tag-resolution is
-//     not implemented by pagination.go setting `limit` on the list routes. The
-//     analysis walks from the coverage row's method to the params struct in its
-//     signature, into that struct's query builder and anything it embeds, and
-//     adds the transport's own chokepoint parameters, which really do apply to
-//     every call.
-//   - The RESPONSE MODEL. `doData[Tag]` names the type the method decodes into,
-//     so the contract's Tag schema can be compared against the Go struct's JSON
-//     tags field by field -- which is what makes "the server added a field"
-//     visible without anyone noticing it by hand.
+//   - the Code* constants, which are declarations and nothing else; and
+//   - whether a method an inventory row names exists at all.
 //
-// It also derives each method's route and transport helper, so an inventory row
-// is checked against what the method DOES rather than against the existence of a
-// function with the right name.
-
-// transportHelpers are the four request paths a resource method may take. The
-// helper is not decoration: it determines the response envelope the method
-// decodes, which docs/contract-coverage.yaml records as `actual_response`.
-var transportHelpers = map[string]string{
-	"doList":        "list-envelope",
-	"doData":        "data-envelope",
-	"do":            "none",
-	"doUnversioned": "bare",
-}
+// Neither involves following a value through the program, which is why neither
+// can quietly answer the wrong question.
 
 // SDKPackage is the parsed SDK package.
 type SDKPackage struct {
@@ -57,47 +41,21 @@ type SDKPackage struct {
 	fset    *token.FileSet
 	files   map[string]*ast.File // by base file name
 	methods map[string]*sdkMethod
-	structs map[string]*sdkStruct
-	funcs   map[string]*ast.FuncDecl // package-level functions, by name
-	consts  map[string]string        // identifier -> its string value
+	consts  map[string]string // identifier -> its string value
 }
 
 type sdkMethod struct {
 	File string
 	Recv string
 	Name string
-	Decl *ast.FuncDecl
-}
-
-type sdkStruct struct {
-	File string
-	Name string
-	Type *ast.StructType
-}
-
-// Route is what a resource method actually does on the wire.
-type Route struct {
-	// Method is the HTTP method, lowercased: "get", "post", ...
-	Method string
-	// Path is the request path with every escaped segment normalized to "{}",
-	// so it compares against a spec path whose placeholders are named.
-	Path string
-	// Helper is the transport helper the method calls.
-	Helper string
-	// Model is the type argument of doData/doList -- the type the response
-	// decodes into. Empty for the helpers that decode nothing.
-	Model string
 }
 
 // LoadSDKPackage parses every non-test .go file in the SDK package directory.
 //
 // ParseFile per entry rather than parser.ParseDir, which is deprecated for being
 // blind to build tags. This reader is blind to them too -- but it reads one flat
-// directory of unconstrained sources, and a build-tagged non-test file appearing
-// there would be a change to the package's shape that the resource-file rules in
-// AGENTS.md do not allow. The one build-tagged file in the tree is
-// integration_test.go, excluded here with every other test: a query parameter set
-// only by a fixture is a parameter the client never sends.
+// directory of unconstrained sources, and the one build-tagged file in the tree is
+// integration_test.go, excluded here with every other test.
 func LoadSDKPackage(root string) (*SDKPackage, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -109,8 +67,6 @@ func LoadSDKPackage(root string) (*SDKPackage, error) {
 		fset:    token.NewFileSet(),
 		files:   map[string]*ast.File{},
 		methods: map[string]*sdkMethod{},
-		structs: map[string]*sdkStruct{},
-		funcs:   map[string]*ast.FuncDecl{},
 		consts:  map[string]string{},
 	}
 	for _, entry := range entries {
@@ -136,36 +92,30 @@ func (p *SDKPackage) index(file string, f *ast.File) {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
 			if d.Recv == nil || len(d.Recv.List) == 0 {
-				// Package-level function. Indexed because a path helper is one:
-				// resourcePath builds the /resources/{}/{} prefix that three
-				// resource files share, and renderPath resolves it by reading its
-				// body rather than by hardcoding what it returns.
-				p.funcs[d.Name.Name] = d
 				continue
 			}
-			recv := receiverType(d.Recv.List[0].Type)
+			recv := baseTypeName(d.Recv.List[0].Type)
 			if recv == "" {
 				continue
 			}
-			p.methods[recv+"."+d.Name.Name] = &sdkMethod{File: file, Recv: recv, Name: d.Name.Name, Decl: d}
+			p.methods[recv+"."+d.Name.Name] = &sdkMethod{File: file, Recv: recv, Name: d.Name.Name}
 		case *ast.GenDecl:
 			for _, spec := range d.Specs {
-				switch s := spec.(type) {
-				case *ast.TypeSpec:
-					if st, ok := s.Type.(*ast.StructType); ok {
-						p.structs[s.Name.Name] = &sdkStruct{File: file, Name: s.Name.Name, Type: st}
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				// Typed and untyped alike: `CodeFoo = "foo"` and
+				// `CodeFoo ErrorCode = "foo"` are the same declaration to a reader
+				// and must be the same declaration here. A pattern written for one
+				// of the two stops matching the other in silence, which is how the
+				// regexp version of this failed review.
+				for i, name := range value.Names {
+					if i >= len(value.Values) {
+						continue
 					}
-				case *ast.ValueSpec:
-					// Typed and untyped alike: `scopeParam = "scope"` and
-					// `scopeParam string = "scope"` are the same declaration to a
-					// reader and must be the same declaration here.
-					for i, name := range s.Names {
-						if i >= len(s.Values) {
-							continue
-						}
-						if lit, ok := stringLit(s.Values[i]); ok {
-							p.consts[name.Name] = lit
-						}
+					if lit, ok := stringLit(value.Values[i]); ok {
+						p.consts[name.Name] = lit
 					}
 				}
 			}
@@ -190,482 +140,6 @@ func (p *SDKPackage) Method(symbol string) (*sdkMethod, bool) {
 	return m, ok
 }
 
-// Route derives what the named method does on the wire.
-//
-// It fails rather than guesses. A method whose route cannot be read is reported
-// as a finding, because the alternative -- treating "I could not tell" as "it is
-// fine" -- is the silent pass this whole tool exists to remove. If a refactor
-// makes this fail, the fix is to teach it the new shape or to keep the shape
-// AGENTS.md already requires of resource files.
-func (p *SDKPackage) Route(symbol string) (Route, error) {
-	m, ok := p.methods[symbol]
-	if !ok {
-		return Route{}, fmt.Errorf("no method %s is declared in this package", symbol)
-	}
-	return p.routeOf(m, nil, 0)
-}
-
-func (p *SDKPackage) routeOf(m *sdkMethod, scope map[string]string, depth int) (Route, error) {
-	if depth > 1 {
-		return Route{}, fmt.Errorf("%s: gave up following calls looking for a transport helper", m.Name)
-	}
-
-	// EVERY transport call in the body, not the first one. A method that issues
-	// two different requests has no single route, and picking whichever the walk
-	// reached first would answer the inventory's question with something that is
-	// only sometimes true -- the silent wrong answer this derivation exists to
-	// rule out. Two calls that agree are fine (a retry, a branch that ends in the
-	// same request); two that disagree are a finding.
-	var (
-		routes []Route
-		perr   error
-	)
-	ast.Inspect(m.Decl.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok || perr != nil {
-			return perr == nil
-		}
-		helper, model := helperCall(call)
-		if helper == "" {
-			return true
-		}
-		method, pathExpr := methodAndPath(call)
-		if method == "" {
-			// A helper that fixes its own method takes none: doUnversioned issues
-			// a GET and nothing else, so the method lives in its declaration and
-			// the path is the argument bound to its `path` parameter. Reading it
-			// from there rather than special-casing the name keeps the derivation
-			// honest -- if that helper ever stops being a GET, this follows.
-			method, pathExpr = p.methodAndPathFromHelper(helper, call)
-			if method == "" {
-				perr = fmt.Errorf("%s: %s neither takes an http.Method* argument nor declares one", m.Name, helper)
-				return false
-			}
-		}
-		path, err := p.renderPath(pathExpr, scope)
-		if err != nil {
-			perr = fmt.Errorf("%s: %w", m.Name, err)
-			return false
-		}
-		routes = append(routes, Route{Method: strings.ToLower(method), Path: path, Helper: helper, Model: model})
-		return true
-	})
-	if perr != nil {
-		return Route{}, perr
-	}
-	for _, other := range routes[min(len(routes), 1):] {
-		if other != routes[0] {
-			return Route{}, fmt.Errorf("%s: issues more than one request (%s %s via %s, and %s %s via %s); an inventory row names one operation",
-				m.Name, strings.ToUpper(routes[0].Method), routes[0].Path, routes[0].Helper,
-				strings.ToUpper(other.Method), other.Path, other.Helper)
-		}
-	}
-	if len(routes) > 0 {
-		return routes[0], nil
-	}
-
-	// One level of indirection, which is exactly what the health probes need:
-	// Live and Ready are thin wrappers around a shared probe() that takes the
-	// path as a parameter. The callee supplies the method and the helper; the
-	// caller supplies the path, substituted into the callee's parameter names.
-	var (
-		inner    *sdkMethod
-		innerArg map[string]string
-	)
-	ast.Inspect(m.Decl.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok || inner != nil {
-			return inner == nil
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		next, ok := p.methods[m.Recv+"."+sel.Sel.Name]
-		if !ok {
-			return true
-		}
-		inner = next
-		innerArg = p.bindParams(next, call.Args)
-		return false
-	})
-	if inner == nil {
-		return Route{}, fmt.Errorf("%s: no transport helper call found (expected one of doData, doList, do, doUnversioned)", m.Name)
-	}
-	return p.routeOf(inner, innerArg, depth+1)
-}
-
-// methodAndPathFromHelper reads the HTTP method out of a transport helper's own
-// declaration, for the helper that does not take one, and picks the argument
-// bound to that helper's `path` parameter.
-func (p *SDKPackage) methodAndPathFromHelper(helper string, call *ast.CallExpr) (string, ast.Expr) {
-	decl, ok := p.methods["Client."+helper]
-	if !ok {
-		return "", nil
-	}
-	var method string
-	ast.Inspect(decl.Decl.Body, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok || method != "" {
-			return method == ""
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if ok && pkg.Name == "http" && strings.HasPrefix(sel.Sel.Name, "Method") {
-			method = strings.TrimPrefix(sel.Sel.Name, "Method")
-		}
-		return true
-	})
-	if method == "" {
-		return "", nil
-	}
-	// The call is a method value (c.doUnversioned(ctx, path)), so its arguments
-	// line up with the declaration's parameters directly.
-	index := 0
-	for _, field := range decl.Decl.Type.Params.List {
-		for _, name := range field.Names {
-			if name.Name == "path" && index < len(call.Args) {
-				return method, call.Args[index]
-			}
-			index++
-		}
-	}
-	return "", nil
-}
-
-// bindParams maps a callee's parameter names to the caller's arguments, as far
-// as those arguments resolve to string constants.
-func (p *SDKPackage) bindParams(callee *sdkMethod, args []ast.Expr) map[string]string {
-	out := map[string]string{}
-	i := 0
-	for _, field := range callee.Decl.Type.Params.List {
-		for _, name := range field.Names {
-			if i < len(args) {
-				if value, ok := p.resolveString(args[i]); ok {
-					out[name.Name] = value
-				}
-			}
-			i++
-		}
-	}
-	return out
-}
-
-// QueryParams returns the query parameter names the named method puts on the
-// wire: the ones its params struct builds, plus the transport's own.
-func (p *SDKPackage) QueryParams(symbol string) (map[string]bool, error) {
-	m, ok := p.methods[symbol]
-	if !ok {
-		return nil, fmt.Errorf("no method %s is declared in this package", symbol)
-	}
-	out := p.TransportParams()
-	for _, typeName := range p.paramStructs(m) {
-		for name := range p.settersOn(typeName, map[string]bool{}) {
-			out[name] = true
-		}
-	}
-	return out, nil
-}
-
-// TransportParams are the parameters set at the request chokepoint rather than
-// by any one resource: they reach every method through a RequestOption, so they
-// count as sent for every operation that documents them.
-func (p *SDKPackage) TransportParams() map[string]bool {
-	out := map[string]bool{}
-	if f, ok := p.files["transport.go"]; ok {
-		for name := range p.settersIn(f) {
-			out[name] = true
-		}
-	}
-	return out
-}
-
-// paramStructs names the local struct types in a method's signature -- the
-// params struct it builds its query from.
-func (p *SDKPackage) paramStructs(m *sdkMethod) []string {
-	var out []string
-	for _, field := range m.Decl.Type.Params.List {
-		name := baseTypeName(field.Type)
-		if name == "" {
-			continue
-		}
-		if _, ok := p.structs[name]; ok {
-			out = append(out, name)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// settersOn collects the query parameters set by any method on the type, and by
-// anything it embeds. Embedding is how every list params struct gets limit and
-// offset from ListOptions.
-func (p *SDKPackage) settersOn(typeName string, seen map[string]bool) map[string]bool {
-	out := map[string]bool{}
-	if seen[typeName] {
-		return out
-	}
-	seen[typeName] = true
-
-	for _, m := range p.methods {
-		if m.Recv != typeName || m.Decl.Body == nil {
-			continue
-		}
-		for name := range p.settersIn(m.Decl.Body) {
-			out[name] = true
-		}
-	}
-	st, ok := p.structs[typeName]
-	if !ok {
-		return out
-	}
-	for _, field := range st.Type.Fields.List {
-		if len(field.Names) != 0 {
-			continue // named field, not embedded
-		}
-		embedded := baseTypeName(field.Type)
-		if embedded == "" {
-			continue
-		}
-		for name := range p.settersOn(embedded, seen) {
-			out[name] = true
-		}
-	}
-	return out
-}
-
-// settersIn collects `X.Set("name", ...)` and `X.Set(nameConst, ...)` under a
-// node. Header sets do not survive: their names are canonical HTTP headers, and
-// resolveString returns them verbatim, so the caller's snake_case expectation
-// simply never matches -- but the filter is explicit below rather than implied.
-func (p *SDKPackage) settersIn(node ast.Node) map[string]bool {
-	out := map[string]bool{}
-	ast.Inspect(node, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok || len(call.Args) == 0 {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || (sel.Sel.Name != "Set" && sel.Sel.Name != "Add") {
-			return true
-		}
-		value, ok := p.resolveString(call.Args[0])
-		if !ok || !isQueryParamName(value) {
-			return true
-		}
-		out[value] = true
-		return true
-	})
-	return out
-}
-
-// isQueryParamName keeps HTTP header names out of the query-parameter set. The
-// contracts name every query parameter in lower snake_case and every header in
-// canonical Header-Case, so the two vocabularies do not overlap.
-func isQueryParamName(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
-			return false
-		}
-	}
-	return true
-}
-
-// JSONFields returns the JSON names a struct decodes, mapped to the Go field.
-// Embedded structs are flattened the way encoding/json flattens them.
-func (p *SDKPackage) JSONFields(typeName string) (map[string]string, bool) {
-	st, ok := p.structs[typeName]
-	if !ok {
-		return nil, false
-	}
-	out := map[string]string{}
-	p.collectJSONFields(st, out, map[string]bool{})
-	return out, true
-}
-
-func (p *SDKPackage) collectJSONFields(st *sdkStruct, out map[string]string, seen map[string]bool) {
-	if seen[st.Name] {
-		return
-	}
-	seen[st.Name] = true
-
-	for _, field := range st.Type.Fields.List {
-		name, omitted := jsonName(field)
-		if len(field.Names) == 0 {
-			// Embedded: encoding/json promotes its fields unless the embedded
-			// field itself carries a name.
-			if name != "" {
-				out[name] = baseTypeName(field.Type)
-				continue
-			}
-			if embedded, ok := p.structs[baseTypeName(field.Type)]; ok {
-				p.collectJSONFields(embedded, out, seen)
-			}
-			continue
-		}
-		if omitted || name == "" {
-			continue
-		}
-		out[name] = field.Names[0].Name
-	}
-}
-
-// --- expression helpers ---------------------------------------------------------
-
-// helperCall reports the transport helper a call invokes and, for the generic
-// ones, the type it decodes into.
-func helperCall(call *ast.CallExpr) (helper, model string) {
-	switch fun := call.Fun.(type) {
-	case *ast.Ident:
-		if _, ok := transportHelpers[fun.Name]; ok {
-			return fun.Name, ""
-		}
-	case *ast.SelectorExpr:
-		// c.do(...) and friends.
-		if _, ok := transportHelpers[fun.Sel.Name]; ok {
-			return fun.Sel.Name, ""
-		}
-	case *ast.IndexExpr:
-		// doData[Tag](...) -- one type argument.
-		if ident, ok := fun.X.(*ast.Ident); ok {
-			if _, known := transportHelpers[ident.Name]; known {
-				return ident.Name, baseTypeName(fun.Index)
-			}
-		}
-	case *ast.IndexListExpr:
-		if ident, ok := fun.X.(*ast.Ident); ok {
-			if _, known := transportHelpers[ident.Name]; known && len(fun.Indices) > 0 {
-				return ident.Name, baseTypeName(fun.Indices[0])
-			}
-		}
-	}
-	return "", ""
-}
-
-// methodAndPath finds the http.Method* argument and the expression right after
-// it. Positional indices are deliberately not used: the four helpers have four
-// different signatures, and the one invariant they share is that the path
-// follows the method.
-func methodAndPath(call *ast.CallExpr) (method string, path ast.Expr) {
-	for i, arg := range call.Args {
-		sel, ok := arg.(*ast.SelectorExpr)
-		if !ok {
-			continue
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if !ok || pkg.Name != "http" || !strings.HasPrefix(sel.Sel.Name, "Method") {
-			continue
-		}
-		if i+1 >= len(call.Args) {
-			return "", nil
-		}
-		return strings.TrimPrefix(sel.Sel.Name, "Method"), call.Args[i+1]
-	}
-	return "", nil
-}
-
-// renderPath turns a path expression into the request path, with every escaped
-// segment collapsed to "{}" so it can be compared with a spec path whose
-// placeholders carry names this package does not know.
-func (p *SDKPackage) renderPath(expr ast.Expr, scope map[string]string) (string, error) {
-	switch e := expr.(type) {
-	case *ast.BasicLit:
-		if value, ok := stringLit(e); ok {
-			return value, nil
-		}
-	case *ast.Ident:
-		if value, ok := scope[e.Name]; ok {
-			return value, nil
-		}
-		if value, ok := p.consts[e.Name]; ok {
-			return value, nil
-		}
-		return "", fmt.Errorf("path identifier %q does not resolve to a string constant", e.Name)
-	case *ast.BinaryExpr:
-		if e.Op != token.ADD {
-			break
-		}
-		left, err := p.renderPath(e.X, scope)
-		if err != nil {
-			return "", err
-		}
-		right, err := p.renderPath(e.Y, scope)
-		if err != nil {
-			return "", err
-		}
-		return left + right, nil
-	case *ast.CallExpr:
-		return p.renderPathCall(e, scope)
-	}
-	return "", fmt.Errorf("cannot read the request path from a %T", expr)
-}
-
-func (p *SDKPackage) renderPathCall(call *ast.CallExpr, scope map[string]string) (string, error) {
-	switch fun := call.Fun.(type) {
-	case *ast.SelectorExpr:
-		// url.PathEscape(id) -- a caller-supplied segment, whatever it is named.
-		pkg, ok := fun.X.(*ast.Ident)
-		if ok && pkg.Name == "url" && fun.Sel.Name == "PathEscape" {
-			return "{}", nil
-		}
-	case *ast.Ident:
-		// A package-level path helper -- resourcePath, today, which three resource
-		// files share. Its body is rendered with its parameters bound to this
-		// call's arguments, rather than its result being hardcoded here: a
-		// hardcoded prefix would keep agreeing with the inventory after the helper
-		// itself changed, which is the silent-wrong-answer failure this whole
-		// derivation exists to avoid.
-		if decl, ok := p.funcs[fun.Name]; ok {
-			return p.renderPathFunc(decl, call, scope)
-		}
-	}
-	return "", fmt.Errorf("cannot read the request path from a call to %s", exprName(call.Fun))
-}
-
-// renderPathFunc renders a single-expression path helper with its parameters
-// bound to the caller's arguments.
-func (p *SDKPackage) renderPathFunc(decl *ast.FuncDecl, call *ast.CallExpr, scope map[string]string) (string, error) {
-	if decl.Body == nil || len(decl.Body.List) != 1 {
-		return "", fmt.Errorf("path helper %s is not a single return statement", decl.Name.Name)
-	}
-	ret, ok := decl.Body.List[0].(*ast.ReturnStmt)
-	if !ok || len(ret.Results) != 1 {
-		return "", fmt.Errorf("path helper %s is not a single return statement", decl.Name.Name)
-	}
-
-	// Bind the helper's parameters to the caller's arguments. A parameter whose
-	// argument is not a string constant stays unbound, and renders as an escaped
-	// segment only if the helper itself escapes it -- which is what makes
-	// resourcePath's two ids come out as {} and its literal suffix come out whole.
-	inner := map[string]string{}
-	index := 0
-	for _, field := range decl.Type.Params.List {
-		for _, name := range field.Names {
-			if index < len(call.Args) {
-				if value, err := p.renderPath(call.Args[index], scope); err == nil {
-					inner[name.Name] = value
-				}
-			}
-			index++
-		}
-	}
-	return p.renderPath(ret.Results[0], inner)
-}
-
-// resolveString reads a string literal, or an identifier that names one.
-func (p *SDKPackage) resolveString(expr ast.Expr) (string, bool) {
-	switch e := expr.(type) {
-	case *ast.BasicLit:
-		return stringLit(e)
-	case *ast.Ident:
-		value, ok := p.consts[e.Name]
-		return value, ok
-	}
-	return "", false
-}
-
 func stringLit(expr ast.Expr) (string, bool) {
 	lit, ok := expr.(*ast.BasicLit)
 	if !ok || lit.Kind != token.STRING {
@@ -678,90 +152,17 @@ func stringLit(expr ast.Expr) (string, bool) {
 	return value, true
 }
 
-// jsonName reads a field's JSON name, and reports whether the field is excluded
-// from JSON entirely.
-//
-// An UNTAGGED exported field keeps its Go name, because that is what
-// encoding/json does with it. Returning "" there and skipping the field would
-// have made it invisible to the model comparison -- a field the SDK really
-// decodes, silently absent from the check that exists to notice fields.
-func jsonName(field *ast.Field) (name string, omitted bool) {
-	goName := ""
-	if len(field.Names) == 1 {
-		goName = field.Names[0].Name
-		if !field.Names[0].IsExported() {
-			return "", true // unexported: encoding/json never touches it
-		}
-	}
-	if field.Tag == nil {
-		return goName, false
-	}
-	tag, ok := stringLit(field.Tag)
-	if !ok {
-		return goName, false
-	}
-	value, ok := reflect.StructTag(tag).Lookup("json")
-	if !ok {
-		return goName, false
-	}
-	first, _, _ := strings.Cut(value, ",")
-	switch first {
-	case "-":
-		return "", true
-	case "":
-		// `json:",omitempty"` names no key, so the Go name stands.
-		return goName, false
-	}
-	return first, false
-}
-
-// receiverType names the type a method is declared on, pointer or not.
-func receiverType(expr ast.Expr) string { return baseTypeName(expr) }
-
-// baseTypeName strips pointers, slices, and package qualifiers down to the type
-// name this package would index it under.
+// baseTypeName strips pointers down to the type name a method is declared on.
 func baseTypeName(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
 		return e.Name
 	case *ast.StarExpr:
 		return baseTypeName(e.X)
-	case *ast.ArrayType:
-		return baseTypeName(e.Elt)
 	case *ast.IndexExpr:
 		return baseTypeName(e.X)
 	case *ast.SelectorExpr:
 		return e.Sel.Name
 	}
 	return ""
-}
-
-func exprName(expr ast.Expr) string {
-	if name := baseTypeName(expr); name != "" {
-		return name
-	}
-	return fmt.Sprintf("%T", expr)
-}
-
-// normalizePath collapses a spec path's named placeholders to "{}", so
-// /api/v2/tags/{tag_id} and the SDK's "/tags/" + url.PathEscape(id) compare.
-func normalizePath(path string) string {
-	var b strings.Builder
-	depth := 0
-	for _, r := range path {
-		switch {
-		case r == '{':
-			depth++
-			if depth == 1 {
-				b.WriteString("{}")
-			}
-		case r == '}':
-			if depth > 0 {
-				depth--
-			}
-		case depth == 0:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }

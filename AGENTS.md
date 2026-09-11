@@ -43,6 +43,10 @@ stays a faithful, ergonomic client.
 
 - One file per resource (`tags.go`, `vocabularies.go`, …). Each defines a `*Service` reached from a
   field on `Client`.
+- **A new endpoint needs three things, and the gate fails until it has all three:** the method, a row
+  in `docs/contract-coverage.yaml`, and a driver in `tools/contractdrift/drivers.go` calling it with
+  every parameter populated. The driver is what proves the method sends what the contract documents;
+  a row with no driver is an operation nobody exercises.
 - Methods take `context.Context` first and accept variadic `...RequestOption` last.
 - **Scoping is the transport's job, not each resource's.** `WithNamespace`, `WithGlobalNamespace`,
   `WithApplication`, and `WithIncludeGlobal` apply to any method and are enforced at the chokepoint,
@@ -205,10 +209,12 @@ stays a faithful, ergonomic client.
   and a refresh that stops at the files fails it. Three things move together: the specs, the
   `<!-- contract-version: X.Y.Z -->` marker in `docs/versioning.md`, and `docs/contract-coverage.yaml`
   — which needs a row per operation, naming either the Go method that implements it or a written
-  reason it is not implemented. The gate reads the SDK as Go rather than as text, so it also fails on
-  a query parameter *that operation's* method does not send, a schema field the decoded model has no
-  place for, and a row whose method now requests a different route — "refresh the spec and implement
-  it later" is not a state this repository can be left in. The cross-repository half,
+  reason it is not implemented. The gate CALLS the client rather than reading its
+  source — every method, against a stub that answers with a body built from the vendored schema — so
+  it also fails on a query parameter *that operation's* method does not put on the wire, a schema
+  field the decoded model drops, a property whose type the model can no longer decode, and a row whose
+  method now requests a different route. "Refresh the spec and implement it later" is not a state this
+  repository can be left in. The cross-repository half,
   `make contract-drift`, is scheduled-only and never gates a PR. See
   `docs/development.md#contract-drift`.
 

@@ -22,14 +22,17 @@
 //	                   because ErrorResponse types `code` as a bare string
 //
 // And, because the question is what the SDK IMPLEMENTS and not what it vendors,
-// three comparisons that read the Go package itself (gosdk.go):
+// three comparisons that CALL the client (conformance.go, drivers.go) and read
+// the answer off the wire:
 //
-//	routes             each inventory row against the method, path, and transport
-//	                   helper its Go method really uses
-//	query parameters   per operation, against the parameters that operation's own
-//	                   params struct builds, plus the transport's chokepoint ones
-//	response models    each schema against the struct doData[T]/doList[T] names,
-//	                   field by field
+//	routes             each inventory row against the request its method actually
+//	                   issued
+//	query parameters   per operation, against what the client put on the wire with
+//	                   every parameter it offers populated -- both directions
+//	response models    the client decodes a body built FROM the vendored schema,
+//	                   and the gate reports what did not survive the round trip
+//
+// Reading the source instead was tried first and abandoned: see conformance.go.
 //
 // TWO MODES, because only one of them can be trusted on a pull request:
 //
@@ -129,6 +132,12 @@ func run(repo, upstream, summary, source string) (int, error) {
 			filepath.Join(repo, "errors.go"), len(in.SDKCodes), minSDKErrorCodes)
 	}
 	if in.RecordedVersion, err = RecordedContractVersion(filepath.Join(repo, "docs", "versioning.md")); err != nil {
+		return 0, err
+	}
+	// Call the client, once per operation, against a stub that answers with bodies
+	// built from the vendored schemas. Everything the local checks say about what
+	// the SDK sends and decodes comes from here rather than from reading its source.
+	if in.Conformance, err = RunConformance(in.Vendored["v2"], in.Coverage, Drivers()); err != nil {
 		return 0, err
 	}
 

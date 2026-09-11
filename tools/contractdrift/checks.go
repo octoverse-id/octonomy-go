@@ -19,6 +19,11 @@ type Inputs struct {
 	Coverage *Coverage
 	SDK      *SDKPackage
 
+	// Conformance is what the client actually did when called: one observation per
+	// operation, recorded off the wire. It replaced a static analysis of the same
+	// question -- see conformance.go for why.
+	Conformance *Conformance
+
 	SDKCodes    map[string]string // wire code -> Go constant name
 	ServerCodes map[string]bool   // nil on a local-only run
 	// UnreadableCodes are code-producing lines in the server's registry that the
@@ -209,71 +214,79 @@ func checkInventory(in Inputs, r *Report) {
 	r.Add("Inventory", items)
 }
 
-// checkImplementation reads what each implemented row's method actually does and
-// compares it with what the row claims.
+// checkImplementation compares each inventory row with what the client really
+// did when its method was called.
 //
-// The first version of this checked only that a function with the right name
-// existed, which proves very little: a row could name an unrelated method, or the
-// method could have been repointed at a different route, and the gate would agree
-// the operation was covered. So the route -- HTTP method, path, and the transport
-// helper that determines the response envelope -- is derived from the method body
-// and compared instead.
-//
-// A route that cannot be derived is a FINDING, not a pass. "I could not tell" and
-// "it is fine" are different answers, and only one of them is safe to act on.
+// Nothing here is inferred. drivers.go calls the method, a stub records the
+// request, and the route in the report is the request line the SDK emitted. A row
+// naming a method that issues a different request, or that no longer reaches the
+// wire at all, is a finding; so is an implemented operation no driver covers,
+// because an operation nobody exercises is one this gate says nothing about.
 func checkImplementation(in Inputs, r *Report) {
 	var items []string
+	drivers := map[string]Driver{}
+	for _, d := range Drivers() {
+		drivers[d.Op] = d
+	}
+
 	for _, row := range in.Coverage.Operations {
 		if row.Unimplemented != "" {
+			if _, ok := drivers[row.Key()]; ok {
+				items = append(items, fmt.Sprintf("`%s` is recorded as unimplemented and drivers.go calls it", row.Key()))
+			}
 			continue
 		}
-		method, ok := in.SDK.Method(row.SDK)
-		if !ok {
+		// The row's `sdk:` and `file:` fields are documentation, and cheap to keep
+		// true: the method has to exist, and to be where the row says it is. A
+		// declaration is the one thing still read out of the source, because it is
+		// not control flow -- everything about what the method DOES comes from
+		// driving it.
+		switch method, ok := in.SDK.Method(row.SDK); {
+		case !ok:
 			items = append(items, fmt.Sprintf("`%s` claims `%s`, which this package does not declare", row.Key(), row.SDK))
-			continue
-		}
-		if method.File != row.File {
+		case method.File != row.File:
 			items = append(items, fmt.Sprintf("`%s` says `%s` lives in %s; it is declared in %s",
 				row.Key(), row.SDK, row.File, method.File))
 		}
-
-		route, err := in.SDK.Route(row.SDK)
-		if err != nil {
-			items = append(items, fmt.Sprintf("`%s`: cannot read the route out of `%s`: %v -- teach tools/contractdrift the new shape, or keep the one AGENTS.md asks resource files to hold",
-				row.Key(), row.SDK, err))
+		driver, ok := drivers[row.Key()]
+		if !ok {
+			items = append(items, fmt.Sprintf("`%s` is implemented and drivers.go has no call for it -- add one, or the gate says nothing about this operation", row.Key()))
 			continue
 		}
-		if route.Method != row.Method {
-			items = append(items, fmt.Sprintf("`%s`: `%s` issues a %s, not a %s", row.Key(), row.SDK, strings.ToUpper(route.Method), strings.ToUpper(row.Method)))
+		if driver.SDK != row.SDK {
+			items = append(items, fmt.Sprintf("`%s`: the inventory names `%s` and drivers.go calls `%s`", row.Key(), row.SDK, driver.SDK))
 		}
-		if want := normalizePath(row.Path); route.Path != want {
-			items = append(items, fmt.Sprintf("`%s`: `%s` requests `%s`, not `%s`", row.Key(), row.SDK, route.Path, want))
+
+		if err, failed := in.Conformance.Errors[row.Key()]; failed {
+			items = append(items, fmt.Sprintf("`%s`: `%s` did not reach the wire: %v", row.Key(), driver.SDK, err))
+			continue
 		}
-		if envelope, ok := transportHelpers[route.Helper]; ok && !envelopeAllows(envelope, row.ActualResponse) {
-			items = append(items, fmt.Sprintf("`%s`: `%s` decodes through %s, which yields `%s`, but the row records `%s`",
-				row.Key(), row.SDK, route.Helper, envelope, row.ActualResponse))
+		observed, ok := in.Conformance.Observations[row.Key()]
+		if !ok {
+			items = append(items, fmt.Sprintf("`%s`: no observation was recorded for `%s`", row.Key(), driver.SDK))
+			continue
 		}
-		// A decoding helper whose type argument could not be read leaves the
-		// response-model comparison with nothing to compare -- which it would then
-		// skip in silence. Go can infer a type argument, so this is reachable
-		// without anyone doing anything wrong; it just has to be said out loud.
-		if decodes := route.Helper == "doData" || route.Helper == "doList"; decodes && route.Model == "" {
-			items = append(items, fmt.Sprintf("`%s`: cannot read the type `%s` decodes into -- write the type argument out (`%s[T](...)`) so the response model can be compared",
-				row.Key(), row.SDK, route.Helper))
+		// The row's path names its placeholders and the observed one cannot, so
+		// both sides are reduced to {} before they are compared.
+		if want := row.Method + " " + normalizePath(row.Path); observed.Key() != want {
+			items = append(items, fmt.Sprintf("`%s`: `%s` requests `%s`", row.Key(), driver.SDK, strings.ToUpper(observed.Method)+" "+observed.Path))
+		}
+		// A call error against a body the STUB built from the vendored schema is a
+		// contract failure, not a transport one: the only thing that can go wrong
+		// here is decoding, and it goes wrong when the model no longer fits the
+		// schema -- a retyped property, most often.
+		if observed.CallErr != nil {
+			items = append(items, fmt.Sprintf("`%s`: `%s` could not handle a response built from the vendored schema: %v",
+				row.Key(), driver.SDK, observed.CallErr))
+		}
+	}
+
+	for op := range drivers {
+		if _, ok := in.Coverage.ByKey()[op]; !ok {
+			items = append(items, fmt.Sprintf("drivers.go calls `%s`, which %s does not list", op, in.Coverage.Path))
 		}
 	}
 	r.Add("Implementation", items)
-}
-
-// envelopeAllows maps a transport helper's envelope to the `actual_response`
-// values a row may record for it. The one place two values are legal is doData:
-// it unwraps `{"data": ...}` whether what is inside is a resource or one of the
-// bulk composites, and the distinction between those two is documentary.
-func envelopeAllows(envelope, recorded string) bool {
-	if envelope == recorded {
-		return true
-	}
-	return envelope == "data-envelope" && recorded == "composite-envelope"
 }
 
 // checkDocumentedResponses asserts each recorded divergence between the generated
@@ -282,12 +295,13 @@ func envelopeAllows(envelope, recorded string) bool {
 // This is the list-envelope exception, and it is written as an assertion rather
 // than a suppression on purpose. The spec documents list responses as bare arrays
 // while the server returns {data, pagination}; nothing in this gate flags that,
-// because the SDK side of the comparison is the transport helper the method calls
-// (checkImplementation above), which is the server's shape and not the spec's.
-// What is genuinely useful to know is the day it stops being true -- the day the
-// server's generator learns about the renderer and the SDK can stop carrying a
-// documented workaround. So the inventory records the shape the spec documents,
-// and this check reports when the spec changes out from under it.
+// because the SDK side of the comparison is the envelope the stub wraps its body
+// in -- the server's shape, recorded in the inventory -- and a client that could
+// not decode it would have failed in checkImplementation above. What is genuinely
+// useful to know is the day it stops being true -- the day the server's generator
+// learns about the renderer and the SDK can stop carrying a documented workaround.
+// So the inventory records the shape the spec documents, and this check reports
+// when the spec changes out from under it.
 func checkDocumentedResponses(in Inputs, r *Report) {
 	var items []string
 	for _, surface := range surfaces {
@@ -309,43 +323,49 @@ func checkDocumentedResponses(in Inputs, r *Report) {
 	r.Add("Documented response shapes", items)
 }
 
-// checkQueryParametersSent is the parameter half of the gate, pointed at the SDK
-// rather than at the server, and it is PER OPERATION.
+// checkQueryParametersSent compares the query parameters the contract documents
+// with the ones the client PUT ON THE WIRE, in both directions.
 //
-// Per operation is the whole point and the first draft got it wrong: it asked
-// whether a parameter name appeared anywhere in the package, so `limit` on
-// /tag-resolution counted as implemented because pagination.go sets `limit` on
-// the list routes. What it asks now is whether THIS method's params struct builds
-// it -- following the struct in the method's signature into its query builder and
-// anything it embeds -- or whether the transport sets it at the chokepoint for
-// every call, which `application_id` and `include_global` genuinely are.
+// Both directions, because each names a different mistake. A documented parameter
+// the client never sends is an unimplemented filter -- how `scope` on
+// /tag-resolution could have gone unnoticed, and how `q` and `slug` on
+// /vocabularies (#36) surfaced here. A parameter the client sends that nothing
+// documents is a request the server will ignore, silently, which is the failure
+// mode this SDK refuses everywhere else.
 //
-// The upstream comparison catches the server adding a parameter. This catches the
-// step after it: a vendored contract refreshed to include that parameter while no
-// resource ever learned to send it. That is how `scope` on /tag-resolution could
-// have been missed, and an upstream-versus-vendored diff alone goes green the
-// moment the files are refreshed.
+// The driver behind each observation sets every field the method offers, so a
+// parameter missing from the wire is missing from the CLIENT, not from the call.
 func checkQueryParametersSent(in Inputs, r *Report) {
 	allowed := in.Coverage.UnsentIndex()
 	used := map[string]bool{}
 	var items []string
 
-	for _, surface := range surfaces {
+	// The v2 contract, and only v2. The client under test targets v2 -- that is
+	// the SDK's default surface -- so v2 is what its requests must match. v1
+	// documents strictly fewer parameters (no namespace axis, so no
+	// `include_global`), and comparing a v2 request against it would report every
+	// namespaced read as sending something undocumented. Surface parity has its
+	// own check.
+	{
+		surface := "v2"
 		ops, err := strippedOperations(in.Vendored[surface], surface)
 		if err != nil {
-			continue
+			r.Add("Query parameters", items)
+			return
 		}
 		for _, row := range in.Coverage.Operations {
 			op, ok := ops[row.Key()]
 			if !ok || row.Unimplemented != "" {
 				continue
 			}
-			sent, err := in.SDK.QueryParams(row.SDK)
-			if err != nil {
+			observed, ok := in.Conformance.Observations[row.Key()]
+			if !ok {
 				continue // reported by checkImplementation
 			}
+			documented := map[string]bool{}
 			for _, name := range op.QueryParams() {
-				if sent[name] {
+				documented[name] = true
+				if observed.Query[name] {
 					continue
 				}
 				key := row.Key() + " " + name
@@ -353,37 +373,42 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 					used[key] = true
 					continue
 				}
-				// No surface in the message: both contracts document the same
-				// parameters, so naming one would suggest the gap is
-				// version-specific when it is not. dedupe collapses the pair.
-				items = append(items, fmt.Sprintf("`%s` documents the query parameter `%s` and `%s` never sends it -- implement it or record it under unsent_query_parameters",
-					row.Key(), name, row.SDK))
+				items = append(items, fmt.Sprintf("`%s` documents the query parameter `%s` and the client did not send it -- implement it or record it under unsent_query_parameters",
+					row.Key(), name))
+			}
+			for _, name := range sortedNames(observed.Query) {
+				if !documented[name] {
+					items = append(items, fmt.Sprintf("`%s`: the client sends the query parameter `%s`, which no vendored contract documents -- the server will ignore it",
+						row.Key(), name))
+				}
 			}
 		}
 	}
 
 	for key := range allowed {
 		if !used[key] {
-			items = append(items, fmt.Sprintf("`%s` is listed under unsent_query_parameters and no vendored contract documents it there -- drop the row", key))
+			items = append(items, fmt.Sprintf("`%s` is listed under unsent_query_parameters and the client either sends it now or the contract stopped documenting it -- drop the row", key))
 		}
 	}
-	r.Add("Query parameters the client does not send", dedupe(items))
+	r.Add("Query parameters", dedupe(items))
 }
 
-// checkResponseModels compares the contract's response schema with the Go struct
-// the method decodes into, field by field.
+// checkResponseModels compares the contract's response schema with what survived
+// a round trip through the SDK's model.
 //
 // This is "added or changed fields on models the SDK decodes", and it is the half
 // a spec-to-spec diff cannot do at all: once someone refreshes the vendored files,
-// an upstream comparison is green by construction, while the Go model still has no
-// field for the property that arrived. The decoded type comes from the method's
-// own `doData[T]` / `doList[T]`, so it is what the code really does rather than
-// what a table says.
+// an upstream comparison is green by construction while the Go model still has no
+// field for the property that arrived.
+//
+// The stub answered with a body built FROM the schema, so the comparison needs no
+// knowledge of Go types. A property the model has no field for is dropped on the
+// way back out and is missing here; a property whose type no longer fits fails to
+// decode at all and was reported by checkImplementation.
 //
 // The v2 contract is the reference, as it is everywhere else in this SDK: v1 has
 // no namespace axis, so its schemas omit the namespace_type / namespace_id fields
-// seven models carry, and comparing a Go model against v1 would report those as
-// undocumented on every run. Surface parity is checked separately.
+// seven models carry. Surface parity is checked separately.
 //
 // Only rows whose server shape is a plain resource take part. The composites --
 // bulk assign, bulk remove, the resource-tag replace -- decode into result structs
@@ -412,9 +437,9 @@ func checkResponseModels(in Inputs, r *Report) {
 		if !ok || op.OKModel == "" {
 			continue
 		}
-		route, err := in.SDK.Route(row.SDK)
-		if err != nil || route.Model == "" {
-			continue // both reported by checkImplementation
+		observed, ok := in.Conformance.Observations[row.Key()]
+		if !ok || observed.CallErr != nil {
+			continue // reported by checkImplementation
 		}
 		documented, ok := spec.SchemaProperties(op.OKModel)
 		switch {
@@ -422,39 +447,32 @@ func checkResponseModels(in Inputs, r *Report) {
 			items = append(items, fmt.Sprintf("`%s`: the contract's success body references schema `%s`, which components.schemas does not define", row.Key(), op.OKModel))
 			continue
 		case len(documented) == 0:
-			// Said once, rather than reporting every field of the Go model as
-			// undocumented: a schema with no properties is a document this gate
-			// could not read, not a model with nothing in it.
-			items = append(items, fmt.Sprintf("`%s`: schema `%s` documents no properties, so there is nothing to compare `%s` against", row.Key(), op.OKModel, route.Model))
+			items = append(items, fmt.Sprintf("`%s`: schema `%s` documents no properties, so there is nothing to compare the decoded model against", row.Key(), op.OKModel))
 			continue
-		}
-		decoded, ok := in.SDK.JSONFields(route.Model)
-		if !ok {
-			items = append(items, fmt.Sprintf("`%s`: `%s` decodes into `%s`, which is not a struct this package declares", row.Key(), row.SDK, route.Model))
+		case len(observed.Decoded) == 0:
+			items = append(items, fmt.Sprintf("`%s`: the decoded response carried no fields at all -- a body built from schema `%s` went in and nothing came back out", row.Key(), op.OKModel))
 			continue
 		}
 
-		for _, property := range documented {
-			if _, has := decoded[property]; !has {
-				items = append(items, fmt.Sprintf("schema `%s` documents `%s` and the Go model `%s` has no field for it -- %s decodes it away",
-					op.OKModel, property, route.Model, row.SDK))
-			}
-		}
 		documentedSet := map[string]bool{}
 		for _, property := range documented {
 			documentedSet[property] = true
+			if !observed.Decoded[property] {
+				items = append(items, fmt.Sprintf("schema `%s` documents `%s` and it does not survive decoding by `%s` -- the model has no field for it",
+					op.OKModel, property, row.SDK))
+			}
 		}
-		for _, field := range sortedKeys(decoded) {
+		for _, field := range sortedNames(observed.Decoded) {
 			if documentedSet[field] {
 				continue
 			}
-			key := route.Model + "." + field
+			key := op.OKModel + "." + field
 			if _, ok := undocumented[key]; ok {
 				used[key] = true
 				continue
 			}
-			items = append(items, fmt.Sprintf("the Go model `%s` decodes `%s`, which schema `%s` does not document -- the server withdrew it, or it belongs under undocumented_model_fields",
-				route.Model, field, op.OKModel))
+			items = append(items, fmt.Sprintf("`%s` decodes `%s` into its model, which schema `%s` does not document -- the server withdrew it, or it belongs under undocumented_model_fields",
+				row.SDK, field, op.OKModel))
 		}
 	}
 

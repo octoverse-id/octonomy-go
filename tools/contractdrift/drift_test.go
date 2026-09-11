@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // These tests are the gate's own proof. A drift gate that has never been shown to
@@ -193,6 +195,13 @@ func load(t *testing.T, repo, upstream string) Inputs {
 	}
 	in.SDKCodes = in.SDK.ErrorCodes()
 	if in.RecordedVersion, err = RecordedContractVersion(filepath.Join(repo, "docs", "versioning.md")); err != nil {
+		t.Fatal(err)
+	}
+	// Conformance drives the SDK COMPILED INTO THIS BINARY -- the real one --
+	// against response bodies built from the STAGED spec. That split is what the
+	// tests below exploit: a mutated schema changes what the stub sends, and the
+	// unmutated client either copes with it or does not.
+	if in.Conformance, err = RunConformance(in.Vendored["v2"], in.Coverage, Drivers()); err != nil {
 		t.Fatal(err)
 	}
 	if upstream != "" {
@@ -510,8 +519,7 @@ func TestUnsentQueryParameterFails(t *testing.T) {
 		"      parameters:\n      - in: query\n        name: scope_hint\n        schema:\n          type: string\n")
 
 	assertFinding(t, runLocal(t, repo),
-		"documents the query parameter `scope_hint`",
-		"`TagService.Resolve` never sends it")
+		"`get /tag-resolution` documents the query parameter `scope_hint` and the client did not send it")
 }
 
 // TestAllowlistedUnsentQueryParameterPasses is that allowlist working.
@@ -606,31 +614,31 @@ func TestExtractorFloors(t *testing.T) {
 	}
 }
 
-// TestQueryParametersResolveThroughConstants covers the transport's own spelling:
-// it sets the scope parameters through constants rather than inline literals, and
-// an extractor that only matched the inline form would report them as never sent.
-func TestQueryParametersResolveThroughConstants(t *testing.T) {
-	sdk, err := LoadSDKPackage(repoRoot)
+// TestTypedErrorCodeConstantsAreRead covers the spelling that broke the regexp
+// this replaced: `CodeFoo ErrorCode = "foo"` is the same declaration to a reader
+// as `CodeFoo = "foo"`, and must be the same to the gate. Constants are the one
+// thing still read out of the source, because a declaration is not control flow.
+func TestTypedErrorCodeConstantsAreRead(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "errors.go"), `package octonomy
+
+type ErrorCode = string
+
+const (
+	CodeUntyped         = "untyped"
+	CodeTyped ErrorCode = "typed"
+)
+
+var CodeVar ErrorCode = "var"
+`)
+	sdk, err := LoadSDKPackage(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sent, err := sdk.QueryParams("TagService.Resolve")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// `scope` is set through a constant declared in transport.go and used in
-	// resolution.go; `application_id` and `include_global` are set by the
-	// transport itself, for every call.
-	for _, name := range []string{"scope", "slug", "type", "application_id", "include_global"} {
-		if !sent[name] {
-			t.Errorf("TagService.Resolve sends %q and the analysis did not find it", name)
-		}
-	}
-	// And the point of doing this per operation: the resolution route does NOT
-	// page, even though pagination.go sets limit and offset for the list routes.
-	for _, name := range []string{"limit", "offset"} {
-		if sent[name] {
-			t.Errorf("TagService.Resolve does not send %q; the analysis leaked it from another route", name)
+	codes := sdk.ErrorCodes()
+	for value, want := range map[string]string{"untyped": "CodeUntyped", "typed": "CodeTyped", "var": "CodeVar"} {
+		if codes[value] != want {
+			t.Errorf("%q resolved to %q, want %q", value, codes[value], want)
 		}
 	}
 }
@@ -685,19 +693,117 @@ func TestWriteOperationsCarryTheirContract(t *testing.T) {
 	}
 }
 
-// --- the SDK side, which is where the first review found the hole ---------------
+// --- what the client really does ------------------------------------------------
 //
-// The gate shipped its first draft comparing YAML with YAML and asserting only
-// that a function with the right name existed. An outside review reproduced the
-// consequence exactly: add a property to a vendored schema, change no Go, and the
-// blocking gate was green -- so a contract refresh could land while the SDK still
-// implemented the old contract, which is the one thing this gate is for. The
-// tests below are that reproduction, kept.
+// These replaced a set of tests that mutated Go source and asserted what a static
+// analyzer made of it. The analyzer is gone (see conformance.go), and so is that
+// shape of test: the client under test is the one compiled into this binary, so a
+// mutated source file would not be the code being driven. What IS mutable is the
+// contract the stub answers from -- which is the more useful half anyway, because
+// it is the half that moves.
 
-// TestDetectsFieldAddedToVendoredSchema is the review's own repro: the contract
-// grows a field, the Go model does not, and the OFFLINE gate says so. The
-// upstream comparison cannot: once the YAML is refreshed, both sides of it agree.
-func TestDetectsFieldAddedToVendoredSchema(t *testing.T) {
+// TestRoutesAreObservedOnTheWire is the inventory's route claim, proven by the
+// request the client actually issued rather than by reading its body.
+func TestRoutesAreObservedOnTheWire(t *testing.T) {
+	in := load(t, repoRoot, "")
+	if len(in.Conformance.Errors) != 0 {
+		t.Fatalf("drivers that never reached the wire: %v", in.Conformance.Errors)
+	}
+	for _, row := range in.Coverage.Operations {
+		if row.Unimplemented != "" {
+			continue
+		}
+		observed, ok := in.Conformance.Observations[row.Key()]
+		if !ok {
+			t.Errorf("%s: no observation", row.Key())
+			continue
+		}
+		if want := row.Method + " " + normalizePath(row.Path); observed.Key() != want {
+			t.Errorf("%s: the client requested %q", row.Key(), observed.Key())
+		}
+	}
+}
+
+// TestQueryParametersAreObservedPerOperation is the reason this is driven rather
+// than read. `limit` and `offset` are sent by every list route; /tag-resolution
+// does not page, and an analysis that asked whether the NAME appeared anywhere in
+// the package called it implemented there too.
+func TestQueryParametersAreObservedPerOperation(t *testing.T) {
+	in := load(t, repoRoot, "")
+	resolution, ok := in.Conformance.Observations["get /tag-resolution"]
+	if !ok {
+		t.Fatal("no observation for get /tag-resolution")
+	}
+	for _, name := range []string{"slug", "type", "scope", "application_id", "include_global"} {
+		if !resolution.Query[name] {
+			t.Errorf("TagService.Resolve did not send %q", name)
+		}
+	}
+	for _, name := range []string{"limit", "offset"} {
+		if resolution.Query[name] {
+			t.Errorf("TagService.Resolve sent %q; it does not page", name)
+		}
+	}
+
+	list, ok := in.Conformance.Observations["get /tags"]
+	if !ok {
+		t.Fatal("no observation for get /tags")
+	}
+	for _, name := range []string{"limit", "offset", "q", "slug", "vocabulary_id"} {
+		if !list.Query[name] {
+			t.Errorf("TagService.List did not send %q", name)
+		}
+	}
+}
+
+// TestUnsentQueryParameterIsReported is the first review's BLOCKER, tested where
+// it lives: a client that stops putting a documented parameter on the wire.
+//
+// The observation is synthesized rather than produced by breaking the SDK, because
+// the SDK under test is compiled in. What matters is that the check reads the
+// observation and not the source -- so an operation that stops passing its query
+// builder, branches past it, or drops it in a refactor all arrive here identically.
+func TestUnsentQueryParameterIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["get /tags"]
+	delete(observed.Query, "vocabulary_id")
+	delete(observed.Query, "parent_id")
+	in.Conformance.Observations["get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"`get /tags` documents the query parameter `vocabulary_id` and the client did not send it",
+		"`get /tags` documents the query parameter `parent_id` and the client did not send it")
+}
+
+// TestUndocumentedQueryParameterIsReported is the other direction, which the first
+// version of this check did not have at all: a parameter the client sends that
+// nothing documents is a filter the server ignores in silence.
+func TestUndocumentedQueryParameterIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["get /tags"]
+	observed.Query["colour"] = true
+	in.Conformance.Observations["get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"`get /tags`: the client sends the query parameter `colour`, which no vendored contract documents")
+}
+
+// TestWrongRouteIsReported: the row names a method, the method requests something
+// else. Under the analyzer this needed a mutated source file and a derivation that
+// could read it; here it is the request line.
+func TestWrongRouteIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["get /tags/{tag_id}"]
+	observed.Path = "/vocabularies/{}"
+	in.Conformance.Observations["get /tags/{tag_id}"] = observed
+
+	assertFinding(t, CheckLocal(in), "`TagService.Get` requests `GET /vocabularies/{}`")
+}
+
+// TestAddedSchemaPropertyIsReported is the first review's repro, and it now runs
+// end to end: the contract grows a property, the stub sends it, and the Go model
+// drops it on the way back out.
+func TestAddedSchemaPropertyIsReported(t *testing.T) {
 	repo := stageRepo(t)
 	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
 		edit(t, filepath.Join(repo, "docs", spec), "\n    Tag:\n",
@@ -706,12 +812,27 @@ func TestDetectsFieldAddedToVendoredSchema(t *testing.T) {
 	}
 
 	assertFinding(t, runLocal(t, repo),
-		"schema `Tag` documents `colour` and the Go model `Tag` has no field for it")
+		"schema `Tag` documents `colour` and it does not survive decoding by `TagService.List`")
 }
 
-// TestDetectsFieldWithdrawnFromVendoredSchema is the other direction: the SDK
-// keeps decoding something the contract no longer documents.
-func TestDetectsFieldWithdrawnFromVendoredSchema(t *testing.T) {
+// TestRetypedSchemaPropertyIsReported is the second review's repro, and the one a
+// name-only comparison could never catch: the property keeps its name and changes
+// its type, so the model still has a field and the body no longer fits it.
+func TestRetypedSchemaPropertyIsReported(t *testing.T) {
+	repo := stageRepo(t)
+	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
+		edit(t, filepath.Join(repo, "docs", spec), "\n    Tag:\n",
+			"        usage_count:\n          type: integer\n",
+			"        usage_count:\n          type: string\n")
+	}
+
+	assertFinding(t, runLocal(t, repo),
+		"could not handle a response built from the vendored schema")
+}
+
+// TestWithdrawnSchemaPropertyIsReported is the other direction: the SDK keeps
+// decoding something the contract no longer documents.
+func TestWithdrawnSchemaPropertyIsReported(t *testing.T) {
 	repo := stageRepo(t)
 	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
 		edit(t, filepath.Join(repo, "docs", spec), "\n    Tag:\n",
@@ -719,124 +840,13 @@ func TestDetectsFieldWithdrawnFromVendoredSchema(t *testing.T) {
 	}
 
 	assertFinding(t, runLocal(t, repo),
-		"the Go model `Tag` decodes `usage_count`, which schema `Tag` does not document")
+		"decodes `usage_count` into its model, which schema `Tag` does not document")
 }
 
-// TestResponseModelCheckIsNotVacuous guards the check above from quietly
-// comparing nothing -- an empty property set on either side would make every
-// model "match".
-func TestResponseModelCheckIsNotVacuous(t *testing.T) {
-	in := load(t, repoRoot, "")
-	spec := in.Vendored["v2"]
-
-	compared := 0
-	for _, model := range []string{"Tag", "Vocabulary", "TagAlias", "Assignment", "AuditLog", "ResourceTag", "TagResource", "TagResolution"} {
-		documented, ok := spec.SchemaProperties(model)
-		if !ok || len(documented) == 0 {
-			t.Errorf("schema %s documents no properties", model)
-			continue
-		}
-		decoded, ok := in.SDK.JSONFields(model)
-		if !ok || len(decoded) == 0 {
-			t.Errorf("the Go model %s decodes no JSON fields", model)
-			continue
-		}
-		compared += len(documented)
-	}
-	if compared < 50 {
-		t.Errorf("only %d properties take part in the model comparison; it is close to vacuous", compared)
-	}
-}
-
-// TestQueryParameterCheckIsPerOperation is the review's second repro. `limit` is
-// set by pagination.go for every list route, so a check that asked whether the
-// NAME appeared anywhere in the package called it implemented on /tag-resolution
-// too -- which does not page at all.
-func TestQueryParameterCheckIsPerOperation(t *testing.T) {
-	repo := stageRepo(t)
-	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
-		edit(t, filepath.Join(repo, "docs", spec),
-			"operationId: api_v"+surfaceDigit(spec)+"_tag_resolution_retrieve",
-			"      parameters:\n",
-			"      parameters:\n      - in: query\n        name: limit\n        schema:\n          type: integer\n")
-	}
-
-	assertFinding(t, runLocal(t, repo),
-		"`get /tag-resolution` documents the query parameter `limit` and `TagService.Resolve` never sends it")
-}
-
-// surfaceDigit picks the operationId prefix for a vendored spec file.
-func surfaceDigit(spec string) string {
-	if strings.Contains(spec, "-v2") {
-		return "2"
-	}
-	return "1"
-}
-
-// TestUnsentAllowlistDoesNotLeakAcrossOperations pins the reason that allowlist
-// is keyed by operation. `q` is recorded as unsent on /vocabularies; that must
-// not excuse it anywhere else.
-func TestUnsentAllowlistDoesNotLeakAcrossOperations(t *testing.T) {
-	repo := stageRepo(t)
-	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
-		edit(t, filepath.Join(repo, "docs", spec),
-			"operationId: api_v"+surfaceDigit(spec)+"_tag_resolution_retrieve",
-			"      parameters:\n",
-			"      parameters:\n      - in: query\n        name: q\n        schema:\n          type: string\n")
-	}
-
-	assertFinding(t, runLocal(t, repo),
-		"`get /tag-resolution` documents the query parameter `q` and `TagService.Resolve` never sends it")
-}
-
-// TestRoutesAreDerivedFromTheCode is what turns the inventory from a claim into
-// an assertion: the row says `get /tags`, and the method really does issue a GET
-// to /tags through doList.
-func TestRoutesAreDerivedFromTheCode(t *testing.T) {
-	sdk, err := LoadSDKPackage(repoRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		symbol string
-		want   Route
-	}{
-		{"TagService.List", Route{Method: "get", Path: "/tags", Helper: "doList", Model: "Tag"}},
-		{"TagService.Get", Route{Method: "get", Path: "/tags/{}", Helper: "doData", Model: "Tag"}},
-		{"TagService.Delete", Route{Method: "delete", Path: "/tags/{}", Helper: "do"}},
-		{"ResourceService.ListTags", Route{Method: "get", Path: "/resources/{}/{}/tags", Helper: "doList", Model: "ResourceTag"}},
-		// The health probes reach the transport through a shared helper that takes
-		// the path as a parameter and fixes the method itself; both indirections
-		// have to resolve or the row cannot be checked at all.
-		{"HealthService.Live", Route{Method: "get", Path: "/health/live", Helper: "doUnversioned"}},
-	} {
-		got, err := sdk.Route(tc.symbol)
-		if err != nil {
-			t.Errorf("%s: %v", tc.symbol, err)
-			continue
-		}
-		if got != tc.want {
-			t.Errorf("%s: got %+v, want %+v", tc.symbol, got, tc.want)
-		}
-	}
-}
-
-// TestRepointedMethodFailsInventory: the named method exists and does something
-// else. The name-only check this replaced agreed the operation was covered.
-func TestRepointedMethodFailsInventory(t *testing.T) {
-	repo := stageRepo(t)
-	edit(t, filepath.Join(repo, "tags.go"),
-		"func (s *TagService) Get(",
-		`"/tags/"+url.PathEscape(id), nil, nil, opts...)`,
-		`"/vocabularies/"+url.PathEscape(id), nil, nil, opts...)`)
-
-	assertFinding(t, runLocal(t, repo),
-		"`TagService.Get` requests `/vocabularies/{}`, not `/tags/{}`")
-}
-
-// TestWrongActualResponseFails ties the recorded envelope to the transport helper
-// the method actually calls, rather than to whatever someone typed.
-func TestWrongActualResponseFails(t *testing.T) {
+// TestWrongRecordedEnvelopeIsReported: the recorded envelope is what the stub
+// wraps its body in, so a row that names the wrong one hands the client a shape it
+// cannot decode. The envelope is not a label anyone can get away with mistyping.
+func TestWrongRecordedEnvelopeIsReported(t *testing.T) {
 	repo := stageRepo(t)
 	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
 		"  - path: /tags\n    method: get\n",
@@ -844,20 +854,59 @@ func TestWrongActualResponseFails(t *testing.T) {
 		"    actual_response: data-envelope\n")
 
 	assertFinding(t, runLocal(t, repo),
-		"`TagService.List` decodes through doList, which yields `list-envelope`, but the row records `data-envelope`")
+		"`TagService.List` could not handle a response built from the vendored schema")
 }
 
-// TestTypedConstantsResolve covers the spelling that broke the regexp this
-// replaced: `scopeParam string = "scope"` is the same declaration to a reader and
-// must be the same to the gate.
-func TestTypedConstantsResolve(t *testing.T) {
-	repo := stageRepo(t)
-	edit(t, filepath.Join(repo, "transport.go"),
-		"\tscopeParam ",
-		`scopeParam            = "scope"`,
-		`scopeParam     string = "scope"`)
+// TestResponseModelComparisonIsNotVacuous guards the check above from quietly
+// comparing nothing: an empty property set on either side would make every model
+// "match".
+func TestResponseModelComparisonIsNotVacuous(t *testing.T) {
+	in := load(t, repoRoot, "")
+	spec := in.Vendored["v2"]
+	ops, err := strippedOperations(spec, "v2")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	assertClean(t, runLocal(t, repo))
+	compared := 0
+	for _, row := range in.Coverage.Operations {
+		if row.ActualResponse != "list-envelope" && row.ActualResponse != "data-envelope" {
+			continue
+		}
+		op := ops[row.Key()]
+		if op == nil || op.OKModel == "" {
+			continue
+		}
+		documented, _ := spec.SchemaProperties(op.OKModel)
+		observed := in.Conformance.Observations[row.Key()]
+		if len(documented) == 0 || len(observed.Decoded) == 0 {
+			t.Errorf("%s: documented=%d decoded=%d -- nothing is being compared",
+				row.Key(), len(documented), len(observed.Decoded))
+			continue
+		}
+		compared += len(documented)
+	}
+	if compared < 100 {
+		t.Errorf("only %d properties take part in the model comparison; it is close to vacuous", compared)
+	}
+}
+
+// TestEveryOperationHasADriver: an operation nobody calls is an operation this
+// gate says nothing about, which is the same silence the inventory exists to end.
+func TestEveryOperationHasADriver(t *testing.T) {
+	in := load(t, repoRoot, "")
+	drivers := map[string]bool{}
+	for _, d := range Drivers() {
+		drivers[d.Op] = true
+	}
+	for _, row := range in.Coverage.Operations {
+		if row.Unimplemented != "" {
+			continue
+		}
+		if !drivers[row.Key()] {
+			t.Errorf("%s is implemented and drivers.go does not call it", row.Key())
+		}
+	}
 }
 
 // --- spec-reading corners the review found ---------------------------------------
@@ -926,21 +975,84 @@ func TestParameterIdentityIncludesIn(t *testing.T) {
 	}
 }
 
-// TestReorderedSequenceIsNotDrift keeps a generator's incidental ordering out of
-// the report. A scheduled job that goes red for a reshuffle is a job people learn
-// to close unread.
-func TestReorderedSequenceIsNotDrift(t *testing.T) {
-	upstream := stageUpstream(t)
-	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
-		"operationId: api_v2_tags_list",
-		"      - in: query\n        name: is_active\n        schema:\n          type: boolean\n      - in: query\n        name: limit\n",
-		"      - in: query\n        name: limit\n")
-	edit(t, filepath.Join(upstream, "openapi-v2.yaml"),
-		"operationId: api_v2_tags_list",
-		"      tags:\n",
-		"      - in: query\n        name: is_active\n        schema:\n          type: boolean\n      tags:\n")
+// TestReorderedMappingSequenceIsNotDrift keeps a generator's incidental ordering
+// out of the report. A scheduled job that goes red for a reshuffle is a job people
+// learn to close unread.
+//
+// It tests `flatten` directly, and the previous version of it did not: it moved a
+// parameter within an operation's `parameters` list, and parameters are keyed by
+// `in` + name long before flatten sees them -- so it passed with the normalization
+// removed. `oneOf` and `allOf` members are the sequences that really do reach it.
+func TestReorderedMappingSequenceIsNotDrift(t *testing.T) {
+	parse := func(src string) map[string]string {
+		t.Helper()
+		var node yaml.Node
+		if err := yaml.Unmarshal([]byte(src), &node); err != nil {
+			t.Fatal(err)
+		}
+		return flatten(&node)
+	}
 
-	assertClean(t, runFull(t, repoRoot, upstream))
+	first := parse(`
+oneOf:
+- type: string
+  maxLength: 10
+- type: integer
+  minimum: 1
+`)
+	reordered := parse(`
+oneOf:
+- type: integer
+  minimum: 1
+- type: string
+  maxLength: 10
+`)
+	if lines := diffFlat(first, reordered); len(lines) != 0 {
+		t.Errorf("reordering two oneOf members reported drift:\n%s", strings.Join(lines, "\n"))
+	}
+
+	// And a real change to one of those members still reports, so the
+	// normalization above is not hiding content.
+	changed := parse(`
+oneOf:
+- type: string
+  maxLength: 20
+- type: integer
+  minimum: 1
+`)
+	if lines := diffFlat(first, changed); len(lines) == 0 {
+		t.Error("changing a oneOf member reported nothing")
+	}
+}
+
+// TestInlineClassBodyErrorCodeIsRead covers the Python shape that was invisible to
+// both the value extractor and the unreadable-form detector while they were
+// anchored to the start of a line: a one-line class body. A real code vanished
+// from the comparison while the count floor stayed healthy -- the quietest failure
+// this extractor has.
+func TestInlineClassBodyErrorCodeIsRead(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "errors.py"), syntheticErrorsPy+`
+
+class InlineError(DomainError): code = "inline_code"
+class InlineEnumError(DomainError): code = ErrorCodes.LOCKED
+`)
+	codes, unreadable, err := ServerErrorCodes(filepath.Join(dir, "errors.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !codes["inline_code"] {
+		t.Error("a one-line class body's literal code was not read")
+	}
+	found := false
+	for _, line := range unreadable {
+		if strings.Contains(line, "ErrorCodes.LOCKED") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a one-line class body's unreadable code was not reported: %v", unreadable)
+	}
 }
 
 // TestUnreadableServerErrorCodeIsReported is the answer to "the extractor only
@@ -994,50 +1106,6 @@ paths:
 	if _, err := LoadSpec(filepath.Join(dir, "broken.yaml")); err == nil {
 		t.Fatal("an operation whose parameters are not a list was accepted")
 	}
-}
-
-// TestAmbiguousRouteFailsLoudly: a method that issues two different requests has
-// no single route, and answering the inventory with whichever the walk reached
-// first would be true only sometimes.
-func TestAmbiguousRouteFailsLoudly(t *testing.T) {
-	repo := stageRepo(t)
-	edit(t, filepath.Join(repo, "tags.go"),
-		"func (s *TagService) Get(",
-		`return doData[Tag](ctx, s.client, http.MethodGet, "/tags/"+url.PathEscape(id), nil, nil, opts...)`,
-		`if id == "" {
-		return doData[Tag](ctx, s.client, http.MethodPost, "/vocabularies", nil, nil, opts...)
-	}
-	return doData[Tag](ctx, s.client, http.MethodGet, "/tags/"+url.PathEscape(id), nil, nil, opts...)`)
-
-	assertFinding(t, runLocal(t, repo), "issues more than one request")
-}
-
-// TestUntaggedExportedFieldIsCompared covers what encoding/json really does with
-// a field carrying no tag: it decodes under the Go name. Skipping it would hide a
-// field the SDK genuinely decodes from the check that exists to notice fields.
-func TestUntaggedExportedFieldIsCompared(t *testing.T) {
-	repo := stageRepo(t)
-	edit(t, filepath.Join(repo, "tags.go"),
-		"type Tag struct {",
-		"type Tag struct {\n",
-		"type Tag struct {\n\tColour string\n")
-
-	assertFinding(t, runLocal(t, repo),
-		"the Go model `Tag` decodes `Colour`, which schema `Tag` does not document")
-}
-
-// TestPathHelpersAreRenderedFromTheirBody: the /resources/{}/{} prefix is read out
-// of resourcePath rather than hardcoded, so a change to the helper moves the
-// derived route with it instead of leaving the gate agreeing with a stale string.
-func TestPathHelpersAreRenderedFromTheirBody(t *testing.T) {
-	repo := stageRepo(t)
-	edit(t, filepath.Join(repo, "resources.go"),
-		"func resourcePath(",
-		`return "/resources/" + url.PathEscape(resourceType)`,
-		`return "/things/" + url.PathEscape(resourceType)`)
-
-	assertFinding(t, runLocal(t, repo),
-		"requests `/things/{}/{}/tags`, not `/resources/{}/{}/tags`")
 }
 
 // TestOrdinaryErrorRegistryShapesAreNotReportedAsUnreadable is the nag guard on

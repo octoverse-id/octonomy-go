@@ -25,7 +25,13 @@ import (
 var (
 	// `code = "not_found"` on a DomainError subclass, single or double quoted,
 	// with an optional type annotation (`code: str = "not_found"`).
-	pyClassCodeRE = regexp.MustCompile(`(?m)^\s*code\s*(?::[^=\n]*)?=\s*["']([a-z0-9_]+)["']`)
+	//
+	// NOT anchored to the start of a line. It was, and a one-line class body --
+	// `class InlineError(DomainError): code = "inline"` -- was then invisible to
+	// this AND to the unreadable-form detector below, so a real code vanished from
+	// the comparison while the count floor stayed healthy. `\b` is what keeps it
+	// off `error_code = ...`, where the underscore leaves no word boundary.
+	pyClassCodeRE = regexp.MustCompile(`\bcode\s*(?::[^=\n]*)?=\s*["']([a-z0-9_]+)["']`)
 
 	// `error_response("not_found", ...)` in the DRF exception handler.
 	pyCallCodeRE = regexp.MustCompile(`error_response\(\s*["']([a-z0-9_]+)["']`)
@@ -40,7 +46,7 @@ var (
 	// by the caller instead. It has to be filtered somewhere: reporting a
 	// function's own signature as an unreadable code is the kind of noise that
 	// teaches everyone to stop reading a scheduled job's output.
-	pyClassCodeAnyRE = regexp.MustCompile(`(?m)^(\s*code\s*(?::[^=\n]*)?=\s*)(.+)$`)
+	pyClassCodeAnyRE = regexp.MustCompile(`(?m)\bcode\s*(?::[^=\n]*)?=\s*(.+)$`)
 	pyCallCodeAnyRE  = regexp.MustCompile(`(?m)^(.*?)error_response\(\s*([^,\s][^,]*)`)
 
 	// An argument that resolves to a DomainError's own `code` attribute, which the
@@ -100,7 +106,7 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 
 	seen := map[string]bool{}
 	for _, m := range pyClassCodeAnyRE.FindAllStringSubmatch(src, -1) {
-		if value := strings.TrimSpace(m[2]); !isPyStringLiteral(value) && !seen[value] {
+		if value := strings.TrimSpace(m[1]); !isPyStringLiteral(value) && !seen[value] {
 			seen[value] = true
 			unreadable = append(unreadable, "code = "+value)
 		}

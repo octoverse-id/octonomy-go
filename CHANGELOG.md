@@ -22,14 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `components.schemas` property by property, and — from the server's `core/errors.py`, because
     `ErrorResponse` types `code` as a bare string and a schema comparison therefore cannot see it —
     the error-code registry against this SDK's `Code*` constants.
-  - **The SDK side is read as Go.** `tools/contractdrift` parses the package and derives, per method,
-    the route it requests, the transport helper it decodes through, the query parameters its params
-    struct builds, and the model its `doData[T]` / `doList[T]` names. So the gate compares the
-    contract against *the code*: a schema field the decoded struct has no place for, a query
-    parameter that operation's own method never sends, an inventory row whose method now requests a
-    different route. **This found a real gap on its first run** — `VocabularyListParams` is missing
-    `q` and `slug` ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)), which a
-    name-matching check called implemented because `tags.go` sends both.
+  - **The SDK side is driven, not read.** For each operation the gate calls the method with every
+    parameter populated, against a stub that records the request and answers with a body
+    **synthesized from the vendored schema**. The request is what it compares against the contract's
+    routes and query parameters; the response is what it decodes, so a property the Go model has no
+    field for is dropped on the way back out and a property whose *type* changed does not decode at
+    all. **This found a real gap on its first run** — `VocabularyListParams` is missing `q` and `slug`
+    ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)). An earlier draft read the package
+    statically instead and was replaced: inferring control flow from an AST answered *clean* for a
+    method that stopped passing its query builder, one that branched between two private helpers, and
+    a schema property whose type changed.
   - **Two halves, only one of which gates a pull request.** The offline half (`make contract-check`,
     CI job `contract inventory`) compares the *vendored* contracts against this repository and fails
     the PR; it catches a contract refresh that landed without the follow-through, which the
