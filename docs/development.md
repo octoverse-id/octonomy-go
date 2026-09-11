@@ -294,6 +294,12 @@ now permits absence turns `null` into `0`, which is the silent-zero family of
 [#32](https://github.com/octoverse-id/octonomy-go/issues/32) arriving through the contract instead of
 through a decoder.
 
+Every witness is derived from the property's own name — strings, integers, uuids, dates, and the
+free-form objects — so two properties of one schema never share one and crossing them is always
+visible. That is asserted rather than assumed: a test walks both contracts and fails on any
+same-schema collision, which is how `AuditLog.id` and `AuditLog.operation_id` were found sharing a
+uuid inside the very change that introduced per-property witnesses.
+
 It is still **representative-value coverage**, not a proof of type equivalence. A property documented
 `integer` decoded into a `float64` passes, as does anything at all decoded into `any`; and where the
 contract constrains nothing (`metadata: {}`, `changes: {readOnly: true}`) there is nothing to check —

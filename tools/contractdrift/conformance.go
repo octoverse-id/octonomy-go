@@ -1014,7 +1014,11 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness, property
 			}
 			return out, nil
 		}
-		return map[string]any{"contractdrift": "value"}, nil
+		// Keyed by the property, not a constant: `AuditLog.changes` and
+		// `AuditLog.metadata` are both free-form objects, and one shared value made
+		// crossing them invisible -- the same defect the uuid and date witnesses
+		// above carried until it was found.
+		return map[string]any{"contractdrift": property}, nil
 	case "array":
 		if schema.Items.Kind == 0 {
 			return []any{}, nil
@@ -1032,8 +1036,9 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness, property
 		// the property present through the round trip and prove the model has a
 		// field for it. If an unconstrained property ever needs to be something
 		// other than an object, this is the line to change, and the decode error
-		// will say so.
-		return map[string]any{"contractdrift": "value"}, nil
+		// will say so. Keyed by the property for the same reason as the branch
+		// above: two of them on one schema have to be distinguishable.
+		return map[string]any{"contractdrift": property}, nil
 	}
 	return nil, fmt.Errorf("unsupported type %q", schema.Type)
 }
@@ -1049,7 +1054,13 @@ func nameOffset(name string) int {
 	if sum < 0 {
 		sum = -sum
 	}
-	return sum%97 + 1
+	// The modulus is wide enough that no two property names in either contract
+	// collide. It was 97, and `id` and `operation_id` both landed on 58 -- so
+	// AuditLog's two uuids shared a witness and crossing them was invisible, which
+	// is the exact defect the per-property witnesses were introduced to close,
+	// surviving inside the fix for it. TestWitnessesDoNotCollide walks both
+	// contracts and fails on any same-schema pair that shares one.
+	return sum%99991 + 1
 }
 
 func mappingValue(node *yaml.Node, key string) *yaml.Node {

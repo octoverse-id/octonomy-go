@@ -97,7 +97,7 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 	if err != nil {
 		return nil, nil, err
 	}
-	src := string(raw)
+	src := stripPyComments(string(raw))
 
 	codes = map[string]bool{}
 	for _, m := range pyClassCodeRE.FindAllStringSubmatch(src, -1) {
@@ -131,6 +131,48 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 	}
 	sort.Strings(unreadable)
 	return codes, unreadable, nil
+}
+
+// stripPyComments blanks out `#` comments, line by line.
+//
+// A commented-out `code = "..."` was read as a live server code, and a phantom
+// code demands a Code* constant that must not exist -- a weekly job reporting a
+// line the server deleted is the nag this gate was told not to become. Only
+// comments that begin a line or follow code outside a string are removed; a `#`
+// inside a literal is left alone, since that is part of a value.
+//
+// Docstrings are NOT stripped. A prose `code = "..."` inside one is still read,
+// and that is the deliberate side of the trade: narrowing the readers to exclude
+// prose would narrow them to exclude real codes too, and a phantom code fails
+// loudly while a missed one fails silently.
+func stripPyComments(src string) string {
+	var out strings.Builder
+	out.Grow(len(src))
+	for _, line := range strings.Split(src, "\n") {
+		var quote rune
+		cut := -1
+		for i, r := range line {
+			switch {
+			case quote != 0:
+				if r == quote {
+					quote = 0
+				}
+			case r == '\'' || r == '"':
+				quote = r
+			case r == '#':
+				cut = i
+			}
+			if cut >= 0 {
+				break
+			}
+		}
+		if cut >= 0 {
+			line = line[:cut]
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	return out.String()
 }
 
 // isPyStringLiteral reports whether a Python expression is a plain, single-part

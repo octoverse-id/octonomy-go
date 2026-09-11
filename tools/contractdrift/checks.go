@@ -1569,6 +1569,10 @@ func sameJSON(a, b json.RawMessage) bool {
 func checkDecodedValues(in Inputs, r *Report) {
 	var items []string
 	for _, surface := range surfaces {
+		ops, err := strippedOperations(in.Vendored[surface], surface)
+		if err != nil {
+			continue // reported by checkSurfaceParity
+		}
 		for _, row := range in.Coverage.Operations {
 			if row.Unimplemented != "" || row.ActualResponse == "none" {
 				continue
@@ -1581,13 +1585,21 @@ func checkDecodedValues(in Inputs, r *Report) {
 				if execution == nil || execution.CallErr != nil {
 					continue // reported by checkImplementation
 				}
+				// The null witness runs only where the operation has an OKModel, so
+				// deferring to it for a composite defers to nothing -- a `null` in a
+				// composite_body decoded away was covered by neither check. Not live
+				// as the file stands (no composite_body carries a null) but the
+				// subsumption claim that retired checkCompositeResponses has to be
+				// true for the shapes that file could take, not only the ones it does.
+				op, documented := ops[row.Key()]
+				nullWitnessSpeaks := documented && op.OKModel != ""
 				for _, property := range sortedFields(execution.Sent) {
 					decoded, survived := execution.Decoded[property]
 					// A null the model omits is the null witness's business, and it
 					// has the populated witness on hand to tell a container's nil
 					// from a scalar's zero. Saying anything here would be saying it
 					// with less information.
-					if !survived && string(execution.Sent[property]) == "null" {
+					if !survived && string(execution.Sent[property]) == "null" && nullWitnessSpeaks {
 						continue
 					}
 					switch {

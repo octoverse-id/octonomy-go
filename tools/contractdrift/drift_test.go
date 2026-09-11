@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -2572,4 +2574,117 @@ func TestDetectsWithdrawnRequiredOnErrorEnvelope(t *testing.T) {
 
 	assertFinding(t, runFull(t, repoRoot, upstream),
 		"schema `ErrorResponse`: - required: [error]")
+}
+
+// TestWitnessesDoNotCollide walks every schema in both contracts and fails on any
+// two properties of one schema that would receive the same witness.
+//
+// Two did. `nameOffset` was `sum%97 + 1`, and `id` and `operation_id` both landed
+// on 58, so `AuditLog.id` and `AuditLog.operation_id` carried one uuid and
+// crossing them changed nothing compared — the exact defect per-property
+// witnesses were introduced to close, surviving inside the fix for it. A fixed
+// modulus is a birthday problem, so the property is asserted over the real
+// contracts rather than argued about.
+func TestWitnessesDoNotCollide(t *testing.T) {
+	for surface, spec := range loadSpecs(t) {
+		for name := range spec.Schemas {
+			documented, ok := spec.SchemaProperties(name)
+			if !ok {
+				continue
+			}
+			seen := map[int]string{}
+			for _, property := range documented {
+				offset := nameOffset(property)
+				if other, clash := seen[offset]; clash {
+					t.Errorf("%s: schema %s: %q and %q both receive witness offset %d -- crossing those two fields is invisible",
+						surface, name, other, property, offset)
+				}
+				seen[offset] = property
+			}
+		}
+	}
+}
+
+// TestCrossedFreeFormObjectsAreCaught: `AuditLog.changes` and `AuditLog.metadata`
+// are both free-form, and both used to synthesize the same constant, so a decoder
+// that swapped them changed nothing compared. The contract constrains neither, so
+// the witness is all there is to tell them apart.
+func TestCrossedFreeFormObjectsAreCaught(t *testing.T) {
+	specs := loadSpecs(t)
+	changes, err := synthesizeSchema(specs["v2"], "AuditLog", 0, witnessPopulated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, right := changes["changes"], changes["metadata"]
+	if reflect.DeepEqual(left, right) {
+		t.Fatalf("AuditLog.changes and AuditLog.metadata synthesize the same value %v -- crossing them is invisible", left)
+	}
+}
+
+// TestCompositeNullIsNotDeferredToNothing pins the one residual difference between
+// checkDecodedValues and the checkCompositeResponses it replaced. The deferral for
+// a decoded-away `null` hands the question to the null witness — which runs only
+// where the operation has an OKModel, and a composite has none. So for a composite
+// the deferral used to hand it to nothing at all. Not reachable as the coverage
+// file stands, since no composite_body carries a null; pinned anyway, because the
+// subsumption claim has to hold for the shapes that file can take.
+func TestCompositeNullIsNotDeferredToNothing(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
+		"AssignmentService.BulkRemove",
+		`composite_body: '{"removed": 4}'`,
+		`composite_body: '{"removed": 4, "note": null}'`)
+
+	assertFinding(t, runLocal(t, repo), "decoded it away")
+}
+
+// TestCommentedOutServerCodeIsNotRead: a `#`-commented `code = "..."` used to be
+// read as a live server code, and a phantom code demands a `Code*` constant that
+// must not exist. A weekly job reporting a line the server deleted is the nag
+// this gate was told not to become.
+func TestCommentedOutServerCodeIsNotRead(t *testing.T) {
+	upstream := stageUpstream(t)
+	path := filepath.Join(upstream, "errors.py")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, string(raw)+"\n\n# class RetiredError(DomainError):\n#     code = \"retired_last_release\"\n")
+
+	codes, _, err := ServerErrorCodes(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codes["retired_last_release"] {
+		t.Error("a commented-out code was read as a live one")
+	}
+}
+
+// TestHashInsideAStringLiteralIsNotAComment is the other side of that rule: the
+// stripper must not truncate a value that merely contains a `#`.
+func TestHashInsideAStringLiteralIsNotAComment(t *testing.T) {
+	upstream := stageUpstream(t)
+	path := filepath.Join(upstream, "errors.py")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, string(raw)+"\n\nclass HashError(DomainError):\n    code = \"tag#collision\"\n")
+
+	codes, _, err := ServerErrorCodes(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !codes["tag#collision"] {
+		t.Errorf("a `#` inside a literal was treated as a comment; got %v", sortedCodes(codes))
+	}
+}
+
+func sortedCodes(codes map[string]bool) []string {
+	out := make([]string, 0, len(codes))
+	for code := range codes {
+		out = append(out, code)
+	}
+	sort.Strings(out)
+	return out
 }
