@@ -321,11 +321,15 @@ unsent_inputs:
   # SDK ever starts putting it on the query string, all eleven turn into stale-row
   # findings at once.
   #
-  # The reason is written once and referenced, so it cannot rot in ten copies.
+  # The reason is written once and referenced, so it cannot rot in ten copies —
+  # and `carried_in: body` is not prose at all: the gate requires the property to
+  # really be in that request's payload, so each row proves its own replacement
+  # path instead of merely asserting one.
   - path: /tags
     method: post
     in: query
     name: application_id
+    carried_in: body
     reason: &application_id_in_body >-
       Application scope follows the body on a request that has one, so the SDK
       refuses WithApplication here and the value travels in the write struct's
@@ -338,51 +342,61 @@ unsent_inputs:
     method: patch
     in: query
     name: application_id
+    carried_in: body
     reason: *application_id_in_body
   - path: /vocabularies
     method: post
     in: query
     name: application_id
+    carried_in: body
     reason: *application_id_in_body
   - path: /vocabularies/{vocabulary_id}
     method: patch
     in: query
     name: application_id
+    carried_in: body
     reason: *application_id_in_body
   - path: /tag-aliases
     method: post
     in: query
     name: application_id
+    carried_in: body
     reason: *application_id_in_body
   - path: /tag-aliases/{alias_id}
     method: patch
     in: query
     name: application_id
+    carried_in: body
     reason: *application_id_in_body
   - path: /tag-assignments
     method: post
     in: query
     name: application_id
+    carried_in: body
     reason: *application_id_in_body
   - path: /tag-assignments/bulk-assign
     method: post
     in: query
     name: application_id
+    carried_in: body
     reason: *application_id_in_body
   - path: /tag-assignments/bulk-remove
     method: post
     in: query
     name: application_id
+    carried_in: body
     reason: *application_id_in_body
   - path: /resources/{resource_type}/{resource_id}/tags
     method: post
     in: query
     name: application_id
+    carried_in: body
     reason: *application_id_in_body
   - path: /tag-assignments
     method: delete
     in: query
     name: application_id
+    carried_in: body
     reason: >-
       The one DELETE that carries a body — the ids travel in it rather than in the
       path — so the same body-wins rule applies: AssignmentRemove.ApplicationID is

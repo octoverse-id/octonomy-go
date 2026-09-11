@@ -1364,9 +1364,10 @@ func TestUndocumentedHeaderIsReported(t *testing.T) {
 }
 
 // TestBodyCarriedApplicationIDIsVerified keeps the eleven write exceptions from
-// being an unchecked allowlist. Each says application_id moves from the query
-// string into the payload; if the payload stops carrying it, the row is asserting
-// something false and the missing query key stops being excused.
+// being an unchecked allowlist. Each declares `carried_in: body`, so the gate
+// requires application_id to really be in that payload; if it stops being there,
+// the row is asserting something false and the missing query key stops being
+// excused.
 func TestBodyCarriedApplicationIDIsVerified(t *testing.T) {
 	in := load(t, repoRoot, "")
 	observed := in.Conformance.Observations["post /tags"]
@@ -1374,7 +1375,7 @@ func TestBodyCarriedApplicationIDIsVerified(t *testing.T) {
 	in.Conformance.Observations["post /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
-		"`post /tags` records that application_id travels in the body, and the request body does not carry it")
+		"`post /tags` records that `application_id` travels in the body instead, and the request's body does not carry it")
 }
 
 // TestSwappedPathArgumentsAreReported: both sentinels used to collapse to `{}`, so
@@ -1495,4 +1496,32 @@ func TestUnsynthesizableSchemaBlamesTheGate(t *testing.T) {
 	assertFinding(t, runLocal(t, repo),
 		"the response stub could not build a body",
 		"allOf of 2 members")
+}
+
+// TestCarriedInMustNotRepeatIn: a row saying an input is unsent in the body AND
+// carried in the body says the client both does and does not send it there.
+func TestCarriedInMustNotRepeatIn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "contract-coverage.yaml")
+	write(t, path, `
+operations:
+  - path: /tags
+    method: get
+    sdk: TagService.List
+    file: tags.go
+    documented_response: array
+    actual_response: list-envelope
+server_error_codes: [a, b, c, d, e, f, g, h, i, j]
+unsent_inputs:
+  - path: /tags
+    method: get
+    in: query
+    name: q
+    carried_in: query
+    reason: x
+`)
+	_, err := LoadCoverage(path)
+	if err == nil || !strings.Contains(err.Error(), "repeats `in`") {
+		t.Errorf("expected a carried_in/in conflict, got %v", err)
+	}
 }

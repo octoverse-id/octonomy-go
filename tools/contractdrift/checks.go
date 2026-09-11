@@ -914,22 +914,24 @@ func checkRequestShapes(in Inputs, r *Report) {
 			}
 		}
 	}
-	// A row claiming an input travels in the body has to be TRUE: the parameter
-	// must actually be in the body the client sent. Eleven of these say
-	// application_id moves from the query string into the payload, and without
-	// this they would turn a missing query key green while proving nothing about
-	// the replacement path.
-	for key, reason := range unsent {
-		if !strings.Contains(key, " query ") || !strings.Contains(reason, "ApplicationID") {
+	// A row claiming an input travels somewhere else has to be TRUE: the name must
+	// actually be there. Eleven of these say application_id moves from the query
+	// string into the payload, and without this they would turn a missing query key
+	// green while proving nothing about the replacement path.
+	for _, row := range in.Coverage.UnsentInputs {
+		if row.CarriedIn == "" {
 			continue
 		}
-		op, _, _ := strings.Cut(strings.TrimPrefix(key, ""), " query ")
-		observed, ok := in.Conformance.Observations[op]
+		observed, ok := in.Conformance.Observations[row.Method+" "+row.Path]
 		if !ok {
 			continue
 		}
-		if !observed.Body["application_id"] {
-			items = append(items, fmt.Sprintf("`%s` records that application_id travels in the body, and the request body does not carry it", op))
+		carried := map[string]map[string]bool{
+			"query": observed.Query, "body": observed.Body, "header": observed.Headers,
+		}[row.CarriedIn]
+		if !carried[row.Name] {
+			items = append(items, fmt.Sprintf("`%s %s` records that `%s` travels in the %s instead, and the request's %s does not carry it",
+				row.Method, row.Path, row.Name, row.CarriedIn, row.CarriedIn))
 		}
 	}
 	for key := range unsent {

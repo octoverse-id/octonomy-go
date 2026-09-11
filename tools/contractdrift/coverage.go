@@ -117,8 +117,20 @@ type UnsentInput struct {
 	Path   string `yaml:"path"`
 	Method string `yaml:"method"`
 	// In is where the contract documents it: query, body, or header.
-	In     string `yaml:"in"`
-	Name   string `yaml:"name"`
+	In   string `yaml:"in"`
+	Name string `yaml:"name"`
+
+	// CarriedIn names where the client sends it INSTEAD, when it sends it at all
+	// -- `body` for the eleven writes that move `application_id` out of the query
+	// string. The gate then requires it to really be there, so the row proves its
+	// own replacement path rather than merely asserting one.
+	//
+	// A field rather than a phrase in the reason. The first version of this check
+	// looked for "ApplicationID" in the prose, which made a reworded sentence
+	// silently switch the verification off -- the same class of quiet failure the
+	// rest of this tool exists to remove.
+	CarriedIn string `yaml:"carried_in"`
+
 	Reason string `yaml:"reason"`
 }
 
@@ -227,6 +239,12 @@ func LoadCoverage(path string) (*Coverage, error) {
 		if !unsentLocations[p.In] {
 			return nil, fmt.Errorf("%s: unsent_inputs %q: `in` is %q, not query, body, or header", path, p.Name, p.In)
 		}
+		if p.CarriedIn != "" && !unsentLocations[p.CarriedIn] {
+			return nil, fmt.Errorf("%s: unsent_inputs %q: `carried_in` is %q, not query, body, or header", path, p.Name, p.CarriedIn)
+		}
+		if p.CarriedIn == p.In {
+			return nil, fmt.Errorf("%s: unsent_inputs %q: `carried_in` repeats `in` (%q), which says the client both does and does not send it there", path, p.Name, p.In)
+		}
 		if !seen[p.Method+" "+p.Path] {
 			return nil, fmt.Errorf("%s: unsent_inputs names %q, which is not an operation in this file", path, p.Method+" "+p.Path)
 		}
@@ -273,10 +291,10 @@ func (c *Coverage) ByKey() map[string]CoverageOperation {
 }
 
 // UnsentIndex returns the allowlisted operation+location+name keys.
-func (c *Coverage) UnsentIndex() map[string]string {
-	out := make(map[string]string, len(c.UnsentInputs))
+func (c *Coverage) UnsentIndex() map[string]UnsentInput {
+	out := make(map[string]UnsentInput, len(c.UnsentInputs))
 	for _, p := range c.UnsentInputs {
-		out[p.Key()] = p.Reason
+		out[p.Key()] = p
 	}
 	return out
 }
