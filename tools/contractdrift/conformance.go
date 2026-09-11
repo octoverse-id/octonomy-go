@@ -86,6 +86,13 @@ type Observation struct {
 	// a schema-derived response body lands here, and that is the point.
 	CallErr error
 
+	// Second is the second execution's request, kept whole. It used to contribute
+	// only its decoded body, so the two runs were compared for EQUALITY and the
+	// per-execution expectation was merely ALLOWED when they differed -- which
+	// means a client hard-coding the first pass's value satisfied both. An
+	// exemption is not an assertion.
+	Second *Observation
+
 	// NullWitness is the same decode against a body whose nullable properties are
 	// all null, and NullWitnessErr the error it produced. A nullable property that
 	// comes back as something other than null is one the model cannot represent as
@@ -193,10 +200,13 @@ func (rec *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 // side proves what the client sends, and the response side proves that what the
 // contract describes still fits the models the client decodes into.
 //
-// Twice, with different path values, because one execution only says what the
-// client did with one input. Two do not prove a route is invariant -- nothing
-// short of reading every branch would -- but they catch a route that varies with
-// the value, which one execution cannot.
+// Twice, with different path values and different boolean witnesses, because one
+// execution only says what the client did with one input. Two do not prove a route
+// is invariant -- nothing short of reading every branch would -- but they catch a
+// route that varies with the value, which one execution cannot. Each execution is
+// held to its OWN expected values rather than merely compared with the other: the
+// comparison alone was an exemption, and a client hard-coding one pass's value
+// satisfied it on both.
 func RunConformance(vendored map[string]*Spec, cov *Coverage, drivers []Driver) (*Conformance, error) {
 	rows := cov.ByKey()
 	conf := &Conformance{
@@ -264,6 +274,8 @@ func runSurface(spec *Spec, surface string, rows map[string]CoverageOperation, d
 		// The request side is the first pass's; the null witness's decoded value is
 		// carried alongside it, since that is the only thing the second pass is for.
 		observation := seen[0]
+		second := seen[1]
+		observation.Second = &second
 		observation.NullWitness = seen[1].Decoded
 		observation.NullWitnessErr = seen[1].CallErr
 		conf.Observations[key] = observation
@@ -276,6 +288,18 @@ func runSurface(spec *Spec, surface string, rows map[string]CoverageOperation, d
 func requestDiff(a, b Observation) string {
 	if a.Key() != b.Key() {
 		return fmt.Sprintf("routes %q and %q", a.Key(), b.Key())
+	}
+	// The prefix, which this did not compare: a client that sent only its second
+	// execution to the wrong /api/<version> was invisible, because the prefix
+	// assertion downstream sees the first pass alone.
+	if a.Prefix != b.Prefix {
+		return fmt.Sprintf("prefixes %q and %q", a.Prefix, b.Prefix)
+	}
+	// And the call outcome. A second-pass failure was only consulted on ordinary
+	// model rows, so a composite or no-content operation could fail on its second
+	// witness with nothing said.
+	if (a.CallErr == nil) != (b.CallErr == nil) {
+		return fmt.Sprintf("one execution failed and the other did not: %v / %v", a.CallErr, b.CallErr)
 	}
 	if d := diffStringMaps("query parameter", a.Query, b.Query); d != "" {
 		return d

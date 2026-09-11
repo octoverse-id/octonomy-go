@@ -220,8 +220,8 @@ check reports every one of those as green. So the gate compares:
 | **Query parameters** | per operation, by `in` + name, with `required` and the parameter's schema — *and*, in both directions, against what that operation's method actually puts on the wire |
 | **Responses** | per operation, per status, including request bodies |
 | **Schemas** | `components.schemas`, property by property, including the `required` set |
-| **Response models** | the client decodes a body built **from** the vendored schema; the gate compares every property's value, and reports what did not survive the round trip |
-| **Model field names** | each response model's Go field against the property it decodes — the one defect a round trip cannot see, since the same tags decode and re-encode |
+| **Response models** | the client decodes a body built **from** the vendored schema, on both surfaces; every documented property must survive with its value, and the list envelope's pagination block with it. The reverse direction — a field the model decodes that nothing documents — is v2-authoritative, since v1's schemas omit the namespace axis |
+| **Model field names** | each response model's Go field against the property it decodes — the one defect a round trip cannot see, since the same tags decode and re-encode. It reaches the models no success schema names, too: `Pagination`, the three composite results, `HealthStatus` |
 | **Routes** | each inventory row against the request its method actually issued, on both surfaces |
 | **Error codes** | `server_error_codes` in the inventory against this SDK's `Code*` constants offline, and against the server's `octonomy/core/errors.py` on the schedule — both directions on both hops |
 
@@ -239,8 +239,9 @@ recording transport that answers with a body **synthesized from the vendored sch
 the answer: route, query parameters, headers and request body, **names and values**, compared with
 that surface's contract in **both** directions and with no inference in any of it.
 
-Values are comparable because every scalar and array input has one canonical value, in a single table
-(`ExpectedValue` in `drivers.go`), and the gate requires the wire to carry exactly it. Most are the
+Values are comparable because every scalar and array input has a canonical value per execution, in a
+single table (`ExpectedValue` in `drivers.go`), and the gate requires each execution's wire to carry
+exactly its own. Most are the
 wire field's own name, which makes a misrouted value self-describing; the rest — numbers, booleans,
 an enum, the credentials — are listed explicitly. Booleans get a **pair** of values, one per
 execution: there are three boolean axes on a tag list and only two values, so one run can never tell
@@ -266,12 +267,16 @@ That is the deliberate trade — a driver that names the wrong method reports th
 first run, a driver that stops compiling is a build failure, and an operation with no driver is a
 finding. A driver that is merely *wrong* — nil params, a missing option, a swapped argument, a hard-coded
 value, a duplicate entry, one that never reaches the wire or reaches it twice, or one whose two
-executions disagree — fails the same way a broken client would, because every value is compared
-against the table and both executions are compared in full.
+executions disagree — fails the same way a broken client would, because each execution is held to its
+own expected values rather than merely compared with the other. That distinction is the whole point:
+comparing the two runs and *allowing* the declared difference is an exemption, and a client
+hard-coding one pass's value satisfies it on both.
 
 What it does **not** cover: options the contract does not document (`WithActor`, `WithRequestID`)
 have no documented counterpart to compare against, and free-form values (`metadata`) constrain
-nothing.
+nothing. Two booleans whose relationship is inverted rather than crossed — `include_shared =
+!is_active` — still carry every expected name and value on both executions; telling that apart needs
+the truth table, and this is representative coverage, not exhaustive.
 
 **What a passing decode does and does not prove.** Each operation is driven twice: once with every
 property populated, once with every `nullable` property set to `null`. Together those prove the model
@@ -302,8 +307,11 @@ and `WithActor` / `WithRequestID` have no documented counterpart to compare agai
 **Everything the offline half compares is vendored, on purpose.** The two contracts, the error
 registry, the recorded server version: each has a copy in this repository, so each can be checked
 against the code on every pull request and against the server once a week. That is the shape that
-makes "the refresh landed but the code did not follow" impossible to sit on — the cross-repository
+makes "the refresh landed but the code did not follow" visible at all — the cross-repository
 comparison structurally cannot see it, because after a refresh both of its sides are the same file.
+What the offline half catches there is what the drivers exercise: a documented input the client does
+not send, a documented property it does not decode, a value it puts in the wrong place. A change to a
+part of the contract no driver touches is still a change nobody is asked about.
 
 ### Two modes, and why only one runs on a pull request
 

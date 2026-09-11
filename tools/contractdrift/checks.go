@@ -403,7 +403,16 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 						row.Key(), name))
 					continue
 				}
-				items = append(items, valueFindings(row.Key(), "query parameter", name, value, op.ParamSchema("query", name))...)
+				// BOTH executions, each against its OWN expectation. Comparing the
+				// two runs for equality and merely ALLOWING the declared pair when
+				// they differed was an exemption rather than an assertion: a client
+				// hard-coding one pass's value satisfied it on both.
+				items = append(items, valueFindings(row.Key(), "query parameter", name, value, 0, op.ParamSchema("query", name))...)
+				if second := observed.Second; second != nil {
+					if v, ok := second.Query[name]; ok {
+						items = append(items, valueFindings(row.Key(), "query parameter", name, v, 1, op.ParamSchema("query", name))...)
+					}
+				}
 			}
 			for _, name := range sortedStrings(observed.Query) {
 				if documented[name] {
@@ -460,128 +469,152 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 // recorded divergences, and comparing them against the spec would report the
 // divergence as drift on every run.
 func checkResponseModels(in Inputs, r *Report) {
-	const surface = "v2"
-	spec := in.Vendored[surface]
-	ops, err := strippedOperations(spec, surface)
-	if err != nil {
-		return // reported by checkSurfaceParity
-	}
 	undocumented := in.Coverage.UndocumentedFieldIndex()
 	used := map[string]bool{}
 	var items []string
 
-	for _, row := range in.Coverage.Operations {
-		if row.Unimplemented != "" {
-			continue
+	// BOTH surfaces for the FORWARD direction -- every documented property has to
+	// survive decoding -- because an unknown JSON property decodes without error,
+	// so merely calling the v1 method proves nothing about its fields. A review
+	// added a v1-only property to the staged Tag schema, the v1 stub sent it, the
+	// model dropped it, and the report stayed clean.
+	//
+	// The REVERSE direction stays v2-authoritative: v1's schemas omit the
+	// namespace_type / namespace_id every model carries, so asking v1 to account
+	// for them would report the namespace axis as undocumented on every row.
+	for _, surface := range surfaces {
+		spec := in.Vendored[surface]
+		ops, err := strippedOperations(spec, surface)
+		if err != nil {
+			continue // reported by checkSurfaceParity
 		}
-		if row.ActualResponse != "list-envelope" && row.ActualResponse != "data-envelope" {
-			continue
-		}
-		op, ok := ops[row.Key()]
-		if !ok || op.OKModel == "" {
-			continue
-		}
-		observed, ok := in.Conformance.Observations[surface+" "+row.Key()]
-		if !ok || observed.CallErr != nil {
-			continue // reported by checkImplementation
-		}
-		documented, ok := spec.SchemaProperties(op.OKModel)
-		switch {
-		case !ok:
-			items = append(items, fmt.Sprintf("`%s`: the contract's success body references schema `%s`, which components.schemas does not define", row.Key(), op.OKModel))
-			continue
-		case len(documented) == 0:
-			items = append(items, fmt.Sprintf("`%s`: schema `%s` documents no properties, so there is nothing to compare the decoded model against", row.Key(), op.OKModel))
-			continue
-		case len(observed.Decoded) == 0:
-			items = append(items, fmt.Sprintf("`%s`: the decoded response carried no fields at all -- a body built from schema `%s` went in and nothing came back out", row.Key(), op.OKModel))
-			continue
-		}
+		for _, row := range in.Coverage.Operations {
+			if row.Unimplemented != "" {
+				continue
+			}
+			if row.ActualResponse != "list-envelope" && row.ActualResponse != "data-envelope" {
+				continue
+			}
+			op, ok := ops[row.Key()]
+			if !ok || op.OKModel == "" {
+				continue
+			}
+			observed, ok := in.Conformance.Observations[surface+" "+row.Key()]
+			if !ok || observed.CallErr != nil {
+				continue // reported by checkImplementation
+			}
+			documented, ok := spec.SchemaProperties(op.OKModel)
+			switch {
+			case !ok:
+				items = append(items, fmt.Sprintf("`%s`: the contract's success body references schema `%s`, which components.schemas does not define", row.Key(), op.OKModel))
+				continue
+			case len(documented) == 0:
+				items = append(items, fmt.Sprintf("`%s`: schema `%s` documents no properties, so there is nothing to compare the decoded model against", row.Key(), op.OKModel))
+				continue
+			case len(observed.Decoded) == 0:
+				items = append(items, fmt.Sprintf("`%s`: the decoded response carried no fields at all -- a body built from schema `%s` went in and nothing came back out", row.Key(), op.OKModel))
+				continue
+			}
 
-		documentedSet := map[string]bool{}
-		for _, property := range documented {
-			documentedSet[property] = true
-			decoded, survived := observed.Decoded[property]
-			if survived {
-				// The VALUE, not just the key. The stub knows what it sent, so a
-				// model that puts one property's contents into another field --
-				// through a custom UnmarshalJSON, a post-decode assignment, or a
-				// composite decoder -- returns every key with the wrong data, and
-				// only comparing the pair says so.
-				if sent, ok := observed.Sent[property]; ok && !sameJSON(sent, decoded) {
-					items = append(items, fmt.Sprintf("schema `%s` sent `%s` as %s and `%s` returned %s -- the model is not putting it where it belongs",
-						op.OKModel, property, string(sent), row.SDK, string(decoded)))
+			// The list envelope, from the SENT side so absence is visible.
+			for _, field := range sortedFields(observed.Sent) {
+				if !strings.HasPrefix(field, "pagination.") {
+					continue
+				}
+				name := strings.TrimPrefix(field, "pagination.")
+				decoded, survived := observed.Decoded[field]
+				switch {
+				case !survived:
+					items = append(items, fmt.Sprintf("`%s`: the list envelope carries `%s` and `%s` decodes it away",
+						row.Key(), name, row.SDK))
+				case !containsJSON(observed.Sent[field], decoded):
+					items = append(items, fmt.Sprintf("`%s`: the list envelope sent `%s` as %s and `%s` returned %s",
+						row.Key(), name, string(observed.Sent[field]), row.SDK, string(decoded)))
 				}
 			}
-			if !survived {
-				items = append(items, fmt.Sprintf("schema `%s` documents `%s` and it does not survive decoding by `%s` -- the model has no field for it",
-					op.OKModel, property, row.SDK))
-			}
-		}
 
-		// The null witness. A property the contract marks nullable has to come back
-		// as null, not as the zero value the model fell back to -- `0` for an int
-		// where the contract now permits absence is the silent-zero failure this
-		// SDK refuses everywhere else, arriving through the contract rather than
-		// through a decoder.
-		if observed.NullWitnessErr != nil {
-			items = append(items, fmt.Sprintf("`%s`: `%s` could not decode a response whose nullable properties are null: %v",
-				row.Key(), row.SDK, observed.NullWitnessErr))
-			continue
-		}
-		for _, property := range nullableProperties(spec, op.OKModel) {
-			value, survived := observed.NullWitness[property]
-			if !survived {
-				// The field carries `omitempty`, so null came back as the zero
-				// value and the key was dropped entirely. Whether that is a
-				// problem depends on what the zero value IS, and the populated
-				// witness says: a field that marshals as an object or an array is
-				// a Go map or slice, whose nil is exactly the absent state; a
-				// field that marshals as a scalar has a zero value indistinguishable
-				// from a real one, and the null is lost.
-				//
-				// This was a silent pass until a review's own experiment walked
-				// into it -- the skip here read "already reported above", and
-				// above only reports what the POPULATED witness dropped.
-				if populated, ok := observed.Decoded[property]; ok && !isJSONContainer(populated) {
-					items = append(items, fmt.Sprintf("schema `%s` marks `%s` nullable and `%s` decodes null into a field that omits it -- a scalar with `omitempty` cannot tell an absent value from a zero one",
+			documentedSet := map[string]bool{}
+			for _, property := range documented {
+				documentedSet[property] = true
+				decoded, survived := observed.Decoded[property]
+				if survived {
+					// The VALUE, not just the key. The stub knows what it sent, so a
+					// model that puts one property's contents into another field --
+					// through a custom UnmarshalJSON, a post-decode assignment, or a
+					// composite decoder -- returns every key with the wrong data, and
+					// only comparing the pair says so.
+					if sent, ok := observed.Sent[property]; ok && !containsJSON(sent, decoded) {
+						items = append(items, fmt.Sprintf("schema `%s` sent `%s` as %s and `%s` returned %s -- the model is not putting it where it belongs",
+							op.OKModel, property, string(sent), row.SDK, string(decoded)))
+					}
+				}
+				if !survived {
+					items = append(items, fmt.Sprintf("schema `%s` documents `%s` and it does not survive decoding by `%s` -- the model has no field for it",
 						op.OKModel, property, row.SDK))
 				}
-				continue
 			}
-			if string(value) != "null" {
-				items = append(items, fmt.Sprintf("schema `%s` marks `%s` nullable and `%s` decodes null as `%s` -- the model cannot represent the absent state, so a null from the server reads as a value",
-					op.OKModel, property, row.SDK, string(value)))
-			}
-		}
-		for _, field := range sortedFields(observed.Decoded) {
-			if documentedSet[field] {
-				continue
-			}
-			// The pagination block belongs to the ENVELOPE, not to the resource
-			// schema -- the contract describes neither, which is the recorded
-			// divergence. Compared just below, against what the stub sent.
-			if strings.HasPrefix(field, "pagination.") {
-				sent, ok := observed.Sent[field]
-				switch {
-				case !ok:
-					continue
-				case !sameJSON(sent, observed.Decoded[field]):
-					items = append(items, fmt.Sprintf("`%s`: the list envelope sent `%s` as %s and `%s` returned %s",
-						row.Key(), strings.TrimPrefix(field, "pagination."), string(sent), row.SDK, string(observed.Decoded[field])))
-				}
-				continue
-			}
-			key := op.OKModel + "." + field
-			if _, ok := undocumented[key]; ok {
-				used[key] = true
-				continue
-			}
-			items = append(items, fmt.Sprintf("`%s` decodes `%s` into its model, which schema `%s` does not document -- the server withdrew it, or it belongs under undocumented_model_fields",
-				row.SDK, field, op.OKModel))
-		}
-	}
 
+			// The null witness. A property the contract marks nullable has to come back
+			// as null, not as the zero value the model fell back to -- `0` for an int
+			// where the contract now permits absence is the silent-zero failure this
+			// SDK refuses everywhere else, arriving through the contract rather than
+			// through a decoder.
+			if observed.NullWitnessErr != nil {
+				items = append(items, fmt.Sprintf("`%s`: `%s` could not decode a response whose nullable properties are null: %v",
+					row.Key(), row.SDK, observed.NullWitnessErr))
+				continue
+			}
+			for _, property := range nullableProperties(spec, op.OKModel) {
+				value, survived := observed.NullWitness[property]
+				if !survived {
+					// The field carries `omitempty`, so null came back as the zero
+					// value and the key was dropped entirely. Whether that is a
+					// problem depends on what the zero value IS, and the populated
+					// witness says: a field that marshals as an object or an array is
+					// a Go map or slice, whose nil is exactly the absent state; a
+					// field that marshals as a scalar has a zero value indistinguishable
+					// from a real one, and the null is lost.
+					//
+					// This was a silent pass until a review's own experiment walked
+					// into it -- the skip here read "already reported above", and
+					// above only reports what the POPULATED witness dropped.
+					if populated, ok := observed.Decoded[property]; ok && !isJSONContainer(populated) {
+						items = append(items, fmt.Sprintf("schema `%s` marks `%s` nullable and `%s` decodes null into a field that omits it -- a scalar with `omitempty` cannot tell an absent value from a zero one",
+							op.OKModel, property, row.SDK))
+					}
+					continue
+				}
+				if string(value) != "null" {
+					items = append(items, fmt.Sprintf("schema `%s` marks `%s` nullable and `%s` decodes null as `%s` -- the model cannot represent the absent state, so a null from the server reads as a value",
+						op.OKModel, property, row.SDK, string(value)))
+				}
+			}
+			if surface != "v2" {
+				continue // the reverse direction is v2-authoritative; see above
+			}
+			for _, field := range sortedFields(observed.Decoded) {
+				if documentedSet[field] {
+					continue
+				}
+				// The pagination block belongs to the ENVELOPE, not to the resource
+				// schema -- the contract describes neither, which is the recorded
+				// divergence. It is compared separately, below, from the SENT side:
+				// walking the decoded side alone could never notice a field the model
+				// dropped, because a dropped field is not there to walk.
+				if strings.HasPrefix(field, "pagination.") {
+					continue
+				}
+				key := op.OKModel + "." + field
+				if _, ok := undocumented[key]; ok {
+					used[key] = true
+					continue
+				}
+				items = append(items, fmt.Sprintf("`%s` decodes `%s` into its model, which schema `%s` does not document -- the server withdrew it, or it belongs under undocumented_model_fields",
+					row.SDK, field, op.OKModel))
+			}
+		}
+
+	}
 	for key := range undocumented {
 		if !used[key] {
 			items = append(items, fmt.Sprintf("`%s` is listed under undocumented_model_fields and is either documented now or no longer decoded -- drop the row", key))
@@ -944,7 +977,12 @@ func checkRequestShapes(in Inputs, r *Report) {
 					items = append(items, fmt.Sprintf("`%s` documents the header `%s` and the client did not send it", row.Key(), name))
 					continue
 				}
-				items = append(items, valueFindings(row.Key(), "header", canonical, value, op.ParamSchema("header", name))...)
+				items = append(items, valueFindings(row.Key(), "header", canonical, value, 0, op.ParamSchema("header", name))...)
+				if second := observed.Second; second != nil {
+					if v, ok := second.Headers[canonical]; ok {
+						items = append(items, valueFindings(row.Key(), "header", canonical, v, 1, op.ParamSchema("header", name))...)
+					}
+				}
 			}
 
 			// client_headers means EVERY versioned request, with the value the client was
@@ -966,6 +1004,12 @@ func checkRequestShapes(in Inputs, r *Report) {
 					if want := ExpectedValue(name, 0); value != want {
 						items = append(items, fmt.Sprintf("`%s`: the client was configured with %q and sent `%s: %s`",
 							row.Key(), want, name, value))
+					}
+					if second := observed.Second; second != nil {
+						if v, ok := second.Headers[name]; ok && v != ExpectedValue(name, 1) {
+							items = append(items, fmt.Sprintf("`%s`: on its second execution the client was configured with %q and sent `%s: %s`",
+								row.Key(), ExpectedValue(name, 1), name, v))
+						}
 					}
 				case !sent && versioned:
 					items = append(items, fmt.Sprintf("`%s` does not carry `%s`, which client_headers records as sent on every versioned request", row.Key(), name))
@@ -1026,7 +1070,12 @@ func checkRequestShapes(in Inputs, r *Report) {
 						row.Key(), op.RequestModel, property))
 					continue
 				}
-				items = append(items, jsonValueFindings(row.Key(), "body property", property, raw, spec.PropertySchema(op.RequestModel, property))...)
+				items = append(items, jsonValueFindings(row.Key(), "body property", property, raw, 0, spec.PropertySchema(op.RequestModel, property))...)
+				if second := observed.Second; second != nil {
+					if v, ok := second.Body[property]; ok {
+						items = append(items, jsonValueFindings(row.Key(), "body property", property, v, 1, spec.PropertySchema(op.RequestModel, property))...)
+					}
+				}
 			}
 			for _, property := range sortedFields(observed.Body) {
 				if !documentedSet[property] {
@@ -1108,17 +1157,17 @@ func checkRequestShapes(in Inputs, r *Report) {
 // The type check still runs on top, because a value can be exactly what the driver
 // sent and the CONTRACT can be the thing that moved: a parameter retyped upstream
 // leaves the client sending a perfectly correct string for a documented integer.
-func valueFindings(op, kind, name, value string, schema map[string]string) []string {
+func valueFindings(op, kind, name, value string, pass int, schema map[string]string) []string {
 	var items []string
-	if want := ExpectedValue(name, 0); value != want {
+	if want := ExpectedValue(name, pass); value != want {
 		// Where the value belongs to another field, say so: that names the defect
 		// rather than merely reporting a mismatch.
 		if origin, ok := sentinelOrigin(value); ok && !strings.EqualFold(origin, name) {
 			items = append(items, fmt.Sprintf("`%s`: the %s `%s` carries the value the driver supplied for `%s` -- the client is wiring one input to another's name",
 				op, kind, name, origin))
 		} else {
-			items = append(items, fmt.Sprintf("`%s`: the driver sent %q for the %s `%s` and the client put %q on the wire",
-				op, want, kind, name, value))
+			items = append(items, fmt.Sprintf("`%s`: on execution %d the driver sent %q for the %s `%s` and the client put %q on the wire",
+				op, pass+1, want, kind, name, value))
 		}
 		return items
 	}
@@ -1131,7 +1180,7 @@ func valueFindings(op, kind, name, value string, schema map[string]string) []str
 
 // jsonValueFindings is the same for a request-body property, whose value arrives
 // as JSON rather than as a string.
-func jsonValueFindings(op, kind, name string, raw json.RawMessage, schema map[string]string) []string {
+func jsonValueFindings(op, kind, name string, raw json.RawMessage, pass int, schema map[string]string) []string {
 	// An array is compared WHOLE. Recursing over the elements that remain let an
 	// emptied array through, since there was then nothing left to disagree with.
 	var elements []json.RawMessage
@@ -1140,19 +1189,19 @@ func jsonValueFindings(op, kind, name string, raw json.RawMessage, schema map[st
 			return []string{fmt.Sprintf("`%s`: the driver sent one element for the %s `%s` and the client put %d on the wire",
 				op, kind, name, len(elements))}
 		}
-		return jsonValueFindings(op, kind, name, elements[0], itemSchema(schema))
+		return jsonValueFindings(op, kind, name, elements[0], pass, itemSchema(schema))
 	}
 
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		return valueFindings(op, kind, name, text, schema)
+		return valueFindings(op, kind, name, text, pass, schema)
 	}
 	// A free-form object -- `metadata`, which the contract constrains in no way.
 	// Compared exactly all the same: the gate controls both sides, so a driver
 	// whose object stopped arriving intact was otherwise invisible.
 	var object map[string]any
 	if err := json.Unmarshal(raw, &object); err == nil {
-		want, _ := json.Marshal(map[string]any{ExpectedValue(name, 0): "value"})
+		want, _ := json.Marshal(map[string]any{ExpectedValue(name, pass): "value"})
 		if !sameJSON(want, raw) {
 			return []string{fmt.Sprintf("`%s`: the driver sent %s for the %s `%s` and the client put %s on the wire",
 				op, string(want), kind, name, string(raw))}
@@ -1247,13 +1296,61 @@ func checkCompositeResponses(in Inputs, r *Report) {
 			case !survived:
 				items = append(items, fmt.Sprintf("`%s`: the composite body carries `%s` and `%s` decodes it away",
 					row.Key(), property, row.SDK))
-			case !sameJSON(sent, decoded):
+			case !containsJSON(sent, decoded):
 				items = append(items, fmt.Sprintf("`%s`: the composite body sent `%s` as %s and `%s` returned %s",
 					row.Key(), property, string(sent), row.SDK, string(decoded)))
 			}
 		}
 	}
 	r.Add("Composite responses", items)
+}
+
+// containsJSON reports whether everything SENT survived in what came back.
+//
+// The forward direction, and it has to be containment rather than equality once
+// both surfaces are driven: v1's schemas omit the namespace_type / namespace_id
+// that every model carries, so a nested object decoded from a v1 body comes back
+// with two keys the body never had. Those are the reverse direction's business,
+// and the reverse direction is v2-authoritative.
+func containsJSON(sent, decoded json.RawMessage) bool {
+	var want, got any
+	if err := json.Unmarshal(sent, &want); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(decoded, &got); err != nil {
+		return false
+	}
+	return containsValue(want, got)
+}
+
+func containsValue(want, got any) bool {
+	switch want := want.(type) {
+	case map[string]any:
+		gotMap, ok := got.(map[string]any)
+		if !ok {
+			return false
+		}
+		for key, value := range want {
+			other, present := gotMap[key]
+			if !present || !containsValue(value, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		gotSlice, ok := got.([]any)
+		if !ok || len(gotSlice) != len(want) {
+			return false
+		}
+		for i := range want {
+			if !containsValue(want[i], gotSlice[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(want, got)
+	}
 }
 
 // sameJSON compares two encodings of the same value, ignoring formatting.
@@ -1293,10 +1390,22 @@ func checkModelFieldNames(in Inputs, r *Report) {
 	// other -- and, like any other, a pure tag swap on it is invisible to a round
 	// trip, which is the whole reason this check exists. It is not reachable from
 	// any operation's OKModel, so it is named here.
+	// The models no operation's success schema names, and which are therefore
+	// unreachable from the loop below: the list envelope's pagination block, the
+	// three composite results whose bodies the contract describes wrongly or not
+	// at all, and the health payload, which sits outside the API surface. A pure
+	// tag swap is invisible to a round trip on every one of them, which is exactly
+	// what this check is for -- and a review proved it by crossing two counters on
+	// BulkAssignResult and its wire struct together, which re-marshalled to the
+	// original bytes.
 	checked := map[string]bool{}
 	var items []string
-	items = append(items, fieldNameFindings(in.SDK, "Pagination")...)
-	checked["Pagination"] = true
+	for _, model := range []string{
+		"Pagination", "BulkAssignResult", "BulkRemoveResult", "ResourceReplaceResult", "HealthStatus",
+	} {
+		items = append(items, fieldNameFindings(in.SDK, model)...)
+		checked[model] = true
+	}
 
 	for _, row := range in.Coverage.Operations {
 		if row.Unimplemented != "" {

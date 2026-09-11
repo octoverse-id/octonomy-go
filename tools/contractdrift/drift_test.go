@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1914,17 +1915,38 @@ func TestSurfacesReachTheirOwnPrefix(t *testing.T) {
 	}
 }
 
-// TestBooleansAreDistinguishableAcrossExecutions: three boolean axes ride a tag
-// list and there are two values, so one execution can never tell them all apart.
-// Each gets a distinct PAIR across the two runs instead.
+// TestBooleansAreDistinguishableAcrossExecutions: two values cannot tell three
+// boolean axes apart in one execution, so each carries a distinct PAIR across the
+// two -- but only among the booleans that can ride the SAME request. The groups
+// come from the contract rather than from a list here, so a new boolean parameter
+// on an existing operation is checked the day it arrives.
 func TestBooleansAreDistinguishableAcrossExecutions(t *testing.T) {
-	seen := map[[2]string]string{}
-	for _, name := range []string{"include_global", "include_shared", "is_active", "include_inactive"} {
-		pattern := [2]string{ExpectedValue(name, 0), ExpectedValue(name, 1)}
-		if other, clash := seen[pattern]; clash {
-			t.Errorf("%q and %q carry the same pair %v; swapping them would change nothing", name, other, pattern)
+	in := load(t, repoRoot, "")
+	spec := in.Vendored["v2"]
+
+	groups := 0
+	for _, key := range sortedKeys(spec.Operations) {
+		op := spec.Operations[key]
+		patterns := map[[2]string]string{}
+		booleans := 0
+		for _, name := range op.QueryParams() {
+			if op.ParamSchema("query", name)["type"] != "boolean" {
+				continue
+			}
+			booleans++
+			pattern := [2]string{ExpectedValue(name, 0), ExpectedValue(name, 1)}
+			if other, clash := patterns[pattern]; clash {
+				t.Errorf("%s: %q and %q both carry %v, so swapping them would change nothing",
+					key, name, other, pattern)
+			}
+			patterns[pattern] = name
 		}
-		seen[pattern] = name
+		if booleans > 1 {
+			groups++
+		}
+	}
+	if groups == 0 {
+		t.Fatal("no operation documents more than one boolean; this test is asserting nothing")
 	}
 }
 
@@ -2020,22 +2042,141 @@ func TestFreeFormObjectValueIsCompared(t *testing.T) {
 	assertFinding(t, CheckLocal(in), "for the body property `metadata`")
 }
 
-// TestOneSourcePerInput: a list driver that passed both its params struct's
-// ApplicationID and WithApplication put the same value on the wire twice, so
-// either implementation path could break and the other covered for it.
-func TestOneSourcePerInput(t *testing.T) {
-	for _, driver := range Drivers() {
-		if driver.Op != "get /tags" {
-			continue
-		}
-		// The check is behavioural: removing the params emission must be visible.
-		in := load(t, repoRoot, "")
-		observed := in.Conformance.Observations["v2 get /tags"]
-		delete(observed.Query, "application_id")
-		in.Conformance.Observations["v2 get /tags"] = observed
-		assertFinding(t, CheckLocal(in),
-			"`get /tags` documents the query parameter `application_id` and the client did not send it")
-		return
+// TestListScopeContributesNoApplication is the one-source rule, tested where it
+// lives. The version of this a review found deleted `application_id` from a
+// recorded observation and asserted the ordinary missing-query checker reported
+// it -- which is a different test that stays green if ListScope regresses and
+// re-adds WithApplication, recreating the duplicate source it exists to prevent.
+func TestListScopeContributesNoApplication(t *testing.T) {
+	env := &Env{surface: "v2"}
+	if len(env.ListScope()) == 0 {
+		t.Fatal("ListScope contributes nothing at all")
 	}
-	t.Fatal("no driver for get /tags")
+	// The option list is opaque, so the check is behavioural: a client given only
+	// ListScope must put no application_id on the wire.
+	spec := loadSpecs(t)
+	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf, err := RunConformance(spec, cov, []Driver{{
+		Op:  "get /tags",
+		SDK: "TagService.List",
+		Call: func(ctx context.Context, env *Env) (any, error) {
+			// No params struct, so nothing else can supply it either.
+			return env.Client.Tags.List(ctx, nil, env.ListScope()...)
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := conf.Observations["v2 get /tags"]
+	if _, sent := observed.Query["application_id"]; sent {
+		t.Error("ListScope put application_id on the wire; the params struct is supposed to be its only source")
+	}
+	// And ReadScope, which is the one that should.
+	readEnv := &Env{surface: "v2"}
+	if len(readEnv.ReadScope()) <= len(env.ListScope()) {
+		t.Error("ReadScope does not add the application option ListScope omits")
+	}
+}
+
+// --- the seventh pass -------------------------------------------------------------
+
+// TestHardCodedPassValueIsReported is the review's BLOCKER: comparing the two
+// executions and ALLOWING the declared difference is an exemption, not an
+// assertion, so a client hard-coding one pass's value satisfied it on both.
+func TestHardCodedPassValueIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	second := *observed.Second
+	second.Query = map[string]string{}
+	for name, value := range observed.Second.Query {
+		second.Query[name] = value
+	}
+	// Both executions now carry the FIRST pass's value.
+	second.Query["include_shared"] = observed.Query["include_shared"]
+	observed.Second = &second
+	in.Conformance.Observations["v2 get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"on execution 2 the driver sent \"false\" for the query parameter `include_shared` and the client put \"true\" on the wire")
+}
+
+// TestSecondExecutionPrefixIsCompared: the prefix assertion downstream sees the
+// first pass only, so a client sending just its second execution to the wrong
+// /api/<version> was invisible.
+func TestSecondExecutionPrefixIsCompared(t *testing.T) {
+	a := Observation{Method: "get", Path: "/tags", Prefix: "/api/v2"}
+	b := Observation{Method: "get", Path: "/tags", Prefix: "/api/v1"}
+	if diff := requestDiff(a, b); !strings.Contains(diff, "prefixes") {
+		t.Errorf("a differing prefix was not reported: %q", diff)
+	}
+}
+
+// TestSecondExecutionFailureIsCompared: a second-pass error was consulted only on
+// ordinary model rows, so a composite or no-content operation could fail on its
+// second witness with nothing said.
+func TestSecondExecutionFailureIsCompared(t *testing.T) {
+	a := Observation{Method: "post", Path: "/tags"}
+	b := Observation{Method: "post", Path: "/tags", CallErr: errSecondPass}
+	if diff := requestDiff(a, b); !strings.Contains(diff, "one execution failed") {
+		t.Errorf("a second-execution failure was not reported: %q", diff)
+	}
+}
+
+var errSecondPass = errors.New("the second execution failed")
+
+// TestEveryBooleanExercisesBothValues: `include_inactive` had the pattern
+// {false,false}, so the only value it ever sent was the one it defaults to and
+// the opt-in was never exercised at all.
+func TestEveryBooleanExercisesBothValues(t *testing.T) {
+	for _, name := range []string{"include_shared", "is_active", "include_inactive"} {
+		if ExpectedValue(name, 0) == ExpectedValue(name, 1) {
+			t.Errorf("%q carries %q on both executions; one of its two values is never sent",
+				name, ExpectedValue(name, 0))
+		}
+	}
+}
+
+// TestDroppedPaginationFieldIsReported: the pagination comparison walked the
+// DECODED side, which can never notice a field the model dropped -- a dropped
+// field is not there to walk.
+func TestDroppedPaginationFieldIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	delete(observed.Decoded, "pagination.count")
+	in.Conformance.Observations["v2 get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"the list envelope carries `count` and `TagService.List` decodes it away")
+}
+
+// TestV1OnlyResponsePropertyIsReported: an unknown JSON property decodes without
+// error, so merely calling the v1 method proved nothing about its fields. The
+// forward comparison runs on both surfaces now.
+func TestV1OnlyResponsePropertyIsReported(t *testing.T) {
+	repo := stageRepo(t)
+	editTagSchema(t, filepath.Join(repo, "docs", "openapi.yaml"),
+		"      properties:\n",
+		"      properties:\n        v1_only_colour:\n          type: string\n")
+
+	assertFinding(t, runLocal(t, repo), "v1_only_colour")
+}
+
+// TestCompositeModelsReachTheFieldNameCheck: the composite result structs are
+// named by no success schema, so the check that catches a round-trip-invariant tag
+// swap never reached them.
+func TestCompositeModelsReachTheFieldNameCheck(t *testing.T) {
+	in := load(t, repoRoot, "")
+	for _, model := range []string{"BulkAssignResult", "BulkRemoveResult", "ResourceReplaceResult", "Pagination", "HealthStatus"} {
+		fields, ok := in.SDK.ModelFields(model)
+		if !ok || len(fields) == 0 {
+			t.Errorf("%s is not reachable by the field-name check", model)
+		}
+	}
+	// And the check really rejects a crossed pair on one of them.
+	if items := fieldNameFindings(in.SDK, "BulkAssignResult"); len(items) != 0 {
+		t.Errorf("the real model reported findings: %v", items)
+	}
 }

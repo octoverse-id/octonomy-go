@@ -27,10 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     **synthesized from the vendored schema**. The request is what it compares against the contract —
     route, query parameters, headers, and request-body properties, **names and values**, in both
     directions, on **both REST surfaces**. Values are comparable because every scalar and array input has
-    one canonical value the wire must carry exactly, so a parameter retyped in the contract, a params struct wiring
+    a canonical value per execution that the wire must carry exactly, so a parameter retyped in the contract, a params struct wiring
     one input to another's name, two JSON tags swapped on a write model, the two namespace headers
-    crossed, a hard-coded value, two swapped integers or booleans, an emptied array and a wrong
-    credential are each reported — every one of which keeps all the right names in place. The response is what it decodes,
+    crossed, a value hard-coded to what one execution expects, two swapped integers or booleans, an
+    emptied array and a wrong credential are each reported — every one of which keeps all the right names in place. The response is what it decodes,
     twice: once with every property populated and once with every `nullable` property null, so a field
     the model lacks, a type it cannot read, and a nullable state it cannot hold are all reported. And
     because a JSON round trip structurally cannot see two response tags swapped — the same tags decode

@@ -46,8 +46,8 @@ stays a faithful, ergonomic client.
 - **A new endpoint needs three things, and the gate fails until it has all three:** the method, a row
   in `docs/contract-coverage.yaml`, and a driver in `tools/contractdrift/drivers.go` calling it with
   every documented parameter, property and header populated. The driver is what proves the method
-  sends what the contract documents — names *and* values, since every scalar and array input has one
-  canonical value the wire must carry exactly — on both REST surfaces. A row with no driver is an operation nobody
+  sends what the contract documents — names *and* values, since every scalar and array input has a
+  canonical value per execution that the wire must carry exactly — on both REST surfaces. A row with no driver is an operation nobody
   exercises.
 - Methods take `context.Context` first and accept variadic `...RequestOption` last.
 - **Scoping is the transport's job, not each resource's.** `WithNamespace`, `WithGlobalNamespace`,

@@ -311,8 +311,8 @@ func Drivers() []Driver {
 
 // --- expected values ---------------------------------------------------------------
 //
-// Every input a driver supplies has ONE canonical value, and the gate requires the
-// wire to carry exactly it. Not "a value that looks like a sentinel for something
+// Every input a driver supplies has a canonical value PER EXECUTION, and the gate
+// requires each execution's wire to carry exactly its own. Not "a value that looks like a sentinel for something
 // else" -- that was the previous rule, and a review walked through it six ways: a
 // hard-coded string passed because it no longer looked like a sentinel at all;
 // `limit` and `offset` swapped because both parse as integers; two booleans
@@ -362,11 +362,16 @@ var constrainedValues = map[string]string{
 // Two executions give four patterns, which is enough. `include_global` is fixed:
 // WithIncludeGlobal sends only "true", so it takes TT and the others take the
 // three remaining patterns.
+// Distinctness is only required among booleans that can ride the SAME request, so
+// `include_inactive` reuses a pattern rather than taking the leftover {false,
+// false} -- which would have meant the only value it ever sent was the one it
+// defaults to, never exercising the opt-in at all. It appears on the resource-tag
+// list, which carries no `include_shared` and no `is_active`.
 var booleanPatterns = map[string][2]bool{
 	"include_global":   {true, true},
 	"include_shared":   {true, false},
 	"is_active":        {false, true},
-	"include_inactive": {false, false},
+	"include_inactive": {true, false},
 }
 
 // ExpectedValue is the value the wire must carry for a documented input, on a

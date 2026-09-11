@@ -58,8 +58,10 @@
 //	                   route around.
 //
 // Each operation is driven FOUR times: both REST surfaces, and on each, two
-// executions with different path values and different response witnesses. The two
-// executions on a surface must agree in everything but the path.
+// executions with different path values and different response witnesses. Each
+// execution must carry its own expected values; the two agree in everything except
+// the path and the inputs whose expectation is declared to differ by execution --
+// the booleans, which two values cannot otherwise tell apart.
 //
 // Fetching is deliberately NOT this program's job. scripts/contract-fetch.sh
 // does it, and this reads plain files -- which is what makes a synthetic
