@@ -13,9 +13,11 @@ option.
 > Every resource group the vendored contracts publish is implemented — see
 > [Implemented resources](#implemented-resources). Once the tag is published, `go get` on the `/v2`
 > path resolves it without naming a version, since Go prefers a prerelease when no stable release of
-> that major exists; until then it resolves a pseudo-version off `main`. The
-> [releases page](https://github.com/octoverse-id/octonomy-go/releases) is the authority on which it
-> is — a version bump lands with the release PR and the tag follows it.
+> that major exists; until then it resolves a pseudo-version off `main`. **The git tag is what
+> publishes a Go module** — the GitHub release is a separate step that can lag it, so the releases
+> page can show nothing for a version that already installs. The proxy query in
+> [versioning.md](docs/versioning.md#release-state) is what settles whether this one is fetchable
+> yet; a version bump lands with the release PR and the tag follows it.
 >
 > The `-alpha.N` suffix comes off at **API freeze**, not at an endpoint count, so until then a
 > necessary breaking change may ride an alpha bump. The **compat** line is released separately:

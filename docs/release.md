@@ -173,8 +173,9 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
    and carries a dated CHANGELOG heading, so between the merge and step 7 the branch describes a
    version that cannot yet be fetched. Keep the window to minutes, and keep the prose honest about
    what creates a release: **pushing the tag is the release**, so status text on the branch should
-   point at the releases page or the proxy rather than asserting a tag it cannot see. If step 7 is
-   going to be delayed, say so on the PR.
+   point at the tag or the proxy query rather than asserting a tag it cannot see. Not at the
+   releases page: step 7 pushes the tag *before* `gh release create`, so a module can be fetchable
+   while that page still shows nothing. If step 7 is going to be delayed, say so on the PR.
 7. **Tag the merge commit on `BASE`:**
    ```bash
    git switch BASE && git pull
@@ -190,9 +191,11 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
    and version*, so without the flag the release is published as an ordinary one and GitHub can label
    it **Latest** — exactly the stability claim a prerelease exists to avoid making. It does not
    affect module resolution, which reads the git tag and not the GitHub release; what it changes is
-   what a human reading the releases page concludes, and `README.md` sends them there to find out
-   whether a version is live. `v1.0.0` needed none of this, so this is the first release the flag
-   applies to.
+   what a human reading the releases page concludes. That page answers "what did the maintainers
+   publish and how did they label it", never "can I fetch this version" — the tag push on the line
+   above has already settled that, and the proxy query in [versioning.md](versioning.md#release-state)
+   is what reports it. `v1.0.0` needed none of this, so this is the first release the flag applies
+   to.
 8. **Verify** the module is resolvable at the path for this line:
    ```bash
    GOPROXY=proxy.golang.org go list -m MODULE@TAG
