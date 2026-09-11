@@ -34,6 +34,38 @@ A tool installed with `go install` lands in `$(go env GOPATH)/bin`, which is not
 default here. If `require-tools` reports a binary you believe you have installed, that is the first
 thing to check.
 
+**Cut the release on a patched Go toolchain.** `vuln` now really runs, and `govulncheck` reports
+standard-library advisories against **the Go it resolves** — which is the point, since scanning with a
+newer standard library than the one under test would hide exactly what the scan is for (the `vuln` job
+in [`ci.yml`](../.github/workflows/ci.yml) explains the same distinction from the other side). So a
+local Go a few patch releases behind fails the gate on findings that have nothing to do with this code
+and that CI, resolving a current patch, does not see. Check both lines before you start:
+
+```bash
+go version                 # a current 1.25.x patch, not a months-old version-manager pin
+govulncheck -version       # its `Go:` line is the one that counts, and it can disagree with the above
+```
+
+In source mode `govulncheck` takes the scanned standard library from the `go` **it** resolves —
+`GOVERSION` in its environment, else `go env GOVERSION` — so ordinarily putting a patched `go` first
+on `PATH` is all it takes, and the two lines agree. The toolchain that *built* the scanner does not
+enter into it.
+
+What breaks that is a version manager's **shim**. A `govulncheck` reached through one (asdf, for
+instance) is re-execed with the manager's selected Go, so the scan uses *that* standard library no
+matter how you ordered `PATH`, and `govulncheck -version` says so while `go version` disagrees. Fix
+it by pointing the version manager at the patched toolchain, or by calling a non-shimmed binary:
+
+```bash
+GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest   # lands in $(go env GOPATH)/bin
+$(go env GOPATH)/bin/govulncheck -version                              # must agree with `go version`
+```
+
+Verified both ways here: one and the same binary reports `Go: go1.25.14` or `Go: go1.25.4` purely by
+which toolchain leads `PATH`, and reports the manager's pick when reached through its shim.
+`GOTOOLCHAIN=auto` above covers *building* the scanner only, exactly as in CI. This is a
+local-environment problem, never a reason to change anything in the repository.
+
 CI installs both tools and runs them as separate jobs; that remains the enforcement of record, and
 this gate is the fast local pre-check for it.
 
@@ -136,15 +168,34 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
    refresh the link definitions at the bottom.
 5. **Run the gate:** `make release-check`.
 6. **Open the release PR targeting `BASE`** — *not* necessarily `main`. Get it reviewed and merged.
+
+   **Push the tag as soon as it merges.** The merged tree already names the release in `version.go`
+   and carries a dated CHANGELOG heading, so between the merge and step 7 the branch describes a
+   version that cannot yet be fetched. Keep the window to minutes, and keep the prose honest about
+   what creates a release: **pushing the tag is the release**, so status text on the branch should
+   point at the tag or the proxy query rather than asserting a tag it cannot see. Not at the
+   releases page: step 7 pushes the tag *before* `gh release create`, so a module can be fetchable
+   while that page still shows nothing. If step 7 is going to be delayed, say so on the PR.
 7. **Tag the merge commit on `BASE`:**
    ```bash
    git switch BASE && git pull
    head -1 go.mod                       # last chance: must match MODULE
    git tag -a TAG -m TAG
    git push origin TAG
-   gh release create TAG --title TAG --notes-from-tag
+   gh release create TAG --title TAG --notes-from-tag        # --prerelease if TAG has a suffix
    ```
    Go modules require the `v` prefix on the tag, which is why `TAG` and `VERSION` are separate here.
+
+   **Pass `--prerelease` whenever `TAG` carries a prerelease suffix** — `-alpha.N`, `-beta.N`,
+   `-rc.N`. `gh` does not infer it from the tag, and `--latest` defaults to *automatic based on date
+   and version*, so without the flag the release is published as an ordinary one and GitHub can label
+   it **Latest** — exactly the stability claim a prerelease exists to avoid making. It does not
+   affect module resolution, which reads the git tag and not the GitHub release; what it changes is
+   what a human reading the releases page concludes. That page answers "what did the maintainers
+   publish and how did they label it", never "can I fetch this version" — the tag push on the line
+   above has already settled that, and the proxy query in [versioning.md](versioning.md#release-state)
+   is what reports it. `v1.0.0` needed none of this, so this is the first release the flag applies
+   to.
 8. **Verify** the module is resolvable at the path for this line:
    ```bash
    GOPROXY=proxy.golang.org go list -m MODULE@TAG

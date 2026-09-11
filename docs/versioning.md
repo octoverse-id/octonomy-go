@@ -70,47 +70,61 @@ prerelease suffix is **not** resource coverage — counting endpoints says nothi
 has stopped moving. It is: no further breaking changes intended, real-server integration green, docs
 current, and one release candidate validated.
 
-**No `v2` tag exists yet at all**, prerelease or otherwise, so
-`go get github.com/octoverse-id/octonomy-go/v2` currently resolves a **pseudo-version** off the
-default branch. Once `v2.0.0-alpha.1` is tagged ([#29](https://github.com/octoverse-id/octonomy-go/issues/29))
-it resolves the highest prerelease, and adoption works normally without anyone naming a version:
-`go get` prefers a prerelease when no stable release of that major exists.
+**`v2.0.0-alpha.1` is the first `v2` version**, cut in
+[#29](https://github.com/octoverse-id/octonomy-go/issues/29). Once its tag is pushed,
+`go get github.com/octoverse-id/octonomy-go/v2` resolves the highest prerelease rather than a
+pseudo-version off the default branch, and adoption works normally without anyone naming a version:
+`go get` prefers a prerelease when no stable release of that major exists. That stops being automatic
+the moment a stable `v2.0.0` ships: from then on a fresh `go get` resolves the stable release, and
+reaching a prerelease means naming it. One exception worth knowing — a module *already* required at a
+prerelease can be moved to a newer prerelease by a plain `go get -u`, without anyone naming it.
+
+The version bump lands with the release PR and the tag follows it ([release.md](release.md) steps 6
+and 7), so `version.go` naming a version is not on its own proof that the version is fetchable. The
+proxy query below is.
 
 ## Release state
 
 | Line | Latest tag | State |
 | ---- | ---------- | ----- |
 | **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` (2026-08-26) | Released. Frozen — security fixes only, sunset 2027-08-31 |
-| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | *none yet* | `v2.0.0-alpha.1` is unreleased ([#29](https://github.com/octoverse-id/octonomy-go/issues/29)) |
+| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.1` | First release ([#29](https://github.com/octoverse-id/octonomy-go/issues/29)); prerelease until API freeze. Its tag follows the release PR — the proxy check below says whether it is live yet |
 
-**There is no published `v0.x`.** `CHANGELOG.md` carries a `## [0.1.0]` heading describing an early
-state of the tree, but that release was never cut — see the note under that heading. Checkable, and
-worth re-checking rather than trusting:
+**There is no published `v0.x`, and never was.** The `## [0.1.0]` heading `CHANGELOG.md` used to
+carry described an early state of the tree, not a release; its contents are now filed under
+`v2.0.0-alpha.1`, where they were actually published for the first time. That is what made adopting
+the `/v2` module path free — no import path was in the wild to break.
+
+Checkable, and worth re-checking rather than trusting. Each line's tags live under its own path:
 
 ```console
 $ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octoverse-id/octonomy-go/@v/list
-v1.0.0
+v1.0.0                                      # the compat line, and no v0.x above or below it
 [HTTP 200]
 $ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octoverse-id/octonomy-go/v2/@v/list
-                                            # no rows: no TAGGED /v2 release exists
-[HTTP 200]
+v2.0.0-alpha.1                              # listed once the tag is pushed -- until then this comes
+[HTTP 200]                                  # back with no rows, and the proxy fetches on first ask
 ```
 
 Read that for what it is: the proxy's **current** view of **tagged** versions. `@v/list` deliberately
-omits pseudo-versions, so an empty list means "nothing is released", not "nothing resolves" — a
-`go get` on the `/v2` path still resolves the default branch to a pseudo-version, as noted above.
-Keep `-w` on the command, too: a bare `curl -s` renders a network failure as the same blank output a
-genuinely empty list produces, which is how this kind of evidence turns into a false claim.
+omits pseudo-versions, so an empty list means "nothing is released", not "nothing resolves". Keep
+`-w` on the command, too: a bare `curl -s` renders a network failure as the same blank output a
+genuinely empty list produces, which is how this kind of evidence turns into a false claim. The
+authoritative check for a release you just cut is step 8 of [release.md](release.md),
+`go list -m MODULE@TAG`, which fails loudly on a tag placed on the wrong branch.
 
-That is what made adopting the `/v2` module path free, since no import path was in the wild to break.
-
-> **`version.go` does not agree with that yet, and should not.** The `Version` constant on `main`
-> still reads `0.1.0`, so the default User-Agent is `octonomy-go/0.1.0`. It is a **placeholder left
-> from before anything was released**, kept to match the historical `## [0.1.0]` CHANGELOG heading,
-> and no tag anywhere corresponds to it — `v1.0.0` belongs to the other module. The first `/v2`
-> release PR replaces it, since `version.go` is bumped there and nowhere else (see
-> [Where this shows up](#where-this-shows-up)); from that point on the constant names the most recent
-> release of *this* line until the next release PR moves it.
+> **What `version.go` says, and what it does not.** The `Version` constant reads `2.0.0-alpha.1` —
+> the version this tree was cut as, and the one its tag carries once [release.md](release.md) step 7
+> pushes it — so the default User-Agent is `octonomy-go/2.0.0-alpha.1`. It moves **only** in a release
+> PR (see [Where this shows up](#where-this-shows-up)), which is what keeps it meaningful, and it
+> names this line's latest release from the moment that tag is live until the next release PR moves
+> it again. What it is **not** is evidence that the version is fetchable: the bump lands one step
+> before the tag, so a tree can name a version the proxy has never heard of. The query above settles
+> that; this constant cannot. It read `0.1.0` until this release: a **placeholder left from before
+> anything was released**, matching a CHANGELOG heading for a version that was never cut. A
+> User-Agent of `octonomy-go/0.1.0` in a server log therefore identifies **no release**: it is some
+> pre-release state of the tree, reached by pseudo-version, checkout, `replace`, or a vendored copy,
+> and it does not say which. `Config.UserAgent` can override the string entirely, too.
 
 **Why the tag history looks odd.** `v1.0.0` is not an ancestor of `main`. It sits on
 `support/go1.13`, whose `go.mod` declares the **unsuffixed** module path, while `main` declares

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-alpha.1] - 2026-09-11
+
+**The first published release of the modern line** (`main`, module
+`github.com/octoverse-id/octonomy-go/v2`), and the first **tagged** version at the `/v2` path — until
+this tag, `go get` there resolved a pseudo-version off the default branch, which is a resolvable
+version too, just not a released one.
+
+No `0.x` of either line was ever released, so this entry covers everything in the tree: the original
+`/api/v1` client, the server 3.1.x upgrade that made `/api/v2` the default surface, the remaining six
+resource groups, and the pre-release fixes. The `### BREAKING` and `### Changed` sections below
+describe deltas against the **untagged** tree and against the `1.x` compat line, since no consumer can
+have been running an earlier *released* version of this module. Untagged is not the same as
+uninstallable, though: `go get` on the `/v2` path resolved a **pseudo-version** off the default
+branch, so anyone tracking `main` that way has been running some earlier state of this tree, and these
+entries are written for them too.
+
+**It is a prerelease on purpose.** A bare `v2.0.0` would promise SemVer stability this API does not
+have yet, and the first break would force a `/v3` path migration. The gate for dropping the
+`-alpha.N` suffix is API freeze — no further breaking changes intended, real-server integration
+green, docs current, one release candidate validated — not endpoint count, which is already complete.
+
 ### BREAKING
 - **The default REST surface is now `/api/v2`.** `Config.APIVersion` selects it and defaults to
   `APIV2`, the server's primary advertised surface; the client previously targeted `/api/v1`
@@ -59,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `NamespaceType` / `NamespaceID` on `Tag` and `Vocabulary` — decode-only, nil on a global row and on
   every `/api/v1` response. All **seven** v2 schemas that carry namespace identity now have them:
   the five remaining (`TagAlias`, `Assignment`, `TagResource`, `ResourceTag`, `AuditLog`) landed with
-  their resources later in this same unreleased set (see [`docs/roadmap.md`](docs/roadmap.md)).
+  their resources later in this same release (see [`docs/roadmap.md`](docs/roadmap.md)).
 - Error codes and helpers for the namespace surface: `namespace_not_supported`, `namespace_invalid`,
   `namespaced_writes_disabled`, `namespace_api_disabled`, `ambiguous_resolution`, each with an `Is*`
   helper. `namespaced_writes_disabled` and `namespace_api_disabled` are **operator** states — rollout
@@ -439,7 +460,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the literal `ord%209`. `doRaw` now sets both halves of the path pair through `Client.resolvePath`,
   so each segment is escaped exactly once.
 
-  Harmless while every path segment was a uuid, which is why it survived since the first release. It
+  Harmless while every path segment was a uuid, which is why it survived from the original client. It
   stopped being harmless at `/resources/{resource_type}/{resource_id}`: a resource id is a
   **caller-chosen external identifier** the server validates only as non-blank, and `ReplaceTags` is
   destructive — so a wrong id silently replaced the tag set of a resource the caller never named.
@@ -627,12 +648,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The library "adds no retry loop of its own"**, stated that way rather than as "never retries":
   `net/http`'s transport already retries a request it failed to write on a *reused* connection, which
   is recovery from a half-closed idle socket rather than a retry policy.
-- **`version.go`'s `0.1.0` is disclosed as a pre-release placeholder** rather than left to surprise.
-  The `Version` constant on `main` still reads `0.1.0`, so the default User-Agent is
-  `octonomy-go/0.1.0`. No tag anywhere corresponds to it — `v1.0.0` belongs to the other module — and
-  the first `/v2` release PR replaces it, since `version.go` is bumped there and nowhere else. The
-  claim that no `v0.x` was published is now backed by a re-runnable `proxy.golang.org` query rather
-  than by assertion, framed as the proxy's current set of tag-resolvable versions.
+- **`version.go` names this release**, and the `0.1.0` that preceded it is on the record as what it
+  was. That constant sat in the tree as a placeholder from before anything was released, making the
+  default User-Agent `octonomy-go/0.1.0` with no tag anywhere corresponding to it; the documentation
+  truth pass disclosed it rather than leaving it to surprise, and this release PR replaces it, since
+  `version.go` is bumped there and nowhere else. The default User-Agent is now
+  `octonomy-go/2.0.0-alpha.1`. The claim that no `v0.x` was published is backed by a re-runnable
+  `proxy.golang.org` query rather than by assertion, framed as the proxy's current set of
+  tag-resolvable versions.
 - **The "two response envelopes" framing is corrected where it implied a closed set.**
   `docs/architecture.md` said the envelopes *are* the deliberate divergences; the two bulk-assignment
   responses and the resource-tag replace are three more, and `docs/api.md` — which carries the
@@ -649,17 +672,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PR template now checks the base branch against the line and the no-version-bump rule, and both
   templates cite `openapi-v2.yaml` alongside `openapi.yaml`.
 
-## [0.1.0] - 2026-06-08
+### Added (the original client, carried in from the never-released tree)
 
-> **Never released.** No `v0.1.0` git tag was ever cut and the module proxy has never served this
-> version, so nothing below was ever installable. The entry is kept because it accurately describes
-> the code in the tree; the version label is corrected when the first real releases are cut
-> (`v1.0.0` on the compat line, `v2.0.0-alpha.1` here) in their dedicated release PRs.
+The initial contents of the SDK, targeting the stable Octonomy REST **v1** API at server contract
+`1.0.0`, served under `/api/v1`. Dependency-free — standard library only. This section was previously
+filed under a `## [0.1.0] - 2026-06-08` heading describing a release that was never cut; the label is
+corrected here, per #24 and #29, rather than left implying an installable version that never existed.
+Everything in it ships for the first time in `v2.0.0-alpha.1`, reshaped by the entries above — most
+of all the default surface, which is now `/api/v2`.
 
-Initial contents of the Octonomy Go SDK. Targets the stable Octonomy REST **v1** API
-(server release `1.0.0`, served under `/api/v1`). Dependency-free (standard library only).
-
-### Added
 - Client foundation: `New(Config)` with `BaseURL`/`Token`/`TenantID` validation, a configurable
   `*http.Client`, and a shared transport that sets `Authorization`, `X-Tenant-ID`, optional
   `X-Actor-ID`, `Accept`, and `User-Agent` headers.
@@ -672,8 +693,12 @@ Initial contents of the Octonomy Go SDK. Targets the stable Octonomy REST **v1**
 - `WithActor` per-request option, and `String`/`Bool`/`Int` pointer helpers for optional fields.
 - Runnable `examples/quickstart` program and a vendored `docs/openapi.yaml` contract reference.
 
-[Unreleased]: https://github.com/octoverse-id/octonomy-go/commits/main
+[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.1...main
+[2.0.0-alpha.1]: https://github.com/octoverse-id/octonomy-go/releases/tag/v2.0.0-alpha.1
 
-<!-- No [0.1.0] link definition: that tag does not exist. Both this and the former
-     compare/v0.1.0...HEAD link returned 404 because they referenced a release never cut.
-     Real link definitions land with the first release PRs. -->
+<!-- Both links point at THIS line. The compat line is a different module with its own
+     versions and its own copy of this file on support/go1.13, so a link to v1.0.0 from
+     here would compare a consumer of /v2 against code they cannot install.
+     There is still no [0.1.0] link definition, because that tag does not exist: the
+     section it used to head is now filed under this release, where its contents were
+     actually published for the first time. -->
