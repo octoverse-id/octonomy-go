@@ -21,10 +21,13 @@ import (
 // skip look identical from the outside, and that is precisely how this SDK sat
 // on a server 1.0.0 contract while the server shipped 3.1.0.
 //
-// Every row is asserted against the contracts AND against the Go sources, so a
-// row cannot drift into fiction: the gate derives each method's route, transport
-// helper, query parameters, and decoded model from the code itself and compares
-// them with what the row claims.
+// Most of what a row claims is asserted against the client itself, by CALLING it:
+// the route and prefix, the query parameters, headers and request-body properties,
+// and the decoded response -- names AND values, on both surfaces and both
+// executions. Nothing is derived from reading the SDK's source any more; that
+// analyzer is gone. Only declarations and struct tags are parsed, for the two
+// things a running client cannot show -- its error-code constants, and which field
+// a property lands in.
 type Coverage struct {
 	Path string `yaml:"-"`
 

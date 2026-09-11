@@ -110,7 +110,9 @@ func CheckLocal(in Inputs) *Report {
 	checkDocumentedResponses(in, r)
 	checkQueryParametersSent(in, r)
 	checkRequestShapes(in, r)
+	checkEmittedValues(in, r)
 	checkResponseModels(in, r)
+	checkDecodedValues(in, r)
 	checkCompositeResponses(in, r)
 	checkModelFieldNames(in, r)
 	checkErrorCodesImplemented(in, r)
@@ -918,6 +920,103 @@ func dedupe(items []string) []string {
 	return out
 }
 
+// checkEmittedValues holds EVERY value the client emitted to the value the driver
+// supplied for it, on both executions, whether or not the contract documents it.
+//
+// It is separate from the documented-input checks above because those walk the
+// CONTRACT and stop wherever an exception is recorded -- and two of those
+// exceptions were bypassing value validation entirely. A query parameter listed
+// under `undocumented_inputs` was accepted on sight, so v1 could send
+// `application_id=wrong-application` and be waved through; an operation with an
+// `undocumented_request_body` took an early continue, so the body-carrying DELETE
+// could send its tag id under `resource_type` with nothing said.
+//
+// A recorded divergence means the CONTRACT has nothing to compare against. It
+// never meant the DRIVER had nothing to compare against.
+func checkEmittedValues(in Inputs, r *Report) {
+	var items []string
+	for _, surface := range surfaces {
+		for _, row := range in.Coverage.Operations {
+			if row.Unimplemented != "" {
+				continue
+			}
+			observed, ok := in.Conformance.Observations[surface+" "+row.Key()]
+			if !ok {
+				continue // reported by checkImplementation
+			}
+			for pass, execution := range []*Observation{&observed, observed.Second} {
+				if execution == nil {
+					continue
+				}
+				for _, name := range sortedStrings(execution.Query) {
+					items = append(items, exactValueFindings(row.Key(), "query parameter", name, execution.Query[name], pass)...)
+				}
+				for _, name := range sortedStrings(execution.Headers) {
+					items = append(items, exactValueFindings(row.Key(), "header", name, execution.Headers[name], pass)...)
+				}
+				for _, name := range sortedFields(execution.Body) {
+					items = append(items, exactJSONFindings(row.Key(), "body property", name, execution.Body[name], pass)...)
+				}
+			}
+		}
+	}
+	r.Add("Emitted values", dedupe(items))
+}
+
+// exactValueFindings requires one emitted string to be exactly what the driver
+// supplied for that field on that execution.
+func exactValueFindings(op, kind, name, value string, pass int) []string {
+	want := ExpectedValue(name, pass)
+	if value == want {
+		return nil
+	}
+	if origin, ok := sentinelOrigin(value); ok && !strings.EqualFold(origin, name) {
+		return []string{fmt.Sprintf("`%s`: the %s `%s` carries the value the driver supplied for `%s` -- the client is wiring one input to another's name",
+			op, kind, name, origin)}
+	}
+	return []string{fmt.Sprintf("`%s`: on execution %d the driver sent %q for the %s `%s` and the client put %q on the wire",
+		op, pass+1, want, kind, name, value)}
+}
+
+// exactJSONFindings is the same for a value that arrives as JSON. Booleans and
+// numbers used to reach only a TYPE check here, which is how a request-body
+// boolean hard-coded to one execution's value passed on both.
+func exactJSONFindings(op, kind, name string, raw json.RawMessage, pass int) []string {
+	want := ExpectedValue(name, pass)
+
+	var elements []json.RawMessage
+	if err := json.Unmarshal(raw, &elements); err == nil {
+		if len(elements) != 1 {
+			return []string{fmt.Sprintf("`%s`: the driver sent one element for the %s `%s` and the client put %d on the wire",
+				op, kind, name, len(elements))}
+		}
+		return exactJSONFindings(op, kind, name, elements[0], pass)
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return exactValueFindings(op, kind, name, text, pass)
+	}
+
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err == nil {
+		expected, _ := json.Marshal(map[string]any{want: "value"})
+		if !sameJSON(expected, raw) {
+			return []string{fmt.Sprintf("`%s`: on execution %d the driver sent %s for the %s `%s` and the client put %s on the wire",
+				op, pass+1, string(expected), kind, name, string(raw))}
+		}
+		return nil
+	}
+
+	// A boolean or a number. The driver's value is held in the table as text, and
+	// `true` / `1` are already valid JSON, so it compares directly.
+	if !sameJSON(json.RawMessage(want), raw) {
+		return []string{fmt.Sprintf("`%s`: on execution %d the driver sent %s for the %s `%s` and the client put %s on the wire",
+			op, pass+1, want, kind, name, string(raw))}
+	}
+	return nil
+}
+
 // checkRequestShapes compares what the client PUT IN THE REQUEST with what the
 // operation documents: the JSON properties of its request schema, and its header
 // parameters.
@@ -1332,7 +1431,19 @@ func containsValue(want, got any) bool {
 		}
 		for key, value := range want {
 			other, present := gotMap[key]
-			if !present || !containsValue(value, other) {
+			if !present {
+				// A null that came back as an absent key is a field carrying
+				// `omitempty` whose zero value is nil -- a map, a slice, a pointer.
+				// Whether that is acceptable depends on what the zero value IS, and
+				// the null witness in checkResponseModels is what judges it, using
+				// the populated witness to tell a container from a scalar. Here it
+				// is simply not a missing value.
+				if value == nil {
+					continue
+				}
+				return false
+			}
+			if !containsValue(value, other) {
 				return false
 			}
 		}
@@ -1363,6 +1474,60 @@ func sameJSON(a, b json.RawMessage) bool {
 		return false
 	}
 	return reflect.DeepEqual(left, right)
+}
+
+// checkDecodedValues holds every decoded response to what the stub sent, on BOTH
+// surfaces and BOTH executions, for every shape including the ones the schema
+// comparison steps around.
+//
+// checkResponseModels walks the CONTRACT's properties, which means it stops
+// wherever the contract stops: it reads execution 1 only, it is v2-authoritative
+// in reverse, it skips the composites because their bodies are recorded rather
+// than documented, and it skips the health probes because they are outside the API
+// surface entirely. Each of those was a place a decoded value could be wrong with
+// nothing said -- a review cleared `Tag.Name` on the second execution alone,
+// cleared a composite counter on the v1 client alone, and replaced the health word
+// outright, and all three came back clean.
+//
+// This walks the STUB's side instead. Whatever it sent has to come back, whatever
+// the operation's shape and whichever execution it was.
+func checkDecodedValues(in Inputs, r *Report) {
+	var items []string
+	for _, surface := range surfaces {
+		for _, row := range in.Coverage.Operations {
+			if row.Unimplemented != "" || row.ActualResponse == "none" {
+				continue
+			}
+			observed, ok := in.Conformance.Observations[surface+" "+row.Key()]
+			if !ok {
+				continue // reported by checkImplementation
+			}
+			for pass, execution := range []*Observation{&observed, observed.Second} {
+				if execution == nil || execution.CallErr != nil {
+					continue // reported by checkImplementation
+				}
+				for _, property := range sortedFields(execution.Sent) {
+					decoded, survived := execution.Decoded[property]
+					// A null the model omits is the null witness's business, and it
+					// has the populated witness on hand to tell a container's nil
+					// from a scalar's zero. Saying anything here would be saying it
+					// with less information.
+					if !survived && string(execution.Sent[property]) == "null" {
+						continue
+					}
+					switch {
+					case !survived:
+						items = append(items, fmt.Sprintf("`%s` (%s, execution %d): the response carried `%s` and `%s` decoded it away",
+							row.Key(), surface, pass+1, property, row.SDK))
+					case !containsJSON(execution.Sent[property], decoded):
+						items = append(items, fmt.Sprintf("`%s` (%s, execution %d): the response sent `%s` as %s and `%s` returned %s",
+							row.Key(), surface, pass+1, property, string(execution.Sent[property]), row.SDK, string(decoded)))
+					}
+				}
+			}
+		}
+	}
+	r.Add("Decoded values", dedupe(items))
 }
 
 // checkModelFieldNames asserts each response model's Go field name matches the

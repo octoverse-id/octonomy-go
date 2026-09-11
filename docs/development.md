@@ -274,9 +274,17 @@ hard-coding one pass's value satisfies it on both.
 
 What it does **not** cover: options the contract does not document (`WithActor`, `WithRequestID`)
 have no documented counterpart to compare against, and free-form values (`metadata`) constrain
-nothing. Two booleans whose relationship is inverted rather than crossed — `include_shared =
-!is_active` — still carry every expected name and value on both executions; telling that apart needs
-the truth table, and this is representative coverage, not exhaustive.
+nothing.
+
+And the boundary that contains all of those: **exact comparison proves these executions, not that the
+SDK propagates arbitrary values.** A method that hard-codes a witness exactly — `limit=1`,
+`application_id="cd~application_id"` — emits every expected name and value on both surfaces and both
+executions and is still wrong for a real caller. So does a decoder hard-coded to the populated
+response, a one-element array handler that would break on two, behaviour conditional on a value other
+than the sentinels, and two booleans whose relationship is inverted rather than crossed
+(`include_shared = !is_active`). Distinguishing those needs the full input space; this is
+representative coverage, deliberately, and the integration smoke test is what exercises real values
+against a real server.
 
 **What a passing decode does and does not prove.** Each operation is driven twice: once with every
 property populated, once with every `nullable` property set to `null`. Together those prove the model

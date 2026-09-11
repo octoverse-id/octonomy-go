@@ -2166,17 +2166,116 @@ func TestV1OnlyResponsePropertyIsReported(t *testing.T) {
 
 // TestCompositeModelsReachTheFieldNameCheck: the composite result structs are
 // named by no success schema, so the check that catches a round-trip-invariant tag
-// swap never reached them.
+// swap did not reach them.
+//
+// It mutates a staged model and asserts through the real run. The version a review
+// found called fieldNameFindings directly, so removing BulkAssignResult from the
+// production list left it green -- which is the same disconnected-test mistake
+// this file made once before.
 func TestCompositeModelsReachTheFieldNameCheck(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "assignments.go"), "type BulkAssignResult struct {",
+		"\tCreated     int          `json:\"created\"`\n\tExisting    int          `json:\"existing\"`\n",
+		"\tCreated     int          `json:\"existing\"`\n\tExisting    int          `json:\"created\"`\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"model `BulkAssignResult`: the field `Created` decodes `existing`",
+		"model `BulkAssignResult`: the field `Existing` decodes `created`")
+}
+
+// TestUnreachableModelsAreNamed guards the list those models are named in: every
+// one has to resolve, or the check above silently covers nothing.
+func TestUnreachableModelsAreNamed(t *testing.T) {
 	in := load(t, repoRoot, "")
-	for _, model := range []string{"BulkAssignResult", "BulkRemoveResult", "ResourceReplaceResult", "Pagination", "HealthStatus"} {
+	for _, model := range []string{"Pagination", "BulkAssignResult", "BulkRemoveResult", "ResourceReplaceResult", "HealthStatus"} {
 		fields, ok := in.SDK.ModelFields(model)
 		if !ok || len(fields) == 0 {
 			t.Errorf("%s is not reachable by the field-name check", model)
 		}
 	}
-	// And the check really rejects a crossed pair on one of them.
-	if items := fieldNameFindings(in.SDK, "BulkAssignResult"); len(items) != 0 {
-		t.Errorf("the real model reported findings: %v", items)
+}
+
+// --- the eighth pass --------------------------------------------------------------
+
+// TestHardCodedBodyBooleanIsReported is the review's BLOCKER: JSON booleans and
+// numbers reached only a TYPE check, so a request-body boolean hard-coded to one
+// execution's value passed on both -- the seventh pass's defect again, through a
+// different channel.
+func TestHardCodedBodyBooleanIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 post /tags"]
+	second := *observed.Second
+	second.Body = map[string]json.RawMessage{}
+	for name, value := range observed.Second.Body {
+		second.Body[name] = value
 	}
+	second.Body["is_active"] = observed.Body["is_active"] // execution 1's value
+	observed.Second = &second
+	in.Conformance.Observations["v2 post /tags"] = observed
+
+	assertFinding(t, CheckLocal(in), "for the body property `is_active`")
+}
+
+// TestUndocumentedInputValueIsChecked: a recorded divergence means the CONTRACT
+// has nothing to compare against. It never meant the DRIVER had nothing to compare
+// against, and the exception used to skip the value entirely.
+func TestUndocumentedInputValueIsChecked(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v1 get /tags/{tag_id}"]
+	observed.Query["application_id"] = "wrong-application"
+	in.Conformance.Observations["v1 get /tags/{tag_id}"] = observed
+
+	assertFinding(t, CheckLocal(in), `the client put "wrong-application" on the wire`)
+}
+
+// TestUndocumentedRequestBodyValuesAreChecked: the body-carrying DELETE took an
+// early continue, so neither its field names nor their values were checked.
+func TestUndocumentedRequestBodyValuesAreChecked(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 delete /tag-assignments"]
+	observed.Body["resource_type"] = observed.Body["tag_id"]
+	in.Conformance.Observations["v2 delete /tag-assignments"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"the body property `resource_type` carries the value the driver supplied for `tag_id`")
+}
+
+// TestSecondExecutionResponseIsChecked: the forward response comparison read
+// execution 1 only, so a value corrupted on the second witness alone was invisible.
+func TestSecondExecutionResponseIsChecked(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags/{tag_id}"]
+	second := *observed.Second
+	second.Decoded = map[string]json.RawMessage{}
+	for name, value := range observed.Second.Decoded {
+		second.Decoded[name] = value
+	}
+	second.Decoded["name"] = json.RawMessage(`""`)
+	observed.Second = &second
+	in.Conformance.Observations["v2 get /tags/{tag_id}"] = observed
+
+	assertFinding(t, CheckLocal(in), "execution 2): the response sent `name`")
+}
+
+// TestV1CompositeResponseIsChecked: the composite comparison was pinned to v2, so
+// a counter cleared on the v1 client alone was invisible.
+func TestV1CompositeResponseIsChecked(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v1 post /tag-assignments/bulk-assign"]
+	observed.Decoded["created"] = json.RawMessage(`0`)
+	in.Conformance.Observations["v1 post /tag-assignments/bulk-assign"] = observed
+
+	assertFinding(t, CheckLocal(in), "(v1, execution 1): the response sent `created`")
+}
+
+// TestHealthResponseValueIsChecked: the probes sit outside the API surface, so
+// every schema-driven check stepped around them and the returned word was never
+// compared at all.
+func TestHealthResponseValueIsChecked(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /health/live"]
+	observed.Decoded["status"] = json.RawMessage(`"wrong-status"`)
+	in.Conformance.Observations["v2 get /health/live"] = observed
+
+	assertFinding(t, CheckLocal(in), "the response sent `status` as \"ok\"")
 }

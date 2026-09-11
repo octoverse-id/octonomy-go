@@ -47,7 +47,9 @@ stays a faithful, ergonomic client.
   in `docs/contract-coverage.yaml`, and a driver in `tools/contractdrift/drivers.go` calling it with
   every documented parameter, property and header populated. The driver is what proves the method
   sends what the contract documents — names *and* values, since every scalar and array input has a
-  canonical value per execution that the wire must carry exactly — on both REST surfaces. A row with no driver is an operation nobody
+  canonical value per execution that the wire must carry exactly — on both REST surfaces. It proves
+  those executions, not that the SDK propagates arbitrary values: a method hard-coding a witness
+  exactly still passes, which is why the smoke test exists. A row with no driver is an operation nobody
   exercises.
 - Methods take `context.Context` first and accept variadic `...RequestOption` last.
 - **Scoping is the transport's job, not each resource's.** `WithNamespace`, `WithGlobalNamespace`,
