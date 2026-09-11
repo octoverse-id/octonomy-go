@@ -38,7 +38,15 @@ var (
 	// NOT anchored to the start of a line, so a one-line class body --
 	// `class InlineError(DomainError): code = "inline"` -- is seen. `\b` is what
 	// keeps it off `error_code = ...`, where the underscore leaves no word boundary.
-	pyClassCodeRE = regexp.MustCompile(`(?m)\bcode\s*(?::[^=\n]*)?=\s*(.+)$`)
+	// `=([^=].*)$` and not `=\s*(.+)$`, because `if code == "first":` matched the
+	// first `=` of `==` and was reported as an unreadable assignment. Three
+	// ordinary comparisons in a handler produced three findings, and a scheduled
+	// job nobody reads catches nothing.
+	// `(?:^|:)` and not `\b`, because `\bcode` matched `response.code = "x"` -- an
+	// attribute on an unrelated object, read as a server error code that does not
+	// exist. A code is the first thing on its line, or it follows the colon of a
+	// one-line class body; nothing else is one.
+	pyClassCodeRE = regexp.MustCompile(`(?m)(?:^|:)\s*code\s*(?::[^=\n]*)?=([^=].*)$`)
 
 	// `error_response("not_found", ...)` in the DRF exception handler, capturing
 	// the first argument whatever it is.
@@ -51,16 +59,27 @@ var (
 	// the caller, since Go's regexp has no lookahead. It has to be filtered
 	// somewhere: reporting a function's own signature as an unreadable code is the
 	// kind of noise that teaches everyone to stop reading a scheduled job.
-	pyCallCodeRE = regexp.MustCompile(`(?m)^(.*?)error_response\s*\(\s*([^,\n]*)`)
+	// `[\s\\]*` before the paren covers both `error_response ("x", ...)` and a
+	// backslash line continuation, each of which is valid Python that matched
+	// nothing at all.
+	pyCallCodeRE = regexp.MustCompile(`(?m)^(.*?)error_response[\s\\]*\(\s*([^,\n]*)`)
 
-	// An argument that resolves to a DomainError's own `code` attribute, which the
+	// The argument spellings that resolve to a DomainError's own `code`, which the
 	// class pattern above has already read: the local `code` the DRF handler
 	// assigns, and `exc.code` / `error.code` on a raised domain error. Suppressed
-	// rather than reported, because the code it names IS in the extracted set --
+	// rather than reported, because the code each names IS in the extracted set --
 	// and reporting one line per variable spelling is a flood, not a diagnostic.
-	// The limit is worth knowing: a `.code` attribute on something that is not a
-	// DomainError would be suppressed here too.
-	pyResolvedCodeRE = regexp.MustCompile(`^(?:[A-Za-z_][A-Za-z0-9_]*\.)?code$`)
+	//
+	// An EXPLICIT list, not `<any identifier>.code`, which is what it was. That
+	// pattern suppressed `response.code` too -- a code this reader cannot see, on
+	// an object that is not a DomainError -- so an unreadable call was silently
+	// treated as one already accounted for. A spelling not listed here is reported,
+	// and the fix for a legitimate new one is to add it deliberately.
+	pyResolvedCodes = map[string]bool{
+		"code":       true,
+		"exc.code":   true,
+		"error.code": true,
+	}
 
 	// The machine-readable marker in docs/versioning.md.
 	versioningMarkerRE = regexp.MustCompile(`<!--\s*contract-version:\s*([0-9][^\s]*)\s*-->`)
@@ -109,7 +128,7 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 			codes[value] = true
 			return
 		}
-		if pyResolvedCodeRE.MatchString(trimPyExpr(rhs)) {
+		if pyResolvedCodes[trimPyExpr(rhs)] {
 			return // a DomainError's own code, already read from its class
 		}
 		if !seen[form] {
@@ -122,8 +141,11 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 		record("code = "+trimPyExpr(m[1]), m[1])
 	}
 	for _, m := range pyCallCodeRE.FindAllStringSubmatch(src, -1) {
-		if strings.Contains(m[1], "def ") {
-			continue // the function's own definition, not a call
+		// The function's own definition, not a call -- and matched on the LINE's
+		// shape rather than on the text containing "def " anywhere, which suppressed
+		// a real call on any line that happened to mention it.
+		if prefix := strings.TrimSpace(m[1]); prefix == "def" || strings.HasPrefix(prefix, "def ") {
+			continue
 		}
 		record("error_response("+trimPyExpr(m[2])+", ...)", m[2])
 	}

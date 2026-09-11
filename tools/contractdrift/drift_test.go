@@ -2874,9 +2874,49 @@ func TestAdjacentLiteralsAreReportedNotHalfRead(t *testing.T) {
 // reading a code already extracted from its class. One line per variable spelling
 // is a flood, not a diagnostic, and a scheduled job nobody reads catches nothing.
 func TestAliasesDoNotFloodTheUnreadableList(t *testing.T) {
-	_, unreadable := pyRegistry(t, "\ndef handler(exc):\n    code = exc.code\n    code = error.code\n    code = failure.code\n    return code\n")
+	_, unreadable := pyRegistry(t, "\ndef handler(exc):\n    code = exc.code\n    code = error.code\n    return code\n")
 	if len(unreadable) != 0 {
 		t.Errorf("ordinary aliases were reported as unreadable: %v", unreadable)
+	}
+}
+
+// TestUnrecognisedAliasIsReported is the other half of that rule. The suppression
+// used to be `<any identifier>.code`, which silently covered `response.code` --
+// an object that is not a DomainError, carrying a code this reader cannot see, so
+// an unreadable call was treated as one already accounted for. The list is
+// explicit now, and a spelling not on it is reported.
+func TestUnrecognisedAliasIsReported(t *testing.T) {
+	_, unreadable := pyRegistry(t, "\ndef handler(response):\n    return error_response(response.code, \"x\", {}, None, 400)\n")
+	if len(unreadable) == 0 {
+		t.Error("`response.code` was suppressed as if it were a DomainError's own code")
+	}
+}
+
+// TestEqualityIsNotAnAssignment: `if code == "first":` matched the first `=` of
+// `==`, so three ordinary comparisons in a handler produced three findings.
+func TestEqualityIsNotAnAssignment(t *testing.T) {
+	_, unreadable := pyRegistry(t, "\ndef handler(code):\n    if code == \"first\":\n        pass\n    if code == \"second\":\n        pass\n    return code\n")
+	if len(unreadable) != 0 {
+		t.Errorf("equality comparisons were read as assignments: %v", unreadable)
+	}
+}
+
+// TestContinuedCallIsRead: a backslash line continuation before the paren is
+// valid Python that matched nothing at all, so the code vanished.
+func TestContinuedCallIsRead(t *testing.T) {
+	codes, unreadable := pyRegistry(t, "\ndef handler(exc):\n    return error_response \\\n        (\"continued_call\", \"x\", {}, None, 400)\n")
+	if !codes["continued_call"] {
+		t.Errorf("a continued call was not read; unreadable=%v", unreadable)
+	}
+}
+
+// TestRealCallOnALineMentioningDefIsRead: the definition filter matched "def "
+// ANYWHERE in the text before the call, so a real call on any line that happened
+// to mention it was suppressed.
+func TestRealCallOnALineMentioningDefIsRead(t *testing.T) {
+	codes, unreadable := pyRegistry(t, "\ndef handler(exc):\n    if \"def \" in exc.message: return error_response(\"mentions_def\", \"x\", {}, None, 400)\n")
+	if !codes["mentions_def"] {
+		t.Errorf("a real call was suppressed as a definition; unreadable=%v", unreadable)
 	}
 }
 
@@ -2890,5 +2930,47 @@ func TestTheRealServerRegistryReadsCleanly(t *testing.T) {
 	}
 	if len(unreadable) != 0 {
 		t.Errorf("an ordinary registry produced %d unreadable findings: %v", len(unreadable), unreadable)
+	}
+}
+
+// TestAttributeAssignmentIsNotACode: `\bcode` matched `response.code = "x"` --
+// an attribute on an unrelated object, read as a server error code that does not
+// exist. A phantom code demands a Code* constant that must not exist.
+func TestAttributeAssignmentIsNotACode(t *testing.T) {
+	codes, _ := pyRegistry(t, "\ndef handler(response):\n    response.code = \"phantom_attribute\"\n    return response\n")
+	if codes["phantom_attribute"] {
+		t.Error("an attribute assignment on an unrelated object was read as a server code")
+	}
+}
+
+// TestOneLineClassBodyStillReads is the other side of that scoping: a code that
+// follows the colon of a one-line class body is still the first thing in its
+// statement, and tightening the pattern must not lose it.
+func TestOneLineClassBodyStillReads(t *testing.T) {
+	codes, unreadable := pyRegistry(t, "\nclass InlineError(DomainError): code = \"inline_oneliner\"\n")
+	if !codes["inline_oneliner"] {
+		t.Errorf("a one-line class body was lost; unreadable=%v", unreadable)
+	}
+}
+
+// TestSuppressedAliasesAreExactlyThese pins the extractor's one remaining silent
+// spot, so that it stays one and stays deliberate.
+//
+// `error_response(code, ...)` has to be suppressed: the server's handler assigns
+// `code = exc.code` and passes it, and reporting that every run is a flood. The
+// cost is that a `code` this reader cannot follow to a literal -- a loop
+// variable, say -- is suppressed with it, and a code introduced that way is
+// neither read nor reported. Distinguishing them needs dataflow, which a regexp
+// over Python does not have. It is bounded rather than closed: the list is
+// explicit, and this test fails if it grows.
+func TestSuppressedAliasesAreExactlyThese(t *testing.T) {
+	want := []string{"code", "error.code", "exc.code"}
+	var got []string
+	for spelling := range pyResolvedCodes {
+		got = append(got, spelling)
+	}
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the suppressed spellings are %v, not %v -- each one is a place a code can go unseen, so growing the list is a decision, not a detail", got, want)
 	}
 }

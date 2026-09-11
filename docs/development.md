@@ -239,6 +239,16 @@ the other way needs a table of initialisms, and a code whose initialism is missi
 report a correctly named constant as wrong. An exported rename is a release-gate question; this
 gate does not answer it.
 
+**What the registry reader can and cannot see.** It is a set of patterns over Python, not a parser,
+so it is built to leave no third outcome: every `code = …` and every `error_response(…)` it captures
+is read, recognised as an alias the server's own handler uses, or **reported as a spelling the gate
+cannot read**. Five review rounds' worth of shapes are pinned by tests — an escaped literal, two
+adjacent literals, a space or a line continuation before the paren, an equality mistaken for an
+assignment, an attribute on an unrelated object. One silent spot remains, deliberately: the handler
+does `code = exc.code` and passes `code`, so a bare `code` argument must be suppressed — and a
+`code` this reader cannot follow to a literal is suppressed with it. Telling those apart needs
+dataflow. The suppressed spellings are an explicit list of three, and a test fails if it grows.
+
 The error-code check needs that Python file because the contract cannot answer the question:
 `ErrorResponse` types `code` as a bare string, so every code the envelope can carry is invisible to a
 schema comparison. The registry is therefore **vendored into
