@@ -40,7 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`docs/contract-coverage.yaml`** is the new inventory: every published operation, each naming
     the Go method that implements it or carrying a written reason it does not. An operation missing
     from it fails the gate, which is what turns "not implemented" into a decision rather than an
-    oversight.
+    oversight. It also **vendors the server's error registry**, the way the two OpenAPI documents are
+    vendored and for the same reason — the codes are in neither contract, so without a copy here they
+    could only ever be checked with the network, leaving them the one item where "refresh now,
+    implement later" was still possible.
   - **The spec-versus-server envelope divergence is recorded, not suppressed.** Each row carries what
     the spec documents and what the server really returns; the recorded envelope is checked against
     the transport helper the method calls, and the documented one against the spec — so the gate stays

@@ -41,6 +41,15 @@ type Coverage struct {
 	// the contract's schema does not document, each with the reason it is there.
 	UndocumentedModelFields []UndocumentedField `yaml:"undocumented_model_fields"`
 
+	// ServerErrorCodes is the server's error registry, vendored the way the two
+	// contracts are -- and for the same reason. The registry is not in the OpenAPI
+	// documents (ErrorResponse types `code` as a bare string), so without a copy
+	// here the only comparison possible would be SDK-against-upstream, which runs
+	// weekly and needs the network. Vendoring it turns one unverifiable hop into
+	// two checked ones: this list against errors.go offline, and this list against
+	// the real registry on the schedule.
+	ServerErrorCodes []string `yaml:"server_error_codes"`
+
 	// SDKOnlyErrorCodes lists Code* constants that exist in errors.go with no
 	// counterpart in the server's error registry, each with the reason it is
 	// legitimate.
@@ -202,9 +211,23 @@ func LoadCoverage(path string) (*Coverage, error) {
 			return nil, fmt.Errorf("%s: undocumented_model_fields needs model, field, and reason on every row", path)
 		}
 	}
+	if len(cov.ServerErrorCodes) < minServerErrorCodes {
+		return nil, fmt.Errorf("%s: server_error_codes lists only %d codes (expected at least %d) -- the vendored registry is the offline half of the error-code check and an empty one checks nothing",
+			path, len(cov.ServerErrorCodes), minServerErrorCodes)
+	}
+	vendored := make(map[string]bool, len(cov.ServerErrorCodes))
+	for _, code := range cov.ServerErrorCodes {
+		if vendored[code] {
+			return nil, fmt.Errorf("%s: server_error_codes lists %q twice", path, code)
+		}
+		vendored[code] = true
+	}
 	for _, c := range cov.SDKOnlyErrorCodes {
 		if c.Code == "" || c.Reason == "" {
 			return nil, fmt.Errorf("%s: sdk_only_error_codes needs a code and a reason on every row", path)
+		}
+		if vendored[c.Code] {
+			return nil, fmt.Errorf("%s: %q is listed under both server_error_codes and sdk_only_error_codes -- it cannot be both the server's and the SDK's alone", path, c.Code)
 		}
 	}
 	return &cov, nil
@@ -233,6 +256,15 @@ func (c *Coverage) UndocumentedFieldIndex() map[string]string {
 	out := make(map[string]string, len(c.UndocumentedModelFields))
 	for _, f := range c.UndocumentedModelFields {
 		out[f.Key()] = f.Reason
+	}
+	return out
+}
+
+// ServerErrorCodeSet returns the vendored registry as a set.
+func (c *Coverage) ServerErrorCodeSet() map[string]bool {
+	out := make(map[string]bool, len(c.ServerErrorCodes))
+	for _, code := range c.ServerErrorCodes {
+		out[code] = true
 	}
 	return out
 }

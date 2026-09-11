@@ -222,11 +222,15 @@ check reports every one of those as green. So the gate compares:
 | **Schemas** | `components.schemas`, property by property, including the `required` set |
 | **Response models** | each schema against the Go struct the method decodes into, field by field |
 | **Routes** | each inventory row against the HTTP method, path, and transport helper its Go method actually uses |
-| **Error codes** | the server's registry in `octonomy/core/errors.py` against this SDK's `Code*` constants, both directions |
+| **Error codes** | `server_error_codes` in the inventory against this SDK's `Code*` constants offline, and against the server's `octonomy/core/errors.py` on the schedule — both directions on both hops |
 
 The error-code check needs that Python file because the contract cannot answer the question:
 `ErrorResponse` types `code` as a bare string, so every code the envelope can carry is invisible to a
-schema comparison.
+schema comparison. The registry is therefore **vendored into
+[`contract-coverage.yaml`](contract-coverage.yaml)**, exactly as the two OpenAPI documents are, so
+the SDK's constants can be checked against it without the network. Without that copy, error codes
+would have been the one item on this list where "refresh now, implement later" was still a state the
+repository could be left in.
 
 **The SDK side is read as Go, not as text.** `tools/contractdrift` parses the package with `go/parser`
 and derives, per method, the route it requests, the transport helper it decodes through, the query
@@ -236,6 +240,12 @@ above assertions about the code rather than about a table someone maintains besi
 what caught `q` and `slug` missing from `VocabularyListParams`
 ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)), which a comparison of parameter names
 against the whole package reported as implemented because `tags.go` sends both.
+
+**Everything the offline half compares is vendored, on purpose.** The two contracts, the error
+registry, the recorded server version: each has a copy in this repository, so each can be checked
+against the code on every pull request and against the server once a week. That is the shape that
+makes "the refresh landed but the code did not follow" impossible to sit on — the cross-repository
+comparison structurally cannot see it, because after a refresh both of its sides are the same file.
 
 ### Two modes, and why only one runs on a pull request
 

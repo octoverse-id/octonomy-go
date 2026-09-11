@@ -330,7 +330,7 @@ class VocabularyLockedError(ConflictError):
 `)
 
 	assertFinding(t, runFull(t, repoRoot, upstream),
-		"the server can return `vocabulary_locked` and errors.go has no constant for it")
+		"the server can return `vocabulary_locked`, which the vendored registry")
 }
 
 // TestDetectsWithdrawnErrorCode covers the other direction: a constant this SDK
@@ -341,21 +341,52 @@ func TestDetectsWithdrawnErrorCode(t *testing.T) {
 		strings.Replace(syntheticErrorsPy, `code = "scope_immutable"`, `code = "scope_frozen"`, 1))
 
 	assertFinding(t, runFull(t, repoRoot, upstream),
-		"`CodeScopeImmutable` (scope_immutable) is not in the server's error registry")
+		"the vendored registry lists `scope_immutable` and the server no longer raises it")
 }
 
-// TestSDKOnlyCodesAreNotFlagged guards the allowlist that keeps the check above
-// from firing every run on the two codes the server never sends.
+// TestSDKOnlyCodesAreNotFlagged guards the allowlist that keeps the offline check
+// from firing every run on the two codes the server never sends. It is the
+// OFFLINE check that judges them: errors.go is compared with the vendored
+// registry, and only that registry is compared with the server's.
 func TestSDKOnlyCodesAreNotFlagged(t *testing.T) {
-	in := load(t, repoRoot, stageUpstream(t))
+	in := load(t, repoRoot, "")
 	if len(in.Coverage.SDKOnlyErrorCodes) == 0 {
 		t.Fatal("no sdk_only_error_codes recorded -- this test is asserting nothing")
 	}
-	for _, item := range findings(CheckUpstream(in)) {
+	for _, item := range findings(CheckLocal(in)) {
 		if strings.Contains(item, "unexpected_status") || strings.Contains(item, "not_ready") {
 			t.Errorf("an allowlisted SDK-only code was reported: %s", item)
 		}
 	}
+}
+
+// TestUnlistedErrorCodeConstantFails is the offline half doing its job: a new
+// Code* constant that is in neither the vendored registry nor the SDK-only list
+// has no recorded provenance, and a code with no provenance is how a constant for
+// something the server never sends gets exported forever.
+func TestUnlistedErrorCodeConstantFails(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "errors.go"),
+		"const (",
+		"const (\n",
+		"const (\n\tCodeVocabularyLocked = \"vocabulary_locked\"\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`CodeVocabularyLocked` (vocabulary_locked) is in neither the vendored error registry nor sdk_only_error_codes")
+}
+
+// TestVendoredErrorCodeWithoutConstantFails is the other direction, and the one
+// that closes "refresh the registry, implement it later". Before the registry was
+// vendored this was only reachable weekly, with the network.
+func TestVendoredErrorCodeWithoutConstantFails(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
+		"\nserver_error_codes:\n",
+		"\nserver_error_codes:\n",
+		"\nserver_error_codes:\n  - vocabulary_locked\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`vocabulary_locked` is in the vendored error registry and errors.go declares no constant for it")
 }
 
 // TestDetectsAddedSchemaField covers "added or changed fields on models the SDK
@@ -940,7 +971,7 @@ class VocabularyLockedError(ConflictError):
 `)
 
 	assertFinding(t, runFull(t, repoRoot, upstream),
-		"the server can return `vocabulary_locked` and errors.go has no constant for it")
+		"the server can return `vocabulary_locked`, which the vendored registry")
 }
 
 // TestNonListParametersFailLoudly: a `parameters` key that is not a list would

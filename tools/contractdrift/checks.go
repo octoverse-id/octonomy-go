@@ -101,7 +101,7 @@ func CheckLocal(in Inputs) *Report {
 	checkDocumentedResponses(in, r)
 	checkQueryParametersSent(in, r)
 	checkResponseModels(in, r)
-	checkStaleAllowlists(in, r)
+	checkErrorCodesImplemented(in, r)
 	return r
 }
 
@@ -466,17 +466,37 @@ func checkResponseModels(in Inputs, r *Report) {
 	r.Add("Response models", dedupe(items))
 }
 
-// checkStaleAllowlists keeps sdk_only_error_codes pointed at constants that
-// exist. The rest of the error-code comparison needs the server's registry and
-// lives in checkErrorCodeDrift.
-func checkStaleAllowlists(in Inputs, r *Report) {
+// checkErrorCodesImplemented is the offline half of the error-code comparison:
+// the VENDORED registry in docs/contract-coverage.yaml against errors.go.
+//
+// It exists for the same reason the vendored contracts do. The codes are not in
+// the OpenAPI documents -- ErrorResponse types `code` as a bare string -- so
+// without a copy in the repository the only comparison possible would be
+// SDK-against-upstream, which needs the network and runs weekly. That would have
+// left error codes as the one item on issue #18's list where "refresh and
+// implement later" was still a state this repository could be left in.
+func checkErrorCodesImplemented(in Inputs, r *Report) {
+	vendored := in.Coverage.ServerErrorCodeSet()
+	allowed := in.Coverage.SDKOnlyCodeSet()
 	var items []string
-	for code := range in.Coverage.SDKOnlyCodeSet() {
+
+	for code := range vendored {
+		if _, ok := in.SDKCodes[code]; !ok {
+			items = append(items, fmt.Sprintf("`%s` is in the vendored error registry and errors.go declares no constant for it", code))
+		}
+	}
+	for code, constant := range in.SDKCodes {
+		if vendored[code] || allowed[code] != "" {
+			continue
+		}
+		items = append(items, fmt.Sprintf("`%s` (%s) is in neither the vendored error registry nor sdk_only_error_codes -- record which it is", constant, code))
+	}
+	for code := range allowed {
 		if _, ok := in.SDKCodes[code]; !ok {
 			items = append(items, fmt.Sprintf("`%s` is listed under sdk_only_error_codes and errors.go declares no constant for it -- drop the row", code))
 		}
 	}
-	r.Add("Error code allowlist", items)
+	r.Add("Error codes", items)
 }
 
 // --- upstream checks -----------------------------------------------------------
@@ -603,22 +623,22 @@ func checkSchemaDrift(in Inputs, r *Report) {
 // registry in the server's core/errors.py is the real list, which is why the
 // fetch pulls that file alongside the two contracts.
 func checkErrorCodeDrift(in Inputs, r *Report) {
-	allowed := in.Coverage.SDKOnlyCodeSet()
+	vendored := in.Coverage.ServerErrorCodeSet()
 	var items []string
+	// Vendored registry against the real one, in both directions -- the same shape
+	// as the contract comparison above it. The SDK's own constants are checked
+	// against the vendored copy offline (checkErrorCodesImplemented), so the two
+	// hops together say whether errors.go matches the server, and each hop names
+	// which side moved.
 	for code := range in.ServerCodes {
-		if _, ok := in.SDKCodes[code]; !ok {
-			items = append(items, fmt.Sprintf("the server can return `%s` and errors.go has no constant for it", code))
+		if !vendored[code] {
+			items = append(items, fmt.Sprintf("the server can return `%s`, which the vendored registry in %s does not list", code, in.Coverage.Path))
 		}
 	}
-	for code, constant := range in.SDKCodes {
-		if in.ServerCodes[code] {
-			continue
+	for code := range vendored {
+		if !in.ServerCodes[code] {
+			items = append(items, fmt.Sprintf("the vendored registry lists `%s` and the server no longer raises it -- drop it, and decide what the SDK's constant becomes", code))
 		}
-		if _, ok := allowed[code]; ok {
-			continue
-		}
-		items = append(items, fmt.Sprintf("`%s` (%s) is not in the server's error registry -- it was removed upstream, or it belongs under sdk_only_error_codes with a reason",
-			constant, code))
 	}
 	// A form the extractor cannot read is reported rather than passed over. The
 	// count floor in ServerErrorCodes catches a regexp that stopped matching

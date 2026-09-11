@@ -302,9 +302,36 @@ unsent_query_parameters:
 # Empty today: every field the models decode is documented.
 undocumented_model_fields: []
 
-# Code* constants in errors.go with no counterpart in the server's error registry
-# (octonomy/core/errors.py). Every other constant must appear there, and every code
-# the server can return must have a constant here — the gate checks both directions.
+# The server's error registry, vendored the way the two OpenAPI contracts are — and
+# for the same reason. These codes are not in the contracts: `ErrorResponse` types
+# `code` as a bare string, so a schema comparison cannot see a single one of them.
+# Without a copy here, the only possible check would be errors.go against the
+# server's own octonomy/core/errors.py, which needs the network and runs weekly —
+# leaving error codes as the one item on #18's list where "refresh now, implement
+# later" was still a state this repository could be left in.
+#
+# Vendoring turns one unverifiable hop into two checked ones: this list against
+# errors.go on every pull request, and this list against the real registry on the
+# schedule. Each hop names which side moved.
+server_error_codes:
+  - ambiguous_resolution
+  - application_mismatch
+  - authentication_required
+  - conflict
+  - forbidden
+  - inactive_tag
+  - namespace_api_disabled
+  - namespace_invalid
+  - namespace_not_supported
+  - namespaced_writes_disabled
+  - not_found
+  - scope_immutable
+  - tenant_mismatch
+  - validation_error
+
+# Code* constants in errors.go with no counterpart in the registry above. Every
+# other constant must appear there, and every code in it must have a constant —
+# the gate checks both directions, and refuses a code listed in both places.
 sdk_only_error_codes:
   - code: unexpected_status
     reason: >-
