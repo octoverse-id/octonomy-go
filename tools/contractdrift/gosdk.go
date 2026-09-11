@@ -5,7 +5,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"os"
+	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,7 +58,8 @@ type SDKPackage struct {
 	files   map[string]*ast.File // by base file name
 	methods map[string]*sdkMethod
 	structs map[string]*sdkStruct
-	consts  map[string]string // identifier -> its string value
+	funcs   map[string]*ast.FuncDecl // package-level functions, by name
+	consts  map[string]string        // identifier -> its string value
 }
 
 type sdkMethod struct {
@@ -87,34 +90,40 @@ type Route struct {
 }
 
 // LoadSDKPackage parses every non-test .go file in the SDK package directory.
+//
+// ParseFile per entry rather than parser.ParseDir, which is deprecated for being
+// blind to build tags. This reader is blind to them too -- but it reads one flat
+// directory of unconstrained sources, and a build-tagged non-test file appearing
+// there would be a change to the package's shape that the resource-file rules in
+// AGENTS.md do not allow. The one build-tagged file in the tree is
+// integration_test.go, excluded here with every other test: a query parameter set
+// only by a fixture is a parameter the client never sends.
 func LoadSDKPackage(root string) (*SDKPackage, error) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, root, func(info fs.FileInfo) bool {
-		// Tests are excluded deliberately: a parameter set only by a fixture is a
-		// parameter the client never sends.
-		return !strings.HasSuffix(info.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(root)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", root, err)
+		return nil, err
 	}
 
 	p := &SDKPackage{
 		Root:    root,
-		fset:    fset,
+		fset:    token.NewFileSet(),
 		files:   map[string]*ast.File{},
 		methods: map[string]*sdkMethod{},
 		structs: map[string]*sdkStruct{},
+		funcs:   map[string]*ast.FuncDecl{},
 		consts:  map[string]string{},
 	}
-	for name, pkg := range pkgs {
-		if strings.HasSuffix(name, "_test") {
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		for path, file := range pkg.Files {
-			base := path[strings.LastIndexByte(path, '/')+1:]
-			p.files[base] = file
-			p.index(base, file)
+		file, err := parser.ParseFile(p.fset, filepath.Join(root, name), nil, 0)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
 		}
+		p.files[name] = file
+		p.index(name, file)
 	}
 	if len(p.files) == 0 {
 		return nil, fmt.Errorf("%s: no Go sources -- is this the SDK repository root?", root)
@@ -127,6 +136,11 @@ func (p *SDKPackage) index(file string, f *ast.File) {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
 			if d.Recv == nil || len(d.Recv.List) == 0 {
+				// Package-level function. Indexed because a path helper is one:
+				// resourcePath builds the /resources/{}/{} prefix that three
+				// resource files share, and renderPath resolves it by reading its
+				// body rather than by hardcoding what it returns.
+				p.funcs[d.Name.Name] = d
 				continue
 			}
 			recv := receiverType(d.Recv.List[0].Type)
@@ -196,15 +210,20 @@ func (p *SDKPackage) routeOf(m *sdkMethod, scope map[string]string, depth int) (
 		return Route{}, fmt.Errorf("%s: gave up following calls looking for a transport helper", m.Name)
 	}
 
+	// EVERY transport call in the body, not the first one. A method that issues
+	// two different requests has no single route, and picking whichever the walk
+	// reached first would answer the inventory's question with something that is
+	// only sometimes true -- the silent wrong answer this derivation exists to
+	// rule out. Two calls that agree are fine (a retry, a branch that ends in the
+	// same request); two that disagree are a finding.
 	var (
-		route Route
-		found bool
-		perr  error
+		routes []Route
+		perr   error
 	)
 	ast.Inspect(m.Decl.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
-		if !ok || found {
-			return !found
+		if !ok || perr != nil {
+			return perr == nil
 		}
 		helper, model := helperCall(call)
 		if helper == "" {
@@ -228,15 +247,21 @@ func (p *SDKPackage) routeOf(m *sdkMethod, scope map[string]string, depth int) (
 			perr = fmt.Errorf("%s: %w", m.Name, err)
 			return false
 		}
-		route = Route{Method: strings.ToLower(method), Path: path, Helper: helper, Model: model}
-		found = true
-		return false
+		routes = append(routes, Route{Method: strings.ToLower(method), Path: path, Helper: helper, Model: model})
+		return true
 	})
 	if perr != nil {
 		return Route{}, perr
 	}
-	if found {
-		return route, nil
+	for _, other := range routes[min(len(routes), 1):] {
+		if other != routes[0] {
+			return Route{}, fmt.Errorf("%s: issues more than one request (%s %s via %s, and %s %s via %s); an inventory row names one operation",
+				m.Name, strings.ToUpper(routes[0].Method), routes[0].Path, routes[0].Helper,
+				strings.ToUpper(other.Method), other.Path, other.Helper)
+		}
+	}
+	if len(routes) > 0 {
+		return routes[0], nil
 	}
 
 	// One level of indirection, which is exactly what the health probes need:
@@ -586,18 +611,47 @@ func (p *SDKPackage) renderPathCall(call *ast.CallExpr, scope map[string]string)
 			return "{}", nil
 		}
 	case *ast.Ident:
-		// resourcePath(resourceType, resourceID, "/tags") -- the one path helper
-		// resources.go and audit.go share. Its first two arguments are escaped
-		// segments and its third is a literal suffix.
-		if fun.Name == "resourcePath" && len(call.Args) == 3 {
-			suffix, err := p.renderPath(call.Args[2], scope)
-			if err != nil {
-				return "", err
-			}
-			return "/resources/{}/{}" + suffix, nil
+		// A package-level path helper -- resourcePath, today, which three resource
+		// files share. Its body is rendered with its parameters bound to this
+		// call's arguments, rather than its result being hardcoded here: a
+		// hardcoded prefix would keep agreeing with the inventory after the helper
+		// itself changed, which is the silent-wrong-answer failure this whole
+		// derivation exists to avoid.
+		if decl, ok := p.funcs[fun.Name]; ok {
+			return p.renderPathFunc(decl, call, scope)
 		}
 	}
 	return "", fmt.Errorf("cannot read the request path from a call to %s", exprName(call.Fun))
+}
+
+// renderPathFunc renders a single-expression path helper with its parameters
+// bound to the caller's arguments.
+func (p *SDKPackage) renderPathFunc(decl *ast.FuncDecl, call *ast.CallExpr, scope map[string]string) (string, error) {
+	if decl.Body == nil || len(decl.Body.List) != 1 {
+		return "", fmt.Errorf("path helper %s is not a single return statement", decl.Name.Name)
+	}
+	ret, ok := decl.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return "", fmt.Errorf("path helper %s is not a single return statement", decl.Name.Name)
+	}
+
+	// Bind the helper's parameters to the caller's arguments. A parameter whose
+	// argument is not a string constant stays unbound, and renders as an escaped
+	// segment only if the helper itself escapes it -- which is what makes
+	// resourcePath's two ids come out as {} and its literal suffix come out whole.
+	inner := map[string]string{}
+	index := 0
+	for _, field := range decl.Type.Params.List {
+		for _, name := range field.Names {
+			if index < len(call.Args) {
+				if value, err := p.renderPath(call.Args[index], scope); err == nil {
+					inner[name.Name] = value
+				}
+			}
+			index++
+		}
+	}
+	return p.renderPath(ret.Results[0], inner)
 }
 
 // resolveString reads a string literal, or an identifier that names one.
@@ -624,70 +678,41 @@ func stringLit(expr ast.Expr) (string, bool) {
 	return value, true
 }
 
-// jsonName reads a field's JSON name from its struct tag, and reports whether
-// the field is excluded from JSON entirely.
+// jsonName reads a field's JSON name, and reports whether the field is excluded
+// from JSON entirely.
+//
+// An UNTAGGED exported field keeps its Go name, because that is what
+// encoding/json does with it. Returning "" there and skipping the field would
+// have made it invisible to the model comparison -- a field the SDK really
+// decodes, silently absent from the check that exists to notice fields.
 func jsonName(field *ast.Field) (name string, omitted bool) {
-	if field.Tag == nil {
-		if len(field.Names) == 1 {
-			return "", false
+	goName := ""
+	if len(field.Names) == 1 {
+		goName = field.Names[0].Name
+		if !field.Names[0].IsExported() {
+			return "", true // unexported: encoding/json never touches it
 		}
-		return "", false
+	}
+	if field.Tag == nil {
+		return goName, false
 	}
 	tag, ok := stringLit(field.Tag)
 	if !ok {
-		return "", false
+		return goName, false
 	}
-	value, ok := structTag(tag, "json")
+	value, ok := reflect.StructTag(tag).Lookup("json")
 	if !ok {
-		return "", false
+		return goName, false
 	}
 	first, _, _ := strings.Cut(value, ",")
-	if first == "-" {
+	switch first {
+	case "-":
 		return "", true
+	case "":
+		// `json:",omitempty"` names no key, so the Go name stands.
+		return goName, false
 	}
 	return first, false
-}
-
-// structTag reads one key out of a struct tag. It is reflect.StructTag.Get,
-// spelled out here so this file does not reach for reflect to parse text.
-func structTag(tag, key string) (string, bool) {
-	st := tag
-	for st != "" {
-		i := 0
-		for i < len(st) && st[i] == ' ' {
-			i++
-		}
-		st = st[i:]
-		i = 0
-		for i < len(st) && st[i] > ' ' && st[i] != ':' && st[i] != '"' {
-			i++
-		}
-		if i == 0 || i+1 >= len(st) || st[i] != ':' || st[i+1] != '"' {
-			return "", false
-		}
-		name := st[:i]
-		st = st[i+1:]
-		i = 1
-		for i < len(st) && st[i] != '"' {
-			if st[i] == '\\' {
-				i++
-			}
-			i++
-		}
-		if i >= len(st) {
-			return "", false
-		}
-		quoted := st[:i+1]
-		st = st[i+1:]
-		if name == key {
-			value, err := strconv.Unquote(quoted)
-			if err != nil {
-				return "", false
-			}
-			return value, true
-		}
-	}
-	return "", false
 }
 
 // receiverType names the type a method is declared on, pointer or not.

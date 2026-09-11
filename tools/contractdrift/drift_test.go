@@ -959,3 +959,47 @@ paths:
 		t.Fatal("an operation whose parameters are not a list was accepted")
 	}
 }
+
+// TestAmbiguousRouteFailsLoudly: a method that issues two different requests has
+// no single route, and answering the inventory with whichever the walk reached
+// first would be true only sometimes.
+func TestAmbiguousRouteFailsLoudly(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "tags.go"),
+		"func (s *TagService) Get(",
+		`return doData[Tag](ctx, s.client, http.MethodGet, "/tags/"+url.PathEscape(id), nil, nil, opts...)`,
+		`if id == "" {
+		return doData[Tag](ctx, s.client, http.MethodPost, "/vocabularies", nil, nil, opts...)
+	}
+	return doData[Tag](ctx, s.client, http.MethodGet, "/tags/"+url.PathEscape(id), nil, nil, opts...)`)
+
+	assertFinding(t, runLocal(t, repo), "issues more than one request")
+}
+
+// TestUntaggedExportedFieldIsCompared covers what encoding/json really does with
+// a field carrying no tag: it decodes under the Go name. Skipping it would hide a
+// field the SDK genuinely decodes from the check that exists to notice fields.
+func TestUntaggedExportedFieldIsCompared(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "tags.go"),
+		"type Tag struct {",
+		"type Tag struct {\n",
+		"type Tag struct {\n\tColour string\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"the Go model `Tag` decodes `Colour`, which schema `Tag` does not document")
+}
+
+// TestPathHelpersAreRenderedFromTheirBody: the /resources/{}/{} prefix is read out
+// of resourcePath rather than hardcoded, so a change to the helper moves the
+// derived route with it instead of leaving the gate agreeing with a stale string.
+func TestPathHelpersAreRenderedFromTheirBody(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "resources.go"),
+		"func resourcePath(",
+		`return "/resources/" + url.PathEscape(resourceType)`,
+		`return "/things/" + url.PathEscape(resourceType)`)
+
+	assertFinding(t, runLocal(t, repo),
+		"requests `/things/{}/{}/tags`, not `/resources/{}/{}/tags`")
+}

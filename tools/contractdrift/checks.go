@@ -253,6 +253,14 @@ func checkImplementation(in Inputs, r *Report) {
 			items = append(items, fmt.Sprintf("`%s`: `%s` decodes through %s, which yields `%s`, but the row records `%s`",
 				row.Key(), row.SDK, route.Helper, envelope, row.ActualResponse))
 		}
+		// A decoding helper whose type argument could not be read leaves the
+		// response-model comparison with nothing to compare -- which it would then
+		// skip in silence. Go can infer a type argument, so this is reachable
+		// without anyone doing anything wrong; it just has to be said out loud.
+		if decodes := route.Helper == "doData" || route.Helper == "doList"; decodes && route.Model == "" {
+			items = append(items, fmt.Sprintf("`%s`: cannot read the type `%s` decodes into -- write the type argument out (`%s[T](...)`) so the response model can be compared",
+				row.Key(), row.SDK, route.Helper))
+		}
 	}
 	r.Add("Implementation", items)
 }
@@ -372,6 +380,11 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 // own `doData[T]` / `doList[T]`, so it is what the code really does rather than
 // what a table says.
 //
+// The v2 contract is the reference, as it is everywhere else in this SDK: v1 has
+// no namespace axis, so its schemas omit the namespace_type / namespace_id fields
+// seven models carry, and comparing a Go model against v1 would report those as
+// undocumented on every run. Surface parity is checked separately.
+//
 // Only rows whose server shape is a plain resource take part. The composites --
 // bulk assign, bulk remove, the resource-tag replace -- decode into result structs
 // the contract does not describe (it claims a bare array, or nothing at all), and
@@ -401,11 +414,18 @@ func checkResponseModels(in Inputs, r *Report) {
 		}
 		route, err := in.SDK.Route(row.SDK)
 		if err != nil || route.Model == "" {
-			continue // reported by checkImplementation
+			continue // both reported by checkImplementation
 		}
 		documented, ok := spec.SchemaProperties(op.OKModel)
-		if !ok {
+		switch {
+		case !ok:
 			items = append(items, fmt.Sprintf("`%s`: the contract's success body references schema `%s`, which components.schemas does not define", row.Key(), op.OKModel))
+			continue
+		case len(documented) == 0:
+			// Said once, rather than reporting every field of the Go model as
+			// undocumented: a schema with no properties is a document this gate
+			// could not read, not a model with nothing in it.
+			items = append(items, fmt.Sprintf("`%s`: schema `%s` documents no properties, so there is nothing to compare `%s` against", row.Key(), op.OKModel, route.Model))
 			continue
 		}
 		decoded, ok := in.SDK.JSONFields(route.Model)
