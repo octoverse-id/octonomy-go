@@ -23,43 +23,41 @@ import (
 // is a hole in the comparison, and the run says so instead of quietly shrinking
 // the registry it compares against.
 var (
-	// `code = "not_found"` on a DomainError subclass, single or double quoted,
-	// with an optional type annotation (`code: str = "not_found"`).
+	// `code = <anything>` on a DomainError subclass, capturing the WHOLE
+	// right-hand side -- a plain literal, an alias, an f-string, a concatenation,
+	// whatever is there.
 	//
-	// ANY plain literal, not just lowercase snake case. The capture was
-	// `[a-z0-9_]+` while the unreadable-form detector accepted any string literal,
-	// so the two predicates disagreed and a code spelled `Brand_New_Thing` was
-	// "not a code" to one and "perfectly readable" to the other: neither extracted
-	// nor reported. A rename was worse -- the removal was reported and the new name
-	// was not mentioned at all.
+	// One pattern, not two. There used to be a narrow reader for the shapes this
+	// understands and a wide detector for the shapes it does not, and three review
+	// rounds running found codes that fell between them: a value the narrow one
+	// skipped and the wide one called readable vanished with no diagnostic at all.
+	// Two predicates that have to agree will eventually disagree. Now there is one
+	// capture and one predicate -- pyLiteralValue -- and every right-hand side is
+	// either read or reported, with no third outcome available.
 	//
-	// NOT anchored to the start of a line. It was, and a one-line class body --
-	// `class InlineError(DomainError): code = "inline"` -- was then invisible to
-	// this AND to the unreadable-form detector below, so a real code vanished from
-	// the comparison while the count floor stayed healthy. `\b` is what keeps it
-	// off `error_code = ...`, where the underscore leaves no word boundary.
-	pyClassCodeRE = regexp.MustCompile(`\bcode\s*(?::[^=\n]*)?=\s*["']([^"'\n]+)["']`)
+	// NOT anchored to the start of a line, so a one-line class body --
+	// `class InlineError(DomainError): code = "inline"` -- is seen. `\b` is what
+	// keeps it off `error_code = ...`, where the underscore leaves no word boundary.
+	pyClassCodeRE = regexp.MustCompile(`(?m)\bcode\s*(?::[^=\n]*)?=\s*(.+)$`)
 
-	// `error_response("not_found", ...)` in the DRF exception handler.
-	pyCallCodeRE = regexp.MustCompile(`error_response\(\s*["']([^"'\n]+)["']`)
-
-	// The same two shapes with anything other than a plain string literal where
-	// the code belongs: an enum member, a lookup, an f-string, a constant from
-	// somewhere else. Each match the two extractors above did not already account
-	// for is reported as a form the gate cannot read.
+	// `error_response("not_found", ...)` in the DRF exception handler, capturing
+	// the first argument whatever it is.
 	//
-	// `(?m)^(?:(?!def )...)` is not available here (Go's regexp has no lookahead),
-	// so the definition line -- `def error_response(code: str, ...)` -- is filtered
-	// by the caller instead. It has to be filtered somewhere: reporting a
-	// function's own signature as an unreadable code is the kind of noise that
-	// teaches everyone to stop reading a scheduled job's output.
-	pyClassCodeAnyRE = regexp.MustCompile(`(?m)\bcode\s*(?::[^=\n]*)?=\s*(.+)$`)
-	pyCallCodeAnyRE  = regexp.MustCompile(`(?m)^(.*?)error_response\(\s*([^,\s][^,]*)`)
+	// `\s*` before the paren because `error_response ("spaced", ...)` is valid
+	// Python and was matched by neither the old reader nor the old detector, so a
+	// code written that way disappeared while the count floor stayed healthy.
+	//
+	// The definition line -- `def error_response(code: str, ...)` -- is filtered by
+	// the caller, since Go's regexp has no lookahead. It has to be filtered
+	// somewhere: reporting a function's own signature as an unreadable code is the
+	// kind of noise that teaches everyone to stop reading a scheduled job.
+	pyCallCodeRE = regexp.MustCompile(`(?m)^(.*?)error_response\s*\(\s*([^,\n]*)`)
 
 	// An argument that resolves to a DomainError's own `code` attribute, which the
 	// class pattern above has already read: the local `code` the DRF handler
 	// assigns, and `exc.code` / `error.code` on a raised domain error. Suppressed
-	// rather than reported, because the code it names IS in the extracted set.
+	// rather than reported, because the code it names IS in the extracted set --
+	// and reporting one line per variable spelling is a flood, not a diagnostic.
 	// The limit is worth knowing: a `.code` attribute on something that is not a
 	// DomainError would be suppressed here too.
 	pyResolvedCodeRE = regexp.MustCompile(`^(?:[A-Za-z_][A-Za-z0-9_]*\.)?code$`)
@@ -92,6 +90,11 @@ const minSDKErrorCodes = 10
 
 // ServerErrorCodes extracts the error codes from the server's core/errors.py,
 // alongside the code-producing lines it could not read.
+//
+// Every right-hand side the two patterns capture reaches exactly one of three
+// places: the extracted set, the suppressed-alias case, or the unreadable list.
+// There is deliberately no fourth, because the fourth was where codes went to
+// disappear.
 func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, err error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -100,72 +103,71 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 	src := stripPyComments(string(raw))
 
 	codes = map[string]bool{}
-	var escaped []string
-	for _, m := range pyClassCodeRE.FindAllStringSubmatch(src, -1) {
-		if readablePyCode(m[1]) {
-			codes[m[1]] = true
-			continue
-		}
-		escaped = append(escaped, `code = "`+m[1]+`" (an escape this reader does not resolve)`)
-	}
-	for _, m := range pyCallCodeRE.FindAllStringSubmatch(src, -1) {
-		if readablePyCode(m[1]) {
-			codes[m[1]] = true
-			continue
-		}
-		escaped = append(escaped, `error_response("`+m[1]+`", ...) (an escape this reader does not resolve)`)
-	}
-	if len(codes) < minServerErrorCodes {
-		return nil, nil, fmt.Errorf("%s: found only %d error codes (expected at least %d) -- core/errors.py moved or changed shape",
-			path, len(codes), minServerErrorCodes)
-	}
-
 	seen := map[string]bool{}
-	for _, m := range pyClassCodeAnyRE.FindAllStringSubmatch(src, -1) {
-		if value := strings.TrimSpace(m[1]); !isPyStringLiteral(value) && !seen[value] {
-			seen[value] = true
-			unreadable = append(unreadable, "code = "+value)
+	record := func(form, rhs string) {
+		if value, ok := pyLiteralValue(rhs); ok {
+			codes[value] = true
+			return
 		}
-	}
-	for _, m := range pyCallCodeAnyRE.FindAllStringSubmatch(src, -1) {
-		if strings.Contains(m[1], "def ") {
-			continue // the function's own definition, not a call
+		if pyResolvedCodeRE.MatchString(trimPyExpr(rhs)) {
+			return // a DomainError's own code, already read from its class
 		}
-		value := strings.TrimSpace(m[2])
-		if isPyStringLiteral(value) || pyResolvedCodeRE.MatchString(value) || seen[value] {
-			continue
-		}
-		seen[value] = true
-		unreadable = append(unreadable, "error_response("+value+", ...)")
-	}
-	// Every capture readablePyCode refused, reported.
-	//
-	// Dropping one without reporting it was a silent omission and exactly the
-	// failure the drop was meant to prevent, arriving from the other side:
-	// `code = "brand\x5fnew"` is a VALID Python literal for `brand_new`, and
-	// isPyStringLiteral calls it perfectly readable -- no embedded quote -- so the
-	// unreadable detector below said nothing while the extractor above skipped it.
-	// A new server code vanished from the comparison entirely.
-	for _, form := range escaped {
 		if !seen[form] {
 			seen[form] = true
 			unreadable = append(unreadable, form)
 		}
 	}
+
+	for _, m := range pyClassCodeRE.FindAllStringSubmatch(src, -1) {
+		record("code = "+trimPyExpr(m[1]), m[1])
+	}
+	for _, m := range pyCallCodeRE.FindAllStringSubmatch(src, -1) {
+		if strings.Contains(m[1], "def ") {
+			continue // the function's own definition, not a call
+		}
+		record("error_response("+trimPyExpr(m[2])+", ...)", m[2])
+	}
+
+	if len(codes) < minServerErrorCodes {
+		return nil, nil, fmt.Errorf("%s: found only %d error codes (expected at least %d) -- core/errors.py moved or changed shape",
+			path, len(codes), minServerErrorCodes)
+	}
 	sort.Strings(unreadable)
 	return codes, unreadable, nil
 }
 
-// readablePyCode rejects a captured value this extractor cannot resolve.
+// pyLiteralValue returns the value of a Python expression that is one plain
+// string literal, and reports whether it was one.
 //
-// The capture stops at the first quote, so `code = "tag\"#collision"` yields
-// `tag\` -- a code the server does not have, demanding a Code* constant that must
-// not exist. isPyStringLiteral already refuses that spelling, so the line is
-// reported as an unreadable form; dropping it here is what keeps the same line
-// from ALSO entering the comparison as a phantom. Reported and not read beats
-// read wrong.
-func readablePyCode(value string) bool {
-	return !strings.Contains(value, `\`)
+// The single predicate the extractor runs on. It is deliberately strict, and
+// every case it refuses is REPORTED rather than guessed at:
+//
+//   - a backslash, because `"brand\x5fnew"` is a valid literal for `brand_new`
+//     and reading it verbatim records a code the server does not have;
+//   - a quote inside the literal, which means an f-string, a concatenation, or
+//     two adjacent literals -- `"joined" "_code"` is one Python string, and
+//     reading the first half invents `joined`;
+//   - anything not quoted at both ends: an alias, a lookup, a call.
+func pyLiteralValue(expr string) (string, bool) {
+	expr = trimPyExpr(expr)
+	if len(expr) < 2 {
+		return "", false
+	}
+	quote := expr[0]
+	if (quote != '"' && quote != '\'') || expr[len(expr)-1] != quote {
+		return "", false
+	}
+	inner := expr[1 : len(expr)-1]
+	if strings.ContainsAny(inner, "\\'\"") {
+		return "", false
+	}
+	return inner, true
+}
+
+// trimPyExpr strips the whitespace and trailing comma around a captured
+// expression, so `"not_found",` and `"not_found"` are the same thing.
+func trimPyExpr(expr string) string {
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(expr), ","))
 }
 
 // stripPyComments blanks out `#` comments, line by line.
@@ -216,24 +218,6 @@ func stripPyComments(src string) string {
 		lines[n] = line
 	}
 	return strings.Join(lines, "\n")
-}
-
-// isPyStringLiteral reports whether a Python expression is a plain, single-part
-// string literal -- the only form the extractors above can read a code out of.
-func isPyStringLiteral(expr string) bool {
-	expr = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(expr), ","))
-	if len(expr) < 2 {
-		return false
-	}
-	quote := expr[0]
-	if quote != '"' && quote != '\'' {
-		return false
-	}
-	if expr[len(expr)-1] != quote {
-		return false
-	}
-	// An f-string or a concatenation is not a literal this can read.
-	return !strings.ContainsRune(expr[1:len(expr)-1], rune(quote))
 }
 
 // RecordedContractVersion reads the server contract docs/versioning.md claims the

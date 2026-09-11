@@ -2828,3 +2828,67 @@ func TestDuplicateAbbreviationRowIsRefused(t *testing.T) {
 		t.Fatal("two rows for one constant were accepted")
 	}
 }
+
+// --- the Python extractor's one predicate ----------------------------------------
+//
+// Three review rounds running found a code that fell between a narrow reader and
+// a wide unreadable-detector that had to agree with it. They now share one
+// predicate, and these pin the four shapes that found the gap.
+
+// pyRegistry runs the extractor over the synthetic registry plus one addition.
+func pyRegistry(t *testing.T, extra string) (map[string]bool, []string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "errors.py")
+	write(t, path, syntheticErrorsPy+extra)
+	codes, unreadable, err := ServerErrorCodes(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return codes, unreadable
+}
+
+// TestSpacedCallIsRead: `error_response ("spaced_call", ...)` is valid Python and
+// was matched by neither the old reader nor the old detector, so a code written
+// that way disappeared while the count floor stayed healthy.
+func TestSpacedCallIsRead(t *testing.T) {
+	codes, unreadable := pyRegistry(t, "\ndef handler(exc):\n    return error_response (\"spaced_call\", \"x\", {}, None, 400)\n")
+	if !codes["spaced_call"] {
+		t.Errorf("a code written with a space before the paren was not read; unreadable=%v", unreadable)
+	}
+}
+
+// TestAdjacentLiteralsAreReportedNotHalfRead: `"joined" "_code"` is ONE Python
+// string, `joined_code`. Reading the first half invents a code the server does
+// not have.
+func TestAdjacentLiteralsAreReportedNotHalfRead(t *testing.T) {
+	codes, unreadable := pyRegistry(t, "\nclass JoinedError(DomainError):\n    code = \"joined\" \"_code\"\n")
+	if codes["joined"] {
+		t.Error("half of a concatenated literal was read as a code")
+	}
+	if len(unreadable) == 0 {
+		t.Error("the concatenation was neither read nor reported")
+	}
+}
+
+// TestAliasesDoNotFloodTheUnreadableList: `code = exc.code` is the DRF handler
+// reading a code already extracted from its class. One line per variable spelling
+// is a flood, not a diagnostic, and a scheduled job nobody reads catches nothing.
+func TestAliasesDoNotFloodTheUnreadableList(t *testing.T) {
+	_, unreadable := pyRegistry(t, "\ndef handler(exc):\n    code = exc.code\n    code = error.code\n    code = failure.code\n    return code\n")
+	if len(unreadable) != 0 {
+		t.Errorf("ordinary aliases were reported as unreadable: %v", unreadable)
+	}
+}
+
+// TestTheRealServerRegistryReadsCleanly is the anti-nag guard for all of the
+// above: the extractor must read the actual file without inventing work. A
+// predicate tightened until it is safe is worthless if it reports every line.
+func TestTheRealServerRegistryReadsCleanly(t *testing.T) {
+	codes, unreadable := pyRegistry(t, "")
+	if len(codes) < minServerErrorCodes {
+		t.Errorf("read only %d codes from the synthetic registry", len(codes))
+	}
+	if len(unreadable) != 0 {
+		t.Errorf("an ordinary registry produced %d unreadable findings: %v", len(unreadable), unreadable)
+	}
+}
