@@ -1065,3 +1065,58 @@ func TestOrdinaryErrorRegistryShapesAreNotReportedAsUnreadable(t *testing.T) {
 		}
 	}
 }
+
+// TestInventoryFileMismatchFails: the row names the file as well as the method,
+// and a row that is wrong about where the code lives is a row nobody can follow.
+func TestInventoryFileMismatchFails(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
+		"    sdk: TagService.Resolve\n",
+		"    file: resolution.go\n",
+		"    file: tags.go\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"says `TagService.Resolve` lives in tags.go; it is declared in resolution.go")
+}
+
+// TestCoverageValidationRefusesRowsThatWouldDoNothing. Every rule here exists
+// because the row it rejects would otherwise load, match nothing, and leave an
+// endpoint or an allowlist entry silently unchecked -- a gate reporting green over
+// something nobody reviewed.
+func TestCoverageValidationRefusesRowsThatWouldDoNothing(t *testing.T) {
+	valid := `
+operations:
+  - path: /tags
+    method: get
+    sdk: TagService.List
+    file: tags.go
+    documented_response: array
+    actual_response: list-envelope
+server_error_codes: [a, b, c, d, e, f, g, h, i, j]
+`
+	for _, tc := range []struct{ name, yaml, want string }{
+		{"prefixed path", strings.Replace(valid, "path: /tags", "path: /api/v2/tags", 1), "must not carry the /api/<version> prefix"},
+		{"unknown method", strings.Replace(valid, "method: get", "method: GET", 1), "is not a lowercase HTTP method"},
+		{"bare sdk name", strings.Replace(valid, "sdk: TagService.List", "sdk: List", 1), "must name the method as Receiver.Method"},
+		{"neither implemented nor not", strings.Replace(valid, "    sdk: TagService.List\n    file: tags.go\n", "", 1), "needs either sdk+file or an unimplemented reason"},
+		{"unknown envelope", strings.Replace(valid, "actual_response: list-envelope", "actual_response: list_envelope", 1), "is not one of"},
+		{"unknown documented shape", strings.Replace(valid, "documented_response: array", "documented_response: list", 1), "is not `array`, `none`, `other`, or `ref:<Schema>`"},
+		{"unknown key", valid + "unexpected_key: 1\n", "field unexpected_key not found"},
+		{"allowlist for a missing operation", valid + "unsent_query_parameters:\n  - path: /nowhere\n    method: get\n    name: q\n    reason: x\n", "is not an operation in this file"},
+		{"code in both lists", valid + "sdk_only_error_codes:\n  - code: a\n    reason: x\n", "cannot be both the server's and the SDK's alone"},
+		{"registry too small", strings.Replace(valid, "server_error_codes: [a, b, c, d, e, f, g, h, i, j]", "server_error_codes: [a]", 1), "an empty one checks nothing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "contract-coverage.yaml")
+			write(t, path, tc.yaml)
+			_, err := LoadCoverage(path)
+			if err == nil {
+				t.Fatalf("%s was accepted", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not mention %q", err, tc.want)
+			}
+		})
+	}
+}
