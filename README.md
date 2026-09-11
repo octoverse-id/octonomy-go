@@ -9,17 +9,23 @@ multi-application tag management and taxonomy service. This SDK is a hand-writte
 (standard library only) client for the REST **v2** API, with `/api/v1` available as a configuration
 option.
 
-> **Status: this line has no tag yet.** Every resource group the vendored contracts publish is
-> implemented — see [Implemented resources](#implemented-resources) — but `v2.0.0-alpha.1` has not
-> been cut ([#29](https://github.com/octoverse-id/octonomy-go/issues/29)), so `go get` on the `/v2`
-> path resolves a pseudo-version until it is. The **compat** line is released: `v1.0.0`, tagged
-> 2026-08-26 on `support/go1.13`. There has never been a `v0.x` of either line.
-> See [versioning.md](docs/versioning.md) for both lines and their support policies.
+> **This tree is `v2.0.0-alpha.1`**, the modern line's first release and a prerelease on purpose.
+> Every resource group the vendored contracts publish is implemented — see
+> [Implemented resources](#implemented-resources). Once the tag is published, `go get` on the `/v2`
+> path resolves it without naming a version, since Go prefers a prerelease when no stable release of
+> that major exists; until then it resolves a pseudo-version off `main`. The
+> [releases page](https://github.com/octoverse-id/octonomy-go/releases) is the authority on which it
+> is — a version bump lands with the release PR and the tag follows it.
+>
+> The `-alpha.N` suffix comes off at **API freeze**, not at an endpoint count, so until then a
+> necessary breaking change may ride an alpha bump. The **compat** line is released separately:
+> `v1.0.0`, tagged 2026-08-26 on `support/go1.13`. There has never been a `v0.x` of either line. See
+> [versioning.md](docs/versioning.md) for both lines and their support policies.
 
 > [!IMPORTANT]
 > **The default REST surface is now `/api/v2`.** Earlier states of this tree targeted `/api/v1`
-> unconditionally, so if you are tracking `main` by pseudo-version or carrying a vendored copy, this
-> changes the wire. If your Octonomy server
+> unconditionally, so if you are arriving from the `1.x` compat line, tracking `main` by
+> pseudo-version, or carrying a vendored copy, this changes the wire. If your Octonomy server
 > predates **2.0**, set `Config.APIVersion = octonomy.APIV1` — such a deployment has no `/api/v2`
 > route and answers every call with an unrouted 404. This is a wire-level change that compiles
 > clean, and there is no version handshake for the SDK to detect it with.

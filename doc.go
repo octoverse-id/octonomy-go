@@ -28,16 +28,22 @@
 // (go1.13.15, August 2020, was its last release), so pinning there is an informed
 // trade rather than a safe harbour. See docs/versioning.md and SECURITY.md.
 //
-// This line is not yet tagged: v2.0.0-alpha.1 is unreleased, so go get on the /v2
-// path resolves a pseudo-version. The compat line is released at v1.0.0. No v0.x
-// of either line was ever published -- proxy.golang.org lists v1.0.0 alone for
-// the unsuffixed path and nothing at all for /v2.
+// This tree is v2.0.0-alpha.1, the modern line's first release and a prerelease
+// on purpose. Once the tag is published, go get on the /v2 path resolves it
+// without anyone naming a version, because the go command prefers a prerelease
+// when no stable release of that major exists; until then it resolves a
+// pseudo-version off the default branch. The -alpha.N suffix comes off at API
+// FREEZE, not at some endpoint count: no further breaking changes intended,
+// real-server integration green, docs current, one release candidate validated.
+// Before that, a necessary break may ride an alpha bump, documented in the
+// CHANGELOG. The compat line is released separately at v1.0.0.
 //
-// Note that the Version constant still reads "0.1.0" on this branch, so the
-// default User-Agent is octonomy-go/0.1.0. It is a leftover placeholder from
-// before anything was released, kept to match the historical CHANGELOG heading;
-// the first /v2 release PR replaces it (docs/release.md). No tag on this line
-// corresponds to it, and v1.0.0 belongs to the other module entirely.
+// No v0.x of either line was ever published. The Version constant read "0.1.0"
+// until this release -- a placeholder from before anything was released, which
+// no tag ever corresponded to. A default User-Agent of octonomy-go/0.1.0 in a
+// server log therefore identifies NO release: it is some pre-release state of
+// the tree, reached by pseudo-version, checkout, replace, or a vendored copy,
+// and it does not say which. See docs/versioning.md.
 //
 // # Quickstart
 //
