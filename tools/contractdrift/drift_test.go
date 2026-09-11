@@ -2783,3 +2783,48 @@ func TestTwoConstantsForOneCodeAreReported(t *testing.T) {
 	assertFinding(t, runLocal(t, repo),
 		"`conflict` is carried by `CodeClash` and `CodeConflict`")
 }
+
+// TestEscapedPythonCodeIsReportedNotDropped: `code = "brand\x5fnew"` is a VALID
+// Python literal for `brand_new`. The extractor refuses the backslash, and
+// isPyStringLiteral calls the same expression perfectly readable — no embedded
+// quote — so before this the code was neither read nor reported. It vanished.
+func TestEscapedPythonCodeIsReportedNotDropped(t *testing.T) {
+	upstream := stageUpstream(t)
+	path := filepath.Join(upstream, "errors.py")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, string(raw)+"\n\nclass EscapedUnderscoreError(DomainError):\n    code = \"brand\\x5fnew\"\n")
+
+	codes, unreadable, err := ServerErrorCodes(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codes[`brand\x5fnew`] {
+		t.Error("an unresolved escape was read as a literal code")
+	}
+	found := false
+	for _, form := range unreadable {
+		if strings.Contains(form, `brand\x5fnew`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the escaped spelling was neither read nor reported; unreadable=%v", unreadable)
+	}
+}
+
+// TestDuplicateAbbreviationRowIsRefused: the rows are read into a map, so two for
+// one constant means the later silently wins — and the loser can be the row that
+// was actually true.
+func TestDuplicateAbbreviationRowIsRefused(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"), "abbreviated_error_constants",
+		"  - constant: CodeValidation\n",
+		"  - constant: CodeValidation\n    code: authentication_required\n    reason: A duplicate row.\n  - constant: CodeValidation\n")
+
+	if _, err := LoadCoverage(filepath.Join(repo, "docs", "contract-coverage.yaml")); err == nil {
+		t.Fatal("two rows for one constant were accepted")
+	}
+}

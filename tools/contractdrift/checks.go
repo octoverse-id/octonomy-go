@@ -695,6 +695,16 @@ func checkErrorCodesImplemented(in Inputs, r *Report) {
 	//
 	// The rule is that a constant is named for its value, which this SDK already
 	// obeys everywhere but two places, both recorded with their reason.
+	//
+	// KNOWN LIMIT, and a deliberate one: the comparison runs Go name -> wire code,
+	// not the reverse, so it cannot see a rename that spells the same code
+	// differently -- CodeNamespaceAPIDisabled to CodeNamespaceApiDisabled is a
+	// breaking change to every caller and clean here. Going the other way means
+	// deriving `NamespaceAPIDisabled` from `namespace_api_disabled`, which needs a
+	// table of initialisms; a code whose initialism is not in that table reports a
+	// correctly named constant as wrong, and this gate was told not to become a
+	// nag. An exported rename is a release-gate question, not a contract-drift
+	// one, and no part of this tool claims to answer it.
 	abbreviated := map[string]string{}
 	for _, row := range in.Coverage.AbbreviatedErrorConstants {
 		abbreviated[row.Constant] = row.Code

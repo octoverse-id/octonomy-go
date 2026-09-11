@@ -100,15 +100,20 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 	src := stripPyComments(string(raw))
 
 	codes = map[string]bool{}
+	var escaped []string
 	for _, m := range pyClassCodeRE.FindAllStringSubmatch(src, -1) {
 		if readablePyCode(m[1]) {
 			codes[m[1]] = true
+			continue
 		}
+		escaped = append(escaped, `code = "`+m[1]+`" (an escape this reader does not resolve)`)
 	}
 	for _, m := range pyCallCodeRE.FindAllStringSubmatch(src, -1) {
 		if readablePyCode(m[1]) {
 			codes[m[1]] = true
+			continue
 		}
+		escaped = append(escaped, `error_response("`+m[1]+`", ...) (an escape this reader does not resolve)`)
 	}
 	if len(codes) < minServerErrorCodes {
 		return nil, nil, fmt.Errorf("%s: found only %d error codes (expected at least %d) -- core/errors.py moved or changed shape",
@@ -132,6 +137,20 @@ func ServerErrorCodes(path string) (codes map[string]bool, unreadable []string, 
 		}
 		seen[value] = true
 		unreadable = append(unreadable, "error_response("+value+", ...)")
+	}
+	// Every capture readablePyCode refused, reported.
+	//
+	// Dropping one without reporting it was a silent omission and exactly the
+	// failure the drop was meant to prevent, arriving from the other side:
+	// `code = "brand\x5fnew"` is a VALID Python literal for `brand_new`, and
+	// isPyStringLiteral calls it perfectly readable -- no embedded quote -- so the
+	// unreadable detector below said nothing while the extractor above skipped it.
+	// A new server code vanished from the comparison entirely.
+	for _, form := range escaped {
+		if !seen[form] {
+			seen[form] = true
+			unreadable = append(unreadable, form)
+		}
 	}
 	sort.Strings(unreadable)
 	return codes, unreadable, nil

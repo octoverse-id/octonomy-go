@@ -341,7 +341,12 @@ func LoadCoverage(path string) (*Coverage, error) {
 		}
 		vendored[code] = true
 	}
+	declared := map[string]bool{}
 	for _, c := range cov.AbbreviatedErrorConstants {
+		if declared[c.Constant] {
+			return nil, fmt.Errorf("%s: abbreviated_error_constants lists %s twice -- the rows are read into a map, so one would silently win over the other", path, c.Constant)
+		}
+		declared[c.Constant] = true
 		if c.Constant == "" || c.Code == "" || c.Reason == "" {
 			return nil, fmt.Errorf("%s: abbreviated_error_constants needs constant, code, and reason on every row", path)
 		}

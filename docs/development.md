@@ -233,6 +233,11 @@ constant's **name** is checked against the value it carries (`CodeNotFound` carr
 with the two constants that abbreviate — `CodeValidation`, `CodeAuthRequired` — recorded in
 `contract-coverage.yaml` with their reason, and a row that exempts nothing refused by the loader.
 Two constants carrying one code are reported for the same reason: every set stays intact through it.
+That comparison runs Go name → wire code and not the reverse, so it does **not** see a rename that
+spells the same code differently (`CodeNamespaceAPIDisabled` → `CodeNamespaceApiDisabled`): going
+the other way needs a table of initialisms, and a code whose initialism is missing from it would
+report a correctly named constant as wrong. An exported rename is a release-gate question; this
+gate does not answer it.
 
 The error-code check needs that Python file because the contract cannot answer the question:
 `ErrorResponse` types `code` as a bare string, so every code the envelope can carry is invisible to a
