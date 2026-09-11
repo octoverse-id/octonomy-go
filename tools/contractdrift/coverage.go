@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -38,6 +39,14 @@ type Coverage struct {
 	// sent on every list route, and `resource_type` is legitimately absent from a
 	// body while being required in the path.
 	UnsentInputs []UnsentInput `yaml:"unsent_inputs"`
+
+	// UndocumentedInputs are inputs the client sends that a SURFACE's generated
+	// contract does not document, with the reason. Keyed by surface and name
+	// rather than per operation, because the one live case has a single cause
+	// that applies uniformly: the server's schema hook injects the application,
+	// namespace and include_global parameters on v2 only, while the view code
+	// behind both surfaces reads them either way.
+	UndocumentedInputs []UndocumentedInput `yaml:"undocumented_inputs"`
 
 	// ClientHeaders are headers the client puts on EVERY versioned request that no
 	// operation documents. They are transport identity rather than per-operation
@@ -90,6 +99,17 @@ type CoverageOperation struct {
 	// rather than a silent suppression.
 	DocumentedResponse string `yaml:"documented_response"`
 
+	// CompositeBody is the response body the running server really returns for an
+	// operation whose contract describes it wrongly or not at all -- the bulk
+	// results and the resource-tag replace. A REVIEWED FACT, verified against a
+	// booted server, and the exact bytes the gate's stub answers with, so what the
+	// SDK decodes is compared against it property by property.
+	//
+	// One body per operation, because they differ: a single universal object
+	// carrying every composite's keys meant each decoder silently dropped the
+	// others' and nothing could be compared at all.
+	CompositeBody string `yaml:"composite_body"`
+
 	// UndocumentedRequestBody records that this operation sends a body the
 	// generated spec does not describe, with the reason. One live case: the
 	// body-carrying DELETE, whose ids travel in a payload drf-spectacular does not
@@ -135,6 +155,17 @@ type UnsentInput struct {
 
 // Key is the operation key, the location, and the name.
 func (u UnsentInput) Key() string { return u.Method + " " + u.Path + " " + u.In + " " + u.Name }
+
+// UndocumentedInput records an input one surface's contract omits.
+type UndocumentedInput struct {
+	Surface string `yaml:"surface"`
+	In      string `yaml:"in"`
+	Name    string `yaml:"name"`
+	Reason  string `yaml:"reason"`
+}
+
+// Key is "<surface> <in> <name>".
+func (u UndocumentedInput) Key() string { return u.Surface + " " + u.In + " " + u.Name }
 
 // ClientHeader records a header the client sends on every versioned request.
 type ClientHeader struct {
@@ -227,6 +258,12 @@ func LoadCoverage(path string) (*Coverage, error) {
 			return nil, fmt.Errorf("%s: %s: documented_response %q is not `array`, `none`, `other`, or `ref:<Schema>`", path, op.Key(), op.DocumentedResponse)
 		case !actualResponses[op.ActualResponse]:
 			return nil, fmt.Errorf("%s: %s: actual_response %q is not one of %s", path, op.Key(), op.ActualResponse, actualResponseList)
+		case op.ActualResponse == "composite-envelope" && op.CompositeBody == "":
+			return nil, fmt.Errorf("%s: %s: a composite response needs the composite_body the server returns; there is no schema to build one from", path, op.Key())
+		case op.CompositeBody != "" && op.ActualResponse != "composite-envelope":
+			return nil, fmt.Errorf("%s: %s: composite_body is only meaningful on a composite-envelope row", path, op.Key())
+		case op.CompositeBody != "" && !json.Valid([]byte(op.CompositeBody)):
+			return nil, fmt.Errorf("%s: %s: composite_body is not valid JSON", path, op.Key())
 		}
 		seen[op.Key()] = true
 	}
@@ -246,6 +283,16 @@ func LoadCoverage(path string) (*Coverage, error) {
 		}
 		if !seen[p.Method+" "+p.Path] {
 			return nil, fmt.Errorf("%s: unsent_inputs names %q, which is not an operation in this file", path, p.Method+" "+p.Path)
+		}
+	}
+	for _, u := range cov.UndocumentedInputs {
+		switch {
+		case u.Surface == "" || u.In == "" || u.Name == "" || u.Reason == "":
+			return nil, fmt.Errorf("%s: undocumented_inputs needs surface, in, name, and reason on every row", path)
+		case u.Surface != "v1" && u.Surface != "v2":
+			return nil, fmt.Errorf("%s: undocumented_inputs %q: surface is %q, not v1 or v2", path, u.Name, u.Surface)
+		case !unsentLocations[u.In]:
+			return nil, fmt.Errorf("%s: undocumented_inputs %q: `in` is %q, not query, body, or header", path, u.Name, u.In)
 		}
 	}
 	for _, h := range cov.ClientHeaders {
@@ -294,6 +341,15 @@ func (c *Coverage) UnsentIndex() map[string]UnsentInput {
 	out := make(map[string]UnsentInput, len(c.UnsentInputs))
 	for _, p := range c.UnsentInputs {
 		out[p.Key()] = p
+	}
+	return out
+}
+
+// UndocumentedIndex returns the surface-scoped exceptions and their reasons.
+func (c *Coverage) UndocumentedIndex() map[string]string {
+	out := make(map[string]string, len(c.UndocumentedInputs))
+	for _, u := range c.UndocumentedInputs {
+		out[u.Key()] = u.Reason
 	}
 	return out
 }

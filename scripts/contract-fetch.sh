@@ -77,7 +77,7 @@ log "fetching $REPO@$REF via $MODE"
 resolve_sha_once() {
     case "$MODE" in
         gh)
-            gh api "repos/$REPO/commits/$REF" --jq .sha
+            timeout "$TIMEOUT" gh api "repos/$REPO/commits/$REF" --jq .sha
             ;;
         curl)
             # No jq dependency: the commit object's own sha is the first "sha"
@@ -103,7 +103,7 @@ fetch_once() {
             # stderr is NOT suppressed: gh reports a 404, a rate limit, and a
             # renamed path in three different ways, and the retry loop below
             # would otherwise reduce all three to "attempt 1/3 failed".
-            gh api -H "Accept: application/vnd.github.raw" \
+            timeout "$TIMEOUT" gh api -H "Accept: application/vnd.github.raw" \
                 "repos/$REPO/contents/$1?ref=$SHA" >"$2"
             ;;
         curl)

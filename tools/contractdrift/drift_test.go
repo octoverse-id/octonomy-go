@@ -204,7 +204,7 @@ func load(t *testing.T, repo, upstream string) Inputs {
 	// against response bodies built from the STAGED spec. That split is what the
 	// tests below exploit: a mutated schema changes what the stub sends, and the
 	// unmutated client either copes with it or does not.
-	if in.Conformance, err = RunConformance(in.Vendored["v2"], in.Coverage, Drivers()); err != nil {
+	if in.Conformance, err = RunConformance(in.Vendored, in.Coverage, Drivers()); err != nil {
 		t.Fatal(err)
 	}
 	if upstream != "" {
@@ -220,6 +220,21 @@ func load(t *testing.T, repo, upstream string) Inputs {
 		}
 	}
 	return in
+}
+
+// loadSpecs reads both vendored surfaces, which is what the conformance runner
+// drives -- one client per surface, each against its own contract.
+func loadSpecs(t *testing.T) map[string]*Spec {
+	t.Helper()
+	out := map[string]*Spec{}
+	var err error
+	if out["v1"], err = LoadSpec(filepath.Join(repoRoot, "docs", "openapi.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if out["v2"], err = LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // findings flattens a report for assertion.
@@ -718,7 +733,7 @@ func TestRoutesAreObservedOnTheWire(t *testing.T) {
 		if row.Unimplemented != "" {
 			continue
 		}
-		observed, ok := in.Conformance.Observations[row.Key()]
+		observed, ok := in.Conformance.Observations["v2 "+row.Key()]
 		if !ok {
 			t.Errorf("%s: no observation", row.Key())
 			continue
@@ -735,7 +750,7 @@ func TestRoutesAreObservedOnTheWire(t *testing.T) {
 // the package called it implemented there too.
 func TestQueryParametersAreObservedPerOperation(t *testing.T) {
 	in := load(t, repoRoot, "")
-	resolution, ok := in.Conformance.Observations["get /tag-resolution"]
+	resolution, ok := in.Conformance.Observations["v2 get /tag-resolution"]
 	if !ok {
 		t.Fatal("no observation for get /tag-resolution")
 	}
@@ -750,7 +765,7 @@ func TestQueryParametersAreObservedPerOperation(t *testing.T) {
 		}
 	}
 
-	list, ok := in.Conformance.Observations["get /tags"]
+	list, ok := in.Conformance.Observations["v2 get /tags"]
 	if !ok {
 		t.Fatal("no observation for get /tags")
 	}
@@ -770,10 +785,10 @@ func TestQueryParametersAreObservedPerOperation(t *testing.T) {
 // builder, branches past it, or drops it in a refactor all arrive here identically.
 func TestUnsentQueryParameterIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["get /tags"]
+	observed := in.Conformance.Observations["v2 get /tags"]
 	delete(observed.Query, "vocabulary_id")
 	delete(observed.Query, "parent_id")
-	in.Conformance.Observations["get /tags"] = observed
+	in.Conformance.Observations["v2 get /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"`get /tags` documents the query parameter `vocabulary_id` and the client did not send it",
@@ -785,12 +800,12 @@ func TestUnsentQueryParameterIsReported(t *testing.T) {
 // nothing documents is a filter the server ignores in silence.
 func TestUndocumentedQueryParameterIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["get /tags"]
+	observed := in.Conformance.Observations["v2 get /tags"]
 	observed.Query["colour"] = "x"
-	in.Conformance.Observations["get /tags"] = observed
+	in.Conformance.Observations["v2 get /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
-		"`get /tags`: the client sends the query parameter `colour`, which no vendored contract documents")
+		"`get /tags` (v2): the client sends the query parameter `colour`, which that surface's contract does not document")
 }
 
 // TestWrongRouteIsReported: the row names a method, the method requests something
@@ -798,9 +813,9 @@ func TestUndocumentedQueryParameterIsReported(t *testing.T) {
 // could read it; here it is the request line.
 func TestWrongRouteIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["get /tags/{tag_id}"]
+	observed := in.Conformance.Observations["v2 get /tags/{tag_id}"]
 	observed.Path = "/vocabularies/{}"
-	in.Conformance.Observations["get /tags/{tag_id}"] = observed
+	in.Conformance.Observations["v2 get /tags/{tag_id}"] = observed
 
 	assertFinding(t, CheckLocal(in), "`TagService.Get` requests `GET /vocabularies/{}`")
 }
@@ -883,7 +898,7 @@ func TestResponseModelComparisonIsNotVacuous(t *testing.T) {
 			continue
 		}
 		documented, _ := spec.SchemaProperties(op.OKModel)
-		observed := in.Conformance.Observations[row.Key()]
+		observed := in.Conformance.Observations["v2 "+row.Key()]
 		if len(documented) == 0 || len(observed.Decoded) == 0 {
 			t.Errorf("%s: documented=%d decoded=%d -- nothing is being compared",
 				row.Key(), len(documented), len(observed.Decoded))
@@ -1186,10 +1201,7 @@ server_error_codes: [a, b, c, d, e, f, g, h, i, j]
 // them and have it read as describing the operation. A driver exercises one
 // operation, once.
 func TestMultiRequestDriverIsRejected(t *testing.T) {
-	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	spec := loadSpecs(t)
 	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -1208,10 +1220,10 @@ func TestMultiRequestDriverIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := conf.Observations["get /tags"]; ok {
+	if _, ok := conf.Observations["v2 get /tags"]; ok {
 		t.Error("a driver that issued two requests was recorded as an observation")
 	}
-	if err := conf.Errors["get /tags"]; err == nil || !strings.Contains(err.Error(), "issued 2 requests") {
+	if err := conf.Errors["v2 get /tags"]; err == nil || !strings.Contains(err.Error(), "issued 2 requests") {
 		t.Errorf("expected a two-request error, got %v", err)
 	}
 }
@@ -1220,10 +1232,7 @@ func TestMultiRequestDriverIsRejected(t *testing.T) {
 // client refuses before sending anything -- an option the transport rejects, say.
 // Silence there would read as an operation with no parameters at all.
 func TestDriverThatNeverReachesTheWireIsReported(t *testing.T) {
-	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	spec := loadSpecs(t)
 	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -1242,7 +1251,7 @@ func TestDriverThatNeverReachesTheWireIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := conf.Errors["post /tags"]; err == nil || !strings.Contains(err.Error(), "reached no request") {
+	if err := conf.Errors["v2 post /tags"]; err == nil || !strings.Contains(err.Error(), "reached no request") {
 		t.Errorf("expected a no-request error, got %v", err)
 	}
 }
@@ -1290,10 +1299,10 @@ func TestNullableModelsRoundTripNull(t *testing.T) {
 // the same query as one that still does, so every other check stayed satisfied.
 func TestMissingRequestBodyPropertyIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["post /tags"]
+	observed := in.Conformance.Observations["v2 post /tags"]
 	delete(observed.Body, "slug")
 	delete(observed.Body, "metadata")
-	in.Conformance.Observations["post /tags"] = observed
+	in.Conformance.Observations["v2 post /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"schema `TagWrite` documents `slug` and the client did not send it",
@@ -1304,9 +1313,9 @@ func TestMissingRequestBodyPropertyIsReported(t *testing.T) {
 // sends no payload at all.
 func TestEmptyRequestBodyIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["post /tags"]
+	observed := in.Conformance.Observations["v2 post /tags"]
 	observed.Body = map[string]json.RawMessage{}
-	in.Conformance.Observations["post /tags"] = observed
+	in.Conformance.Observations["v2 post /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"the contract documents a `TagWrite` request body and the client sent none")
@@ -1316,9 +1325,9 @@ func TestEmptyRequestBodyIsReported(t *testing.T) {
 // property the server was never told to expect.
 func TestUndocumentedRequestBodyPropertyIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["post /tags"]
+	observed := in.Conformance.Observations["v2 post /tags"]
 	observed.Body["colour"] = json.RawMessage(`"x"`)
-	in.Conformance.Observations["post /tags"] = observed
+	in.Conformance.Observations["v2 post /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"the client sends `colour` in its request body, which schema `TagWrite` does not document")
@@ -1329,9 +1338,9 @@ func TestUndocumentedRequestBodyPropertyIsReported(t *testing.T) {
 // exactly like one that never could, because nothing recorded headers at all.
 func TestMissingDocumentedHeaderIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["get /tags"]
+	observed := in.Conformance.Observations["v2 get /tags"]
 	delete(observed.Headers, "X-Namespace-Type")
-	in.Conformance.Observations["get /tags"] = observed
+	in.Conformance.Observations["v2 get /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"`get /tags` documents the header `X-Namespace-Type` and the client did not send it")
@@ -1342,9 +1351,9 @@ func TestMissingDocumentedHeaderIsReported(t *testing.T) {
 // is a finding.
 func TestUndocumentedHeaderIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["get /tags"]
+	observed := in.Conformance.Observations["v2 get /tags"]
 	observed.Headers["X-Invented-Header"] = "x"
-	in.Conformance.Observations["get /tags"] = observed
+	in.Conformance.Observations["v2 get /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"the client sends the header `X-Invented-Header`, which no vendored contract documents")
@@ -1357,9 +1366,9 @@ func TestUndocumentedHeaderIsReported(t *testing.T) {
 // excused.
 func TestBodyCarriedApplicationIDIsVerified(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["post /tags"]
+	observed := in.Conformance.Observations["v2 post /tags"]
 	delete(observed.Body, "application_id")
-	in.Conformance.Observations["post /tags"] = observed
+	in.Conformance.Observations["v2 post /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"`post /tags` records that `application_id` travels in the body instead, and the request's body does not carry it")
@@ -1369,10 +1378,7 @@ func TestBodyCarriedApplicationIDIsVerified(t *testing.T) {
 // a driver passing resource_type where resource_id belongs produced exactly the
 // expected route. Each placeholder has its own value now.
 func TestSwappedPathArgumentsAreReported(t *testing.T) {
-	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	spec := loadSpecs(t)
 	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -1389,7 +1395,7 @@ func TestSwappedPathArgumentsAreReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	observed := conf.Observations["get /resources/{resource_type}/{resource_id}/tags"]
+	observed := conf.Observations["v2 get /resources/{resource_type}/{resource_id}/tags"]
 	if observed.Path == "/resources/{resource_type}/{resource_id}/tags" {
 		t.Error("swapping the two path arguments produced the expected route")
 	}
@@ -1401,10 +1407,7 @@ func TestSwappedPathArgumentsAreReported(t *testing.T) {
 // request, not just its route: a driver that passed its options on one execution
 // and not the other used to pass, because the first supplied all the evidence.
 func TestValueDependentRouteIsReported(t *testing.T) {
-	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	spec := loadSpecs(t)
 	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -1424,7 +1427,7 @@ func TestValueDependentRouteIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := conf.Errors["get /tags/{tag_id}"]; err == nil || !strings.Contains(err.Error(), "the two executions sent different requests") {
+	if err := conf.Errors["v2 get /tags/{tag_id}"]; err == nil || !strings.Contains(err.Error(), "the two executions sent different requests") {
 		t.Errorf("a value-dependent route was accepted: %v", err)
 	}
 }
@@ -1573,9 +1576,9 @@ func TestRetypedQueryParameterIsReported(t *testing.T) {
 // `slug`, so the public Query input is ignored. Every name is still right.
 func TestMiswiredQueryValueIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["get /tags"]
+	observed := in.Conformance.Observations["v2 get /tags"]
 	observed.Query["q"] = observed.Query["slug"]
-	in.Conformance.Observations["get /tags"] = observed
+	in.Conformance.Observations["v2 get /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"the query parameter `q` carries the value the driver supplied for `slug`")
@@ -1584,9 +1587,9 @@ func TestMiswiredQueryValueIsReported(t *testing.T) {
 // TestMiswiredBodyValueIsReported is the same on a write: two JSON tags swapped.
 func TestMiswiredBodyValueIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["post /tags"]
+	observed := in.Conformance.Observations["v2 post /tags"]
 	observed.Body["name"], observed.Body["slug"] = observed.Body["slug"], observed.Body["name"]
-	in.Conformance.Observations["post /tags"] = observed
+	in.Conformance.Observations["v2 post /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"the body property `name` carries the value the driver supplied for `slug`",
@@ -1597,10 +1600,10 @@ func TestMiswiredBodyValueIsReported(t *testing.T) {
 // the other's value, so every namespaced call targets the wrong scope pair.
 func TestCrossedNamespaceHeadersAreReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["get /tags"]
+	observed := in.Conformance.Observations["v2 get /tags"]
 	observed.Headers["X-Namespace-Type"], observed.Headers["X-Namespace-Id"] =
 		observed.Headers["X-Namespace-Id"], observed.Headers["X-Namespace-Type"]
-	in.Conformance.Observations["get /tags"] = observed
+	in.Conformance.Observations["v2 get /tags"] = observed
 
 	assertFinding(t, CheckLocal(in), "carries the value the driver supplied for `x-namespace-")
 }
@@ -1611,9 +1614,9 @@ func TestCrossedNamespaceHeadersAreReported(t *testing.T) {
 // every write losing its tenant scope, reported as nothing at all.
 func TestMissingClientHeaderOnOneOperationIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["post /tags"]
+	observed := in.Conformance.Observations["v2 post /tags"]
 	delete(observed.Headers, "X-Tenant-Id")
-	in.Conformance.Observations["post /tags"] = observed
+	in.Conformance.Observations["v2 post /tags"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"`post /tags` does not carry `X-Tenant-Id`, which client_headers records as sent on every versioned request")
@@ -1623,9 +1626,9 @@ func TestMissingClientHeaderOnOneOperationIsReported(t *testing.T) {
 // authenticate nobody, so a credential leaking onto them is a finding.
 func TestClientHeaderOnHealthIsReported(t *testing.T) {
 	in := load(t, repoRoot, "")
-	observed := in.Conformance.Observations["get /health/live"]
+	observed := in.Conformance.Observations["v2 get /health/live"]
 	observed.Headers["Authorization"] = "Bearer leaked"
-	in.Conformance.Observations["get /health/live"] = observed
+	in.Conformance.Observations["v2 get /health/live"] = observed
 
 	assertFinding(t, CheckLocal(in),
 		"carries `Authorization`, and the unversioned probes authenticate nobody")
@@ -1633,23 +1636,20 @@ func TestClientHeaderOnHealthIsReported(t *testing.T) {
 
 // TestSwappedResponseTagsAreReported is the defect a round trip structurally
 // cannot see: the same tags decode and re-encode, so identical bytes come back
-// while the caller reads the server's name out of Tag.Slug. Only the declaration
-// knows which field is meant to carry which property.
+// while the caller reads the server's name out of Tag.Slug.
+//
+// It mutates the staged model and runs the real check. The version of this test a
+// review found only asserted that SnakeCase("Slug") != "name" -- removing the
+// checkModelFieldNames call from CheckLocal would have left it green.
 func TestSwappedResponseTagsAreReported(t *testing.T) {
-	in := load(t, repoRoot, "")
-	fields, ok := in.SDK.ModelFields("Tag")
-	if !ok {
-		t.Fatal("no Tag model")
-	}
-	if fields["name"] != "Name" || fields["slug"] != "Slug" {
-		t.Fatalf("the model no longer has the fields this test swaps: %v", fields)
-	}
-	// The check itself, applied to a swapped pair.
-	for property, field := range map[string]string{"name": "Slug", "slug": "Name"} {
-		if SnakeCase(field) == property {
-			t.Errorf("SnakeCase(%q) matched %q; the swap would not be reported", field, property)
-		}
-	}
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "tags.go"), "type Tag struct {",
+		"\tName          string    `json:\"name\"`\n\tSlug          string    `json:\"slug\"`\n",
+		"\tName          string    `json:\"slug\"`\n\tSlug          string    `json:\"name\"`\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"model `Tag`: the field `Name` decodes `slug`",
+		"model `Tag`: the field `Slug` decodes `name`")
 }
 
 // TestModelFieldNamesAreNotVacuous: the convention really is checked, over real
@@ -1682,10 +1682,7 @@ func TestModelFieldNamesAreNotVacuous(t *testing.T) {
 // duplicate be overwritten by a correct one, and the gate saw only the correct
 // evidence.
 func TestDuplicateDriverIsRejected(t *testing.T) {
-	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	spec := loadSpecs(t)
 	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -1702,7 +1699,7 @@ func TestDuplicateDriverIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := conf.Errors["get /tags"]; err == nil || !strings.Contains(err.Error(), "more than once") {
+	if err := conf.Errors["v2 get /tags"]; err == nil || !strings.Contains(err.Error(), "more than once") {
 		t.Errorf("a duplicate driver was accepted: %v", err)
 	}
 }
@@ -1711,10 +1708,7 @@ func TestDuplicateDriverIsRejected(t *testing.T) {
 // to be discarded except for its decoded body, so a driver that passed its options
 // once and not the other time was invisible.
 func TestDriverWithInconsistentOptionsIsReported(t *testing.T) {
-	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	spec := loadSpecs(t)
 	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -1726,7 +1720,7 @@ func TestDriverWithInconsistentOptionsIsReported(t *testing.T) {
 		Call: func(ctx context.Context, env *Env) (any, error) {
 			id := env.Path("tag_id")
 			if id == "TAGID1" {
-				return env.Client.Tags.Get(ctx, id, readScope()...)
+				return env.Client.Tags.Get(ctx, id, env.ReadScope()...)
 			}
 			return env.Client.Tags.Get(ctx, id)
 		},
@@ -1734,7 +1728,154 @@ func TestDriverWithInconsistentOptionsIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := conf.Errors["get /tags/{tag_id}"]; err == nil || !strings.Contains(err.Error(), "different requests") {
+	if err := conf.Errors["v2 get /tags/{tag_id}"]; err == nil || !strings.Contains(err.Error(), "different requests") {
 		t.Errorf("a driver whose two executions differed was accepted: %v", err)
+	}
+}
+
+// --- exact values ----------------------------------------------------------------
+//
+// The sentinel convention only ever reported a value that still LOOKED like a
+// sentinel for some other field. A review walked through that six ways, and these
+// are those six: a value has to be what the driver sent, not merely plausible.
+
+// TestHardCodedValueIsReported: the value stops looking like a sentinel at all.
+func TestHardCodedValueIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	observed.Query["q"] = "hard-coded-wrong-value"
+	in.Conformance.Observations["v2 get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		`the driver sent "cd~q" for the query parameter `+"`q`"+` and the client put "hard-coded-wrong-value" on the wire`)
+}
+
+// TestSwappedIntegerValuesAreReported: limit and offset both parse as integers, so
+// a type check alone could never tell them apart. The table gives them different
+// numbers for exactly that reason.
+func TestSwappedIntegerValuesAreReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	observed.Query["limit"], observed.Query["offset"] = observed.Query["offset"], observed.Query["limit"]
+	in.Conformance.Observations["v2 get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"for the query parameter `limit`", "for the query parameter `offset`")
+}
+
+// TestSwappedBooleanValuesAreReported: two booleans on one request would be
+// interchangeable if both were `true`. The table makes them differ.
+func TestSwappedBooleanValuesAreReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	observed.Query["include_shared"], observed.Query["is_active"] =
+		observed.Query["is_active"], observed.Query["include_shared"]
+	in.Conformance.Observations["v2 get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in), "for the query parameter `include_shared`")
+}
+
+// TestWrongCredentialValueIsReported: client_headers used to check presence only,
+// so an arbitrary token under Authorization passed.
+func TestWrongCredentialValueIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	observed.Headers["Authorization"] = "Bearer wrong"
+	in.Conformance.Observations["v2 get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in), "and sent `Authorization: Bearer wrong`")
+}
+
+// TestEmptiedArrayIsReported: recursing over the elements that remain let an
+// emptied array through, because there was nothing left to disagree with.
+func TestEmptiedArrayIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 post /tag-assignments/bulk-assign"]
+	observed.Body["tag_ids"] = json.RawMessage(`[]`)
+	in.Conformance.Observations["v2 post /tag-assignments/bulk-assign"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"the driver sent one element for the body property `tag_ids` and the client put 0 on the wire")
+}
+
+// TestReusedPathValueIsReported: a path witness reused as a query value. The
+// two-execution comparison used to suppress any difference where either side was a
+// path witness, which accepted it across both runs.
+func TestReusedPathValueIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tag-resolution"]
+	observed.Query["slug"] = "TAGID1"
+	in.Conformance.Observations["v2 get /tag-resolution"] = observed
+
+	assertFinding(t, CheckLocal(in), "for the query parameter `slug`")
+}
+
+// TestSwappedResponseValuesAreReported: every key present, each carrying the
+// other's contents. The populated witness kept its values and never compared them.
+func TestSwappedResponseValuesAreReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	observed.Decoded["name"], observed.Decoded["slug"] = observed.Decoded["slug"], observed.Decoded["name"]
+	in.Conformance.Observations["v2 get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in), "the model is not putting it where it belongs")
+}
+
+// TestSwappedCompositeCountersAreReported: composites sat outside every value
+// comparison, so swapping two counters left the bytes intact and was invisible.
+func TestSwappedCompositeCountersAreReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 post /tag-assignments/bulk-assign"]
+	observed.Decoded["created"], observed.Decoded["existing"] =
+		observed.Decoded["existing"], observed.Decoded["created"]
+	in.Conformance.Observations["v2 post /tag-assignments/bulk-assign"] = observed
+
+	assertFinding(t, CheckLocal(in), "the composite body sent `created` as 1")
+}
+
+// --- both surfaces ----------------------------------------------------------------
+
+// TestV1OnlyParameterIsReported: the gate drove v2 only, so a v1 contract change
+// could land with no client follow-through and the offline gate stayed clean --
+// the hole it exists to close, on the half of the API it was not looking at.
+func TestV1OnlyParameterIsReported(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "openapi.yaml"),
+		"operationId: api_v1_tag_resolution_retrieve",
+		"      parameters:\n",
+		"      parameters:\n      - in: query\n        name: v1_only_hint\n        schema:\n          type: string\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`get /tag-resolution` documents the query parameter `v1_only_hint` and the client did not send it")
+}
+
+// TestBothSurfacesAreDriven is the non-vacuity guard on that: every implemented
+// operation is exercised on each surface, and v1 really is reached at its own
+// prefix.
+func TestBothSurfacesAreDriven(t *testing.T) {
+	in := load(t, repoRoot, "")
+	for _, surface := range []string{"v1", "v2"} {
+		seen := 0
+		for _, row := range in.Coverage.Operations {
+			if row.Unimplemented != "" {
+				continue
+			}
+			if _, ok := in.Conformance.Observations[surface+" "+row.Key()]; ok {
+				seen++
+			}
+		}
+		if seen < 25 {
+			t.Errorf("%s: only %d operations were observed", surface, seen)
+		}
+	}
+	// And the namespace axis is v2 only: a v1 client refuses the headers, so the
+	// drivers must not be sending them there.
+	v1 := in.Conformance.Observations["v1 get /tags"]
+	if _, sent := v1.Headers["X-Namespace-Type"]; sent {
+		t.Error("the v1 client sent a namespace header, which v1 rejects")
+	}
+	v2 := in.Conformance.Observations["v2 get /tags"]
+	if _, sent := v2.Headers["X-Namespace-Type"]; !sent {
+		t.Error("the v2 client did not send a namespace header")
 	}
 }

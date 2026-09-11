@@ -88,6 +88,12 @@ type Observation struct {
 	NullWitness    map[string]json.RawMessage
 	NullWitnessErr error
 
+	// Sent is the response body the stub answered with, unwrapped to the same
+	// shape Decoded takes. Keeping it is what lets the two be compared: a model
+	// that puts one property's value into another's field returns every key with
+	// the wrong contents, and only the pair says so.
+	Sent map[string]json.RawMessage
+
 	// Decoded is the re-marshalled response value, when the call returned one:
 	// the JSON keys that survived a round trip through the SDK's model, and their
 	// values. A documented property missing from here is one the client drops; a
@@ -135,7 +141,7 @@ const (
 	witnessNull
 )
 
-// Conformance is what every driver did, keyed by the operation it names.
+// Conformance is what every driver did, keyed by "<surface> <operation>".
 type Conformance struct {
 	Observations map[string]Observation
 
@@ -186,25 +192,41 @@ func (rec *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 // client did with one input. Two do not prove a route is invariant -- nothing
 // short of reading every branch would -- but they catch a route that varies with
 // the value, which one execution cannot.
-func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, error) {
+func RunConformance(vendored map[string]*Spec, cov *Coverage, drivers []Driver) (*Conformance, error) {
 	rows := cov.ByKey()
-	ops, err := strippedOperations(spec, "v2")
-	if err != nil {
-		return nil, err
-	}
-
 	conf := &Conformance{
 		Observations: map[string]Observation{},
 		Errors:       map[string]error{},
 	}
+	for _, surface := range surfaces {
+		if err := runSurface(vendored[surface], surface, rows, drivers, conf); err != nil {
+			return nil, err
+		}
+	}
+	return conf, nil
+}
+
+// runSurface drives every operation against one REST surface.
+//
+// Both surfaces, because the SDK speaks both and the gate used to speak only the
+// default. A v1-only contract change could land with no client follow-through and
+// the offline gate stayed clean -- the exact hole it exists to close, on the half
+// of the API it was not looking at. The client is configured for the surface, and
+// its requests are compared against that surface's own contract.
+func runSurface(spec *Spec, surface string, rows map[string]CoverageOperation, drivers []Driver, conf *Conformance) error {
+	ops, err := strippedOperations(spec, surface)
+	if err != nil {
+		return err
+	}
 
 	declared := map[string]bool{}
 	for _, driver := range drivers {
+		key := surface + " " + driver.Op
 		// A duplicate silently overwrote the first entry's observation, so a
 		// wrong-route driver followed by a correct one for the same operation
 		// produced green.
 		if declared[driver.Op] {
-			conf.Errors[driver.Op] = fmt.Errorf("drivers.go declares %q more than once; the later call would overwrite the earlier one's evidence", driver.Op)
+			conf.Errors[key] = fmt.Errorf("drivers.go declares %q more than once; the later call would overwrite the earlier one's evidence", driver.Op)
 			continue
 		}
 		declared[driver.Op] = true
@@ -214,7 +236,7 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 			failure error
 		)
 		for pass := range pathValues {
-			observation, err := runDriver(spec, ops[driver.Op], rows[driver.Op], driver, pass, witness(pass))
+			observation, err := runDriver(spec, surface, ops[driver.Op], rows[driver.Op], driver, pass, witness(pass))
 			if err != nil {
 				failure = err
 				break
@@ -222,7 +244,7 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 			seen[pass] = observation
 		}
 		if failure != nil {
-			conf.Errors[driver.Op] = failure
+			conf.Errors[key] = failure
 			continue
 		}
 		// The two executions differ only in the values substituted into the path,
@@ -231,7 +253,7 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 		// execution and not the other go unnoticed, since the first execution
 		// supplied all the request-shape evidence.
 		if diff := requestDiff(seen[0], seen[1]); diff != "" {
-			conf.Errors[driver.Op] = fmt.Errorf("the two executions sent different requests: %s", diff)
+			conf.Errors[key] = fmt.Errorf("the two executions sent different requests: %s", diff)
 			continue
 		}
 		// The request side is the first pass's; the null witness's decoded value is
@@ -239,9 +261,9 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 		observation := seen[0]
 		observation.NullWitness = seen[1].Decoded
 		observation.NullWitnessErr = seen[1].CallErr
-		conf.Observations[driver.Op] = observation
+		conf.Observations[key] = observation
 	}
-	return conf, nil
+	return nil
 }
 
 // requestDiff describes the first difference between two executions' requests,
@@ -273,7 +295,11 @@ func diffStringMaps(what string, a, b map[string]string) string {
 		if !ok {
 			return fmt.Sprintf("%s %s sent once and not the second time", what, key)
 		}
-		if a[key] != bv && !pathSentinelValue(a[key]) && !pathSentinelValue(bv) {
+		// No path-value exception here. It used to suppress any difference where
+		// either side happened to be a path witness, which accepted a path argument
+		// reused as a query value across both executions. The path is normalized in
+		// Key(); every other channel must be identical between the two runs.
+		if a[key] != bv {
 			return fmt.Sprintf("%s %s carried %q then %q", what, key, a[key], bv)
 		}
 	}
@@ -283,19 +309,6 @@ func diffStringMaps(what string, a, b map[string]string) string {
 		}
 	}
 	return ""
-}
-
-// pathSentinelValue reports whether a value is one of the per-execution path
-// sentinels, which are meant to differ between the two runs.
-func pathSentinelValue(value string) bool {
-	for _, set := range pathValues {
-		for _, v := range set {
-			if value == v {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func sortedStrings(m map[string]string) []string {
@@ -308,19 +321,23 @@ func sortedStrings(m map[string]string) []string {
 }
 
 // runDriver executes one driver once and records what it did.
-func runDriver(spec *Spec, op *Operation, row CoverageOperation, driver Driver, pass int, w witness) (Observation, error) {
+func runDriver(spec *Spec, surface string, op *Operation, row CoverageOperation, driver Driver, pass int, w witness) (Observation, error) {
 	values := pathValues[pass]
+	var sent map[string]json.RawMessage
 	rec := &recorder{
 		respond: func(req *http.Request) (*http.Response, error) {
-			return synthesizeResponse(spec, op, row, req, w)
+			return synthesizeResponse(spec, op, row, req, w, &sent)
 		},
 	}
 	httpClient := &http.Client{Transport: rec}
 
 	client, err := octonomy.New(octonomy.Config{
-		BaseURL:    "https://contractdrift.invalid",
-		Token:      "contractdrift",
-		TenantID:   "contractdrift",
+		BaseURL: "https://contractdrift.invalid",
+		// The credentials the client_headers expectations are written against, so
+		// Authorization and X-Tenant-ID are checked for their VALUES and not only
+		// their presence.
+		Token:      strings.TrimPrefix(ExpectedValue("authorization"), "Bearer "),
+		TenantID:   ExpectedValue("x-tenant-id"),
 		HTTPClient: httpClient,
 	})
 	if err != nil {
@@ -331,7 +348,9 @@ func runDriver(spec *Spec, op *Operation, row CoverageOperation, driver Driver, 
 		return Observation{}, fmt.Errorf("constructing the health client: %w", err)
 	}
 
-	value, callErr := driver.Call(context.Background(), &Env{Client: client, Health: health, values: values})
+	value, callErr := driver.Call(context.Background(), &Env{
+		Client: client, Health: health, values: values, surface: surface,
+	})
 
 	if rec.synthErr != nil {
 		return Observation{}, rec.synthErr
@@ -353,6 +372,7 @@ func runDriver(spec *Spec, op *Operation, row CoverageOperation, driver Driver, 
 		Headers: headerNames(req.Header),
 		Body:    bodyKeys(req),
 		CallErr: callErr,
+		Sent:    sent,
 		Decoded: remarshalKeys(value),
 	}
 	return observed, nil
@@ -364,8 +384,46 @@ type Env struct {
 	Client *octonomy.Client
 	Health *octonomy.HealthClient
 
-	values map[string]string
+	values  map[string]string
+	surface string
 }
+
+// Namespaced returns the namespace option for the surface under test, and NOTHING
+// on v1 -- which has no namespace axis, refuses the headers with
+// namespace_not_supported, and whose client rejects the option before the wire.
+// A driver that hard-coded it could not run against v1 at all.
+func (e *Env) Namespaced() []octonomy.RequestOption {
+	if e.surface == "v1" {
+		return nil
+	}
+	return []octonomy.RequestOption{octonomy.WithNamespace(
+		ExpectedValue("x-namespace-type"), ExpectedValue("x-namespace-id"))}
+}
+
+// ReadScope is what every bodyless read carries: an application, the namespace
+// pair where the surface has one, and the opt-in that widens a namespaced read
+// back to global rows.
+func (e *Env) ReadScope() []octonomy.RequestOption {
+	opts := []octonomy.RequestOption{octonomy.WithApplication(ExpectedValue("application_id"))}
+	opts = append(opts, e.Namespaced()...)
+	if e.surface == "v2" {
+		opts = append(opts, octonomy.WithIncludeGlobal())
+	}
+	return opts
+}
+
+// DeleteScope is what a BODYLESS write carries: an application, which a
+// namespaced bodyless request requires, and the namespace pair. Not
+// WithIncludeGlobal -- the server reads that only on safe methods, so the SDK
+// refuses it on a write rather than let it be dropped in silence.
+func (e *Env) DeleteScope() []octonomy.RequestOption {
+	opts := []octonomy.RequestOption{octonomy.WithApplication(ExpectedValue("application_id"))}
+	return append(opts, e.Namespaced()...)
+}
+
+// Scope is the namespace alone, for a request whose BODY carries the application:
+// on a POST or PATCH the body is authoritative and WithApplication is refused.
+func (e *Env) Scope() []octonomy.RequestOption { return e.Namespaced() }
 
 // Path returns the value to pass for a documented path placeholder. It differs
 // between a driver's two executions, which is what makes a value-dependent route
@@ -393,7 +451,7 @@ type Driver struct {
 // so the observed path is directly comparable with the documented one -- and a
 // swapped pair of arguments is not.
 func normalizeObservedPath(path string, values map[string]string) string {
-	path = strings.TrimPrefix(path, "/api/v2")
+	path = strings.TrimPrefix(strings.TrimPrefix(path, "/api/v2"), "/api/v1")
 	byValue := make(map[string]string, len(values))
 	for placeholder, value := range values {
 		byValue[value] = "{" + placeholder + "}"
@@ -463,6 +521,28 @@ func queryNames(values url.Values) map[string]string {
 	return out
 }
 
+// unwrapEnvelope reduces a response body to the model the client decodes: the
+// object under `data`, or the first element of a list under it.
+func unwrapEnvelope(body []byte) map[string]json.RawMessage {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(body, &object); err != nil {
+		return nil
+	}
+	data, ok := object["data"]
+	if !ok {
+		return object
+	}
+	var inner map[string]json.RawMessage
+	if err := json.Unmarshal(data, &inner); err == nil {
+		return inner
+	}
+	var elements []map[string]json.RawMessage
+	if err := json.Unmarshal(data, &elements); err == nil && len(elements) > 0 {
+		return elements[0]
+	}
+	return nil
+}
+
 // remarshalKeys renders a decoded response back to JSON and returns its fields --
 // for a list, the fields of its first element. A documented property the Go model
 // has no field for cannot appear here, which is the whole point; and the VALUES
@@ -501,8 +581,11 @@ func remarshalKeys(value any) map[string]json.RawMessage {
 // A schema it cannot build a body from becomes a transport error rather than a
 // 500, so the run reports "the gate could not synthesize this" instead of
 // blaming the SDK for failing to decode the gate's own apology page.
-func synthesizeResponse(spec *Spec, op *Operation, row CoverageOperation, req *http.Request, w witness) (*http.Response, error) {
+func synthesizeResponse(spec *Spec, op *Operation, row CoverageOperation, req *http.Request, w witness, sent *map[string]json.RawMessage) (*http.Response, error) {
 	body, status, err := synthesizeBody(spec, op, row, w)
+	if err == nil && sent != nil {
+		*sent = unwrapEnvelope(body)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("the response stub could not build a body: %w", err)
 	}
@@ -527,11 +610,12 @@ func synthesizeBody(spec *Spec, op *Operation, row CoverageOperation, w witness)
 	// The composites -- bulk assign, bulk remove, the resource-tag replace -- are
 	// the recorded divergence: the contract claims a bare array for two of them
 	// and documents no body at all for the third, while the server returns a
-	// result object the contract never describes. There is no schema to
-	// synthesize from, so the stub answers with the shape the SDK documents and
-	// the request side of the observation still counts.
+	// result object the contract never describes. There is no schema to synthesize
+	// from, so the body comes from the inventory, where it is recorded as the
+	// reviewed fact it is -- and one per operation, since a universal object
+	// carrying every composite's keys left each decoder dropping the others'.
 	if row.ActualResponse == "composite-envelope" {
-		return []byte(`{"data":{"created":1,"existing":0,"skipped":0,"removed":1,"assignments":[],"tags":[]}}`), http.StatusOK, nil
+		return []byte(`{"data":` + row.CompositeBody + `}`), http.StatusOK, nil
 	}
 
 	if op == nil || op.OKModel == "" {
@@ -641,9 +725,9 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness, property
 		case "date":
 			return "2026-01-02", nil
 		}
-		// The property's OWN name, in the same self-identifying form the drivers
-		// use. Every string used to be the same word, so two response fields with
-		// swapped JSON tags round-tripped indistinguishably.
+		// The property's OWN name, in the same form the drivers use, so a response
+		// value that lands in the wrong field says where it came from. Every string
+		// used to be the same word.
 		return driverValue(property), nil
 	case "integer":
 		return 1, nil

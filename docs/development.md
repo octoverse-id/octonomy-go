@@ -220,8 +220,9 @@ check reports every one of those as green. So the gate compares:
 | **Query parameters** | per operation, by `in` + name, with `required` and the parameter's schema — *and*, in both directions, against what that operation's method actually puts on the wire |
 | **Responses** | per operation, per status, including request bodies |
 | **Schemas** | `components.schemas`, property by property, including the `required` set |
-| **Response models** | the client decodes a body built **from** the vendored schema; the gate reports what did not survive the round trip |
-| **Routes** | each inventory row against the request its method actually issued |
+| **Response models** | the client decodes a body built **from** the vendored schema; the gate compares every property's value, and reports what did not survive the round trip |
+| **Model field names** | each response model's Go field against the property it decodes — the one defect a round trip cannot see, since the same tags decode and re-encode |
+| **Routes** | each inventory row against the request its method actually issued, on both surfaces |
 | **Error codes** | `server_error_codes` in the inventory against this SDK's `Code*` constants offline, and against the server's `octonomy/core/errors.py` on the schedule — both directions on both hops |
 
 The error-code check needs that Python file because the contract cannot answer the question:
@@ -233,10 +234,16 @@ would have been the one item on this list where "refresh now, implement later" w
 repository could be left in.
 
 **The SDK side is driven, not read.** For each operation, `tools/contractdrift/drivers.go` calls the
-method with every parameter it offers populated, against a stub server that records the request and
-answers with a body **synthesized from the vendored schema**. The request is the answer — the route, the query
-parameters, the headers, and the JSON keys of the body, compared with the contract in **both**
-directions and with no inference in any of it. The response is the other half: a property the Go model
+method with every documented input populated — on **both REST surfaces**, twice each — against a
+recording transport that answers with a body **synthesized from the vendored schema**. The request is
+the answer: route, query parameters, headers and request body, **names and values**, compared with
+that surface's contract in **both** directions and with no inference in any of it.
+
+Values are comparable because every input has one canonical value, in a single table
+(`ExpectedValue` in `drivers.go`), and the gate requires the wire to carry exactly it. Most are the
+wire field's own name, which makes a misrouted value self-describing; the rest — numbers, booleans,
+an enum, the credentials — are listed explicitly and chosen so that any two that can ride the same
+request differ from each other. The response is the other half: a property the Go model
 has no field for is dropped on the way back out, and one whose type the model cannot read fails to
 decode.
 
@@ -253,11 +260,14 @@ from a client that actually issues the request.
 The cost is the driver table: one call per operation, which someone has to write and keep compiling.
 That is the deliberate trade — a driver that names the wrong method reports the wrong route on its
 first run, a driver that stops compiling is a build failure, and an operation with no driver is a
-finding. A driver that is merely *wrong* — nil params, a missing option, a swapped argument, a duplicate
-entry, one that never reaches the wire or reaches it twice, or one whose two executions disagree —
-fails the same way a broken client would, because the gate compares both executions in full. The one
-thing a driver can still fail to do is exercise an option the contract does not document (`WithActor`,
-`WithRequestID`); those have no documented counterpart to compare against.
+finding. A driver that is merely *wrong* — nil params, a missing option, a swapped argument, a hard-coded
+value, a duplicate entry, one that never reaches the wire or reaches it twice, or one whose two
+executions disagree — fails the same way a broken client would, because every value is compared
+against the table and both executions are compared in full.
+
+What it does **not** cover: options the contract does not document (`WithActor`, `WithRequestID`)
+have no documented counterpart to compare against, and free-form values (`metadata`) constrain
+nothing.
 
 **What a passing decode does and does not prove.** Each operation is driven twice: once with every
 property populated, once with every `nullable` property set to `null`. Together those prove the model

@@ -193,6 +193,7 @@ operations:
     sdk: AssignmentService.BulkAssign
     documented_response: array
     actual_response: composite-envelope
+    composite_body: '{"created": 1, "existing": 2, "skipped": 3, "assignments": []}' 
   - path: /tag-assignments/bulk-remove
     method: post
     # The spec documents NO response schema at all. The server returns
@@ -200,6 +201,7 @@ operations:
     sdk: AssignmentService.BulkRemove
     documented_response: none
     actual_response: composite-envelope
+    composite_body: '{"removed": 4}' 
 
   # --- Resource tags (resources.go) -------------------------------------------
   - path: /resources/{resource_type}/{resource_id}/tags
@@ -214,6 +216,7 @@ operations:
     sdk: ResourceService.ReplaceTags
     documented_response: array
     actual_response: composite-envelope
+    composite_body: '{"created": 5, "removed": 6, "tags": []}' 
   - path: /tags/{tag_id}/resources
     method: get
     sdk: TagService.ListResources
@@ -394,6 +397,27 @@ unsent_inputs:
     in: body
     name: resource_id
     reason: *resource_in_path
+
+# Inputs the client sends that a SURFACE's generated contract does not document.
+#
+# One cause, applied uniformly: the server's OpenAPI hook injects the application,
+# namespace and include_global parameters on **v2 only** (octonomy/openapi/schema.py),
+# while the view code behind both surfaces reads `application_id` either way. So v1's
+# generated spec under-documents a parameter the v1 API really accepts.
+#
+# Keyed by surface and name rather than per operation, because the cause is not
+# per operation — and the gate reports any OTHER undocumented input on either
+# surface, plus this row itself if v1 ever starts documenting it.
+undocumented_inputs:
+  - surface: v1
+    in: query
+    name: application_id
+    reason: >-
+      Verified in the vendored contracts: api_v1_tags_retrieve documents only its
+      path parameter while api_v2_tags_retrieve carries the injected application,
+      namespace and include_global parameters. The v1 views read application_id
+      all the same — it is the same view tree behind both prefixes — so the SDK
+      sends it on both surfaces and the v1 spec is the half that is incomplete.
 
 # Headers the client puts on EVERY versioned request that no operation documents.
 #

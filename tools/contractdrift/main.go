@@ -57,8 +57,9 @@
 //	                   gate that does that is a merge gate people learn to
 //	                   route around.
 //
-// Each operation is driven TWICE -- different path values, different response
-// witness -- and the two requests must agree in everything but the path.
+// Each operation is driven FOUR times: both REST surfaces, and on each, two
+// executions with different path values and different response witnesses. The two
+// executions on a surface must agree in everything but the path.
 //
 // Fetching is deliberately NOT this program's job. scripts/contract-fetch.sh
 // does it, and this reads plain files -- which is what makes a synthetic
@@ -142,10 +143,10 @@ func run(repo, upstream, summary, source string) (int, error) {
 	if in.RecordedVersion, err = RecordedContractVersion(filepath.Join(repo, "docs", "versioning.md")); err != nil {
 		return 0, err
 	}
-	// Call the client, once per operation, against a stub that answers with bodies
-	// built from the vendored schemas. Everything the local checks say about what
+	// Call the client against a stub that answers with bodies built from the
+	// vendored schemas: every operation, on BOTH surfaces, twice each. Everything the local checks say about what
 	// the SDK sends and decodes comes from here rather than from reading its source.
-	if in.Conformance, err = RunConformance(in.Vendored["v2"], in.Coverage, Drivers()); err != nil {
+	if in.Conformance, err = RunConformance(in.Vendored, in.Coverage, Drivers()); err != nil {
 		return 0, err
 	}
 
@@ -200,9 +201,9 @@ func render(in Inputs, report *Report, source string, withUpstream bool) string 
 
 	if report.Count() == 0 {
 		if withUpstream {
-			b.WriteString("No drift. The vendored contracts match the server's, and the SDK sends and decodes what they document.\n")
+			b.WriteString("No drift. The vendored contracts match the server's, and what the client sent and decoded matches what they document.\n")
 		} else {
-			b.WriteString("No drift. The SDK sends and decodes what the vendored contracts document. The cross-repository comparison did not run.\n")
+			b.WriteString("No drift. What the client sent and decoded matches the vendored contracts. The cross-repository comparison did not run.\n")
 		}
 		return b.String()
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -110,6 +111,7 @@ func CheckLocal(in Inputs) *Report {
 	checkQueryParametersSent(in, r)
 	checkRequestShapes(in, r)
 	checkResponseModels(in, r)
+	checkCompositeResponses(in, r)
 	checkModelFieldNames(in, r)
 	checkErrorCodesImplemented(in, r)
 	return r
@@ -234,66 +236,68 @@ func checkImplementation(in Inputs, r *Report) {
 		drivers[d.Op] = d
 	}
 
-	for _, row := range in.Coverage.Operations {
-		if row.Unimplemented != "" {
-			if _, ok := drivers[row.Key()]; ok {
-				items = append(items, fmt.Sprintf("`%s` is recorded as unimplemented and drivers.go calls it", row.Key()))
+	for _, surface := range surfaces {
+		for _, row := range in.Coverage.Operations {
+			if row.Unimplemented != "" {
+				if _, ok := drivers[row.Key()]; ok {
+					items = append(items, fmt.Sprintf("`%s` is recorded as unimplemented and drivers.go calls it", row.Key()))
+				}
+				continue
 			}
-			continue
-		}
-		// The row's `sdk:` field is documentation, and cheap to keep true: the
-		// method it names has to exist. A declaration is the one thing still read
-		// out of the source, because it is not control flow -- everything about
-		// what the method DOES comes from driving it.
-		//
-		// It used to assert the FILE too. That went: a warning when a working
-		// method moves between source files is not worth a field in a checked
-		// inventory, and the compiled driver plus the observed route prove the
-		// behavior either way.
-		if _, ok := in.SDK.Method(row.SDK); !ok {
-			items = append(items, fmt.Sprintf("`%s` claims `%s`, which this package does not declare", row.Key(), row.SDK))
-		}
-		driver, ok := drivers[row.Key()]
-		if !ok {
-			items = append(items, fmt.Sprintf("`%s` is implemented and drivers.go has no call for it -- add one, or the gate says nothing about this operation", row.Key()))
-			continue
-		}
-		if driver.SDK != row.SDK {
-			items = append(items, fmt.Sprintf("`%s`: the inventory names `%s` and drivers.go calls `%s`", row.Key(), row.SDK, driver.SDK))
+			// The row's `sdk:` field is documentation, and cheap to keep true: the
+			// method it names has to exist. A declaration is the one thing still read
+			// out of the source, because it is not control flow -- everything about
+			// what the method DOES comes from driving it.
+			//
+			// It used to assert the FILE too. That went: a warning when a working
+			// method moves between source files is not worth a field in a checked
+			// inventory, and the compiled driver plus the observed route prove the
+			// behavior either way.
+			if _, ok := in.SDK.Method(row.SDK); !ok {
+				items = append(items, fmt.Sprintf("`%s` claims `%s`, which this package does not declare", row.Key(), row.SDK))
+			}
+			driver, ok := drivers[row.Key()]
+			if !ok {
+				items = append(items, fmt.Sprintf("`%s` is implemented and drivers.go has no call for it -- add one, or the gate says nothing about this operation", row.Key()))
+				continue
+			}
+			if driver.SDK != row.SDK {
+				items = append(items, fmt.Sprintf("`%s`: the inventory names `%s` and drivers.go calls `%s`", row.Key(), row.SDK, driver.SDK))
+			}
+
+			if err, failed := in.Conformance.Errors[surface+" "+row.Key()]; failed {
+				items = append(items, fmt.Sprintf("`%s`: `%s` did not reach the wire: %v", row.Key(), driver.SDK, err))
+				continue
+			}
+			observed, ok := in.Conformance.Observations[surface+" "+row.Key()]
+			if !ok {
+				items = append(items, fmt.Sprintf("`%s`: no observation was recorded for `%s`", row.Key(), driver.SDK))
+				continue
+			}
+			// Compared verbatim: the recorder maps each sentinel back to the
+			// placeholder it was passed for, so the observed path carries the same
+			// names the contract does -- and two arguments in the wrong order no
+			// longer produce the expected route.
+			if observed.Key() != row.Key() {
+				items = append(items, fmt.Sprintf("`%s`: `%s` requests `%s`", row.Key(), driver.SDK, strings.ToUpper(observed.Method)+" "+observed.Path))
+			}
+			// A call error against a body the STUB built from the vendored schema is a
+			// contract failure, not a transport one: the only thing that can go wrong
+			// here is decoding, and it goes wrong when the model no longer fits the
+			// schema -- a retyped property, most often.
+			if observed.CallErr != nil {
+				items = append(items, fmt.Sprintf("`%s`: `%s` could not handle a response built from the vendored schema: %v",
+					row.Key(), driver.SDK, observed.CallErr))
+			}
 		}
 
-		if err, failed := in.Conformance.Errors[row.Key()]; failed {
-			items = append(items, fmt.Sprintf("`%s`: `%s` did not reach the wire: %v", row.Key(), driver.SDK, err))
-			continue
-		}
-		observed, ok := in.Conformance.Observations[row.Key()]
-		if !ok {
-			items = append(items, fmt.Sprintf("`%s`: no observation was recorded for `%s`", row.Key(), driver.SDK))
-			continue
-		}
-		// Compared verbatim: the recorder maps each sentinel back to the
-		// placeholder it was passed for, so the observed path carries the same
-		// names the contract does -- and two arguments in the wrong order no
-		// longer produce the expected route.
-		if observed.Key() != row.Key() {
-			items = append(items, fmt.Sprintf("`%s`: `%s` requests `%s`", row.Key(), driver.SDK, strings.ToUpper(observed.Method)+" "+observed.Path))
-		}
-		// A call error against a body the STUB built from the vendored schema is a
-		// contract failure, not a transport one: the only thing that can go wrong
-		// here is decoding, and it goes wrong when the model no longer fits the
-		// schema -- a retyped property, most often.
-		if observed.CallErr != nil {
-			items = append(items, fmt.Sprintf("`%s`: `%s` could not handle a response built from the vendored schema: %v",
-				row.Key(), driver.SDK, observed.CallErr))
-		}
 	}
-
 	for op := range drivers {
 		if _, ok := in.Coverage.ByKey()[op]; !ok {
 			items = append(items, fmt.Sprintf("drivers.go calls `%s`, which %s does not list", op, in.Coverage.Path))
 		}
 	}
-	r.Add("Implementation", items)
+	r.Add("Implementation", dedupe(items))
 }
 
 // checkDocumentedResponses asserts each recorded divergence between the generated
@@ -344,17 +348,16 @@ func checkDocumentedResponses(in Inputs, r *Report) {
 // parameter missing from the wire is missing from the CLIENT, not from the call.
 func checkQueryParametersSent(in Inputs, r *Report) {
 	allowed := in.Coverage.UnsentIndex()
+	undocumented := in.Coverage.UndocumentedIndex()
 	used := map[string]bool{}
+	usedUndocumented := map[string]bool{}
 	var items []string
 
-	// The v2 contract, and only v2. The client under test targets v2 -- that is
-	// the SDK's default surface -- so v2 is what its requests must match. v1
-	// documents strictly fewer parameters (no namespace axis, so no
-	// `include_global`), and comparing a v2 request against it would report every
-	// namespaced read as sending something undocumented. Surface parity has its
-	// own check.
-	{
-		surface := "v2"
+	// BOTH surfaces, each against a client configured for it. This used to be v2
+	// only -- the default -- so a parameter added to a v1 operation could land with
+	// no client follow-through and the offline gate stayed clean, which is the
+	// hole this gate exists to close, on the half of the API it was not looking at.
+	for _, surface := range surfaces {
 		ops, err := strippedOperations(in.Vendored[surface], surface)
 		if err != nil {
 			r.Add("Query parameters", items)
@@ -365,7 +368,7 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 			if !ok || row.Unimplemented != "" {
 				continue
 			}
-			observed, ok := in.Conformance.Observations[row.Key()]
+			observed, ok := in.Conformance.Observations[surface+" "+row.Key()]
 			if !ok {
 				continue // reported by checkImplementation
 			}
@@ -386,10 +389,16 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 				items = append(items, valueFindings(row.Key(), "query parameter", name, value, op.ParamSchema("query", name))...)
 			}
 			for _, name := range sortedStrings(observed.Query) {
-				if !documented[name] {
-					items = append(items, fmt.Sprintf("`%s`: the client sends the query parameter `%s`, which no vendored contract documents -- the server will ignore it",
-						row.Key(), name))
+				if documented[name] {
+					continue
 				}
+				key := surface + " query " + name
+				if _, ok := undocumented[key]; ok {
+					usedUndocumented[key] = true
+					continue
+				}
+				items = append(items, fmt.Sprintf("`%s` (%s): the client sends the query parameter `%s`, which that surface's contract does not document -- the server will ignore it",
+					row.Key(), surface, name))
 			}
 		}
 	}
@@ -400,6 +409,11 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 		}
 		if !used[key] {
 			items = append(items, fmt.Sprintf("`%s` is listed under unsent_inputs and the client sends it now, or the contract stopped documenting it -- drop the row", key))
+		}
+	}
+	for key := range undocumented {
+		if !usedUndocumented[key] {
+			items = append(items, fmt.Sprintf("`%s` is listed under undocumented_inputs and that surface documents it now, or the client stopped sending it -- drop the row", key))
 		}
 	}
 	r.Add("Query parameters", dedupe(items))
@@ -429,8 +443,9 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 // recorded divergences, and comparing them against the spec would report the
 // divergence as drift on every run.
 func checkResponseModels(in Inputs, r *Report) {
-	spec := in.Vendored["v2"]
-	ops, err := strippedOperations(spec, "v2")
+	const surface = "v2"
+	spec := in.Vendored[surface]
+	ops, err := strippedOperations(spec, surface)
 	if err != nil {
 		return // reported by checkSurfaceParity
 	}
@@ -449,7 +464,7 @@ func checkResponseModels(in Inputs, r *Report) {
 		if !ok || op.OKModel == "" {
 			continue
 		}
-		observed, ok := in.Conformance.Observations[row.Key()]
+		observed, ok := in.Conformance.Observations[surface+" "+row.Key()]
 		if !ok || observed.CallErr != nil {
 			continue // reported by checkImplementation
 		}
@@ -469,7 +484,18 @@ func checkResponseModels(in Inputs, r *Report) {
 		documentedSet := map[string]bool{}
 		for _, property := range documented {
 			documentedSet[property] = true
-			_, survived := observed.Decoded[property]
+			decoded, survived := observed.Decoded[property]
+			if survived {
+				// The VALUE, not just the key. The stub knows what it sent, so a
+				// model that puts one property's contents into another field --
+				// through a custom UnmarshalJSON, a post-decode assignment, or a
+				// composite decoder -- returns every key with the wrong data, and
+				// only comparing the pair says so.
+				if sent, ok := observed.Sent[property]; ok && !sameJSON(sent, decoded) {
+					items = append(items, fmt.Sprintf("schema `%s` sent `%s` as %s and `%s` returned %s -- the model is not putting it where it belongs",
+						op.OKModel, property, string(sent), row.SDK, string(decoded)))
+				}
+			}
 			if !survived {
 				items = append(items, fmt.Sprintf("schema `%s` documents `%s` and it does not survive decoding by `%s` -- the model has no field for it",
 					op.OKModel, property, row.SDK))
@@ -826,127 +852,137 @@ func dedupe(items []string) []string {
 // parameter is populated" from a promise in a comment into something a reader can
 // stop taking on trust.
 func checkRequestShapes(in Inputs, r *Report) {
-	spec := in.Vendored["v2"]
-	ops, err := strippedOperations(spec, "v2")
-	if err != nil {
-		return // reported by checkSurfaceParity
-	}
 	unsent := in.Coverage.UnsentIndex()
 	clientHeaders := in.Coverage.ClientHeaderSet()
 	used := map[string]bool{}
 	seenClientHeader := map[string]bool{}
 	var items []string
 
-	for _, row := range in.Coverage.Operations {
-		if row.Unimplemented != "" {
-			continue
+	// Both surfaces, for the same reason the query check runs on both: a request
+	// shape is per surface, and only one of the two was ever exercised.
+	for _, surface := range surfaces {
+		spec := in.Vendored[surface]
+		ops, err := strippedOperations(spec, surface)
+		if err != nil {
+			continue // reported by checkSurfaceParity
 		}
-		op, ok := ops[row.Key()]
-		if !ok {
-			continue
-		}
-		observed, ok := in.Conformance.Observations[row.Key()]
-		if !ok {
-			continue // reported by checkImplementation
-		}
+		for _, row := range in.Coverage.Operations {
+			if row.Unimplemented != "" {
+				continue
+			}
+			op, ok := ops[row.Key()]
+			if !ok {
+				continue
+			}
+			observed, ok := in.Conformance.Observations[surface+" "+row.Key()]
+			if !ok {
+				continue // reported by checkImplementation
+			}
 
-		// --- headers ---
-		documentedHeaders := map[string]bool{}
-		for _, name := range op.HeaderParams() {
-			canonical := http.CanonicalHeaderKey(name)
-			documentedHeaders[canonical] = true
-			value, sent := observed.Headers[canonical]
-			if !sent {
-				key := row.Key() + " header " + name
-				if _, ok := unsent[key]; ok {
-					used[key] = true
+			// --- headers ---
+			documentedHeaders := map[string]bool{}
+			for _, name := range op.HeaderParams() {
+				canonical := http.CanonicalHeaderKey(name)
+				documentedHeaders[canonical] = true
+				value, sent := observed.Headers[canonical]
+				if !sent {
+					key := row.Key() + " header " + name
+					if _, ok := unsent[key]; ok {
+						used[key] = true
+						continue
+					}
+					items = append(items, fmt.Sprintf("`%s` documents the header `%s` and the client did not send it", row.Key(), name))
 					continue
 				}
-				items = append(items, fmt.Sprintf("`%s` documents the header `%s` and the client did not send it", row.Key(), name))
-				continue
+				items = append(items, valueFindings(row.Key(), "header", canonical, value, op.ParamSchema("header", name))...)
 			}
-			items = append(items, valueFindings(row.Key(), "header", canonical, value, op.ParamSchema("header", name))...)
-		}
 
-		// client_headers means EVERY versioned request, and it is checked that way
-		// -- once per operation, not once per run. Requiring each name to have been
-		// seen somewhere let a client drop X-Tenant-ID from every request carrying
-		// a body while the reads kept it, which is every write losing its tenant
-		// scope, reported as nothing at all.
-		//
-		// And forbidden on the unversioned probes, which is the other half of the
-		// same rule: /health authenticates nobody, so an Authorization or
-		// X-Tenant-ID leaking onto it is a finding rather than an absence.
-		versioned := !strings.HasPrefix(row.Path, "/health/")
-		for name := range clientHeaders {
-			switch _, sent := observed.Headers[name]; {
-			case sent && versioned:
-				seenClientHeader[name] = true
-			case !sent && versioned:
-				items = append(items, fmt.Sprintf("`%s` does not carry `%s`, which client_headers records as sent on every versioned request", row.Key(), name))
-			case sent && !versioned:
-				seenClientHeader[name] = true
-				items = append(items, fmt.Sprintf("`%s` carries `%s`, and the unversioned probes authenticate nobody -- it must not be sent there", row.Key(), name))
+			// client_headers means EVERY versioned request, with the value the client was
+			// configured with -- an arbitrary token under Authorization used to pass,
+			// because only presence was checked. And it is checked per operation
+			// -- once per operation, not once per run. Requiring each name to have been
+			// seen somewhere let a client drop X-Tenant-ID from every request carrying
+			// a body while the reads kept it, which is every write losing its tenant
+			// scope, reported as nothing at all.
+			//
+			// And forbidden on the unversioned probes, which is the other half of the
+			// same rule: /health authenticates nobody, so an Authorization or
+			// X-Tenant-ID leaking onto it is a finding rather than an absence.
+			versioned := !strings.HasPrefix(row.Path, "/health/")
+			for name := range clientHeaders {
+				switch value, sent := observed.Headers[name]; {
+				case sent && versioned:
+					seenClientHeader[name] = true
+					if want := ExpectedValue(name); value != want {
+						items = append(items, fmt.Sprintf("`%s`: the client was configured with %q and sent `%s: %s`",
+							row.Key(), want, name, value))
+					}
+				case !sent && versioned:
+					items = append(items, fmt.Sprintf("`%s` does not carry `%s`, which client_headers records as sent on every versioned request", row.Key(), name))
+				case sent && !versioned:
+					seenClientHeader[name] = true
+					items = append(items, fmt.Sprintf("`%s` carries `%s`, and the unversioned probes authenticate nobody -- it must not be sent there", row.Key(), name))
+				}
 			}
-		}
-		for _, name := range sortedStrings(observed.Headers) {
-			if clientHeaders[name] || documentedHeaders[name] {
-				continue
-			}
-			items = append(items, fmt.Sprintf("`%s`: the client sends the header `%s`, which no vendored contract documents", row.Key(), name))
-		}
-
-		// --- request body ---
-		switch {
-		case op.RequestModel == "" && len(observed.Body) > 0:
-			// The one live case is DELETE /tag-assignments, whose ids travel in a
-			// body the generated spec does not describe -- a fourth divergence in
-			// the same family as the envelopes, and recorded the same way.
-			if row.UndocumentedRequestBody == "" {
-				items = append(items, fmt.Sprintf("`%s`: the client sends a request body (%s) and the contract documents none -- record it under undocumented_request_body",
-					row.Key(), strings.Join(sortedFields(observed.Body), ", ")))
-			}
-			continue
-		case op.RequestModel == "" && row.UndocumentedRequestBody != "":
-			items = append(items, fmt.Sprintf("`%s` records an undocumented request body and the client sends no body at all -- drop the row", row.Key()))
-			continue
-		case op.RequestModel == "":
-			continue
-		case row.UndocumentedRequestBody != "":
-			items = append(items, fmt.Sprintf("`%s` records an undocumented request body and the contract now documents `%s` -- drop the row",
-				row.Key(), op.RequestModel))
-			continue
-		case len(observed.Body) == 0:
-			items = append(items, fmt.Sprintf("`%s`: the contract documents a `%s` request body and the client sent none",
-				row.Key(), op.RequestModel))
-			continue
-		}
-
-		documented, ok := spec.SchemaProperties(op.RequestModel)
-		if !ok {
-			items = append(items, fmt.Sprintf("`%s`: the request body references schema `%s`, which components.schemas does not define", row.Key(), op.RequestModel))
-			continue
-		}
-		documentedSet := map[string]bool{}
-		for _, property := range documented {
-			documentedSet[property] = true
-			raw, sent := observed.Body[property]
-			if !sent {
-				key := row.Key() + " body " + property
-				if _, ok := unsent[key]; ok {
-					used[key] = true
+			for _, name := range sortedStrings(observed.Headers) {
+				if clientHeaders[name] || documentedHeaders[name] {
 					continue
 				}
-				items = append(items, fmt.Sprintf("`%s`: schema `%s` documents `%s` and the client did not send it -- implement it, or populate it in drivers.go",
-					row.Key(), op.RequestModel, property))
+				items = append(items, fmt.Sprintf("`%s`: the client sends the header `%s`, which no vendored contract documents", row.Key(), name))
+			}
+
+			// --- request body ---
+			switch {
+			case op.RequestModel == "" && len(observed.Body) > 0:
+				// The one live case is DELETE /tag-assignments, whose ids travel in a
+				// body the generated spec does not describe -- a fourth divergence in
+				// the same family as the envelopes, and recorded the same way.
+				if row.UndocumentedRequestBody == "" {
+					items = append(items, fmt.Sprintf("`%s`: the client sends a request body (%s) and the contract documents none -- record it under undocumented_request_body",
+						row.Key(), strings.Join(sortedFields(observed.Body), ", ")))
+				}
+				continue
+			case op.RequestModel == "" && row.UndocumentedRequestBody != "":
+				items = append(items, fmt.Sprintf("`%s` records an undocumented request body and the client sends no body at all -- drop the row", row.Key()))
+				continue
+			case op.RequestModel == "":
+				continue
+			case row.UndocumentedRequestBody != "":
+				items = append(items, fmt.Sprintf("`%s` records an undocumented request body and the contract now documents `%s` -- drop the row",
+					row.Key(), op.RequestModel))
+				continue
+			case len(observed.Body) == 0:
+				items = append(items, fmt.Sprintf("`%s`: the contract documents a `%s` request body and the client sent none",
+					row.Key(), op.RequestModel))
 				continue
 			}
-			items = append(items, jsonValueFindings(row.Key(), "body property", property, raw, spec.PropertySchema(op.RequestModel, property))...)
-		}
-		for _, property := range sortedFields(observed.Body) {
-			if !documentedSet[property] {
-				items = append(items, fmt.Sprintf("`%s`: the client sends `%s` in its request body, which schema `%s` does not document",
-					row.Key(), property, op.RequestModel))
+
+			documented, ok := spec.SchemaProperties(op.RequestModel)
+			if !ok {
+				items = append(items, fmt.Sprintf("`%s`: the request body references schema `%s`, which components.schemas does not define", row.Key(), op.RequestModel))
+				continue
+			}
+			documentedSet := map[string]bool{}
+			for _, property := range documented {
+				documentedSet[property] = true
+				raw, sent := observed.Body[property]
+				if !sent {
+					key := row.Key() + " body " + property
+					if _, ok := unsent[key]; ok {
+						used[key] = true
+						continue
+					}
+					items = append(items, fmt.Sprintf("`%s`: schema `%s` documents `%s` and the client did not send it -- implement it, or populate it in drivers.go",
+						row.Key(), op.RequestModel, property))
+					continue
+				}
+				items = append(items, jsonValueFindings(row.Key(), "body property", property, raw, spec.PropertySchema(op.RequestModel, property))...)
+			}
+			for _, property := range sortedFields(observed.Body) {
+				if !documentedSet[property] {
+					items = append(items, fmt.Sprintf("`%s`: the client sends `%s` in its request body, which schema `%s` does not document",
+						row.Key(), property, op.RequestModel))
+				}
 			}
 		}
 	}
@@ -958,7 +994,7 @@ func checkRequestShapes(in Inputs, r *Report) {
 		if row.CarriedIn == "" {
 			continue
 		}
-		observed, ok := in.Conformance.Observations[row.Method+" "+row.Path]
+		observed, ok := in.Conformance.Observations["v2 "+row.Method+" "+row.Path]
 		if !ok {
 			continue
 		}
@@ -1012,13 +1048,28 @@ func checkRequestShapes(in Inputs, r *Report) {
 // right, and the type says the contract still describes what is being sent.
 
 // valueFindings checks one emitted string value: query parameter or header.
+//
+// EXACT EQUALITY against the value the driver supplied for that field. The rule
+// used to be weaker -- report only a value that still looked like a sentinel for
+// some other field -- and a review walked through it six ways, including a
+// hard-coded string, two swapped integers, two swapped booleans and a reused path
+// argument. A field carries what the driver gave it or it does not.
+//
+// The type check still runs on top, because a value can be exactly what the driver
+// sent and the CONTRACT can be the thing that moved: a parameter retyped upstream
+// leaves the client sending a perfectly correct string for a documented integer.
 func valueFindings(op, kind, name, value string, schema map[string]string) []string {
 	var items []string
-	// Case-insensitive: a header's name is canonicalized on the wire
-	// (X-Namespace-Type) and a sentinel is written as the field it names.
-	if origin, ok := sentinelOrigin(value); ok && !strings.EqualFold(origin, name) {
-		items = append(items, fmt.Sprintf("`%s`: the %s `%s` carries the value the driver supplied for `%s` -- the client is wiring one input to another's name",
-			op, kind, name, origin))
+	if want := ExpectedValue(name); value != want {
+		// Where the value belongs to another field, say so: that names the defect
+		// rather than merely reporting a mismatch.
+		if origin, ok := sentinelOrigin(value); ok && !strings.EqualFold(origin, name) {
+			items = append(items, fmt.Sprintf("`%s`: the %s `%s` carries the value the driver supplied for `%s` -- the client is wiring one input to another's name",
+				op, kind, name, origin))
+		} else {
+			items = append(items, fmt.Sprintf("`%s`: the driver sent %q for the %s `%s` and the client put %q on the wire",
+				op, want, kind, name, value))
+		}
 		return items
 	}
 	if documented := schema["type"]; documented != "" && !valueMatchesType(value, documented) {
@@ -1031,14 +1082,15 @@ func valueFindings(op, kind, name, value string, schema map[string]string) []str
 // jsonValueFindings is the same for a request-body property, whose value arrives
 // as JSON rather than as a string.
 func jsonValueFindings(op, kind, name string, raw json.RawMessage, schema map[string]string) []string {
-	// An array is checked element by element: the sentinel lives inside it.
+	// An array is compared WHOLE. Recursing over the elements that remain let an
+	// emptied array through, since there was then nothing left to disagree with.
 	var elements []json.RawMessage
 	if err := json.Unmarshal(raw, &elements); err == nil {
-		var items []string
-		for _, element := range elements {
-			items = append(items, jsonValueFindings(op, kind, name, element, itemSchema(schema))...)
+		if len(elements) != 1 {
+			return []string{fmt.Sprintf("`%s`: the driver sent one element for the %s `%s` and the client put %d on the wire",
+				op, kind, name, len(elements))}
 		}
-		return items
+		return jsonValueFindings(op, kind, name, elements[0], itemSchema(schema))
 	}
 
 	var text string
@@ -1107,6 +1159,53 @@ func jsonMatchesType(raw json.RawMessage, documented string) bool {
 	return true
 }
 
+// checkCompositeResponses compares what the stub sent with what came back for the
+// rows that have no schema behind them: the bulk composites and the resource-tag
+// replace, whose bodies the contract describes wrongly or not at all.
+//
+// They sit out of checkResponseModels for that reason, and sat out of every value
+// comparison with it -- so swapping two of a composite's counters left the request
+// and response bytes intact and was invisible. Nothing here needs a schema: the
+// stub's own body is the expectation.
+func checkCompositeResponses(in Inputs, r *Report) {
+	const surface = "v2"
+	var items []string
+	for _, row := range in.Coverage.Operations {
+		if row.Unimplemented != "" || row.ActualResponse != "composite-envelope" {
+			continue
+		}
+		observed, ok := in.Conformance.Observations[surface+" "+row.Key()]
+		if !ok || observed.CallErr != nil {
+			continue // reported by checkImplementation
+		}
+		for _, property := range sortedFields(observed.Sent) {
+			sent := observed.Sent[property]
+			decoded, survived := observed.Decoded[property]
+			switch {
+			case !survived:
+				items = append(items, fmt.Sprintf("`%s`: the composite body carries `%s` and `%s` decodes it away",
+					row.Key(), property, row.SDK))
+			case !sameJSON(sent, decoded):
+				items = append(items, fmt.Sprintf("`%s`: the composite body sent `%s` as %s and `%s` returned %s",
+					row.Key(), property, string(sent), row.SDK, string(decoded)))
+			}
+		}
+	}
+	r.Add("Composite responses", items)
+}
+
+// sameJSON compares two encodings of the same value, ignoring formatting.
+func sameJSON(a, b json.RawMessage) bool {
+	var left, right any
+	if err := json.Unmarshal(a, &left); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &right); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(left, right)
+}
+
 // checkModelFieldNames asserts each response model's Go field name matches the
 // JSON property it decodes.
 //
@@ -1121,8 +1220,9 @@ func jsonMatchesType(raw json.RawMessage, documented string) bool {
 // exceptions across every model the gate compares: TagID decodes `tag_id`,
 // UsageCount decodes `usage_count`, ID decodes `id`.
 func checkModelFieldNames(in Inputs, r *Report) {
-	spec := in.Vendored["v2"]
-	ops, err := strippedOperations(spec, "v2")
+	const surface = "v2"
+	spec := in.Vendored[surface]
+	ops, err := strippedOperations(spec, surface)
 	if err != nil {
 		return // reported by checkSurfaceParity
 	}
