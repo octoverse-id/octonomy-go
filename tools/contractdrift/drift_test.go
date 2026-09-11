@@ -1525,3 +1525,31 @@ unsent_inputs:
 		t.Errorf("expected a carried_in/in conflict, got %v", err)
 	}
 }
+
+// TestStaleClientHeaderIsReported: every allowlist in the coverage file gets the
+// same staleness check, this one included. A header recorded as always-sent that
+// the client no longer sends suppresses nothing -- and would suppress the next
+// header to go missing just as quietly.
+func TestStaleClientHeaderIsReported(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
+		"\nclient_headers:\n",
+		"\nclient_headers:\n",
+		"\nclient_headers:\n  - name: X-Gone\n    reason: left behind by an earlier refactor\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`X-Gone` is listed under client_headers and the client sends it on no operation")
+}
+
+// TestStaleUndocumentedRequestBodyIsReported: the same, for the row that records a
+// payload the contract does not describe.
+func TestStaleUndocumentedRequestBodyIsReported(t *testing.T) {
+	repo := stageRepo(t)
+	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
+		"  - path: /tags/{tag_id}\n    method: delete\n",
+		"    documented_response: none\n",
+		"    undocumented_request_body: this DELETE sends no body at all\n    documented_response: none\n")
+
+	assertFinding(t, runLocal(t, repo),
+		"`delete /tags/{tag_id}` records an undocumented request body and the client sends no body at all")
+}

@@ -829,6 +829,7 @@ func checkRequestShapes(in Inputs, r *Report) {
 	unsent := in.Coverage.UnsentIndex()
 	clientHeaders := in.Coverage.ClientHeaderSet()
 	used := map[string]bool{}
+	seenClientHeader := map[string]bool{}
 	var items []string
 
 	for _, row := range in.Coverage.Operations {
@@ -860,7 +861,11 @@ func checkRequestShapes(in Inputs, r *Report) {
 			items = append(items, fmt.Sprintf("`%s` documents the header `%s` and the client did not send it", row.Key(), name))
 		}
 		for _, name := range sortedNames(observed.Headers) {
-			if !documentedHeaders[name] && !clientHeaders[name] {
+			if clientHeaders[name] {
+				seenClientHeader[name] = true
+				continue
+			}
+			if !documentedHeaders[name] {
 				items = append(items, fmt.Sprintf("`%s`: the client sends the header `%s`, which no vendored contract documents", row.Key(), name))
 			}
 		}
@@ -875,6 +880,9 @@ func checkRequestShapes(in Inputs, r *Report) {
 				items = append(items, fmt.Sprintf("`%s`: the client sends a request body (%s) and the contract documents none -- record it under undocumented_request_body",
 					row.Key(), strings.Join(sortedNames(observed.Body), ", ")))
 			}
+			continue
+		case op.RequestModel == "" && row.UndocumentedRequestBody != "":
+			items = append(items, fmt.Sprintf("`%s` records an undocumented request body and the client sends no body at all -- drop the row", row.Key()))
 			continue
 		case op.RequestModel == "":
 			continue
@@ -940,6 +948,15 @@ func checkRequestShapes(in Inputs, r *Report) {
 		}
 		if !used[key] {
 			items = append(items, fmt.Sprintf("`%s` is listed under unsent_inputs and the client sends it now, or the contract stopped documenting it -- drop the row", key))
+		}
+	}
+	// client_headers gets the same staleness check every other allowlist here has.
+	// A header recorded as always-sent that the client no longer sends is a row
+	// suppressing nothing, and the next header to go missing would be suppressed
+	// by it just as quietly.
+	for name := range clientHeaders {
+		if !seenClientHeader[name] {
+			items = append(items, fmt.Sprintf("`%s` is listed under client_headers and the client sends it on no operation -- drop the row", name))
 		}
 	}
 	r.Add("Request shapes", dedupe(items))
