@@ -274,6 +274,14 @@ func checkImplementation(in Inputs, r *Report) {
 				items = append(items, fmt.Sprintf("`%s`: no observation was recorded for `%s`", row.Key(), driver.SDK))
 				continue
 			}
+			// The versioned prefix, which the suffix normalization erases. A client
+			// that ignored its configured APIVersion sent every "v1" request to
+			// /api/v2 and nothing saw it, because the one field that differed was
+			// the one being thrown away.
+			if want := versionedPrefix(surface, row.Path); observed.Prefix != want {
+				items = append(items, fmt.Sprintf("`%s` (%s): the client sent it to `%s`",
+					row.Key(), surface, observed.Prefix+observed.Path))
+			}
 			// Compared verbatim: the recorder maps each sentinel back to the
 			// placeholder it was passed for, so the observed path carries the same
 			// names the contract does -- and two arguments in the wrong order no
@@ -298,6 +306,15 @@ func checkImplementation(in Inputs, r *Report) {
 		}
 	}
 	r.Add("Implementation", dedupe(items))
+}
+
+// versionedPrefix is the /api/<version> an operation should be sent to. The health
+// probes sit outside the versioned API and carry none.
+func versionedPrefix(surface, path string) string {
+	if strings.HasPrefix(path, "/health/") {
+		return ""
+	}
+	return "/api/" + surface
 }
 
 // checkDocumentedResponses asserts each recorded divergence between the generated
@@ -541,6 +558,20 @@ func checkResponseModels(in Inputs, r *Report) {
 			if documentedSet[field] {
 				continue
 			}
+			// The pagination block belongs to the ENVELOPE, not to the resource
+			// schema -- the contract describes neither, which is the recorded
+			// divergence. Compared just below, against what the stub sent.
+			if strings.HasPrefix(field, "pagination.") {
+				sent, ok := observed.Sent[field]
+				switch {
+				case !ok:
+					continue
+				case !sameJSON(sent, observed.Decoded[field]):
+					items = append(items, fmt.Sprintf("`%s`: the list envelope sent `%s` as %s and `%s` returned %s",
+						row.Key(), strings.TrimPrefix(field, "pagination."), string(sent), row.SDK, string(observed.Decoded[field])))
+				}
+				continue
+			}
 			key := op.OKModel + "." + field
 			if _, ok := undocumented[key]; ok {
 				used[key] = true
@@ -557,6 +588,25 @@ func checkResponseModels(in Inputs, r *Report) {
 		}
 	}
 	r.Add("Response models", dedupe(items))
+}
+
+// fieldNameFindings compares one model's Go field names with the properties they
+// decode.
+func fieldNameFindings(sdk *SDKPackage, model string) []string {
+	fields, ok := sdk.ModelFields(model)
+	if !ok {
+		return nil // the model is named by the contract, not by this package
+	}
+	var items []string
+	for _, property := range sortedStrings(fields) {
+		field := fields[property]
+		if SnakeCase(field) == property {
+			continue
+		}
+		items = append(items, fmt.Sprintf("model `%s`: the field `%s` decodes `%s` -- a caller reading `%s.%s` would get the contract's `%s`, so rename the field or teach tools/contractdrift the exception",
+			model, field, property, model, field, property))
+	}
+	return items
 }
 
 // checkErrorCodesImplemented is the offline half of the error-code comparison:
@@ -913,7 +963,7 @@ func checkRequestShapes(in Inputs, r *Report) {
 				switch value, sent := observed.Headers[name]; {
 				case sent && versioned:
 					seenClientHeader[name] = true
-					if want := ExpectedValue(name); value != want {
+					if want := ExpectedValue(name, 0); value != want {
 						items = append(items, fmt.Sprintf("`%s`: the client was configured with %q and sent `%s: %s`",
 							row.Key(), want, name, value))
 					}
@@ -1060,7 +1110,7 @@ func checkRequestShapes(in Inputs, r *Report) {
 // leaves the client sending a perfectly correct string for a documented integer.
 func valueFindings(op, kind, name, value string, schema map[string]string) []string {
 	var items []string
-	if want := ExpectedValue(name); value != want {
+	if want := ExpectedValue(name, 0); value != want {
 		// Where the value belongs to another field, say so: that names the defect
 		// rather than merely reporting a mismatch.
 		if origin, ok := sentinelOrigin(value); ok && !strings.EqualFold(origin, name) {
@@ -1096,6 +1146,18 @@ func jsonValueFindings(op, kind, name string, raw json.RawMessage, schema map[st
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
 		return valueFindings(op, kind, name, text, schema)
+	}
+	// A free-form object -- `metadata`, which the contract constrains in no way.
+	// Compared exactly all the same: the gate controls both sides, so a driver
+	// whose object stopped arriving intact was otherwise invisible.
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err == nil {
+		want, _ := json.Marshal(map[string]any{ExpectedValue(name, 0): "value"})
+		if !sameJSON(want, raw) {
+			return []string{fmt.Sprintf("`%s`: the driver sent %s for the %s `%s` and the client put %s on the wire",
+				op, string(want), kind, name, string(raw))}
+		}
+		return nil
 	}
 	if documented := schema["type"]; documented != "" && !jsonMatchesType(raw, documented) {
 		return []string{fmt.Sprintf("`%s`: the %s `%s` is documented as `%s` and the client sends %s",
@@ -1227,8 +1289,15 @@ func checkModelFieldNames(in Inputs, r *Report) {
 		return // reported by checkSurfaceParity
 	}
 
+	// Pagination rides in every list envelope and is a response model like any
+	// other -- and, like any other, a pure tag swap on it is invisible to a round
+	// trip, which is the whole reason this check exists. It is not reachable from
+	// any operation's OKModel, so it is named here.
 	checked := map[string]bool{}
 	var items []string
+	items = append(items, fieldNameFindings(in.SDK, "Pagination")...)
+	checked["Pagination"] = true
+
 	for _, row := range in.Coverage.Operations {
 		if row.Unimplemented != "" {
 			continue
@@ -1237,20 +1306,8 @@ func checkModelFieldNames(in Inputs, r *Report) {
 		if !ok || op.OKModel == "" || checked[op.OKModel] {
 			continue
 		}
-		fields, ok := in.SDK.ModelFields(op.OKModel)
-		if !ok {
-			continue // the model is named by the contract, not by this package
-		}
 		checked[op.OKModel] = true
-
-		for _, property := range sortedStrings(fields) {
-			field := fields[property]
-			if SnakeCase(field) == property {
-				continue
-			}
-			items = append(items, fmt.Sprintf("model `%s`: the field `%s` decodes `%s` -- a caller reading `%s.%s` would get the contract's `%s`, so rename the field or teach tools/contractdrift the exception",
-				op.OKModel, field, property, op.OKModel, field, property))
-		}
+		items = append(items, fieldNameFindings(in.SDK, op.OKModel)...)
 	}
 	r.Add("Model field names", items)
 }

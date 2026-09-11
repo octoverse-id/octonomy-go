@@ -239,11 +239,15 @@ recording transport that answers with a body **synthesized from the vendored sch
 the answer: route, query parameters, headers and request body, **names and values**, compared with
 that surface's contract in **both** directions and with no inference in any of it.
 
-Values are comparable because every input has one canonical value, in a single table
+Values are comparable because every scalar and array input has one canonical value, in a single table
 (`ExpectedValue` in `drivers.go`), and the gate requires the wire to carry exactly it. Most are the
 wire field's own name, which makes a misrouted value self-describing; the rest — numbers, booleans,
-an enum, the credentials — are listed explicitly and chosen so that any two that can ride the same
-request differ from each other. The response is the other half: a property the Go model
+an enum, the credentials — are listed explicitly. Booleans get a **pair** of values, one per
+execution: there are three boolean axes on a tag list and only two values, so one run can never tell
+them all apart.
+
+Free-form objects (`metadata`) and path arguments come from elsewhere — the former is compared
+exactly anyway, since the gate controls both sides; the latter varies by execution on purpose. The response is the other half: a property the Go model
 has no field for is dropped on the way back out, and one whose type the model cannot read fails to
 decode.
 
@@ -284,11 +288,16 @@ the stub sends the shape the server really sends, a JSON object, which is enough
 exists and no more. That is the honest boundary; the integration smoke test above is what exercises
 real server payloads.
 
-**And what the route check proves.** Each driver runs twice with different path values, so a route
-that varies with the value it is given is reported, and each placeholder has its own sentinel, so two
-arguments in the wrong order do not produce the expected path. Two executions are not a proof of
+**And what the route check proves.** Each driver runs twice per surface with different path values,
+so a route that varies with the value it is given is reported; each placeholder has its own sentinel,
+so two arguments in the wrong order do not produce the expected path; and the `/api/<version>` prefix
+is asserted separately, because the suffix normalization erases it. Two executions are not a proof of
 invariance — nothing short of reading every branch would be — but they are two more than the one a
 single fixed input gives.
+
+**Known boundaries**, stated rather than implied: a repeated query parameter or header is compared by
+its first value only; path escaping is not exercised, since every path witness is a safe alphanumeric;
+and `WithActor` / `WithRequestID` have no documented counterpart to compare against.
 
 **Everything the offline half compares is vendored, on purpose.** The two contracts, the error
 registry, the recorded server version: each has a copy in this repository, so each can be checked

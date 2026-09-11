@@ -1879,3 +1879,163 @@ func TestBothSurfacesAreDriven(t *testing.T) {
 		t.Error("the v2 client did not send a namespace header")
 	}
 }
+
+// --- the sixth pass ---------------------------------------------------------------
+
+// TestWrongVersionPrefixIsReported is the review's own repro, and the bug it
+// found: the APIVersion field simply was not set, so both passes built a default
+// v2 client and the "v1" run was a v2 run compared against the v1 document. The
+// prefix was erased by the suffix normalization, so nothing could see it either.
+func TestWrongVersionPrefixIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v1 get /tags"]
+	observed.Prefix = "/api/v2"
+	in.Conformance.Observations["v1 get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in), "`get /tags` (v1): the client sent it to `/api/v2/tags`")
+}
+
+// TestSurfacesReachTheirOwnPrefix is the non-vacuity guard on that: the real runs
+// go where their configured surface says, and the health probes go outside both.
+func TestSurfacesReachTheirOwnPrefix(t *testing.T) {
+	in := load(t, repoRoot, "")
+	for surface, want := range map[string]string{"v1": "/api/v1", "v2": "/api/v2"} {
+		observed, ok := in.Conformance.Observations[surface+" get /tags"]
+		if !ok {
+			t.Fatalf("no observation for %s get /tags", surface)
+		}
+		if observed.Prefix != want {
+			t.Errorf("%s: the client reached %q, want %q", surface, observed.Prefix, want)
+		}
+	}
+	probe := in.Conformance.Observations["v2 get /health/live"]
+	if probe.Prefix != "" {
+		t.Errorf("the health probe was sent to %q; it is outside the versioned API", probe.Prefix)
+	}
+}
+
+// TestBooleansAreDistinguishableAcrossExecutions: three boolean axes ride a tag
+// list and there are two values, so one execution can never tell them all apart.
+// Each gets a distinct PAIR across the two runs instead.
+func TestBooleansAreDistinguishableAcrossExecutions(t *testing.T) {
+	seen := map[[2]string]string{}
+	for _, name := range []string{"include_global", "include_shared", "is_active", "include_inactive"} {
+		pattern := [2]string{ExpectedValue(name, 0), ExpectedValue(name, 1)}
+		if other, clash := seen[pattern]; clash {
+			t.Errorf("%q and %q carry the same pair %v; swapping them would change nothing", name, other, pattern)
+		}
+		seen[pattern] = name
+	}
+}
+
+// TestSameTypedResponseValuesDiffer: every date-time was one timestamp and every
+// integer was 1, so a decoder crossing two same-typed properties preserved every
+// compared byte.
+func TestSameTypedResponseValuesDiffer(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	if string(observed.Sent["created_at"]) == string(observed.Sent["updated_at"]) {
+		t.Errorf("created_at and updated_at carry the same witness %s", observed.Sent["created_at"])
+	}
+	pagination := map[string]bool{}
+	for _, field := range []string{"pagination.limit", "pagination.offset", "pagination.count"} {
+		value := string(observed.Sent[field])
+		if value == "" {
+			t.Errorf("%s was not sent", field)
+		}
+		if pagination[value] {
+			t.Errorf("%s reuses the witness %s", field, value)
+		}
+		pagination[value] = true
+	}
+}
+
+// TestCrossedPaginationValuesAreReported: the pagination block was dropped from
+// the comparison entirely, so a client crossing two of its fields after decoding
+// was invisible.
+func TestCrossedPaginationValuesAreReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 get /tags"]
+	observed.Decoded["pagination.offset"], observed.Decoded["pagination.count"] =
+		observed.Decoded["pagination.count"], observed.Decoded["pagination.offset"]
+	in.Conformance.Observations["v2 get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in), "the list envelope sent `offset` as")
+}
+
+// TestDiscardedCompositeRowsAreReported: both composite arrays were empty, so a
+// decoder that dropped every returned row returned exactly what was sent.
+func TestDiscardedCompositeRowsAreReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 post /tag-assignments/bulk-assign"]
+	observed.Decoded["assignments"] = json.RawMessage(`[]`)
+	in.Conformance.Observations["v2 post /tag-assignments/bulk-assign"] = observed
+
+	assertFinding(t, CheckLocal(in), "the composite body sent `assignments` as")
+}
+
+// TestCompositeWitnessesAreDistinct guards the numbers the check above rests on:
+// a decoder crossing two counters has to change both.
+func TestCompositeWitnessesAreDistinct(t *testing.T) {
+	in := load(t, repoRoot, "")
+	for _, row := range in.Coverage.Operations {
+		if row.CompositeBody == "" {
+			continue
+		}
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(row.CompositeBody), &body); err != nil {
+			t.Fatalf("%s: %v", row.Key(), err)
+		}
+		seen := map[string]string{}
+		for name, raw := range body {
+			var number float64
+			if err := json.Unmarshal(raw, &number); err != nil {
+				continue // an array or an object, not a counter
+			}
+			if other, clash := seen[string(raw)]; clash {
+				t.Errorf("%s: %q and %q are both %s; crossing them would change nothing",
+					row.Key(), name, other, string(raw))
+			}
+			seen[string(raw)] = name
+		}
+		for name, raw := range body {
+			var rows []json.RawMessage
+			if err := json.Unmarshal(raw, &rows); err == nil && len(rows) == 0 {
+				t.Errorf("%s: %q is an empty array; a decoder that discards every row would return it unchanged",
+					row.Key(), name)
+			}
+		}
+	}
+}
+
+// TestFreeFormObjectValueIsCompared: `metadata` is unconstrained by the contract,
+// but the gate controls both sides, so a driver whose object stopped arriving
+// intact should not be invisible.
+func TestFreeFormObjectValueIsCompared(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["v2 post /tags"]
+	observed.Body["metadata"] = json.RawMessage(`{"wrong":"value"}`)
+	in.Conformance.Observations["v2 post /tags"] = observed
+
+	assertFinding(t, CheckLocal(in), "for the body property `metadata`")
+}
+
+// TestOneSourcePerInput: a list driver that passed both its params struct's
+// ApplicationID and WithApplication put the same value on the wire twice, so
+// either implementation path could break and the other covered for it.
+func TestOneSourcePerInput(t *testing.T) {
+	for _, driver := range Drivers() {
+		if driver.Op != "get /tags" {
+			continue
+		}
+		// The check is behavioural: removing the params emission must be visible.
+		in := load(t, repoRoot, "")
+		observed := in.Conformance.Observations["v2 get /tags"]
+		delete(observed.Query, "application_id")
+		in.Conformance.Observations["v2 get /tags"] = observed
+		assertFinding(t, CheckLocal(in),
+			"`get /tags` documents the query parameter `application_id` and the client did not send it")
+		return
+	}
+	t.Fatal("no driver for get /tags")
+}

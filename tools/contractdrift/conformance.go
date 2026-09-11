@@ -58,6 +58,11 @@ type Observation struct {
 	Method string
 	Path   string
 
+	// Prefix is the /api/<version> the request really went to, kept because the
+	// suffix normalization below erases it -- and a client that ignored its
+	// configured surface would then be invisible, which is exactly what happened.
+	Prefix string
+
 	// Query, Headers and Body are what the client sent, VALUES AND ALL.
 	//
 	// Names alone were not enough, and a review proved it four ways: a parameter
@@ -295,11 +300,16 @@ func diffStringMaps(what string, a, b map[string]string) string {
 		if !ok {
 			return fmt.Sprintf("%s %s sent once and not the second time", what, key)
 		}
-		// No path-value exception here. It used to suppress any difference where
-		// either side happened to be a path witness, which accepted a path argument
-		// reused as a query value across both executions. The path is normalized in
-		// Key(); every other channel must be identical between the two runs.
-		if a[key] != bv {
+		// Identical between the two runs, with ONE declared exception: an input
+		// whose expectation differs by execution, which is how three booleans on
+		// one request are told apart when there are only two values to go round.
+		// A difference that is not exactly that pair is a difference.
+		//
+		// No path-value exception here. There used to be one, suppressing any
+		// difference where either side happened to be a path witness, and it
+		// accepted a path argument reused as a query value across both runs. The
+		// path is normalized in Key().
+		if a[key] != bv && !declaredPassDifference(key, a[key], bv) {
 			return fmt.Sprintf("%s %s carried %q then %q", what, key, a[key], bv)
 		}
 	}
@@ -309,6 +319,12 @@ func diffStringMaps(what string, a, b map[string]string) string {
 		}
 	}
 	return ""
+}
+
+// declaredPassDifference reports whether two values are exactly the pair this
+// input is expected to carry across the two executions.
+func declaredPassDifference(name, first, second string) bool {
+	return first == ExpectedValue(name, 0) && second == ExpectedValue(name, 1)
 }
 
 func sortedStrings(m map[string]string) []string {
@@ -331,13 +347,23 @@ func runDriver(spec *Spec, surface string, op *Operation, row CoverageOperation,
 	}
 	httpClient := &http.Client{Transport: rec}
 
+	// The surface under test, and the whole point of running twice. This was
+	// missing -- the field simply was not set, so both passes built a default v2
+	// client and the "v1" run was a v2 run compared against the v1 document. The
+	// prefix is asserted below for the same reason: a silent default cannot be
+	// caught by a check that erases the thing it would have changed.
+	apiVersion := octonomy.APIV2
+	if surface == "v1" {
+		apiVersion = octonomy.APIV1
+	}
 	client, err := octonomy.New(octonomy.Config{
-		BaseURL: "https://contractdrift.invalid",
+		APIVersion: apiVersion,
+		BaseURL:    "https://contractdrift.invalid",
 		// The credentials the client_headers expectations are written against, so
 		// Authorization and X-Tenant-ID are checked for their VALUES and not only
 		// their presence.
-		Token:      strings.TrimPrefix(ExpectedValue("authorization"), "Bearer "),
-		TenantID:   ExpectedValue("x-tenant-id"),
+		Token:      strings.TrimPrefix(ExpectedValue("authorization", pass), "Bearer "),
+		TenantID:   ExpectedValue("x-tenant-id", pass),
 		HTTPClient: httpClient,
 	})
 	if err != nil {
@@ -349,7 +375,7 @@ func runDriver(spec *Spec, surface string, op *Operation, row CoverageOperation,
 	}
 
 	value, callErr := driver.Call(context.Background(), &Env{
-		Client: client, Health: health, values: values, surface: surface,
+		Client: client, Health: health, values: values, surface: surface, pass: pass,
 	})
 
 	if rec.synthErr != nil {
@@ -367,6 +393,7 @@ func runDriver(spec *Spec, surface string, op *Operation, row CoverageOperation,
 	req := rec.requests[0]
 	observed := Observation{
 		Method:  strings.ToLower(req.Method),
+		Prefix:  versionPrefix(req.URL.Path),
 		Path:    normalizeObservedPath(req.URL.Path, values),
 		Query:   queryNames(req.URL.Query()),
 		Headers: headerNames(req.Header),
@@ -386,6 +413,7 @@ type Env struct {
 
 	values  map[string]string
 	surface string
+	pass    int
 }
 
 // Namespaced returns the namespace option for the surface under test, and NOTHING
@@ -397,19 +425,37 @@ func (e *Env) Namespaced() []octonomy.RequestOption {
 		return nil
 	}
 	return []octonomy.RequestOption{octonomy.WithNamespace(
-		ExpectedValue("x-namespace-type"), ExpectedValue("x-namespace-id"))}
+		ExpectedValue("x-namespace-type", e.pass), ExpectedValue("x-namespace-id", e.pass))}
 }
 
-// ReadScope is what every bodyless read carries: an application, the namespace
-// pair where the surface has one, and the opt-in that widens a namespaced read
-// back to global rows.
+// ReadScope is what a bodyless read with NO params struct carries: an
+// application, the namespace pair where the surface has one, and the opt-in that
+// widens a namespaced read back to global rows.
+//
+// WithApplication only where the method has nowhere else to put it. A list driver
+// that passed both this and its params struct's ApplicationID put the same value
+// on the wire twice, so either implementation path could break and the other
+// covered for it -- a review removed TagListParams' emission entirely and the gate
+// stayed clean. One input, one source.
 func (e *Env) ReadScope() []octonomy.RequestOption {
-	opts := []octonomy.RequestOption{octonomy.WithApplication(ExpectedValue("application_id"))}
+	opts := []octonomy.RequestOption{octonomy.WithApplication(ExpectedValue("application_id", e.pass))}
 	opts = append(opts, e.Namespaced()...)
-	if e.surface == "v2" {
-		opts = append(opts, octonomy.WithIncludeGlobal())
+	return append(opts, e.IncludeGlobal()...)
+}
+
+// ListScope is what a read WITH a params struct carries: everything ReadScope
+// does except the application, which its own ApplicationID field supplies.
+func (e *Env) ListScope() []octonomy.RequestOption {
+	return append(e.Namespaced(), e.IncludeGlobal()...)
+}
+
+// IncludeGlobal is the namespaced-read opt-in, and v2 only: v1 has no namespace
+// axis for it to widen.
+func (e *Env) IncludeGlobal() []octonomy.RequestOption {
+	if e.surface != "v2" {
+		return nil
 	}
-	return opts
+	return []octonomy.RequestOption{octonomy.WithIncludeGlobal()}
 }
 
 // DeleteScope is what a BODYLESS write carries: an application, which a
@@ -417,7 +463,7 @@ func (e *Env) ReadScope() []octonomy.RequestOption {
 // WithIncludeGlobal -- the server reads that only on safe methods, so the SDK
 // refuses it on a write rather than let it be dropped in silence.
 func (e *Env) DeleteScope() []octonomy.RequestOption {
-	opts := []octonomy.RequestOption{octonomy.WithApplication(ExpectedValue("application_id"))}
+	opts := []octonomy.RequestOption{octonomy.WithApplication(ExpectedValue("application_id", e.pass))}
 	return append(opts, e.Namespaced()...)
 }
 
@@ -445,6 +491,17 @@ type Driver struct {
 	SDK string
 	// Call issues the request and returns the decoded value, when there is one.
 	Call func(ctx context.Context, env *Env) (any, error)
+}
+
+// versionPrefix is the /api/<version> segment a request was sent to, or "" for
+// the unversioned probes.
+func versionPrefix(path string) string {
+	for _, prefix := range []string{"/api/v1", "/api/v2"} {
+		if strings.HasPrefix(path, prefix+"/") {
+			return prefix
+		}
+	}
+	return ""
 }
 
 // normalizeObservedPath maps each sentinel back to the placeholder it stands for,
@@ -537,10 +594,24 @@ func unwrapEnvelope(body []byte) map[string]json.RawMessage {
 		return inner
 	}
 	var elements []map[string]json.RawMessage
-	if err := json.Unmarshal(data, &elements); err == nil && len(elements) > 0 {
-		return elements[0]
+	if err := json.Unmarshal(data, &elements); err != nil {
+		return nil
 	}
-	return nil
+	out := map[string]json.RawMessage{}
+	if len(elements) > 0 {
+		out = elements[0]
+	}
+	// The pagination block, under the same prefix remarshalKeys uses, so the two
+	// sides line up.
+	if page, ok := object["pagination"]; ok {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(page, &fields); err == nil {
+			for name, value := range fields {
+				out["pagination."+name] = value
+			}
+		}
+	}
+	return out
 }
 
 // remarshalKeys renders a decoded response back to JSON and returns its fields --
@@ -561,14 +632,25 @@ func remarshalKeys(value any) map[string]json.RawMessage {
 		return nil
 	}
 	// A *List[T] re-marshals as {"data": [...], "pagination": {...}}; the model
-	// under test is the element type.
+	// under test is the element type, and the pagination block rides alongside it
+	// under a prefix. It used to be dropped, so a client that crossed `offset` and
+	// `count` on the way out was invisible.
 	if data, ok := object["data"]; ok {
 		var elements []map[string]json.RawMessage
 		if err := json.Unmarshal(data, &elements); err == nil {
-			if len(elements) == 0 {
-				return map[string]json.RawMessage{}
+			out := map[string]json.RawMessage{}
+			if len(elements) > 0 {
+				out = elements[0]
 			}
-			object = elements[0]
+			if page, ok := object["pagination"]; ok {
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal(page, &fields); err == nil {
+					for name, value := range fields {
+						out["pagination."+name] = value
+					}
+				}
+			}
+			return out
 		}
 	}
 	return object
@@ -627,9 +709,13 @@ func synthesizeBody(spec *Spec, op *Operation, row CoverageOperation, w witness)
 	}
 	payload := map[string]any{"data": object}
 	if row.ActualResponse == "list-envelope" {
+		// Distinct numbers, for the same reason the composite counters are: a
+		// client crossing two of them has to change both.
 		payload = map[string]any{
-			"data":       []any{object},
-			"pagination": map[string]any{"limit": 1, "offset": 0, "count": 1, "next": nil, "previous": nil},
+			"data": []any{object},
+			"pagination": map[string]any{
+				"limit": 11, "offset": 22, "count": 33, "next": nil, "previous": nil,
+			},
 		}
 	}
 	body, err := json.Marshal(payload)
@@ -719,7 +805,11 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness, property
 	case "string":
 		switch schema.Format {
 		case "date-time":
-			return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).Format(time.RFC3339), nil
+			// Derived from the property name, so `created_at` and `updated_at` are
+			// not the same instant. Every date-time used to be one timestamp, and a
+			// decoder crossing two of them preserved every compared byte.
+			return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).
+				Add(time.Duration(nameOffset(property)) * time.Second).Format(time.RFC3339), nil
 		case "uuid":
 			return "00000000-0000-4000-8000-000000000000", nil
 		case "date":
@@ -728,11 +818,13 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness, property
 		// The property's OWN name, in the same form the drivers use, so a response
 		// value that lands in the wrong field says where it came from. Every string
 		// used to be the same word.
-		return driverValue(property), nil
+		return ExpectedValue(property, 0), nil
 	case "integer":
-		return 1, nil
+		// Also derived from the name: every integer was 1, so two integer
+		// properties could be crossed without changing anything compared.
+		return 1 + nameOffset(property), nil
 	case "number":
-		return 1.5, nil
+		return 1.5 + float64(nameOffset(property)), nil
 	case "boolean":
 		return true, nil
 	case "object":
@@ -776,6 +868,19 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness, property
 }
 
 // mappingValue returns the value node for a key in a mapping.
+// nameOffset turns a property name into a small stable number, so two properties
+// of the same type get different witnesses.
+func nameOffset(name string) int {
+	sum := 0
+	for _, r := range name {
+		sum = sum*31 + int(r)
+	}
+	if sum < 0 {
+		sum = -sum
+	}
+	return sum%97 + 1
+}
+
 func mappingValue(node *yaml.Node, key string) *yaml.Node {
 	if node == nil {
 		return nil

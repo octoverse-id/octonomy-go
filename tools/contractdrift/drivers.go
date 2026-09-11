@@ -39,27 +39,37 @@ import (
 // contradicts an explicit merchant scope on /tag-resolution. A driver that
 // ignored those would fail before reaching the wire.
 
-func meta() octonomy.Metadata { return octonomy.Metadata{"contractdrift": "value"} }
+// The free-form objects. Their contents are arbitrary as far as the contract is
+// concerned, so the gate compares them exactly -- it controls both sides, and a
+// driver whose metadata stopped arriving would otherwise be invisible.
+func metaValue() octonomy.Metadata {
+	return octonomy.Metadata{ExpectedValue("metadata", 0): "value"}
+}
 
-// strFor, boolFor and intFor read the ONE table of expected values, so a driver
-// cannot disagree with what the gate will require. Written by hand, they did: two
-// fields kept plain literals and every boolean was `true` while the table said
-// otherwise, and the gate reported all of it.
-func strFor(wireName string) *string {
-	value := ExpectedValue(wireName)
+func meta() octonomy.Metadata { return metaValue() }
+
+// Str, Bool and Int read the ONE table of expected values for THIS execution, so
+// a driver cannot disagree with what the gate will require. Written by hand, they
+// did: two fields kept plain literals and every boolean was `true` while the table
+// said otherwise, and the gate reported all of it.
+func (e *Env) Str(wireName string) *string {
+	value := ExpectedValue(wireName, e.pass)
 	return &value
 }
 
-func boolFor(wireName string) *bool {
-	value, err := strconv.ParseBool(ExpectedValue(wireName))
+// Val is Str without the pointer, for a field that takes a bare string.
+func (e *Env) Val(wireName string) string { return ExpectedValue(wireName, e.pass) }
+
+func (e *Env) Bool(wireName string) *bool {
+	value, err := strconv.ParseBool(ExpectedValue(wireName, e.pass))
 	if err != nil {
 		panic("contractdrift: " + wireName + " is not a boolean in the expected-value table")
 	}
 	return &value
 }
 
-func intFor(wireName string) int {
-	value, err := strconv.Atoi(ExpectedValue(wireName))
+func (e *Env) Int(wireName string) int {
+	value, err := strconv.Atoi(ExpectedValue(wireName, e.pass))
 	if err != nil {
 		panic("contractdrift: " + wireName + " is not an integer in the expected-value table")
 	}
@@ -70,8 +80,8 @@ func metap() *octonomy.Metadata {
 	return &m
 }
 
-func listOptions() octonomy.ListOptions {
-	return octonomy.ListOptions{Limit: intFor("limit"), Offset: intFor("offset")}
+func listOptions(env *Env) octonomy.ListOptions {
+	return octonomy.ListOptions{Limit: env.Int("limit"), Offset: env.Int("offset")}
 }
 
 // Drivers is the table. Order is the report's order.
@@ -80,23 +90,23 @@ func Drivers() []Driver {
 		// --- Tags -------------------------------------------------------------
 		{Op: "get /tags", SDK: "TagService.List", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Tags.List(ctx, &octonomy.TagListParams{
-				ListOptions:   listOptions(),
-				ApplicationID: strFor("application_id"),
-				IncludeShared: boolFor("include_shared"),
-				IsActive:      boolFor("is_active"),
-				ParentID:      strFor("parent_id"),
-				Query:         strFor("q"),
-				Slug:          strFor("slug"),
-				Type:          strFor("type"),
-				VocabularyID:  strFor("vocabulary_id"),
-			}, env.ReadScope()...)
+				ListOptions:   listOptions(env),
+				ApplicationID: env.Str("application_id"),
+				IncludeShared: env.Bool("include_shared"),
+				IsActive:      env.Bool("is_active"),
+				ParentID:      env.Str("parent_id"),
+				Query:         env.Str("q"),
+				Slug:          env.Str("slug"),
+				Type:          env.Str("type"),
+				VocabularyID:  env.Str("vocabulary_id"),
+			}, env.ListScope()...)
 		}},
 		{Op: "post /tags", SDK: "TagService.Create", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Tags.Create(ctx, octonomy.TagCreate{
-				ApplicationID: strFor("application_id"), Name: driverValue("name"), Slug: driverValue("slug"), Type: driverValue("type"),
-				Description: strFor("description"), ParentID: strFor("parent_id"),
-				VocabularyID: strFor("vocabulary_id"),
-				Metadata:     meta(), IsActive: boolFor("is_active"),
+				ApplicationID: env.Str("application_id"), Name: env.Val("name"), Slug: env.Val("slug"), Type: env.Val("type"),
+				Description: env.Str("description"), ParentID: env.Str("parent_id"),
+				VocabularyID: env.Str("vocabulary_id"),
+				Metadata:     meta(), IsActive: env.Bool("is_active"),
 			}, env.Scope()...)
 		}},
 		{Op: "get /tags/{tag_id}", SDK: "TagService.Get", Call: func(ctx context.Context, env *Env) (any, error) {
@@ -104,10 +114,10 @@ func Drivers() []Driver {
 		}},
 		{Op: "patch /tags/{tag_id}", SDK: "TagService.Update", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Tags.Update(ctx, env.Path("tag_id"), octonomy.TagUpdate{
-				ApplicationID: strFor("application_id"), Name: strFor("name"), Slug: strFor("slug"), Type: strFor("type"),
-				Description: strFor("description"), ParentID: strFor("parent_id"),
-				VocabularyID: strFor("vocabulary_id"),
-				Metadata:     metap(), IsActive: boolFor("is_active"),
+				ApplicationID: env.Str("application_id"), Name: env.Str("name"), Slug: env.Str("slug"), Type: env.Str("type"),
+				Description: env.Str("description"), ParentID: env.Str("parent_id"),
+				VocabularyID: env.Str("vocabulary_id"),
+				Metadata:     metap(), IsActive: env.Bool("is_active"),
 			}, env.Scope()...)
 		}},
 		{Op: "delete /tags/{tag_id}", SDK: "TagService.Delete", Call: func(ctx context.Context, env *Env) (any, error) {
@@ -117,16 +127,16 @@ func Drivers() []Driver {
 		// --- Vocabularies -----------------------------------------------------
 		{Op: "get /vocabularies", SDK: "VocabularyService.List", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
-				ListOptions:   listOptions(),
-				ApplicationID: strFor("application_id"),
-				IncludeShared: boolFor("include_shared"),
-				IsActive:      boolFor("is_active"),
-			}, env.ReadScope()...)
+				ListOptions:   listOptions(env),
+				ApplicationID: env.Str("application_id"),
+				IncludeShared: env.Bool("include_shared"),
+				IsActive:      env.Bool("is_active"),
+			}, env.ListScope()...)
 		}},
 		{Op: "post /vocabularies", SDK: "VocabularyService.Create", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Vocabularies.Create(ctx, octonomy.VocabularyCreate{
-				ApplicationID: strFor("application_id"), Name: driverValue("name"), Slug: driverValue("slug"), Description: strFor("description"),
-				Metadata: meta(), IsActive: boolFor("is_active"),
+				ApplicationID: env.Str("application_id"), Name: env.Val("name"), Slug: env.Val("slug"), Description: env.Str("description"),
+				Metadata: meta(), IsActive: env.Bool("is_active"),
 			}, env.Scope()...)
 		}},
 		{Op: "get /vocabularies/{vocabulary_id}", SDK: "VocabularyService.Get", Call: func(ctx context.Context, env *Env) (any, error) {
@@ -134,8 +144,8 @@ func Drivers() []Driver {
 		}},
 		{Op: "patch /vocabularies/{vocabulary_id}", SDK: "VocabularyService.Update", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Vocabularies.Update(ctx, env.Path("vocabulary_id"), octonomy.VocabularyUpdate{
-				ApplicationID: strFor("application_id"), Name: strFor("name"), Slug: strFor("slug"), Description: strFor("description"),
-				Metadata: metap(), IsActive: boolFor("is_active"),
+				ApplicationID: env.Str("application_id"), Name: env.Str("name"), Slug: env.Str("slug"), Description: env.Str("description"),
+				Metadata: metap(), IsActive: env.Bool("is_active"),
 			}, env.Scope()...)
 		}},
 		{Op: "delete /vocabularies/{vocabulary_id}", SDK: "VocabularyService.Delete", Call: func(ctx context.Context, env *Env) (any, error) {
@@ -145,19 +155,19 @@ func Drivers() []Driver {
 		// --- Tag aliases ------------------------------------------------------
 		{Op: "get /tag-aliases", SDK: "AliasService.List", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Aliases.List(ctx, &octonomy.TagAliasListParams{
-				ListOptions:   listOptions(),
-				ApplicationID: strFor("application_id"),
-				IncludeShared: boolFor("include_shared"),
-				IsActive:      boolFor("is_active"),
-				Query:         strFor("q"),
-				Slug:          strFor("slug"),
-				TagID:         strFor("tag_id"),
-			}, env.ReadScope()...)
+				ListOptions:   listOptions(env),
+				ApplicationID: env.Str("application_id"),
+				IncludeShared: env.Bool("include_shared"),
+				IsActive:      env.Bool("is_active"),
+				Query:         env.Str("q"),
+				Slug:          env.Str("slug"),
+				TagID:         env.Str("tag_id"),
+			}, env.ListScope()...)
 		}},
 		{Op: "post /tag-aliases", SDK: "AliasService.Create", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Aliases.Create(ctx, octonomy.TagAliasCreate{
-				ApplicationID: strFor("application_id"), TagID: driverValue("tag_id"), Name: driverValue("name"), Slug: driverValue("slug"),
-				Metadata: meta(), IsActive: boolFor("is_active"),
+				ApplicationID: env.Str("application_id"), TagID: env.Val("tag_id"), Name: env.Val("name"), Slug: env.Val("slug"),
+				Metadata: meta(), IsActive: env.Bool("is_active"),
 			}, env.Scope()...)
 		}},
 		{Op: "get /tag-aliases/{alias_id}", SDK: "AliasService.Get", Call: func(ctx context.Context, env *Env) (any, error) {
@@ -165,8 +175,8 @@ func Drivers() []Driver {
 		}},
 		{Op: "patch /tag-aliases/{alias_id}", SDK: "AliasService.Update", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Aliases.Update(ctx, env.Path("alias_id"), octonomy.TagAliasUpdate{
-				ApplicationID: strFor("application_id"), TagID: strFor("tag_id"), Name: strFor("name"), Slug: strFor("slug"),
-				Metadata: metap(), IsActive: boolFor("is_active"),
+				ApplicationID: env.Str("application_id"), TagID: env.Str("tag_id"), Name: env.Str("name"), Slug: env.Str("slug"),
+				Metadata: metap(), IsActive: env.Bool("is_active"),
 			}, env.Scope()...)
 		}},
 		{Op: "delete /tag-aliases/{alias_id}", SDK: "AliasService.Delete", Call: func(ctx context.Context, env *Env) (any, error) {
@@ -174,11 +184,11 @@ func Drivers() []Driver {
 		}},
 		{Op: "get /tags/{tag_id}/aliases", SDK: "TagService.ListAliases", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Tags.ListAliases(ctx, env.Path("tag_id"), &octonomy.TagListAliasesParams{
-				ListOptions:   listOptions(),
-				ApplicationID: strFor("application_id"),
-				IncludeShared: boolFor("include_shared"),
-				IsActive:      boolFor("is_active"),
-			}, env.ReadScope()...)
+				ListOptions:   listOptions(env),
+				ApplicationID: env.Str("application_id"),
+				IncludeShared: env.Bool("include_shared"),
+				IsActive:      env.Bool("is_active"),
+			}, env.ListScope()...)
 		}},
 
 		// --- Tag resolution ---------------------------------------------------
@@ -189,11 +199,11 @@ func Drivers() []Driver {
 		// namespace and excludes global rows by definition, and the server would
 		// drop one of the two in silence.
 		{Op: "get /tag-resolution", SDK: "TagService.Resolve", Call: func(ctx context.Context, env *Env) (any, error) {
-			return env.Client.Tags.Resolve(ctx, driverValue("slug"), &octonomy.TagResolveParams{
-				ApplicationID: strFor("application_id"),
-				Type:          strFor("type"),
-				Scope:         octonomy.ResolutionScopeGlobal,
-			}, env.ReadScope()...)
+			return env.Client.Tags.Resolve(ctx, env.Val("slug"), &octonomy.TagResolveParams{
+				ApplicationID: env.Str("application_id"),
+				Type:          env.Str("type"),
+				Scope:         octonomy.ResolutionScope(env.Val("scope")),
+			}, env.ListScope()...)
 		}},
 
 		// --- Assignments ------------------------------------------------------
@@ -203,87 +213,87 @@ func Drivers() []Driver {
 			// are sent and the server's own mutual-exclusion rule is its business,
 			// not this SDK's (AGENTS.md: the SDK adds ergonomics, not validation).
 			return env.Client.Assignments.Create(ctx, octonomy.AssignmentCreate{
-				ApplicationID: driverValue("application_id"), TagID: strFor("tag_id"), AliasID: strFor("alias_id"),
-				AliasSlug:    strFor("alias_slug"),
-				ResourceType: driverValue("resource_type"), ResourceID: driverValue("resource_id"),
-				AssignedBy: strFor("assigned_by"),
+				ApplicationID: env.Val("application_id"), TagID: env.Str("tag_id"), AliasID: env.Str("alias_id"),
+				AliasSlug:    env.Str("alias_slug"),
+				ResourceType: env.Val("resource_type"), ResourceID: env.Val("resource_id"),
+				AssignedBy: env.Str("assigned_by"),
 			}, env.Scope()...)
 		}},
 		{Op: "delete /tag-assignments", SDK: "AssignmentService.Remove", Call: func(ctx context.Context, env *Env) (any, error) {
 			return nil, env.Client.Assignments.Remove(ctx, octonomy.AssignmentRemove{
-				ApplicationID: driverValue("application_id"), TagID: driverValue("tag_id"),
-				ResourceType: driverValue("resource_type"), ResourceID: driverValue("resource_id"),
+				ApplicationID: env.Val("application_id"), TagID: env.Val("tag_id"),
+				ResourceType: env.Val("resource_type"), ResourceID: env.Val("resource_id"),
 			}, env.Scope()...)
 		}},
 		{Op: "post /tag-assignments/bulk-assign", SDK: "AssignmentService.BulkAssign", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Assignments.BulkAssign(ctx, octonomy.BulkAssign{
-				ApplicationID: driverValue("application_id"), ResourceType: driverValue("resource_type"), ResourceID: driverValue("resource_id"),
-				TagIDs: []string{driverValue("tag_ids")}, AliasSlugs: []string{driverValue("alias_slugs")},
-				AssignedBy: strFor("assigned_by"),
+				ApplicationID: env.Val("application_id"), ResourceType: env.Val("resource_type"), ResourceID: env.Val("resource_id"),
+				TagIDs: []string{env.Val("tag_ids")}, AliasSlugs: []string{env.Val("alias_slugs")},
+				AssignedBy: env.Str("assigned_by"),
 			}, env.Scope()...)
 		}},
 		{Op: "post /tag-assignments/bulk-remove", SDK: "AssignmentService.BulkRemove", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Assignments.BulkRemove(ctx, octonomy.BulkRemove{
-				ApplicationID: driverValue("application_id"), ResourceType: driverValue("resource_type"), ResourceID: driverValue("resource_id"),
-				TagIDs: []string{driverValue("tag_ids")},
+				ApplicationID: env.Val("application_id"), ResourceType: env.Val("resource_type"), ResourceID: env.Val("resource_id"),
+				TagIDs: []string{env.Val("tag_ids")},
 			}, env.Scope()...)
 		}},
 
 		// --- Resource tags ----------------------------------------------------
 		{Op: "get /resources/{resource_type}/{resource_id}/tags", SDK: "ResourceService.ListTags", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Resources.ListTags(ctx, env.Path("resource_type"), env.Path("resource_id"), &octonomy.ResourceListTagsParams{
-				ListOptions:     listOptions(),
-				ApplicationID:   strFor("application_id"),
-				IncludeInactive: boolFor("include_inactive"),
-				Type:            strFor("type"),
-			}, env.ReadScope()...)
+				ListOptions:     listOptions(env),
+				ApplicationID:   env.Str("application_id"),
+				IncludeInactive: env.Bool("include_inactive"),
+				Type:            env.Str("type"),
+			}, env.ListScope()...)
 		}},
 		{Op: "post /resources/{resource_type}/{resource_id}/tags", SDK: "ResourceService.ReplaceTags", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Resources.ReplaceTags(ctx, env.Path("resource_type"), env.Path("resource_id"), octonomy.ResourceReplace{
-				ApplicationID: driverValue("application_id"), TagIDs: []string{driverValue("tag_ids")}, AliasSlugs: []string{driverValue("alias_slugs")},
-				AssignedBy: strFor("assigned_by"),
+				ApplicationID: env.Val("application_id"), TagIDs: []string{env.Val("tag_ids")}, AliasSlugs: []string{env.Val("alias_slugs")},
+				AssignedBy: env.Str("assigned_by"),
 			}, env.Scope()...)
 		}},
 		{Op: "get /tags/{tag_id}/resources", SDK: "TagService.ListResources", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Tags.ListResources(ctx, env.Path("tag_id"), &octonomy.TagListResourcesParams{
-				ListOptions:   listOptions(),
-				ApplicationID: strFor("application_id"),
-				ResourceType:  strFor("resource_type"),
-			}, env.ReadScope()...)
+				ListOptions:   listOptions(env),
+				ApplicationID: env.Str("application_id"),
+				ResourceType:  env.Str("resource_type"),
+			}, env.ListScope()...)
 		}},
 
 		// --- Audit logs -------------------------------------------------------
 		{Op: "get /audit-logs", SDK: "AuditLogService.List", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.AuditLogs.List(ctx, &octonomy.AuditLogListParams{
-				ListOptions:   listOptions(),
-				Action:        strFor("action"),
-				ActorID:       strFor("actor_id"),
-				ApplicationID: strFor("application_id"),
-				EntityID:      strFor("entity_id"),
-				EntityType:    strFor("entity_type"),
-				OperationID:   strFor("operation_id"),
-				ResourceID:    strFor("resource_id"),
-				ResourceType:  strFor("resource_type"),
-				TagID:         strFor("tag_id"),
-			}, env.ReadScope()...)
+				ListOptions:   listOptions(env),
+				Action:        env.Str("action"),
+				ActorID:       env.Str("actor_id"),
+				ApplicationID: env.Str("application_id"),
+				EntityID:      env.Str("entity_id"),
+				EntityType:    env.Str("entity_type"),
+				OperationID:   env.Str("operation_id"),
+				ResourceID:    env.Str("resource_id"),
+				ResourceType:  env.Str("resource_type"),
+				TagID:         env.Str("tag_id"),
+			}, env.ListScope()...)
 		}},
 		{Op: "get /tags/{tag_id}/audit-logs", SDK: "TagService.ListAuditLogs", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Tags.ListAuditLogs(ctx, env.Path("tag_id"), &octonomy.TagListAuditLogsParams{
-				ListOptions:   listOptions(),
-				Action:        strFor("action"),
-				ActorID:       strFor("actor_id"),
-				ApplicationID: strFor("application_id"),
-				OperationID:   strFor("operation_id"),
-			}, env.ReadScope()...)
+				ListOptions:   listOptions(env),
+				Action:        env.Str("action"),
+				ActorID:       env.Str("actor_id"),
+				ApplicationID: env.Str("application_id"),
+				OperationID:   env.Str("operation_id"),
+			}, env.ListScope()...)
 		}},
 		{Op: "get /resources/{resource_type}/{resource_id}/audit-logs", SDK: "ResourceService.ListAuditLogs", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Resources.ListAuditLogs(ctx, env.Path("resource_type"), env.Path("resource_id"), &octonomy.ResourceListAuditLogsParams{
-				ListOptions:   listOptions(),
-				Action:        strFor("action"),
-				ActorID:       strFor("actor_id"),
-				ApplicationID: strFor("application_id"),
-				OperationID:   strFor("operation_id"),
-			}, env.ReadScope()...)
+				ListOptions:   listOptions(env),
+				Action:        env.Str("action"),
+				ActorID:       env.Str("actor_id"),
+				ApplicationID: env.Str("application_id"),
+				OperationID:   env.Str("operation_id"),
+			}, env.ListScope()...)
 		}},
 
 		// --- Health -----------------------------------------------------------
@@ -326,15 +336,6 @@ var constrainedValues = map[string]string{
 	"limit":  "1",
 	"offset": "2",
 
-	// Booleans, deliberately not all true: `include_shared` and `is_active` ride
-	// the same request, and two `true`s are interchangeable without either
-	// changing.
-	"include_shared":   "true",
-	"is_active":        "false",
-	"include_inactive": "true",
-	// include_global is set by WithIncludeGlobal, which sends only "true".
-	"include_global": "true",
-
 	// An enum the server validates. `global` pins the tenant-shared namespace and
 	// is the one value that can ride with WithIncludeGlobal.
 	"scope": "global",
@@ -350,16 +351,36 @@ var constrainedValues = map[string]string{
 	"x-namespace-id":   driverValuePrefix + "x-namespace-id",
 }
 
-// ExpectedValue is the value the wire must carry for a documented input.
-func ExpectedValue(wireName string) string {
-	if value, ok := constrainedValues[strings.ToLower(wireName)]; ok {
+// booleanPatterns give each boolean input a distinct pair of values across the two
+// executions.
+//
+// One execution cannot tell three booleans apart: there are two values and three
+// axes on a tag list (`include_shared`, `is_active`, `include_global`), so some
+// pair always matches and swapping that pair changes nothing. The comment here
+// used to claim any two sharing a request differ, and a review showed it false.
+//
+// Two executions give four patterns, which is enough. `include_global` is fixed:
+// WithIncludeGlobal sends only "true", so it takes TT and the others take the
+// three remaining patterns.
+var booleanPatterns = map[string][2]bool{
+	"include_global":   {true, true},
+	"include_shared":   {true, false},
+	"is_active":        {false, true},
+	"include_inactive": {false, false},
+}
+
+// ExpectedValue is the value the wire must carry for a documented input, on a
+// given execution.
+func ExpectedValue(wireName string, pass int) string {
+	name := strings.ToLower(wireName)
+	if pattern, ok := booleanPatterns[name]; ok {
+		return strconv.FormatBool(pattern[pass%len(pattern)])
+	}
+	if value, ok := constrainedValues[name]; ok {
 		return value
 	}
 	return driverValuePrefix + wireName
 }
-
-// driverValue is what a driver passes. Same function, named for the reading side.
-func driverValue(wireName string) string { return ExpectedValue(wireName) }
 
 // sentinelOrigin reports the wire field a name-shaped value was meant for, which
 // turns "this value is wrong" into "this value belongs to that field".

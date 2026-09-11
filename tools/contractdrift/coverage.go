@@ -99,11 +99,16 @@ type CoverageOperation struct {
 	// rather than a silent suppression.
 	DocumentedResponse string `yaml:"documented_response"`
 
-	// CompositeBody is the response body the running server really returns for an
-	// operation whose contract describes it wrongly or not at all -- the bulk
-	// results and the resource-tag replace. A REVIEWED FACT, verified against a
-	// booted server, and the exact bytes the gate's stub answers with, so what the
-	// SDK decodes is compared against it property by property.
+	// CompositeBody is a WITNESS for an operation whose contract describes its
+	// response wrongly or not at all -- the bulk results and the resource-tag
+	// replace. It is the SHAPE the running server returns, with values chosen to
+	// make a decoder defect visible rather than values any one call would produce.
+	//
+	// The distinction matters and this comment used to blur it: the shape is the
+	// reviewed fact, the numbers are test data. They are deliberately all
+	// different, so a decoder crossing two of them changes both, and the row
+	// arrays are populated, because an empty one lets a decoder that discards
+	// every row return exactly what the stub sent.
 	//
 	// One body per operation, because they differ: a single universal object
 	// carrying every composite's keys meant each decoder silently dropped the

@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     parameter populated, against a stub that records the request and answers with a body
     **synthesized from the vendored schema**. The request is what it compares against the contract —
     route, query parameters, headers, and request-body properties, **names and values**, in both
-    directions, on **both REST surfaces**. Values are comparable because every input has one canonical
-    value the wire must carry exactly, so a parameter retyped in the contract, a params struct wiring
+    directions, on **both REST surfaces**. Values are comparable because every scalar and array input has
+    one canonical value the wire must carry exactly, so a parameter retyped in the contract, a params struct wiring
     one input to another's name, two JSON tags swapped on a write model, the two namespace headers
     crossed, a hard-coded value, two swapped integers or booleans, an emptied array and a wrong
     credential are each reported — every one of which keeps all the right names in place. The response is what it decodes,
