@@ -234,9 +234,11 @@ repository could be left in.
 
 **The SDK side is driven, not read.** For each operation, `tools/contractdrift/drivers.go` calls the
 method with every parameter it offers populated, against a stub server that records the request and
-answers with a body **synthesized from the vendored schema**. The request is the answer: the route,
-the query parameters, no inference. The response is the other half: a property the Go model has no
-field for is dropped on the way back out, and a property whose *type* changed fails to decode at all.
+answers with a body **synthesized from the vendored schema**. The request is the answer — the route, the query
+parameters, the headers, and the JSON keys of the body, compared with the contract in **both**
+directions and with no inference in any of it. The response is the other half: a property the Go model
+has no field for is dropped on the way back out, and one whose type the model cannot read fails to
+decode.
 
 That is what caught `q` and `slug` missing from `VocabularyListParams`
 ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)).
@@ -255,14 +257,26 @@ finding. A driver that is merely *wrong* — nil params, a missing option — fa
 client would: the parameters do not reach the wire and the gate says so. There is no shape of driver
 mistake that produces a quieter answer than the truth.
 
-**What a passing decode does and does not prove.** It proves the model accepts a body the contract
-permits: every documented property survives the round trip, and none of them has a type the model
-cannot read. It does not prove the Go types are the *tightest* fit — a property documented `integer`
-decoded into a `float64` passes, as does anything at all decoded into `any`. And where the contract
-constrains nothing (`metadata: {}`, `changes: {readOnly: true}`) there is nothing to check: the stub
-sends the shape the server really sends, a JSON object, which is enough to prove a field exists and
-no more. That is the honest boundary of this check; the integration smoke test above is what exercises
+**What a passing decode does and does not prove.** Each operation is driven twice: once with every
+property populated, once with every `nullable` property set to `null`. Together those prove the model
+has a field for everything documented, that no documented type is one it cannot read, and that a
+nullable property round-trips as `null` rather than as the zero value — an `int` where the contract
+now permits absence turns `null` into `0`, which is the silent-zero family of
+[#32](https://github.com/octoverse-id/octonomy-go/issues/32) arriving through the contract instead of
+through a decoder.
+
+It is still **representative-value coverage**, not a proof of type equivalence. A property documented
+`integer` decoded into a `float64` passes, as does anything at all decoded into `any`; and where the
+contract constrains nothing (`metadata: {}`, `changes: {readOnly: true}`) there is nothing to check —
+the stub sends the shape the server really sends, a JSON object, which is enough to prove a field
+exists and no more. That is the honest boundary; the integration smoke test above is what exercises
 real server payloads.
+
+**And what the route check proves.** Each driver runs twice with different path values, so a route
+that varies with the value it is given is reported, and each placeholder has its own sentinel, so two
+arguments in the wrong order do not produce the expected path. Two executions are not a proof of
+invariance — nothing short of reading every branch would be — but they are two more than the one a
+single fixed input gives.
 
 **Everything the offline half compares is vendored, on purpose.** The two contracts, the error
 registry, the recorded server version: each has a copy in this repository, so each can be checked

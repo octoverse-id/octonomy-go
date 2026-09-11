@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -30,12 +31,18 @@ type Coverage struct {
 	// implemented (naming the Go method) or unimplemented (naming a reason).
 	Operations []CoverageOperation `yaml:"operations"`
 
-	// UnsentQueryParameters lists query parameters the contracts document that the
-	// SDK deliberately never sends, PER OPERATION. Scoped that way because a name
-	// is not a decision: `limit` would be legitimately unsent on /tag-resolution
-	// and is legitimately sent on every list route, and a name-keyed allowlist
-	// would silence both.
-	UnsentQueryParameters []UnsentParameter `yaml:"unsent_query_parameters"`
+	// UnsentInputs lists documented inputs -- a query parameter, a request-body
+	// property, or a header -- that the SDK deliberately does not send, PER
+	// OPERATION AND LOCATION. Scoped that way because a name is not a decision:
+	// `limit` would be legitimately unsent on /tag-resolution and is legitimately
+	// sent on every list route, and `resource_type` is legitimately absent from a
+	// body while being required in the path.
+	UnsentInputs []UnsentInput `yaml:"unsent_inputs"`
+
+	// ClientHeaders are headers the client puts on EVERY versioned request that no
+	// operation documents. They are transport identity rather than per-operation
+	// input, so they are recorded once here instead of once per operation.
+	ClientHeaders []ClientHeader `yaml:"client_headers"`
 
 	// UndocumentedModelFields lists JSON fields an SDK response model decodes that
 	// the contract's schema does not document, each with the reason it is there.
@@ -85,6 +92,12 @@ type CoverageOperation struct {
 	// rather than a silent suppression.
 	DocumentedResponse string `yaml:"documented_response"`
 
+	// UndocumentedRequestBody records that this operation sends a body the
+	// generated spec does not describe, with the reason. One live case: the
+	// body-carrying DELETE, whose ids travel in a payload drf-spectacular does not
+	// document for a DELETE at all.
+	UndocumentedRequestBody string `yaml:"undocumented_request_body"`
+
 	// ActualResponse is what the running server really returns, in the SDK's own
 	// vocabulary -- the closed set in actualResponses below. It is checked against
 	// the transport helper the method calls (doList yields a list envelope, doData
@@ -99,17 +112,24 @@ type CoverageOperation struct {
 // Key matches Operation.Key once the surface prefix is stripped.
 func (c CoverageOperation) Key() string { return c.Method + " " + c.Path }
 
-// UnsentParameter records a documented query parameter one operation does not
-// send.
-type UnsentParameter struct {
+// UnsentInput records a documented input one operation does not send.
+type UnsentInput struct {
 	Path   string `yaml:"path"`
 	Method string `yaml:"method"`
+	// In is where the contract documents it: query, body, or header.
+	In     string `yaml:"in"`
 	Name   string `yaml:"name"`
 	Reason string `yaml:"reason"`
 }
 
-// Key is the operation key plus the parameter name.
-func (u UnsentParameter) Key() string { return u.Method + " " + u.Path + " " + u.Name }
+// Key is the operation key, the location, and the name.
+func (u UnsentInput) Key() string { return u.Method + " " + u.Path + " " + u.In + " " + u.Name }
+
+// ClientHeader records a header the client sends on every versioned request.
+type ClientHeader struct {
+	Name   string `yaml:"name"`
+	Reason string `yaml:"reason"`
+}
 
 // UndocumentedField records a JSON field an SDK model decodes that the contract
 // does not document.
@@ -142,6 +162,8 @@ var (
 		"none":               true, // no body -- 204
 	}
 	actualResponseList = "list-envelope, data-envelope, composite-envelope, bare, none"
+
+	unsentLocations = map[string]bool{"query": true, "body": true, "header": true}
 
 	httpMethodNames = map[string]bool{
 		"get": true, "put": true, "post": true, "delete": true,
@@ -198,12 +220,20 @@ func LoadCoverage(path string) (*Coverage, error) {
 		seen[op.Key()] = true
 	}
 
-	for _, p := range cov.UnsentQueryParameters {
+	for _, p := range cov.UnsentInputs {
 		if p.Path == "" || p.Method == "" || p.Name == "" || p.Reason == "" {
-			return nil, fmt.Errorf("%s: unsent_query_parameters needs path, method, name, and reason on every row", path)
+			return nil, fmt.Errorf("%s: unsent_inputs needs path, method, in, name, and reason on every row", path)
+		}
+		if !unsentLocations[p.In] {
+			return nil, fmt.Errorf("%s: unsent_inputs %q: `in` is %q, not query, body, or header", path, p.Name, p.In)
 		}
 		if !seen[p.Method+" "+p.Path] {
-			return nil, fmt.Errorf("%s: unsent_query_parameters names %q, which is not an operation in this file", path, p.Method+" "+p.Path)
+			return nil, fmt.Errorf("%s: unsent_inputs names %q, which is not an operation in this file", path, p.Method+" "+p.Path)
+		}
+	}
+	for _, h := range cov.ClientHeaders {
+		if h.Name == "" || h.Reason == "" {
+			return nil, fmt.Errorf("%s: client_headers needs a name and a reason on every row", path)
 		}
 	}
 	for _, f := range cov.UndocumentedModelFields {
@@ -242,11 +272,20 @@ func (c *Coverage) ByKey() map[string]CoverageOperation {
 	return out
 }
 
-// UnsentIndex returns the allowlisted operation+parameter pairs and their reasons.
+// UnsentIndex returns the allowlisted operation+location+name keys.
 func (c *Coverage) UnsentIndex() map[string]string {
-	out := make(map[string]string, len(c.UnsentQueryParameters))
-	for _, p := range c.UnsentQueryParameters {
+	out := make(map[string]string, len(c.UnsentInputs))
+	for _, p := range c.UnsentInputs {
 		out[p.Key()] = p.Reason
+	}
+	return out
+}
+
+// ClientHeaderSet returns the always-sent headers, canonicalized.
+func (c *Coverage) ClientHeaderSet() map[string]bool {
+	out := make(map[string]bool, len(c.ClientHeaders))
+	for _, h := range c.ClientHeaders {
+		out[http.CanonicalHeaderKey(h.Name)] = true
 	}
 	return out
 }

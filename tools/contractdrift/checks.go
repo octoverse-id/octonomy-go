@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -105,6 +106,7 @@ func CheckLocal(in Inputs) *Report {
 	checkImplementation(in, r)
 	checkDocumentedResponses(in, r)
 	checkQueryParametersSent(in, r)
+	checkRequestShapes(in, r)
 	checkResponseModels(in, r)
 	checkErrorCodesImplemented(in, r)
 	return r
@@ -266,9 +268,11 @@ func checkImplementation(in Inputs, r *Report) {
 			items = append(items, fmt.Sprintf("`%s`: no observation was recorded for `%s`", row.Key(), driver.SDK))
 			continue
 		}
-		// The row's path names its placeholders and the observed one cannot, so
-		// both sides are reduced to {} before they are compared.
-		if want := row.Method + " " + normalizePath(row.Path); observed.Key() != want {
+		// Compared verbatim: the recorder maps each sentinel back to the
+		// placeholder it was passed for, so the observed path carries the same
+		// names the contract does -- and two arguments in the wrong order no
+		// longer produce the expected route.
+		if observed.Key() != row.Key() {
 			items = append(items, fmt.Sprintf("`%s`: `%s` requests `%s`", row.Key(), driver.SDK, strings.ToUpper(observed.Method)+" "+observed.Path))
 		}
 		// A call error against a body the STUB built from the vendored schema is a
@@ -368,7 +372,7 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 				if observed.Query[name] {
 					continue
 				}
-				key := row.Key() + " " + name
+				key := row.Key() + " query " + name
 				if _, ok := allowed[key]; ok {
 					used[key] = true
 					continue
@@ -386,8 +390,11 @@ func checkQueryParametersSent(in Inputs, r *Report) {
 	}
 
 	for key := range allowed {
+		if !strings.Contains(key, " query ") {
+			continue // checkRequestShapes owns body and header rows
+		}
 		if !used[key] {
-			items = append(items, fmt.Sprintf("`%s` is listed under unsent_query_parameters and the client either sends it now or the contract stopped documenting it -- drop the row", key))
+			items = append(items, fmt.Sprintf("`%s` is listed under unsent_inputs and the client sends it now, or the contract stopped documenting it -- drop the row", key))
 		}
 	}
 	r.Add("Query parameters", dedupe(items))
@@ -457,12 +464,33 @@ func checkResponseModels(in Inputs, r *Report) {
 		documentedSet := map[string]bool{}
 		for _, property := range documented {
 			documentedSet[property] = true
-			if !observed.Decoded[property] {
+			if _, survived := observed.Decoded[property]; !survived {
 				items = append(items, fmt.Sprintf("schema `%s` documents `%s` and it does not survive decoding by `%s` -- the model has no field for it",
 					op.OKModel, property, row.SDK))
 			}
 		}
-		for _, field := range sortedNames(observed.Decoded) {
+
+		// The null witness. A property the contract marks nullable has to come back
+		// as null, not as the zero value the model fell back to -- `0` for an int
+		// where the contract now permits absence is the silent-zero failure this
+		// SDK refuses everywhere else, arriving through the contract rather than
+		// through a decoder.
+		if observed.NullWitnessErr != nil {
+			items = append(items, fmt.Sprintf("`%s`: `%s` could not decode a response whose nullable properties are null: %v",
+				row.Key(), row.SDK, observed.NullWitnessErr))
+			continue
+		}
+		for _, property := range nullableProperties(spec, op.OKModel) {
+			value, survived := observed.NullWitness[property]
+			if !survived {
+				continue // already reported above
+			}
+			if string(value) != "null" {
+				items = append(items, fmt.Sprintf("schema `%s` marks `%s` nullable and `%s` decodes null as `%s` -- the model cannot represent the absent state, so a null from the server reads as a value",
+					op.OKModel, property, row.SDK, string(value)))
+			}
+		}
+		for _, field := range sortedFields(observed.Decoded) {
 			if documentedSet[field] {
 				continue
 			}
@@ -669,6 +697,33 @@ func checkErrorCodeDrift(in Inputs, r *Report) {
 	r.Add("Error codes", items)
 }
 
+// nullableProperties returns the properties a component schema marks nullable.
+func nullableProperties(spec *Spec, name string) []string {
+	node, ok := spec.Schemas[name]
+	if !ok {
+		return nil
+	}
+	root := node
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		root = root.Content[0]
+	}
+	props := mappingValue(root, "properties")
+	if props == nil {
+		return nil
+	}
+	var out []string
+	for i := 0; i+1 < len(props.Content); i += 2 {
+		var schema struct {
+			Nullable bool `yaml:"nullable"`
+		}
+		if err := props.Content[i+1].Decode(&schema); err == nil && schema.Nullable {
+			out = append(out, props.Content[i].Value)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // SchemaProperties returns the property names a component schema documents.
 func (s *Spec) SchemaProperties(name string) ([]string, bool) {
 	node, ok := s.Schemas[name]
@@ -714,4 +769,143 @@ func dedupe(items []string) []string {
 		}
 	}
 	return out
+}
+
+// checkRequestShapes compares what the client PUT IN THE REQUEST with what the
+// operation documents: the JSON properties of its request schema, and its header
+// parameters.
+//
+// This is the half the gate did not have, and the hole was the same shape as the
+// query one that preceded it. A write whose method stopped passing its payload
+// emits the same verb, the same path and the same query as one that still does,
+// so every check was satisfied while the client sent nothing at all. Documented
+// headers were invisible for the same reason: the v2 contract documents
+// `X-Namespace-*` on every operation, and a method that stopped propagating them
+// looked exactly like one that never could.
+//
+// It also makes drivers.go check itself. A driver that leaves a field unset sends
+// a body missing that property, and the run says so -- which is what turns "every
+// parameter is populated" from a promise in a comment into something a reader can
+// stop taking on trust.
+func checkRequestShapes(in Inputs, r *Report) {
+	spec := in.Vendored["v2"]
+	ops, err := strippedOperations(spec, "v2")
+	if err != nil {
+		return // reported by checkSurfaceParity
+	}
+	unsent := in.Coverage.UnsentIndex()
+	clientHeaders := in.Coverage.ClientHeaderSet()
+	used := map[string]bool{}
+	var items []string
+
+	for _, row := range in.Coverage.Operations {
+		if row.Unimplemented != "" {
+			continue
+		}
+		op, ok := ops[row.Key()]
+		if !ok {
+			continue
+		}
+		observed, ok := in.Conformance.Observations[row.Key()]
+		if !ok {
+			continue // reported by checkImplementation
+		}
+
+		// --- headers ---
+		documentedHeaders := map[string]bool{}
+		for _, name := range op.HeaderParams() {
+			canonical := http.CanonicalHeaderKey(name)
+			documentedHeaders[canonical] = true
+			if observed.Headers[canonical] {
+				continue
+			}
+			key := row.Key() + " header " + name
+			if _, ok := unsent[key]; ok {
+				used[key] = true
+				continue
+			}
+			items = append(items, fmt.Sprintf("`%s` documents the header `%s` and the client did not send it", row.Key(), name))
+		}
+		for _, name := range sortedNames(observed.Headers) {
+			if !documentedHeaders[name] && !clientHeaders[name] {
+				items = append(items, fmt.Sprintf("`%s`: the client sends the header `%s`, which no vendored contract documents", row.Key(), name))
+			}
+		}
+
+		// --- request body ---
+		switch {
+		case op.RequestModel == "" && len(observed.Body) > 0:
+			// The one live case is DELETE /tag-assignments, whose ids travel in a
+			// body the generated spec does not describe -- a fourth divergence in
+			// the same family as the envelopes, and recorded the same way.
+			if row.UndocumentedRequestBody == "" {
+				items = append(items, fmt.Sprintf("`%s`: the client sends a request body (%s) and the contract documents none -- record it under undocumented_request_body",
+					row.Key(), strings.Join(sortedNames(observed.Body), ", ")))
+			}
+			continue
+		case op.RequestModel == "":
+			continue
+		case row.UndocumentedRequestBody != "":
+			items = append(items, fmt.Sprintf("`%s` records an undocumented request body and the contract now documents `%s` -- drop the row",
+				row.Key(), op.RequestModel))
+			continue
+		case len(observed.Body) == 0:
+			items = append(items, fmt.Sprintf("`%s`: the contract documents a `%s` request body and the client sent none",
+				row.Key(), op.RequestModel))
+			continue
+		}
+
+		documented, ok := spec.SchemaProperties(op.RequestModel)
+		if !ok {
+			items = append(items, fmt.Sprintf("`%s`: the request body references schema `%s`, which components.schemas does not define", row.Key(), op.RequestModel))
+			continue
+		}
+		documentedSet := map[string]bool{}
+		for _, property := range documented {
+			documentedSet[property] = true
+			if observed.Body[property] {
+				continue
+			}
+			key := row.Key() + " body " + property
+			if _, ok := unsent[key]; ok {
+				used[key] = true
+				continue
+			}
+			items = append(items, fmt.Sprintf("`%s`: schema `%s` documents `%s` and the client did not send it -- implement it, or populate it in drivers.go",
+				row.Key(), op.RequestModel, property))
+		}
+		for _, property := range sortedNames(observed.Body) {
+			if !documentedSet[property] {
+				items = append(items, fmt.Sprintf("`%s`: the client sends `%s` in its request body, which schema `%s` does not document",
+					row.Key(), property, op.RequestModel))
+			}
+		}
+	}
+	// A row claiming an input travels in the body has to be TRUE: the parameter
+	// must actually be in the body the client sent. Eleven of these say
+	// application_id moves from the query string into the payload, and without
+	// this they would turn a missing query key green while proving nothing about
+	// the replacement path.
+	for key, reason := range unsent {
+		if !strings.Contains(key, " query ") || !strings.Contains(reason, "ApplicationID") {
+			continue
+		}
+		op, _, _ := strings.Cut(strings.TrimPrefix(key, ""), " query ")
+		observed, ok := in.Conformance.Observations[op]
+		if !ok {
+			continue
+		}
+		if !observed.Body["application_id"] {
+			items = append(items, fmt.Sprintf("`%s` records that application_id travels in the body, and the request body does not carry it", op))
+		}
+	}
+	for key := range unsent {
+		if strings.Contains(key, " query ") {
+			continue // checkQueryParametersSent owns those
+		}
+		if !used[key] {
+			items = append(items, fmt.Sprintf("`%s` is listed under unsent_inputs and the client sends it now, or the contract stopped documenting it -- drop the row", key))
+		}
+	}
+	r.Add("Request shapes", dedupe(items))
 }

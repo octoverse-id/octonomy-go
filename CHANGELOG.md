@@ -24,10 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the error-code registry against this SDK's `Code*` constants.
   - **The SDK side is driven, not read.** For each operation the gate calls the method with every
     parameter populated, against a stub that records the request and answers with a body
-    **synthesized from the vendored schema**. The request is what it compares against the contract's
-    routes and query parameters; the response is what it decodes, so a property the Go model has no
-    field for is dropped on the way back out and a property whose *type* changed does not decode at
-    all. **This found a real gap on its first run** — `VocabularyListParams` is missing `q` and `slug`
+    **synthesized from the vendored schema**. The request is what it compares against the contract —
+    route, query parameters, headers, and request-body properties, in both directions — and the
+    response is what it decodes, twice: once with every property populated and once with every
+    `nullable` property null, so a field the model lacks, a type it cannot read, and a nullable state
+    it cannot hold are all reported. **This found a real gap on its first run** — `VocabularyListParams` is missing `q` and `slug`
     ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)). An earlier draft read the package
     statically instead and was replaced: inferring control flow from an AST answered *clean* for a
     method that stopped passing its query builder, one that branched between two private helpers, and
@@ -47,9 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     could only ever be checked with the network, leaving them the one item where "refresh now,
     implement later" was still possible.
   - **The spec-versus-server envelope divergence is recorded, not suppressed.** Each row carries what
-    the spec documents and what the server really returns; the recorded envelope is checked against
-    the transport helper the method calls, and the documented one against the spec — so the gate stays
-    quiet while the divergence holds and speaks up the day it ends.
+    the spec documents and what the server really returns. The documented shape is checked against the
+    spec, and the recorded one is what the gate's stub answers with — so a row naming the wrong
+    envelope hands the real client a shape it cannot decode. The gate stays quiet while the divergence
+    holds and speaks up the day it ends.
   - `docs/versioning.md` gained a `<!-- contract-version: X.Y.Z -->` marker so the contract version in
     prose can be checked against the vendored specs.
 

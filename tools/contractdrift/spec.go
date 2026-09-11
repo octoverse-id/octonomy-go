@@ -65,6 +65,22 @@ type Operation struct {
 	// OKModel is the component schema name behind the success body -- the `$ref`
 	// itself, or an array's item `$ref`. Empty when the body is neither.
 	OKModel string
+
+	// RequestModel is the component schema name behind the request body. Empty on
+	// an operation that documents none.
+	RequestModel string
+}
+
+// HeaderParams returns the operation's documented header parameter names.
+func (o *Operation) HeaderParams() []string {
+	var out []string
+	for key := range o.Params {
+		if in, name, ok := strings.Cut(key, " "); ok && in == "header" {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Key is the operation's identity in reports and in coverage lookups.
@@ -195,6 +211,7 @@ func newOperation(doc *document, method, path string, node yaml.Node, shared map
 	}
 	if body.RequestBody.Kind != 0 {
 		op.RequestBody = flatten(&body.RequestBody)
+		op.RequestModel = refIn(op.RequestBody)
 	}
 	op.OKSchema, op.OKModel = okSchema(op.successResponse())
 	return op, nil
@@ -312,6 +329,17 @@ func okSchema(resp map[string]string) (shape, model string) {
 		}
 	}
 	return "none", ""
+}
+
+// refIn finds the component schema a flattened node references. Sorted, so a body
+// documented under two media types resolves the same way on every run.
+func refIn(flat map[string]string) string {
+	for _, k := range sortedKeys(flat) {
+		if strings.HasSuffix(k, ".schema.$ref") {
+			return schemaName(flat[k])
+		}
+	}
+	return ""
 }
 
 func schemaName(ref string) string {

@@ -1,15 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	octonomy "github.com/octoverse-id/octonomy-go/v2"
@@ -35,7 +35,15 @@ import (
 //   - the response the stub sends back is SYNTHESIZED FROM THE VENDORED SCHEMA,
 //     so decoding it is a direct test of whether the SDK's model still matches
 //     the contract. A property the Go struct has no field for disappears on the
-//     way back out; a property whose type changed fails to decode at all.
+//     way back out, and one whose type the model cannot read fails to decode.
+//
+// The response half is representative-value coverage, and worth stating as such:
+// two witnesses per operation, one with every property populated and one with
+// every nullable property null. That catches a field that is missing, a type the
+// model cannot read at all, and a nullable state it cannot hold. It does not
+// enumerate a schema's value space -- an `integer` decoded into a float passes, as
+// does anything into `any` -- and where the contract constrains nothing there is
+// nothing to check.
 //
 // The cost is a driver per operation (drivers.go) -- a call with every parameter
 // populated. That is more typing than a table of expectations and much harder to
@@ -44,51 +52,123 @@ import (
 
 // Observation is what one driver's call did on the wire, and what came back.
 type Observation struct {
-	// Requested is the normalized request: "get /tags", with every path segment
-	// the driver passed in reduced to {}.
+	// Method and Path are the normalized request line: "get", "/tags/{tag_id}",
+	// with every path segment the driver passed in replaced by the placeholder
+	// that segment stands for.
 	Method string
 	Path   string
 
 	// Query is the set of query parameter names the client actually sent.
 	Query map[string]bool
 
+	// Headers is the set of contract-relevant header names it sent -- the X-*
+	// family, which is where the namespace axis lives.
+	Headers map[string]bool
+
+	// Body is the set of top-level JSON keys the request body carried. Empty for
+	// a bodyless request, and that difference matters: a write that stopped
+	// sending its payload emits the same method, path and query as one that still
+	// does.
+	Body map[string]bool
+
 	// CallErr is the error the method returned, if any. A decode failure against
 	// a schema-derived response body lands here, and that is the point.
 	CallErr error
 
+	// NullWitness is the same decode against a body whose nullable properties are
+	// all null, and NullWitnessErr the error it produced. A nullable property that
+	// comes back as something other than null is one the model cannot represent as
+	// absent.
+	NullWitness    map[string]json.RawMessage
+	NullWitnessErr error
+
 	// Decoded is the re-marshalled response value, when the call returned one:
-	// the set of JSON keys that survived a round trip through the SDK's model.
-	// A documented property missing from here is a property the client drops.
-	Decoded map[string]bool
+	// the JSON keys that survived a round trip through the SDK's model, and their
+	// values. A documented property missing from here is one the client drops; a
+	// nullable property whose value came back as something other than null is one
+	// the model cannot represent as absent.
+	Decoded map[string]json.RawMessage
 }
 
 // Key is the operation identity, matching a coverage row.
 func (o Observation) Key() string { return o.Method + " " + o.Path }
 
-// pathSentinels are the values every driver passes for a path segment. The stub
-// reduces any segment equal to one of these to {}, so an observed path compares
-// with a spec path whose placeholders are named.
-var pathSentinels = map[string]bool{
-	"SEG1": true,
-	"SEG2": true,
+// Placeholder sentinels.
+//
+// Each documented placeholder gets its OWN value, and the recorder maps that
+// value back to that placeholder's name. Both used to be reduced to `{}`, which
+// meant a driver that passed resource_type and resource_id the wrong way round
+// produced exactly the expected route -- argument ORDER was not checked at all.
+//
+// Two sets, because each driver runs twice. One execution proves what the client
+// did with one input; two inputs do not prove a route is invariant either, but
+// they do catch a route that depends on the value, which one cannot.
+var pathValues = [2]map[string]string{
+	{"tag_id": "TAGID1", "alias_id": "ALIASID1", "vocabulary_id": "VOCABID1", "resource_type": "RTYPE1", "resource_id": "RID1"},
+	{"tag_id": "TAGID2", "alias_id": "ALIASID2", "vocabulary_id": "VOCABID2", "resource_type": "RTYPE2", "resource_id": "RID2"},
 }
 
-// Conformance runs every driver against a recording stub and returns what each
-// one did, keyed by the operation the driver names.
+// witness names which response body a pass sends.
+//
+// TWO witnesses, because one is a favorable one. The populated body proves every
+// documented property has a field to land in; it says nothing about a property the
+// contract marks `nullable`, because the stub picks the non-null value and the
+// model is never asked to hold the other state. A model whose field is `int` where
+// the contract now permits null decodes `1` perfectly and silently turns `null`
+// into `0` -- the same silent-zero family as #32 and #40, arriving through the
+// contract instead of through a decoder.
+//
+// So the second pass sends null for every nullable property and requires it to
+// come back as null. encoding/json accepts null into a scalar without error, so a
+// decode that merely SUCCEEDS proves nothing here; the round-tripped value is what
+// separates a *string from an int.
+type witness int
+
+const (
+	witnessPopulated witness = iota
+	witnessNull
+)
+
+// Conformance is what every driver did, keyed by the operation it names.
 type Conformance struct {
 	Observations map[string]Observation
 
-	// Errors are drivers that could not be run at all -- a client that would not
-	// construct, a stub that could not synthesize a body. Distinct from a call
-	// error, which is itself an observation.
+	// Errors are drivers that could not be run at all: a call that never reached
+	// a request, one that issued several, one whose two executions disagreed
+	// about the route, or a schema the stub could not build a body from. Distinct
+	// from a call error, which is itself an observation.
 	Errors map[string]error
 }
 
-// RunConformance drives the SDK once per operation.
+// recorder is the transport the client under test is given.
+//
+// A RoundTripper rather than an httptest.Server, for three reasons. It needs no
+// listener, so the gate runs in a sandbox with no loopback socket -- which the
+// review environment did not have, and an unrunnable gate cannot be reviewed. It
+// has no second goroutine, so there is no shared state to race over. And the
+// request arrives as a *http.Request rather than a re-parsed copy of one.
+type recorder struct {
+	// respond builds the response for the request that was just recorded.
+	respond func(*http.Request) (*http.Response, error)
+
+	requests []*http.Request
+}
+
+func (rec *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	rec.requests = append(rec.requests, req)
+	return rec.respond(req)
+}
+
+// RunConformance drives the SDK, twice per operation.
 //
 // The spec supplies the response bodies, so this is a two-way test: the request
 // side proves what the client sends, and the response side proves that what the
 // contract describes still fits the models the client decodes into.
+//
+// Twice, with different path values, because one execution only says what the
+// client did with one input. Two do not prove a route is invariant -- nothing
+// short of reading every branch would -- but they catch a route that varies with
+// the value, which one execution cannot.
 func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, error) {
 	rows := cov.ByKey()
 	ops, err := strippedOperations(spec, "v2")
@@ -101,88 +181,86 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 		Errors:       map[string]error{},
 	}
 
-	// One stub for the whole run. `current` names the operation being exercised,
-	// so the handler knows which schema to answer with; drivers run one at a time.
-	//
-	// Under a mutex even so. The handler runs on the server's goroutine and these
-	// are written from the caller's, and while the HTTP round trip happens to
-	// order them today, "happens to" is not a synchronization argument -- and the
-	// first driver that retries, or walks a page, would make it untrue.
-	var (
-		mu       sync.Mutex
-		current  Driver
-		observed Observation
-		requests int
-	)
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		requests++
-		observed = Observation{
-			Method: strings.ToLower(r.Method),
-			Path:   normalizeObservedPath(r.URL.Path),
-			Query:  queryNames(r.URL.Query()),
-		}
-		row, ok := rows[current.Op]
-		if !ok {
-			http.Error(w, "no coverage row", http.StatusInternalServerError)
-			return
-		}
-		body, status, err := synthesizeResponse(spec, ops[current.Op], row)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		if len(body) > 0 {
-			_, _ = w.Write(body)
-		}
-	}))
-	defer stub.Close()
-
-	client, err := octonomy.New(octonomy.Config{
-		BaseURL:  stub.URL,
-		Token:    "contractdrift",
-		TenantID: "contractdrift",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("constructing the client: %w", err)
-	}
-	health, err := octonomy.NewHealthClient(stub.URL)
-	if err != nil {
-		return nil, fmt.Errorf("constructing the health client: %w", err)
-	}
-	env := &Env{Client: client, Health: health}
-
 	for _, driver := range drivers {
-		mu.Lock()
-		current, observed, requests = driver, Observation{}, 0
-		mu.Unlock()
-
-		value, callErr := driver.Call(context.Background(), env)
-
-		mu.Lock()
-		seen, count := observed, requests
-		mu.Unlock()
-
-		switch {
-		case count == 0:
-			conf.Errors[driver.Op] = fmt.Errorf("the call reached no request: %v", callErr)
-			continue
-		case count > 1:
-			// Only the last request is recorded, so an observation from a driver
-			// that issued several would describe one of them and be read as
-			// describing the operation. A driver calls one method once.
-			conf.Errors[driver.Op] = fmt.Errorf("the call issued %d requests; a driver exercises one operation", count)
+		var (
+			seen    [2]Observation
+			failure error
+		)
+		for pass := range pathValues {
+			observation, err := runDriver(spec, ops[driver.Op], rows[driver.Op], driver, pass, witness(pass))
+			if err != nil {
+				failure = err
+				break
+			}
+			seen[pass] = observation
+		}
+		if failure != nil {
+			conf.Errors[driver.Op] = failure
 			continue
 		}
-		seen.CallErr = callErr
-		seen.Decoded = remarshalKeys(value)
-		conf.Observations[driver.Op] = seen
+		// The two executions differ only in the values substituted into the path,
+		// so anything else differing means the client's request depends on them.
+		if seen[0].Key() != seen[1].Key() {
+			conf.Errors[driver.Op] = fmt.Errorf("the route depends on the values passed: %q with one set of ids and %q with another",
+				seen[0].Key(), seen[1].Key())
+			continue
+		}
+		// The request side is the first pass's; the null witness's decoded value is
+		// carried alongside it, since that is the only thing the second pass is for.
+		observation := seen[0]
+		observation.NullWitness = seen[1].Decoded
+		observation.NullWitnessErr = seen[1].CallErr
+		conf.Observations[driver.Op] = observation
 	}
 	return conf, nil
+}
+
+// runDriver executes one driver once and records what it did.
+func runDriver(spec *Spec, op *Operation, row CoverageOperation, driver Driver, pass int, w witness) (Observation, error) {
+	values := pathValues[pass]
+	rec := &recorder{
+		respond: func(req *http.Request) (*http.Response, error) {
+			return synthesizeResponse(spec, op, row, req, w)
+		},
+	}
+	httpClient := &http.Client{Transport: rec}
+
+	client, err := octonomy.New(octonomy.Config{
+		BaseURL:    "https://contractdrift.invalid",
+		Token:      "contractdrift",
+		TenantID:   "contractdrift",
+		HTTPClient: httpClient,
+	})
+	if err != nil {
+		return Observation{}, fmt.Errorf("constructing the client: %w", err)
+	}
+	health, err := octonomy.NewHealthClient("https://contractdrift.invalid", octonomy.WithHealthHTTPClient(httpClient))
+	if err != nil {
+		return Observation{}, fmt.Errorf("constructing the health client: %w", err)
+	}
+
+	value, callErr := driver.Call(context.Background(), &Env{Client: client, Health: health, values: values})
+
+	switch {
+	case len(rec.requests) == 0:
+		return Observation{}, fmt.Errorf("the call reached no request: %v", callErr)
+	case len(rec.requests) > 1:
+		// Recording every request but comparing one would describe a driver by
+		// whichever it happened to keep. A driver exercises one operation.
+		return Observation{}, fmt.Errorf("the call issued %d requests; a driver exercises one operation", len(rec.requests))
+	}
+
+	req := rec.requests[0]
+	observed := Observation{
+		Method:  strings.ToLower(req.Method),
+		Path:    normalizeObservedPath(req.URL.Path, values),
+		Query:   queryNames(req.URL.Query()),
+		Headers: headerNames(req.Header),
+		Body:    bodyKeys(req),
+		CallErr: callErr,
+		Decoded: remarshalKeys(value),
+	}
+	return observed, nil
 }
 
 // Env is what a driver is handed. Two clients, because the health probes are
@@ -190,6 +268,20 @@ func RunConformance(spec *Spec, cov *Coverage, drivers []Driver) (*Conformance, 
 type Env struct {
 	Client *octonomy.Client
 	Health *octonomy.HealthClient
+
+	values map[string]string
+}
+
+// Path returns the value to pass for a documented path placeholder. It differs
+// between a driver's two executions, which is what makes a value-dependent route
+// visible -- and it is per placeholder, so passing resource_type where
+// resource_id belongs no longer produces the expected route.
+func (e *Env) Path(placeholder string) string {
+	value, ok := e.values[placeholder]
+	if !ok {
+		return "UNDECLARED-" + placeholder
+	}
+	return value
 }
 
 // Driver calls one operation with every parameter it accepts populated.
@@ -202,38 +294,62 @@ type Driver struct {
 	Call func(ctx context.Context, env *Env) (any, error)
 }
 
-func normalizeObservedPath(path string) string {
+// normalizeObservedPath maps each sentinel back to the placeholder it stands for,
+// so the observed path is directly comparable with the documented one -- and a
+// swapped pair of arguments is not.
+func normalizeObservedPath(path string, values map[string]string) string {
 	path = strings.TrimPrefix(path, "/api/v2")
+	byValue := make(map[string]string, len(values))
+	for placeholder, value := range values {
+		byValue[value] = "{" + placeholder + "}"
+	}
 	parts := strings.Split(path, "/")
 	for i, part := range parts {
-		if pathSentinels[part] {
-			parts[i] = "{}"
+		if placeholder, ok := byValue[part]; ok {
+			parts[i] = placeholder
 		}
 	}
 	return strings.Join(parts, "/")
 }
 
-// normalizePath collapses a documented path's named placeholders to {}, so
-// /tags/{tag_id} compares with the request the client actually issued.
-func normalizePath(path string) string {
-	var b strings.Builder
-	depth := 0
-	for _, r := range path {
-		switch {
-		case r == '{':
-			depth++
-			if depth == 1 {
-				b.WriteString("{}")
-			}
-		case r == '}':
-			if depth > 0 {
-				depth--
-			}
-		case depth == 0:
-			b.WriteRune(r)
+// headerNames records the contract-relevant request headers. The X- family is
+// where the namespace axis lives, and the rest (Authorization, Accept,
+// User-Agent) are transport concerns no operation documents.
+func headerNames(header http.Header) map[string]bool {
+	out := map[string]bool{}
+	for name := range header {
+		if strings.HasPrefix(strings.ToLower(name), "x-") {
+			out[http.CanonicalHeaderKey(name)] = true
 		}
 	}
-	return b.String()
+	return out
+}
+
+// bodyKeys reads the top-level JSON keys of a request body. The body is consumed
+// and restored, because the client still owns the request.
+func bodyKeys(req *http.Request) map[string]bool {
+	if req.Body == nil || req.GetBody == nil {
+		return map[string]bool{}
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return map[string]bool{}
+	}
+	defer func() { _ = body.Close() }()
+
+	raw, err := io.ReadAll(body)
+	if err != nil || len(raw) == 0 {
+		return map[string]bool{}
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return map[string]bool{}
+	}
+	out := make(map[string]bool, len(object))
+	for key := range object {
+		out[key] = true
+	}
+	return out
 }
 
 func queryNames(values url.Values) map[string]bool {
@@ -244,10 +360,12 @@ func queryNames(values url.Values) map[string]bool {
 	return out
 }
 
-// remarshalKeys renders a decoded response back to JSON and returns its keys --
-// for a list, the keys of its first element. A documented property the Go model
-// has no field for cannot appear here, which is the whole point.
-func remarshalKeys(value any) map[string]bool {
+// remarshalKeys renders a decoded response back to JSON and returns its fields --
+// for a list, the fields of its first element. A documented property the Go model
+// has no field for cannot appear here, which is the whole point; and the VALUES
+// are kept, because a nullable property that comes back as `0` rather than `null`
+// is one the model cannot represent as absent.
+func remarshalKeys(value any) map[string]json.RawMessage {
 	if value == nil {
 		return nil
 	}
@@ -265,22 +383,37 @@ func remarshalKeys(value any) map[string]bool {
 		var elements []map[string]json.RawMessage
 		if err := json.Unmarshal(data, &elements); err == nil {
 			if len(elements) == 0 {
-				return map[string]bool{}
+				return map[string]json.RawMessage{}
 			}
 			object = elements[0]
 		}
 	}
-	out := make(map[string]bool, len(object))
-	for key := range object {
-		out[key] = true
-	}
-	return out
+	return object
 }
 
-// synthesizeResponse builds the body the stub answers with: the operation's
-// documented schema, filled with type-appropriate values, wrapped in the envelope
-// the coverage row records the real server using.
-func synthesizeResponse(spec *Spec, op *Operation, row CoverageOperation) ([]byte, int, error) {
+// synthesizeResponse builds the response the recorder answers with: the
+// operation's documented schema, filled with type-appropriate values, wrapped in
+// the envelope the coverage row records the real server using.
+//
+// A schema it cannot build a body from becomes a transport error rather than a
+// 500, so the run reports "the gate could not synthesize this" instead of
+// blaming the SDK for failing to decode the gate's own apology page.
+func synthesizeResponse(spec *Spec, op *Operation, row CoverageOperation, req *http.Request, w witness) (*http.Response, error) {
+	body, status, err := synthesizeBody(spec, op, row, w)
+	if err != nil {
+		return nil, fmt.Errorf("the response stub could not build a body: %w", err)
+	}
+	resp := &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Request:    req,
+	}
+	resp.ContentLength = int64(len(body))
+	return resp, nil
+}
+
+func synthesizeBody(spec *Spec, op *Operation, row CoverageOperation, w witness) ([]byte, int, error) {
 	switch row.ActualResponse {
 	case "none":
 		return nil, http.StatusNoContent, nil
@@ -301,7 +434,7 @@ func synthesizeResponse(spec *Spec, op *Operation, row CoverageOperation) ([]byt
 	if op == nil || op.OKModel == "" {
 		return []byte(`{"data":{}}`), http.StatusOK, nil
 	}
-	object, err := synthesizeSchema(spec, op.OKModel, 0)
+	object, err := synthesizeSchema(spec, op.OKModel, 0, w)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -326,7 +459,7 @@ func synthesizeResponse(spec *Spec, op *Operation, row CoverageOperation) ([]byt
 // string produces a body the SDK's model cannot decode, and the call returns an
 // error -- which is a finding, reported against the operation. Nothing here
 // needs to know what the Go type is.
-func synthesizeSchema(spec *Spec, name string, depth int) (map[string]any, error) {
+func synthesizeSchema(spec *Spec, name string, depth int, w witness) (map[string]any, error) {
 	if depth > 4 {
 		return nil, fmt.Errorf("schema %s nests deeper than this stub will follow", name)
 	}
@@ -342,7 +475,7 @@ func synthesizeSchema(spec *Spec, name string, depth int) (map[string]any, error
 	out := map[string]any{}
 	for i := 0; i+1 < len(props.Content); i += 2 {
 		key := props.Content[i].Value
-		value, err := synthesizeValue(spec, props.Content[i+1], depth)
+		value, err := synthesizeValue(spec, props.Content[i+1], depth, w)
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", name, key, err)
 		}
@@ -351,7 +484,7 @@ func synthesizeSchema(spec *Spec, name string, depth int) (map[string]any, error
 	return out, nil
 }
 
-func synthesizeValue(spec *Spec, node *yaml.Node, depth int) (any, error) {
+func synthesizeValue(spec *Spec, node *yaml.Node, depth int, w witness) (any, error) {
 	// Value yaml.Node fields, never pointers: yaml.v3 leaves a *yaml.Node field
 	// nil rather than filling it, so `items` and `allOf` decoded as absent and
 	// every array and every nullable reference fell through to the unconstrained
@@ -366,19 +499,27 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int) (any, error) {
 		Items  yaml.Node   `yaml:"items"`
 		Enum   []string    `yaml:"enum"`
 		AllOf  []yaml.Node `yaml:"allOf"`
+		// Nullable is read, not ignored. It was ignored, and a property the
+		// contract newly permitted to be null passed against a Go model that
+		// cannot hold that state.
+		Nullable bool `yaml:"nullable"`
 	}
 	if err := node.Decode(&schema); err != nil {
 		return nil, err
 	}
+	// The null witness, and the whole reason there are two passes.
+	if w == witnessNull && schema.Nullable {
+		return nil, nil
+	}
 	if schema.Ref != "" {
-		return synthesizeSchema(spec, schemaName(schema.Ref), depth+1)
+		return synthesizeSchema(spec, schemaName(schema.Ref), depth+1, w)
 	}
 	// `allOf: [$ref]` plus `nullable` is how drf-spectacular writes a nullable
 	// reference -- TagResolution.matched_alias. One member is a wrapper around
 	// that member; more than one is a composition this stub does not model, and
 	// guessing at it would surface as a decode error blamed on the SDK.
 	if len(schema.AllOf) == 1 {
-		return synthesizeValue(spec, &schema.AllOf[0], depth+1)
+		return synthesizeValue(spec, &schema.AllOf[0], depth+1, w)
 	}
 	if len(schema.AllOf) > 1 {
 		return nil, fmt.Errorf("an allOf of %d members -- the response stub does not compose schemas", len(schema.AllOf))
@@ -412,7 +553,7 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int) (any, error) {
 		if inline := mappingValue(node, "properties"); inline != nil {
 			out := map[string]any{}
 			for i := 0; i+1 < len(inline.Content); i += 2 {
-				value, err := synthesizeValue(spec, inline.Content[i+1], depth+1)
+				value, err := synthesizeValue(spec, inline.Content[i+1], depth+1, w)
 				if err != nil {
 					return nil, err
 				}
@@ -425,7 +566,7 @@ func synthesizeValue(spec *Spec, node *yaml.Node, depth int) (any, error) {
 		if schema.Items.Kind == 0 {
 			return []any{}, nil
 		}
-		item, err := synthesizeValue(spec, &schema.Items, depth+1)
+		item, err := synthesizeValue(spec, &schema.Items, depth+1, w)
 		if err != nil {
 			return nil, err
 		}
@@ -465,6 +606,16 @@ func mappingValue(node *yaml.Node, key string) *yaml.Node {
 
 // sortedNames renders a name set for a report line.
 func sortedNames(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sortedFields renders a decoded field set for a report line.
+func sortedFields(set map[string]json.RawMessage) []string {
 	out := make([]string, 0, len(set))
 	for name := range set {
 		out = append(out, name)

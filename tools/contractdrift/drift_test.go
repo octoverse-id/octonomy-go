@@ -532,10 +532,11 @@ func TestAllowlistedUnsentQueryParameterPasses(t *testing.T) {
 		"      parameters:\n",
 		"      parameters:\n      - in: query\n        name: scope_hint\n        schema:\n          type: string\n")
 	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
-		"\nunsent_query_parameters:\n",
-		"\nunsent_query_parameters:\n",
-		"\nunsent_query_parameters:\n"+`  - path: /tag-resolution
+		"\nunsent_inputs:\n",
+		"\nunsent_inputs:\n",
+		"\nunsent_inputs:\n"+`  - path: /tag-resolution
     method: get
+    in: query
     name: scope_hint
     reason: server-side ranking hint, not a client concern
 `)
@@ -547,16 +548,17 @@ func TestAllowlistedUnsentQueryParameterPasses(t *testing.T) {
 func TestStaleUnsentAllowlistFails(t *testing.T) {
 	repo := stageRepo(t)
 	edit(t, filepath.Join(repo, "docs", "contract-coverage.yaml"),
-		"\nunsent_query_parameters:\n",
-		"\nunsent_query_parameters:\n",
-		"\nunsent_query_parameters:\n"+`  - path: /tag-resolution
+		"\nunsent_inputs:\n",
+		"\nunsent_inputs:\n",
+		"\nunsent_inputs:\n"+`  - path: /tag-resolution
     method: get
+    in: query
     name: nothing_documents_this
     reason: left behind by an earlier refresh
 `)
 
 	assertFinding(t, runLocal(t, repo),
-		"`get /tag-resolution nothing_documents_this` is listed under unsent_query_parameters",
+		"`get /tag-resolution query nothing_documents_this` is listed under unsent_inputs",
 		"drop the row")
 }
 
@@ -720,7 +722,7 @@ func TestRoutesAreObservedOnTheWire(t *testing.T) {
 			t.Errorf("%s: no observation", row.Key())
 			continue
 		}
-		if want := row.Method + " " + normalizePath(row.Path); observed.Key() != want {
+		if observed.Key() != row.Key() {
 			t.Errorf("%s: the client requested %q", row.Key(), observed.Key())
 		}
 	}
@@ -1172,7 +1174,8 @@ server_error_codes: [a, b, c, d, e, f, g, h, i, j]
 		{"unknown envelope", strings.Replace(valid, "actual_response: list-envelope", "actual_response: list_envelope", 1), "is not one of"},
 		{"unknown documented shape", strings.Replace(valid, "documented_response: array", "documented_response: list", 1), "is not `array`, `none`, `other`, or `ref:<Schema>`"},
 		{"unknown key", valid + "unexpected_key: 1\n", "field unexpected_key not found"},
-		{"allowlist for a missing operation", valid + "unsent_query_parameters:\n  - path: /nowhere\n    method: get\n    name: q\n    reason: x\n", "is not an operation in this file"},
+		{"allowlist for a missing operation", valid + "unsent_inputs:\n  - path: /nowhere\n    method: get\n    in: query\n    name: q\n    reason: x\n", "is not an operation in this file"},
+		{"allowlist with an unknown location", valid + "unsent_inputs:\n  - path: /tags\n    method: get\n    in: cookie\n    name: q\n    reason: x\n", "not query, body, or header"},
 		{"code in both lists", valid + "sdk_only_error_codes:\n  - code: a\n    reason: x\n", "cannot be both the server's and the SDK's alone"},
 		{"registry too small", strings.Replace(valid, "server_error_codes: [a, b, c, d, e, f, g, h, i, j]", "server_error_codes: [a]", 1), "an empty one checks nothing"},
 	} {
@@ -1254,5 +1257,184 @@ func TestDriverThatNeverReachesTheWireIsReported(t *testing.T) {
 	}
 	if err := conf.Errors["post /tags"]; err == nil || !strings.Contains(err.Error(), "reached no request") {
 		t.Errorf("expected a no-request error, got %v", err)
+	}
+}
+
+// TestNullableWithNonNullableModelIsReported is the third review's repro, and the
+// one a single favorable witness could never catch: the contract starts permitting
+// null for a property whose Go field is a value type. The populated body still
+// decodes perfectly. `encoding/json` accepts null into an `int` without an error
+// too -- so neither a decode success nor a decode failure says anything here, and
+// the round-tripped VALUE is what separates a *string from an int.
+func TestNullableWithNonNullableModelIsReported(t *testing.T) {
+	repo := stageRepo(t)
+	for _, spec := range []string{"openapi-v2.yaml", "openapi.yaml"} {
+		edit(t, filepath.Join(repo, "docs", spec), "\n    Tag:\n",
+			"        usage_count:\n          type: integer\n",
+			"        usage_count:\n          type: integer\n          nullable: true\n")
+	}
+
+	assertFinding(t, runLocal(t, repo),
+		"schema `Tag` marks `usage_count` nullable and `TagService.List` decodes null as `0`")
+}
+
+// TestNullableModelsRoundTripNull is the non-vacuity guard on the witness above:
+// the contract really does mark properties nullable, and the models really are
+// asked to hold that state.
+func TestNullableModelsRoundTripNull(t *testing.T) {
+	in := load(t, repoRoot, "")
+	spec := in.Vendored["v2"]
+
+	checked := 0
+	for _, model := range []string{"Tag", "Vocabulary", "TagAlias", "Assignment", "AuditLog"} {
+		nullable := nullableProperties(spec, model)
+		if len(nullable) == 0 {
+			t.Errorf("schema %s marks nothing nullable; the null witness is asserting nothing for it", model)
+		}
+		checked += len(nullable)
+	}
+	if checked < 10 {
+		t.Errorf("only %d nullable properties take part in the null witness", checked)
+	}
+}
+
+// TestMissingRequestBodyPropertyIsReported is the third review's BLOCKER: a write
+// that stops sending part of its payload emits the same verb, the same path and
+// the same query as one that still does, so every other check stayed satisfied.
+func TestMissingRequestBodyPropertyIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["post /tags"]
+	delete(observed.Body, "slug")
+	delete(observed.Body, "metadata")
+	in.Conformance.Observations["post /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"schema `TagWrite` documents `slug` and the client did not send it",
+		"schema `TagWrite` documents `metadata` and the client did not send it")
+}
+
+// TestEmptyRequestBodyIsReported is the same hole at its widest: a write that
+// sends no payload at all.
+func TestEmptyRequestBodyIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["post /tags"]
+	observed.Body = map[string]bool{}
+	in.Conformance.Observations["post /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"the contract documents a `TagWrite` request body and the client sent none")
+}
+
+// TestUndocumentedRequestBodyPropertyIsReported is the other direction: a
+// property the server was never told to expect.
+func TestUndocumentedRequestBodyPropertyIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["post /tags"]
+	observed.Body["colour"] = true
+	in.Conformance.Observations["post /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"the client sends `colour` in its request body, which schema `TagWrite` does not document")
+}
+
+// TestMissingDocumentedHeaderIsReported covers the namespace axis, which lives
+// entirely in headers: a method that stopped propagating X-Namespace-* looked
+// exactly like one that never could, because nothing recorded headers at all.
+func TestMissingDocumentedHeaderIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["get /tags"]
+	delete(observed.Headers, "X-Namespace-Type")
+	in.Conformance.Observations["get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"`get /tags` documents the header `X-Namespace-Type` and the client did not send it")
+}
+
+// TestUndocumentedHeaderIsReported: the always-sent transport headers are
+// recorded once under client_headers, and anything else the client starts sending
+// is a finding.
+func TestUndocumentedHeaderIsReported(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["get /tags"]
+	observed.Headers["X-Invented-Header"] = true
+	in.Conformance.Observations["get /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"the client sends the header `X-Invented-Header`, which no vendored contract documents")
+}
+
+// TestBodyCarriedApplicationIDIsVerified keeps the eleven write exceptions from
+// being an unchecked allowlist. Each says application_id moves from the query
+// string into the payload; if the payload stops carrying it, the row is asserting
+// something false and the missing query key stops being excused.
+func TestBodyCarriedApplicationIDIsVerified(t *testing.T) {
+	in := load(t, repoRoot, "")
+	observed := in.Conformance.Observations["post /tags"]
+	delete(observed.Body, "application_id")
+	in.Conformance.Observations["post /tags"] = observed
+
+	assertFinding(t, CheckLocal(in),
+		"`post /tags` records that application_id travels in the body, and the request body does not carry it")
+}
+
+// TestSwappedPathArgumentsAreReported: both sentinels used to collapse to `{}`, so
+// a driver passing resource_type where resource_id belongs produced exactly the
+// expected route. Each placeholder has its own value now.
+func TestSwappedPathArgumentsAreReported(t *testing.T) {
+	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := RunConformance(spec, cov, []Driver{{
+		Op:  "get /resources/{resource_type}/{resource_id}/tags",
+		SDK: "ResourceService.ListTags",
+		Call: func(ctx context.Context, env *Env) (any, error) {
+			// The two arguments, the wrong way round.
+			return env.Client.Resources.ListTags(ctx, env.Path("resource_id"), env.Path("resource_type"), nil)
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := conf.Observations["get /resources/{resource_type}/{resource_id}/tags"]
+	if observed.Path == "/resources/{resource_type}/{resource_id}/tags" {
+		t.Error("swapping the two path arguments produced the expected route")
+	}
+}
+
+// TestValueDependentRouteIsReported: one execution says what the client did with
+// one input. Two inputs do not prove a route is invariant, but they catch a route
+// that varies with the value -- which one cannot.
+func TestValueDependentRouteIsReported(t *testing.T) {
+	spec, err := LoadSpec(filepath.Join(repoRoot, "docs", "openapi-v2.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := RunConformance(spec, cov, []Driver{{
+		Op:  "get /tags/{tag_id}",
+		SDK: "TagService.Get",
+		Call: func(ctx context.Context, env *Env) (any, error) {
+			id := env.Path("tag_id")
+			if id == "TAGID1" {
+				return env.Client.Tags.Get(ctx, id)
+			}
+			return env.Client.Vocabularies.Get(ctx, id)
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conf.Errors["get /tags/{tag_id}"]; err == nil || !strings.Contains(err.Error(), "route depends on the values passed") {
+		t.Errorf("a value-dependent route was accepted: %v", err)
 	}
 }
