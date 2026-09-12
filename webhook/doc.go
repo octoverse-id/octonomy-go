@@ -74,8 +74,11 @@
 //
 // A valid signature also says nothing about WHICH tenant the event is for.
 // Read that from the parsed body -- after verifying -- and never from
-// X-Octonomy-Tenant-ID alone, which is as attacker-controlled as the rest of
-// the request until the signature checks out. Routing lives in the JSON body:
+// X-Octonomy-Tenant-ID, which the signature does not cover at all: a wholly
+// genuine delivery replayed with that header rewritten verifies exactly as it
+// did the first time. The same goes for every other X-Octonomy-* header; none
+// of them becomes trustworthy because Verify returned nil. Routing lives in the
+// JSON body:
 // partition on (tenant_id, application_id, namespace_type, namespace_id), where
 // a null namespace_type is the concrete global namespace and not a wildcard.
 //
@@ -95,8 +98,10 @@
 // Stopping early on anything except [ErrSignatureMismatch] is what makes that
 // loop correct rather than merely short -- a malformed header is not a reason
 // to try the next secret, and a failure to reject it is a failure to notice the
-// delivery was never signed properly at all. Example_secretRotation is the
-// whole thing. Drop the old secret once the server no longer sends it; leaving
+// delivery was never signed properly at all. Seed the loop's error with a
+// refusal rather than with nil, too, so a list that was never populated fails
+// CLOSED instead of returning "accepted". Example_secretRotation is the whole
+// thing. Drop the old secret once the server no longer sends it; leaving
 // a retired secret in the list keeps it live.
 //
 // Trying N secrets costs N HMACs over the body, which is nothing next to the

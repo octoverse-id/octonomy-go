@@ -192,6 +192,13 @@ it. It imports neither today, and adding a root import to it is a decision, not 
   misconfigured or under attack. `ErrEmptyBody` and `ErrNoSecret` are *policy* refusals of
   cryptographically valid inputs — HMAC of the empty message, and under an empty key, are both well
   defined — and each is documented as such where it is declared.
+- **The signature covers the BODY and nothing else, so no `X-Octonomy-*` header may drive a
+  decision** — not routing, not partitioning, not authorization, and not after a `Verify` that
+  returned nil. A wholly genuine delivery replayed with `X-Octonomy-Tenant-ID` rewritten verifies
+  exactly as it did the first time, so a consumer that routed on that header sends a real event to
+  the wrong tenant. The header constants exist to name the contract the server documents and to log
+  it; anything load-bearing is read from the parsed body. Do not reintroduce "cheap pre-parse
+  routing" advice — an earlier draft of this package's own doc comment carried it.
 - **A new refusal needs a vector in `webhook/testdata/signature_vectors.json` and a row in
   `rejectReasons`.** The test asserts every sentinel is reachable from the shared file, so a refusal
   proved only by a Go test is a refusal no other SDK can adopt.

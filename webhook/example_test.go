@@ -128,24 +128,27 @@ func Example_httpHandler() {
 		w.WriteHeader(http.StatusNoContent)
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(handler))
-	defer server.Close()
+	// Driven with a recorder rather than a live listener: the handler is the
+	// subject, and an example that needs a socket cannot run in a sandboxed CI.
+	post := func(body string, signature string) int {
+		request := httptest.NewRequest(http.MethodPost, "/webhooks/octonomy", strings.NewReader(body))
+		request.Header.Set(webhook.HeaderSignature, signature)
+		recorder := httptest.NewRecorder()
+		handler(recorder, request)
+		return recorder.Code
+	}
 
-	request, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(exampleEnvelope))
-	if err != nil {
-		log.Fatal(err)
-	}
-	request.Header.Set(webhook.HeaderSignature, exampleSignature)
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	fmt.Println("status:", response.StatusCode)
+	fmt.Println("genuine delivery:", post(exampleEnvelope, exampleSignature))
+
+	// The same signature over a body altered after signing. The handler refuses
+	// it, and the sender's retry and dead-letter machinery makes that visible.
+	tampered := strings.Replace(exampleEnvelope, `"tenant_id":"acme"`, `"tenant_id":"evil"`, 1)
+	fmt.Println("tampered delivery:", post(tampered, exampleSignature))
 
 	// Output:
 	// tag.created 0f1d7b24-2c1e-4f9a-9f3a-3a5f1c2d6e77 tenant=acme app=storefront namespace=global
-	// status: 204
+	// genuine delivery: 204
+	// tampered delivery: 401
 }
 
 // Example_secretRotation accepts either the outgoing or the incoming secret for
@@ -161,7 +164,11 @@ func Example_secretRotation() {
 	}
 
 	verify := func(signature string, body []byte) error {
-		var err error
+		// Seeded with a refusal rather than with nil, so an empty or
+		// misconfigured list fails CLOSED. A bare `var err error` here returns nil
+		// -- accepted -- for a list that was never populated, which is the same
+		// silent-acceptance failure the package exists to prevent.
+		err := webhook.ErrNoSecret
 		for _, secret := range secrets {
 			err = webhook.Verify(secret, signature, body)
 			if err == nil {

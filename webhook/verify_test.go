@@ -14,7 +14,6 @@ import (
 	"go/token"
 	"go/types"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -431,16 +430,30 @@ func TestVerifyComparesDigestsInConstantTime(t *testing.T) {
 		"subtle.ConstantTimeCompare": "constant-time, but hmac.Equal is the documented spelling here and is what the vectors' guarantee is written against",
 	}
 
+	// The digest values, by the spelling they carry in verify.go: `received` is
+	// the decoded header digest, and a `.Sum(` call produces the computed one.
+	const receivedIdent = "received"
+	const computedCall = "Sum"
+
 	var (
 		usesHMACEqual bool
+		sawReceived   bool
+		sawComputed   bool
 		comparisons   []*ast.BinaryExpr
 	)
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch typed := node.(type) {
+		case *ast.Ident:
+			if typed.Name == receivedIdent {
+				sawReceived = true
+			}
 		case *ast.CallExpr:
 			selector, ok := typed.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return true
+			}
+			if selector.Sel.Name == computedCall {
+				sawComputed = true
 			}
 			pkg, ok := selector.X.(*ast.Ident)
 			if !ok {
@@ -465,13 +478,19 @@ func TestVerifyComparesDigestsInConstantTime(t *testing.T) {
 		t.Errorf("%s does not call hmac.Equal; digests must be compared in constant time", source)
 	}
 
-	// Nothing derived from a digest may reach an == or != at all. The guarded
-	// spellings track verify.go: `received` is the decoded header digest and
-	// `.Sum(` produces the computed one.
-	guarded := []string{"received", ".Sum("}
-	if body := string(mustReadFile(t, source)); !strings.Contains(body, "received") || !strings.Contains(body, ".Sum(") {
-		t.Fatalf("%s no longer mentions %v -- the digest values were renamed, so this test is now guarding nothing. Update `guarded`.", source, guarded)
+	// Whether the guarded values still exist is established from the AST and
+	// never from the file's text. verify.go's own prose mentions "received"
+	// (see its comparison doc), so a text search is satisfied by the COMMENT --
+	// and a rename that updated the code but left the prose would leave this
+	// test passing while guarding nothing at all.
+	if !sawReceived || !sawComputed {
+		t.Fatalf("%s no longer declares %q or calls .%s(): the digest values were renamed, so this test now guards nothing. Update receivedIdent/computedCall.",
+			source, receivedIdent, computedCall)
 	}
+
+	// Nothing derived from a digest may reach an == or != at all. ExprString
+	// renders the AST rather than the source, so it too carries no comment text.
+	guarded := []string{receivedIdent, "." + computedCall + "("}
 	for _, comparison := range comparisons {
 		text := types.ExprString(comparison)
 		for _, needle := range guarded {
@@ -480,15 +499,6 @@ func TestVerifyComparesDigestsInConstantTime(t *testing.T) {
 			}
 		}
 	}
-}
-
-func mustReadFile(t *testing.T, name string) []byte {
-	t.Helper()
-	content, err := os.ReadFile(filepath.Clean(name))
-	if err != nil {
-		t.Fatalf("read %s: %v", name, err)
-	}
-	return content
 }
 
 // FuzzVerify asserts the two things that must hold for every input: Verify

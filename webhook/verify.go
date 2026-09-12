@@ -15,13 +15,18 @@ import (
 // carries a request id -- so its absence is ordinary and not a malformed
 // delivery. The other four are always present.
 //
-// None of these is trustworthy until [Verify] has returned nil: they are part
-// of the request, and the request is attacker-controlled until the signature
-// says otherwise. Even then, only the signature header has been checked. The
-// other three are unsigned metadata that happen to duplicate fields inside the
-// verified body -- read tenant, event id, and event type from the parsed body,
-// which the signature actually covers, and use these for logging and for
-// cheaply routing a delivery before it is parsed.
+// NONE OF THE FOUR NON-SIGNATURE HEADERS MAY DRIVE A DECISION, before or after
+// verification. The signature covers the BODY and nothing else, so they are
+// never authenticated -- not even by a Verify that returned nil. A captured,
+// entirely genuine delivery can be replayed with X-Octonomy-Tenant-ID rewritten
+// and its signature still checks out, so routing, partitioning, or authorizing
+// on one of them is how a real event reaches the wrong tenant's handler.
+//
+// Read tenant, event id, and event type from the PARSED BODY, which the
+// signature does cover. These constants exist to name the headers the server
+// documents and to read them for logging and correlation while diagnosing a
+// delivery -- as untrusted strings, on the same footing as anything else the
+// sender chose to send.
 const (
 	HeaderSignature = "X-Octonomy-Signature"
 	HeaderEventID   = "X-Octonomy-Event-ID"
