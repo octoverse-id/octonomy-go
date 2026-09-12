@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"strings"
 )
 
@@ -48,9 +49,10 @@ const signaturePrefix = "sha256="
 //
 // They divide into three groups, and the group is the operator's response:
 //
-//   - ErrNoSecret and ErrEmptyBody are CALLER errors: the verification never
-//     ran because it was not given what it needs. Nothing about the sender is
-//     established, and no retry will fix it. Fix the deployment.
+//   - ErrNoSecret, ErrUnusableSecret and ErrEmptyBody are CALLER errors: the
+//     verification never ran, because it was not given what it needs or the
+//     runtime refused the key. Nothing about the sender is established, and no
+//     retry will fix it. Fix the deployment.
 //   - ErrMissingSignature, ErrUnsupportedAlgorithm, and ErrMalformedSignature
 //     are GRAMMAR errors: the request does not carry a signature this package
 //     can even compare. Octonomy never sends one of these, so the sender is
@@ -71,6 +73,24 @@ var (
 	// environment variable reaching Verify as "" is the realistic way that
 	// happens, and it is not a state this package will quietly operate in.
 	ErrNoSecret = errors.New("octonomy: webhook signing secret is empty")
+
+	// ErrUnusableSecret reports that the Go runtime refused the secret as an
+	// HMAC key, so no verification was attempted. The runtime's own message is
+	// wrapped in.
+	//
+	// There is exactly one way to reach it today: under GODEBUG=fips140=only,
+	// crypto/hmac.New PANICS for a key shorter than 112 bits (14 bytes). That
+	// mode is a deployment declaring such keys are not allowed, and the refusal
+	// is correct -- but a panic escaping a library is not, and this package does
+	// not do that. The panic is caught at the one call that can raise it.
+	//
+	// It is deliberately NOT a minimum-length rule of our own. How long a
+	// signing secret must be is a policy this SDK has no business asserting:
+	// outside FIPS-only mode a short secret verifies genuine deliveries
+	// perfectly well, and refusing it here would break working deployments over
+	// a rule nobody applied. The runtime decides; this error only keeps its
+	// decision from arriving as a crash.
+	ErrUnusableSecret = errors.New("octonomy: webhook signing secret was rejected by the runtime")
 
 	// ErrMissingSignature reports an empty signature header: the delivery
 	// carries no signature at all. An unsigned POST to a webhook endpoint is
@@ -189,11 +209,30 @@ func Verify(secret string, signatureHeader string, body []byte) error {
 		return fmt.Errorf("%w: digest is not hexadecimal", ErrMalformedSignature)
 	}
 
-	mac := hmac.New(sha256.New, []byte(secret))
+	mac, err := newMAC(secret)
+	if err != nil {
+		return err
+	}
 	// hash.Hash documents that Write never returns an error.
 	_, _ = mac.Write(body)
 	if !hmac.Equal(mac.Sum(nil), received) {
 		return ErrSignatureMismatch
 	}
 	return nil
+}
+
+// newMAC builds the HMAC, turning the one panic crypto/hmac is documented to
+// raise into an error -- see [ErrUnusableSecret].
+//
+// The recover is scoped to this single call rather than wrapped around Verify,
+// so it can catch only what hmac.New throws and cannot swallow a bug anywhere
+// else in the package. In every ordinary configuration nothing panics and this
+// costs one deferred call.
+func newMAC(secret string) (mac hash.Hash, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			mac, err = nil, fmt.Errorf("%w: %v", ErrUnusableSecret, recovered)
+		}
+	}()
+	return hmac.New(sha256.New, []byte(secret)), nil
 }

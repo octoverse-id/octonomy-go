@@ -199,9 +199,13 @@ it. It imports neither today, and adding a root import to it is a decision, not 
   the wrong tenant. The header constants exist to name the contract the server documents and to log
   it; anything load-bearing is read from the parsed body. Do not reintroduce "cheap pre-parse
   routing" advice — an earlier draft of this package's own doc comment carried it.
-- **A new refusal needs a vector in `webhook/testdata/signature_vectors.json` and a row in
-  `rejectReasons`.** The test asserts every sentinel is reachable from the shared file, so a refusal
-  proved only by a Go test is a refusal no other SDK can adopt.
+- **A new refusal ABOUT THE SIGNATURE CONTRACT needs a vector in
+  `webhook/testdata/signature_vectors.json` and a row in `rejectReasons`.** A refusal proved only by
+  a Go test is one no other SDK can adopt. The exception is a refusal that is a fact about the Go
+  RUNTIME rather than about the contract — `ErrUnusableSecret`, which exists because
+  `crypto/hmac.New` panics on a short key under `GODEBUG=fips140=only`. Nothing portable can be
+  written about that, so it is proved by a subprocess test instead; every sentinel is still checked
+  for distinctness against the source, so one cannot be added and forgotten.
 - **The vectors are generated, not written, and not by this package.**
   `webhook/testdata/generate_vectors.py` mirrors the server's `_webhook_signature`; regenerate with
   it rather than pasting a digest Go produced, since a vector computed by the implementation under
@@ -210,6 +214,14 @@ it. It imports neither today, and adding a root import to it is a decision, not 
 - **Nothing in that file may become Go-specific or payload-specific.** Reasons are language-neutral
   strings the Go binding maps to sentinels, and bodies are format vectors rather than event
   fixtures. That is what keeps them valid as payloads evolve and usable by another language's SDK.
+- **`Verify` must not panic, including on input the RUNTIME refuses.** `crypto/hmac.New` panics
+  rather than erroring for a key under 112 bits when `GODEBUG=fips140=only` is set, which would take
+  a panic out of a library that promises never to raise one — inside an HTTP handler, where it
+  becomes a 500 and a stack trace instead of a diagnosable error. The `recover` that catches it is
+  scoped to that one call, never to `Verify` as a whole, so it cannot swallow a bug elsewhere. Do
+  not replace it with a length check of our own: how long a signing secret must be is a policy this
+  SDK has no business asserting, and outside that mode a short secret verifies genuine deliveries
+  perfectly well.
 - **Replay is not preventable here and no future change makes it so.** The server sends no timestamp
   header, so there is no signed freshness claim to check. Do not add a "freshness" option that
   reads an unsigned header or the local clock; dedupe belongs to the consumer, on the envelope's

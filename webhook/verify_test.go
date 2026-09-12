@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"bytes"
+	"crypto/fips140"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -14,6 +15,7 @@ import (
 	"go/token"
 	"go/types"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -355,12 +357,23 @@ func TestVerifyRejectsCallerMistakes(t *testing.T) {
 func TestVerifyErrorsAreMutuallyDistinguishable(t *testing.T) {
 	all := map[string]error{
 		"ErrNoSecret":             ErrNoSecret,
+		"ErrUnusableSecret":       ErrUnusableSecret,
 		"ErrMissingSignature":     ErrMissingSignature,
 		"ErrUnsupportedAlgorithm": ErrUnsupportedAlgorithm,
 		"ErrMalformedSignature":   ErrMalformedSignature,
 		"ErrSignatureMismatch":    ErrSignatureMismatch,
 		"ErrEmptyBody":            ErrEmptyBody,
 	}
+
+	// The list is checked against the source rather than trusted. A sentinel
+	// added to verify.go and forgotten here would be a refusal nothing proves
+	// is distinguishable from the others -- which is the whole property.
+	for _, name := range exportedErrorNames(t) {
+		if _, covered := all[name]; !covered {
+			t.Errorf("verify.go declares %s but this test does not cover it", name)
+		}
+	}
+
 	for name, err := range all {
 		if err == nil {
 			t.Fatalf("%s is nil", name)
@@ -377,6 +390,37 @@ func TestVerifyErrorsAreMutuallyDistinguishable(t *testing.T) {
 			}
 		}
 	}
+}
+
+// exportedErrorNames reports the Err* sentinels verify.go declares.
+func exportedErrorNames(t *testing.T) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "verify.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse verify.go: %v", err)
+	}
+	var names []string
+	for _, declaration := range file.Decls {
+		general, ok := declaration.(*ast.GenDecl)
+		if !ok || general.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range general.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, name := range value.Names {
+				if strings.HasPrefix(name.Name, "Err") {
+					names = append(names, name.Name)
+				}
+			}
+		}
+	}
+	if len(names) == 0 {
+		t.Fatal("verify.go declares no Err* sentinels; this helper is guarding nothing")
+	}
+	return names
 }
 
 // TestVerifyAcceptsUppercaseHexDigest is the behavioral half of the
@@ -530,4 +574,60 @@ func FuzzVerify(f *testing.F) {
 			t.Fatalf("a body signed with its own secret failed to verify: %v", err)
 		}
 	})
+}
+
+// TestVerifyReturnsRatherThanPanicsUnderFIPSOnly covers the one input the Go
+// runtime itself refuses. Under GODEBUG=fips140=only, crypto/hmac.New PANICS
+// for a key shorter than 112 bits, so a deployment with a short signing secret
+// would take a panic out of a library that promises never to raise one
+// (AGENTS.md) -- inside an HTTP handler, where net/http turns it into a 500 and
+// a stack trace rather than a diagnosable error.
+//
+// It runs in a child process because fips140 is read once at startup: setting
+// the variable in this process would change nothing.
+func TestVerifyReturnsRatherThanPanicsUnderFIPSOnly(t *testing.T) {
+	const (
+		childEnv = "OCTONOMY_WEBHOOK_FIPS_CHILD"
+		// Nine bytes, under the 14 that 112 bits requires.
+		shortSecret = "too-short"
+		okMarker    = "CHILD-OK"
+		skipMarker  = "CHILD-SKIP"
+	)
+	// Well formed, and never compared: the refusal happens before the digest is.
+	signature := signaturePrefix + strings.Repeat("a", hex.EncodedLen(sha256.Size))
+
+	if os.Getenv(childEnv) == "1" {
+		if !fips140.Enabled() {
+			// The toolchain ignored the GODEBUG rather than honoring it. Say so
+			// instead of asserting a refusal that cannot happen here.
+			fmt.Println(skipMarker)
+			return
+		}
+		err := Verify(shortSecret, signature, []byte(`{"event_type":"tag.created"}`))
+		if !errors.Is(err, ErrUnusableSecret) {
+			fmt.Printf("child: Verify() = %v, want ErrUnusableSecret\n", err)
+			return
+		}
+		if !strings.Contains(err.Error(), "112 bits") {
+			fmt.Printf("child: error %q does not carry the runtime's own reason\n", err)
+			return
+		}
+		fmt.Println(okMarker)
+		return
+	}
+
+	child := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+	child.Env = append(os.Environ(), childEnv+"=1", "GODEBUG=fips140=only")
+	output, err := child.CombinedOutput()
+	if err != nil {
+		// A panic escaping Verify lands here, as a non-zero exit with a stack.
+		t.Fatalf("child process failed: %v\n%s", err, output)
+	}
+	switch {
+	case bytes.Contains(output, []byte(okMarker)):
+	case bytes.Contains(output, []byte(skipMarker)):
+		t.Skipf("GODEBUG=fips140=only had no effect under this toolchain; nothing to assert")
+	default:
+		t.Fatalf("child did not report the expected refusal:\n%s", output)
+	}
 }

@@ -30,7 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Zero bytes are refused as `ErrEmptyBody` — a *policy* refusal, since HMAC of the empty message
     is perfectly well defined — so the drained-stream case names itself instead of surfacing as a
     permanent mismatch. An empty secret is refused as `ErrNoSecret` for the same reason: HMAC under
-    an empty key verifies, and the key is then one every attacker also has.
+    an empty key verifies, and the key is then one every attacker also has. A secret the RUNTIME
+    refuses is refused as `ErrUnusableSecret`: under `GODEBUG=fips140=only`, `crypto/hmac.New`
+    **panics** for a key under 112 bits, which would take a panic out of a library that promises
+    never to raise one — inside an HTTP handler, where it becomes a 500 and a stack trace rather
+    than a diagnosable error. The `recover` is scoped to that single call, and the refusal is the
+    runtime's own, not a minimum-length policy this SDK invented: outside that mode a short secret
+    verifies genuine deliveries perfectly well. A subprocess test proves it, since `fips140` is read
+    once at startup.
   - **Digests are compared with `hmac.Equal`, over the decoded bytes.** Never `==`, never on the hex
     text. A test parses `verify.go` and fails the build on `bytes.Equal`, `reflect.DeepEqual`, or an
     `==` that touches a digest, because the wrong comparison passes every functional test while

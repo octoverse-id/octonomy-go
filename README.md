@@ -460,8 +460,10 @@ precisely so that failure names itself.
 
 Digests are compared with `hmac.Equal`, in constant time, over the decoded bytes — never `==` on the
 hex. Every refusal is a distinct error (`ErrMissingSignature`, `ErrUnsupportedAlgorithm`,
-`ErrMalformedSignature`, `ErrSignatureMismatch`, `ErrEmptyBody`, `ErrNoSecret`), because a verifier
-whose failures are indistinguishable cannot tell you whether it is misconfigured or under attack.
+`ErrMalformedSignature`, `ErrSignatureMismatch`, `ErrEmptyBody`, `ErrNoSecret`, `ErrUnusableSecret`),
+because a verifier whose failures are indistinguishable cannot tell you whether it is misconfigured
+or under attack. And it never panics — not even on a secret the runtime itself refuses, which
+`crypto/hmac.New` signals with a panic under `GODEBUG=fips140=only`.
 
 **A valid signature is authenticity, not freshness.** The server sends no timestamp header, so there
 is no window to enforce and **replay cannot be prevented here**. Octonomy's outbox is at-least-once
