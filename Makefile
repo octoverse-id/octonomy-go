@@ -24,9 +24,15 @@ fmt-check: ## Fail if any file is not gofmt-clean
 vet: ## Run go vet
 	go vet ./...
 
-lint: ## Run golangci-lint (skipped if not installed; release-check requires it)
+# Both modules, and both statuses, for the reasons spelled out over `vuln` below.
+# CI lints tools/contractdrift as its own step; this target did not, so
+# release-check could pass on a tree CI would reject.
+lint: ## Run golangci-lint on the SDK and on the contract gate's module
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run; \
+		status=0; \
+		golangci-lint run || status=$$?; \
+		(cd tools/contractdrift && golangci-lint run) || status=$$?; \
+		exit $$status; \
 	else \
 		echo "golangci-lint not installed; skipping. Install: https://golangci-lint.run/welcome/install/"; \
 	fi
@@ -80,10 +86,21 @@ cover: ## Run tests and print total coverage
 # `govulncheck ./...` at the root stops at that go.mod and never sees it. Nothing
 # there ships to a consumer -- it is CI tooling -- but an unscanned directory is
 # an unscanned directory, and this is the target that says otherwise.
+#
+# BOTH statuses, not just the last one. `sh` gives an `if` body the exit status of
+# the command that ended it, so adding the second scan under the first silently
+# discarded the first's: a root scan that found a vulnerability left `make vuln`
+# exiting 0, and release-check runs this target. Caught in review on #56.
+#
+# Captured rather than chained with `&&`, because a scanner should say everything
+# it found in one run -- `&&` would mean a root failure hides the nested module
+# entirely, and you would fix one and then discover the other.
 vuln: ## Run govulncheck on the SDK and on the contract gate's module
 	@if command -v govulncheck >/dev/null 2>&1; then \
-		govulncheck ./...; \
-		(cd tools/contractdrift && govulncheck ./...); \
+		status=0; \
+		govulncheck ./... || status=$$?; \
+		(cd tools/contractdrift && govulncheck ./...) || status=$$?; \
+		exit $$status; \
 	else \
 		echo "govulncheck not installed; skipping. Install: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest"; \
 	fi

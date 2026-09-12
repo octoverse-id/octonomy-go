@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -3283,6 +3285,71 @@ func TestThePullRequestJobIsNeverTheNetworkedOne(t *testing.T) {
 			if strings.Contains(step.Run, "contract-drift") || strings.Contains(step.Run, "contract-fetch") {
 				t.Errorf("ci.yml job %q runs the networked half: %q", name, strings.TrimSpace(step.Run))
 			}
+		}
+	}
+}
+
+// --- the release gate's own targets ----------------------------------------------
+
+// TestBothModuleScansPropagateFailure covers a defect this gate CAUSED.
+//
+// Adding tools/contractdrift meant a second module to scan and lint, and both
+// `make vuln` and `make lint` grew a second command under the first inside an
+// `if` body. `sh` gives an `if` body the exit status of the command that ended
+// it, so the FIRST scan's status was discarded: `govulncheck ./...` could report
+// a vulnerability in the SDK and `make vuln` would still exit 0 -- and
+// release-check runs that target, so a vulnerable SDK passed the documented
+// pre-release gate. CI was unaffected, because there the two scans are separate
+// steps and GitHub fails the job on any of them, which is exactly why nothing
+// noticed. Reported in review on #56.
+//
+// Driven rather than read: the recipe is shell, and the only honest way to ask
+// whether a failure propagates is to fail and look at the exit code.
+func TestBothModuleScansPropagateFailure(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make is not installed")
+	}
+	for _, target := range []struct{ name, tool string }{
+		{"vuln", "govulncheck"},
+		{"lint", "golangci-lint"},
+	} {
+		for _, failing := range []string{"root", "nested"} {
+			t.Run(target.name+"/"+failing, func(t *testing.T) {
+				// A stub that fails in one module and succeeds in the other. Which
+				// one matters: the last command's status propagated on its own, so
+				// only the earlier one was ever silently dropped -- and a test that
+				// exercised just the nested module would have passed against the bug.
+				// The stub SUCCEEDS in the module that is not the failing one.
+				// Polarity matters and was wrong first time round: `nested` is 1 in
+				// tools/contractdrift, so failing the ROOT means succeeding when
+				// nested. Written the other way, the root subtest actually failed the
+				// nested scan -- the last command, whose status propagated even
+				// through the bug -- and the test passed against the very defect it
+				// was written for.
+				succeedWhenNested := "!="
+				if failing == "nested" {
+					succeedWhenNested = "="
+				}
+				dir := t.TempDir()
+				write(t, filepath.Join(dir, target.tool), fmt.Sprintf(
+					// `pwd -P`, never $PWD: `make -C` calls chdir() and leaves the
+					// inherited PWD variable pointing at the test's own directory,
+					// which is tools/contractdrift -- so the stub read every scan as
+					// the nested one and the test passed against the bug.
+					"#!/bin/sh\ncase \"$(pwd -P)\" in */tools/contractdrift) nested=1 ;; *) nested=0 ;; esac\n"+
+						"[ \"$nested\" %s 0 ] && exit 0\necho \"stub: %s failed in $PWD\"\nexit 3\n", succeedWhenNested, target.tool))
+				if err := os.Chmod(filepath.Join(dir, target.tool), 0o755); err != nil {
+					t.Fatal(err)
+				}
+
+				cmd := exec.Command("make", "-C", repoRoot, target.name)
+				cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+				out, err := cmd.CombinedOutput()
+				if err == nil {
+					t.Errorf("`make %s` exited 0 with the %s module's %s reporting a failure -- the status was swallowed:\n%s",
+						target.name, failing, target.tool, out)
+				}
+			})
 		}
 	}
 }
