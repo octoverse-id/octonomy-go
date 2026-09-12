@@ -42,8 +42,10 @@ package octonomy_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	octonomy "github.com/octoverse-id/octonomy-go/v2"
 )
@@ -67,7 +69,7 @@ type readProbe struct {
 
 // readProbes covers every authenticated read method this SDK exposes.
 //
-// The complete list, and why the two absences are not gaps:
+// The complete list, and why the one exclusion is not a gap:
 //
 //	Vocabularies  Get, List
 //	Tags          Get, List, Resolve, ListAliases, ListResources, ListAuditLogs
@@ -82,15 +84,31 @@ type readProbe struct {
 //
 // A new read method is expected to arrive here alongside its resource file. A
 // read endpoint nobody probed is the one a cross-merchant leak lives in.
+//
+// PAGINATION IS NOT AN EXHAUSTIVENESS ARGUMENT. Every list probe below either
+// narrows to the fixture with an exact server-side filter, or walks the whole
+// collection with octonomy.Each. A single page -- even at the server's 200-row
+// clamp -- proves only that the row is not on the FIRST page, and "not on page
+// one" is not "not visible": a long-lived harness, or a run that leaked
+// fixtures, pushes a genuinely leaked row past the boundary and turns the leak
+// into a pass. The routes scoped to one fixture row (a tag's aliases, a
+// resource's tags, one entity's audit rows) hold a handful of rows by
+// construction and are read with an explicit generous limit.
 func readProbes(h harness) []readProbe {
-	const listLimit = 200 // the server's own clamp; see integration_test.go step 5b.
+	// For the routes that address ONE fixture row. Not an exhaustiveness claim:
+	// these collections hold what this run just created.
+	const scopedLimit = 200
 
 	return []readProbe{
 		{
 			name: "Tags.List",
 			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+				// Filtered by the fixture's own slug rather than paged: an empty
+				// page under an exact filter means the row is genuinely not
+				// visible, with no page-boundary caveat at all.
 				page, err := c.Tags.List(ctx, &octonomy.TagListParams{
-					ListOptions: octonomy.ListOptions{Limit: listLimit},
+					Slug:        octonomy.String(want.tag.Slug),
+					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
 				}, h.scoped(readNS)...)
 				if err != nil {
 					return false, err
@@ -130,7 +148,7 @@ func readProbes(h harness) []readProbe {
 			name: "Tags.ListAliases",
 			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
 				page, err := c.Tags.ListAliases(ctx, want.tag.ID, &octonomy.TagListAliasesParams{
-					ListOptions: octonomy.ListOptions{Limit: listLimit},
+					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
 				}, h.scoped(readNS)...)
 				if err != nil {
 					return false, err
@@ -147,7 +165,7 @@ func readProbes(h harness) []readProbe {
 			name: "Tags.ListResources",
 			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
 				page, err := c.Tags.ListResources(ctx, want.tag.ID, &octonomy.TagListResourcesParams{
-					ListOptions: octonomy.ListOptions{Limit: listLimit},
+					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
 				}, h.scoped(readNS)...)
 				if err != nil {
 					return false, err
@@ -164,7 +182,7 @@ func readProbes(h harness) []readProbe {
 			name: "Tags.ListAuditLogs",
 			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
 				page, err := c.Tags.ListAuditLogs(ctx, want.tag.ID, &octonomy.TagListAuditLogsParams{
-					ListOptions: octonomy.ListOptions{Limit: listLimit},
+					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
 				}, h.scoped(readNS)...)
 				if err != nil {
 					return false, err
@@ -177,8 +195,10 @@ func readProbes(h harness) []readProbe {
 		{
 			name: "Aliases.List",
 			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+				// Exact slug filter, same reasoning as Tags.List.
 				page, err := c.Aliases.List(ctx, &octonomy.TagAliasListParams{
-					ListOptions: octonomy.ListOptions{Limit: listLimit},
+					Slug:        octonomy.String(want.alias.Slug),
+					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
 				}, h.scoped(readNS)...)
 				if err != nil {
 					return false, err
@@ -204,18 +224,26 @@ func readProbes(h harness) []readProbe {
 		{
 			name: "Vocabularies.List",
 			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
-				page, err := c.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
-					ListOptions: octonomy.ListOptions{Limit: listLimit},
-				}, h.scoped(readNS)...)
+				// VocabularyListParams exposes no slug or free-text filter (#36
+				// covers the gap), so this is the one probe that must WALK the
+				// collection rather than narrow it. Each stops on the server's
+				// own end-of-collection signal, so "absent" here means absent
+				// from the endpoint, not merely from page one.
+				found := false
+				_, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: scopedLimit},
+					func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Vocabulary], error) {
+						return c.Vocabularies.List(ctx, &octonomy.VocabularyListParams{ListOptions: o}, h.scoped(readNS)...)
+					},
+					func(row octonomy.Vocabulary) error {
+						if row.ID == want.vocabulary.ID {
+							found = true
+						}
+						return nil
+					})
 				if err != nil {
 					return false, err
 				}
-				for _, row := range page.Data {
-					if row.ID == want.vocabulary.ID {
-						return true, nil
-					}
-				}
-				return false, nil
+				return found, nil
 			},
 		},
 		{
@@ -232,7 +260,7 @@ func readProbes(h harness) []readProbe {
 			name: "Resources.ListTags",
 			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
 				page, err := c.Resources.ListTags(ctx, want.resourceType, want.resourceID,
-					&octonomy.ResourceListTagsParams{ListOptions: octonomy.ListOptions{Limit: listLimit}},
+					&octonomy.ResourceListTagsParams{ListOptions: octonomy.ListOptions{Limit: scopedLimit}},
 					h.scoped(readNS)...)
 				if err != nil {
 					return false, err
@@ -249,7 +277,7 @@ func readProbes(h harness) []readProbe {
 			name: "Resources.ListAuditLogs",
 			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
 				page, err := c.Resources.ListAuditLogs(ctx, want.resourceType, want.resourceID,
-					&octonomy.ResourceListAuditLogsParams{ListOptions: octonomy.ListOptions{Limit: listLimit}},
+					&octonomy.ResourceListAuditLogsParams{ListOptions: octonomy.ListOptions{Limit: scopedLimit}},
 					h.scoped(readNS)...)
 				if err != nil {
 					return false, err
@@ -263,7 +291,7 @@ func readProbes(h harness) []readProbe {
 				page, err := c.AuditLogs.List(ctx, &octonomy.AuditLogListParams{
 					EntityType:  octonomy.String("tag"),
 					EntityID:    octonomy.String(want.tag.ID),
-					ListOptions: octonomy.ListOptions{Limit: listLimit},
+					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
 				}, h.scoped(readNS)...)
 				if err != nil {
 					return false, err
@@ -274,29 +302,57 @@ func readProbes(h harness) []readProbe {
 	}
 }
 
+// outcome is what one probe run is entitled to.
+type outcome int
+
+const (
+	// outcomeVisible: the row must come back, with no error. These runs are not
+	// padding -- without them "merchant A cannot see merchant B" also passes
+	// when merchant B was never written, when the probe reads the wrong field,
+	// and when the server is returning empty pages to everyone.
+	outcomeVisible outcome = iota
+
+	// outcomeFiltered: the request is AUTHORIZED and the row must not be in the
+	// result. The server may answer 200-with-the-row-absent (every list route)
+	// or refuse the row by id (404 not_found, or 400 validation_error on
+	// resolution) -- but nothing else. Accepting "any error" here is how this
+	// assertion would come to pass against a crashed container; see
+	// requireFilteredRefusal.
+	outcomeFiltered
+
+	// outcomeForbidden: the request must never reach a queryset at all. This is
+	// the permission layer, and it is a genuinely different mechanism from the
+	// filter above -- which is why it needs its own run rather than being
+	// inferred from one.
+	outcomeForbidden
+)
+
 // TestIntegration_NamespaceIsolation is the 2am-Friday test.
 //
 // Two merchants are seeded with a full set of rows, and every read endpoint this
-// SDK exposes is asked the same question five times. Three of the five must find
-// the row and two must not, and BOTH halves are load-bearing:
+// SDK exposes is asked the same question six times: three runs that must find
+// the row, and three that must not. Both halves are load-bearing, and the
+// negatives cover THREE distinct mechanisms, each of which has to hold on its
+// own:
 //
-//	the positive runs  -- prove the fixture exists and the endpoint works. Without
-//	                      them "merchant A cannot see merchant B" also passes when
-//	                      merchant B was never written, when the probe queries the
-//	                      wrong field, and when the whole server is returning
-//	                      empty pages.
-//	the negative runs  -- prove the boundary, and they are two DIFFERENT
-//	                      mechanisms that must each hold on their own:
+//	the FILTER, under a merchant token   merchant A reads its own namespace and
+//	                                     merchant B's rows are simply not in the
+//	                                     result
+//	the FILTER, under a wildcard token   the same read by a token authorized for
+//	                                     every partition, so nothing refuses it
+//	                                     and only the server's namespace filter
+//	                                     stands between it and merchant B
+//	AUTHORIZATION                        merchant A ASKS FOR merchant B and is
+//	                                     refused 403 before any queryset runs
+//	                                     (BearerTokenPermission, core/auth.py)
 //
-//	    an exact merchant grant  is REFUSED at the permission layer before any
-//	                             queryset runs (403; BearerTokenPermission)
-//	    a wildcard token         is authorized for everything, so nothing refuses
-//	                             it -- only the server's namespace FILTER stands
-//	                             between it and merchant B's rows
-//
-// Testing only the first would pass against a server that had lost every
-// namespace filter; testing only the second would pass against one that had lost
-// every authorization check. Neither alone is the guarantee a caller relies on.
+// The third is the one an attacker actually performs, and it is not implied by
+// either of the first two: a token scoped to its own namespace exercises the
+// filter no matter what the permission layer does. A suite with only the filter
+// runs would stay green through a permission regression on any individual route,
+// and one with only the authorization run would stay green through a lost
+// namespace filter. The harness's single generic `GET /tags` denial covers one
+// route out of thirteen, which is why this is asserted per endpoint here.
 func TestIntegration_NamespaceIsolation(t *testing.T) {
 	h := loadHarness(t)
 	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)
@@ -318,43 +374,57 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 		client *octonomy.Client
 		readNS string
 		want   namespaceFixture
-		// visible is what the reader is entitled to see.
-		visible bool
+		expect outcome
 	}{
 		{
-			name:    "a wildcard token reading merchant B sees merchant B",
-			client:  wildcard,
-			readNS:  h.merchantB.id,
-			want:    fixtureB,
-			visible: true,
+			name:   "a wildcard token reading merchant B sees merchant B",
+			client: wildcard,
+			readNS: h.merchantB.id,
+			want:   fixtureB,
+			expect: outcomeVisible,
 		},
 		{
-			name:    "an exact merchant-B grant sees merchant B",
-			client:  clientB,
-			readNS:  h.merchantB.id,
-			want:    fixtureB,
-			visible: true,
+			name:   "an exact merchant-B grant sees merchant B",
+			client: clientB,
+			readNS: h.merchantB.id,
+			want:   fixtureB,
+			expect: outcomeVisible,
 		},
 		{
-			name:    "an exact merchant-A grant sees merchant A",
-			client:  clientA,
-			readNS:  h.merchantA.id,
-			want:    fixtureA,
-			visible: true,
+			name:   "an exact merchant-A grant sees merchant A",
+			client: clientA,
+			readNS: h.merchantA.id,
+			want:   fixtureA,
+			expect: outcomeVisible,
 		},
 		{
-			name:    "an exact merchant-A grant cannot see merchant B",
-			client:  clientA,
-			readNS:  h.merchantA.id,
-			want:    fixtureB,
-			visible: false,
+			name:   "merchant A, reading its own namespace, does not get merchant B",
+			client: clientA,
+			readNS: h.merchantA.id,
+			want:   fixtureB,
+			expect: outcomeFiltered,
 		},
 		{
-			name:    "a wildcard token scoped to merchant A cannot see merchant B",
-			client:  wildcard,
-			readNS:  h.merchantA.id,
-			want:    fixtureB,
-			visible: false,
+			// The same read by a token that IS authorized for merchant B. The
+			// permission layer cannot be what hides the row here, so a pass
+			// means the namespace filter is doing the work.
+			name:   "a wildcard token scoped to merchant A does not get merchant B",
+			client: wildcard,
+			readNS: h.merchantA.id,
+			want:   fixtureB,
+			expect: outcomeFiltered,
+		},
+		{
+			// The request an attacker actually makes: merchant A ASKING FOR
+			// merchant B. Neither run above performs it -- both keep asking for
+			// a namespace the caller is entitled to -- so without this, a
+			// permission regression on any one of the thirteen routes stays
+			// green while every filter assertion above still passes.
+			name:   "merchant A asking for merchant B is refused outright",
+			client: clientA,
+			readNS: h.merchantB.id,
+			want:   fixtureB,
+			expect: outcomeForbidden,
 		},
 	}
 
@@ -364,28 +434,33 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 				t.Run(run.name, func(t *testing.T) {
 					found, err := probe.find(ctx, run.client, run.readNS, run.want)
 
-					if run.visible {
+					switch run.expect {
+					case outcomeVisible:
 						if err != nil {
 							t.Fatalf("%s: %v", probe.name, err)
 						}
 						if !found {
 							t.Fatalf("%s did not return the row it was entitled to see: the negative runs of this probe prove nothing", probe.name)
 						}
-						return
-					}
 
-					// A refusal is a legitimate answer here, and several
-					// endpoints give one. What it must NOT be is a transport
-					// failure: a torn-down container or a client-side option
-					// guard would also produce an error, and reading that as
-					// "the read was refused" makes isolation look airtight
-					// against a server that is not running.
-					if err != nil {
-						requireServerRefusal(t, err, probe.name)
-					}
-					if found {
-						t.Errorf("%s returned a merchant-%s row to a client reading merchant %s: this is a cross-merchant data leak",
-							probe.name, run.want.namespaceID, run.readNS)
+					case outcomeFiltered:
+						if err != nil {
+							requireFilteredRefusal(t, err, probe.name)
+						}
+						if found {
+							t.Errorf("%s returned a merchant-%s row to a client reading merchant %s: this is a cross-merchant data leak",
+								probe.name, run.want.namespaceID, run.readNS)
+						}
+
+					case outcomeForbidden:
+						apiErr := requireAPIError(t, err, probe.name)
+						if !octonomy.IsForbidden(err) || apiErr.StatusCode != 403 {
+							t.Errorf("%s: reaching into another merchant gave {status:%d code:%q}, want {403 %q} -- the permission layer must refuse the request, not leave it to the namespace filter",
+								probe.name, apiErr.StatusCode, apiErr.Code, octonomy.CodeForbidden)
+						}
+						if found {
+							t.Errorf("%s returned a merchant-%s row on a request that should have been refused", probe.name, run.want.namespaceID)
+						}
 					}
 				})
 			}
@@ -416,6 +491,15 @@ func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
 	clientA := h.merchantClient(t, h.merchantA)
 	fixtureA := h.seed(t, wildcard, h.merchantA.id)
 
+	// Merchant B exists here for one reason: `include_global` must widen a read
+	// to the GLOBAL rows, never to every namespace. Without a second merchant's
+	// row in the database, a server that had come to read the parameter as "all
+	// partitions" would satisfy every other assertion in this test -- the default
+	// read still excludes global, the wildcard control still finds it, and the
+	// merchant token is still clamped back to its own namespace by
+	// authorization. Nothing would notice.
+	fixtureB := h.seed(t, wildcard, h.merchantB.id)
+
 	// A tenant-shared global row: no namespace, no application. It is assignable
 	// and visible tenant-wide, which is exactly what makes "can this merchant
 	// opt into seeing it" a real question.
@@ -435,26 +519,43 @@ func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
 		}
 	})
 
-	// sees reports whether a namespaced list run by c returns tagID.
-	sees := func(t *testing.T, c *octonomy.Client, tagID string, opts ...octonomy.RequestOption) bool {
+	// visibleTags runs ONE namespaced list in merchant A and returns the set of
+	// tag ids it yielded.
+	//
+	// One request, one set, every membership question answered from it. The
+	// alternative -- a `sees(id)` helper called once per id -- makes three
+	// separate requests while the assertions read as if they were describing a
+	// single response, so "the SAME request returned A but not global" would be
+	// a claim the code never actually checked.
+	//
+	// It WALKS rather than taking one page: merchant A's namespace is small, but
+	// "the leaked row was on page two" must not be able to read as "the leaked
+	// row was absent", and TagListParams has no filter that covers three
+	// different slugs at once.
+	visibleTags := func(t *testing.T, c *octonomy.Client, opts ...octonomy.RequestOption) map[string]bool {
 		t.Helper()
-		page, err := c.Tags.List(ctx, &octonomy.TagListParams{
-			ListOptions: octonomy.ListOptions{Limit: 200},
-		}, append(h.scoped(h.merchantA.id), opts...)...)
-		if err != nil {
-			t.Fatalf("Tags.List: %v", err)
+		seen := map[string]bool{}
+		scoped := append(h.scoped(h.merchantA.id), opts...)
+		if _, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 200},
+			func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Tag], error) {
+				return c.Tags.List(ctx, &octonomy.TagListParams{ListOptions: o}, scoped...)
+			},
+			func(row octonomy.Tag) error {
+				seen[row.ID] = true
+				return nil
+			}); err != nil {
+			t.Fatalf("Tags.List (merchant A): %v", err)
 		}
-		for _, row := range page.Data {
-			if row.ID == tagID {
-				return true
-			}
-		}
-		return false
+		return seen
 	}
 
 	t.Run("a namespaced read excludes global rows by default", func(t *testing.T) {
-		if sees(t, wildcard, globalTag.ID) {
+		seen := visibleTags(t, wildcard)
+		if seen[globalTag.ID] {
 			t.Error("a namespaced list returned a global row without include_global: the parameter would then be meaningless")
+		}
+		if !seen[fixtureA.tag.ID] {
+			t.Error("the same read returned none of merchant A's own rows, so it proves nothing about what it excluded")
 		}
 	})
 
@@ -463,21 +564,34 @@ func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
 		// global row" also passes on a server that ignores include_global
 		// entirely, and the fail-closed claim would be resting on a broken
 		// feature rather than a working guard.
-		if !sees(t, wildcard, globalTag.ID, octonomy.WithIncludeGlobal()) {
+		seen := visibleTags(t, wildcard, octonomy.WithIncludeGlobal())
+		if !seen[globalTag.ID] {
 			t.Error("a wildcard token asking for include_global did not get the global row: the opt-in is not working at all")
+		}
+		// GLOBAL, not every namespace -- and this token is authorized for
+		// merchant B, so authorization cannot be what withholds it. Only the
+		// meaning of the parameter can.
+		if seen[fixtureB.tag.ID] {
+			t.Error("include_global returned a row from ANOTHER MERCHANT: the parameter widens a read to the tenant-shared rows, never across the namespace axis")
 		}
 	})
 
 	t.Run("an exact merchant grant cannot opt into global rows", func(t *testing.T) {
-		if sees(t, clientA, globalTag.ID, octonomy.WithIncludeGlobal()) {
+		// One request; three things asserted about it.
+		seen := visibleTags(t, clientA, octonomy.WithIncludeGlobal())
+		if seen[globalTag.ID] {
 			t.Error("an exact merchant grant saw a global row via include_global: the opt-in must be fail-closed, and a merchant token has no global authority to widen with")
 		}
-		// The same request must still have returned merchant A's OWN rows.
-		// Without this, the assertion above passes whenever the request failed,
-		// returned an empty page, or was refused -- none of which is the
-		// fail-closed behaviour being claimed.
-		if !sees(t, clientA, fixtureA.tag.ID, octonomy.WithIncludeGlobal()) {
-			t.Error("the same include_global read returned none of merchant A's own rows: fail-closed means the global rows are withheld, not that the read fails")
+		if seen[fixtureB.tag.ID] {
+			t.Error("an exact merchant grant saw another merchant's row via include_global")
+		}
+		// The same response must still have carried merchant A's OWN rows.
+		// Without this the two assertions above pass whenever the request
+		// failed, was refused, or returned an empty page -- none of which is the
+		// fail-closed behaviour being claimed, which is that the global rows are
+		// withheld and the read otherwise works.
+		if !seen[fixtureA.tag.ID] {
+			t.Error("the same include_global response carried none of merchant A's own rows: fail-closed means the global rows are withheld, not that the read fails")
 		}
 	})
 }
@@ -634,7 +748,26 @@ func TestIntegration_BulkPartialFailure(t *testing.T) {
 			t.Errorf("%s: the error named the caller's own valid id %s, disclosing which of the two was rejected: %q",
 				label, fixtureA.tag.ID, joined)
 		}
-		return strings.ReplaceAll(joined, offendingID, "<offending-id>")
+
+		// The WHOLE envelope, canonicalised -- status, code, message and every
+		// details key, not just the tag_ids strings. An oracle does not have to
+		// live in the field the test happens to read: a different status, a
+		// reworded message, or one extra key such as
+		// {"cross_namespace": ["..."]} would each tell the caller which of the
+		// two ids was real while a tag_ids-only comparison stayed green. The
+		// request id is the one field that legitimately differs per call and is
+		// excluded; the offending id is substituted out so two errors about
+		// different ids can be compared at all.
+		canonical, err := json.Marshal(map[string]any{
+			"status":  apiErr.StatusCode,
+			"code":    apiErr.Code,
+			"message": apiErr.Message,
+			"details": apiErr.Details,
+		})
+		if err != nil {
+			t.Fatalf("%s: canonicalising the envelope: %v", label, err)
+		}
+		return strings.ReplaceAll(string(canonical), offendingID, "<offending-id>")
 	}
 
 	// A real tag, in a real merchant, that this caller may not see.
@@ -643,7 +776,7 @@ func TestIntegration_BulkPartialFailure(t *testing.T) {
 	nonexistent := bulkFailure(t, nilUUID, "bulk assign naming a nonexistent tag")
 
 	if crossNamespace != nonexistent {
-		t.Errorf("a tag in another merchant is reported differently from a tag that does not exist:\n  cross-namespace: %q\n  nonexistent:     %q\nthe difference lets a caller enumerate another merchant's tag ids",
+		t.Errorf("a tag in another merchant is reported differently from a tag that does not exist:\n  cross-namespace: %s\n  nonexistent:     %s\nthe difference lets a caller enumerate another merchant's tag ids",
 			crossNamespace, nonexistent)
 	}
 
@@ -697,9 +830,25 @@ func TestIntegration_DeactivationCascade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tags.Create: %v", err)
 	}
+	// Registered immediately, not after the aliases below, and deliberately
+	// tolerant: the test itself deletes this tag, so on the happy path this
+	// cleanup deletes an already-deactivated row -- which the server accepts.
+	// Its job is the UNHAPPY path, where an alias create fails and t.Fatalf
+	// would otherwise leave an active tag behind in a namespace this suite
+	// reads on every subsequent run against the same harness.
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
+		if err := clientA.Tags.Delete(cleanupCtx, tag.ID, scoped...); err != nil {
+			t.Errorf("cleanup: Tags.Delete: %v", err)
+		}
+	})
 
 	// Two aliases, not one. A cascade that deactivated only the first alias it
 	// found would pass a single-alias test.
+	//
+	// They need no cleanup of their own: the tag deletion above cascades to
+	// them, which is the very property under test.
 	aliasIDs := make([]string, 0, 2)
 	for i := 0; i < 2; i++ {
 		alias, err := clientA.Aliases.Create(ctx, octonomy.TagAliasCreate{
@@ -847,14 +996,27 @@ func TestIntegration_DuplicateSlugScopedPerNamespace(t *testing.T) {
 		t.Fatalf("creating the first tag in merchant A: %v", err)
 	}
 
+	// requireDuplicateConflict asserts BOTH halves of what #17 asks for: the code
+	// a caller branches on and the status a proxy, a log line or a retry policy
+	// sees. IsConflict reads the code alone, so a server that started answering
+	// `conflict` with a 400 would keep every IsConflict branch working while
+	// silently changing what every layer between the two saw.
+	requireDuplicateConflict := func(t *testing.T, err error, label string) {
+		t.Helper()
+		apiErr := requireAPIError(t, err, label)
+		if !octonomy.IsConflict(err) {
+			t.Errorf("%s: IsConflict = false, code = %q", label, apiErr.Code)
+		}
+		if apiErr.StatusCode != http.StatusConflict {
+			t.Errorf("%s: status = %d, want 409", label, apiErr.StatusCode)
+		}
+	}
+
 	// The same slug, the same merchant, the same type: refused.
 	if _, err := create(t, "merchant A again", h.merchantA.id); err == nil {
 		t.Error("a duplicate slug inside one merchant was accepted: the (tenant, application, namespace, type, slug) constraint is not being enforced")
 	} else {
-		apiErr := requireAPIError(t, err, "duplicate slug inside one merchant")
-		if !octonomy.IsConflict(err) {
-			t.Errorf("duplicate slug: IsConflict = false, code = %q status = %d", apiErr.Code, apiErr.StatusCode)
-		}
+		requireDuplicateConflict(t, err, "duplicate slug inside one merchant")
 	}
 
 	// The same slug in a DIFFERENT merchant: accepted, and a distinct row.
@@ -878,8 +1040,10 @@ func TestIntegration_DuplicateSlugScopedPerNamespace(t *testing.T) {
 	if global.NamespaceType != nil {
 		t.Errorf("the global row reports namespace type %v, want none", global.NamespaceType)
 	}
-	if _, err := create(t, "global again", ""); !octonomy.IsConflict(err) {
-		t.Errorf("a duplicate slug in the global namespace: IsConflict = false, err = %v", err)
+	if _, err := create(t, "global again", ""); err == nil {
+		t.Error("a duplicate slug in the global namespace was accepted")
+	} else {
+		requireDuplicateConflict(t, err, "duplicate slug in the global namespace")
 	}
 }
 
@@ -895,15 +1059,9 @@ func TestIntegration_DuplicateSlugScopedPerNamespace(t *testing.T) {
 //	an unmatched slug is a 400 validation_error, NOT a 404
 //	scope_immutable arrives on a 409 whose code is not "conflict"
 //
-// FIVE HELPERS ARE STRUCTURALLY OUT OF REACH HERE, and are listed rather than
+// FOUR HELPERS ARE STRUCTURALLY OUT OF REACH HERE, and are listed rather than
 // quietly omitted:
 //
-//	IsNamespaceNotSupported  The server raises it for X-Namespace-* on /api/v1.
-//	                         This SDK's own checkScopeCoherence refuses that
-//	                         combination before anything is sent, so no client
-//	                         built by New can produce it. Covered by the unit
-//	                         suite's guard tests; the code exists for a server
-//	                         that answers a hand-rolled request.
 //	IsNamespacedWritesDisabled
 //	IsNamespaceAPIDisabled   Both are deployment kill-switches
 //	                         (OCTONOMY_NAMESPACE_WRITE_ENABLED,
@@ -1149,6 +1307,46 @@ func TestIntegration_ErrorEnvelopes(t *testing.T) {
 				_, err := wildcard.Tags.List(ctx, nil,
 					octonomy.WithNamespace(h.namespaceType, strings.Repeat("x", 300)),
 					octonomy.WithApplication(h.applicationID))
+				return err
+			},
+		},
+		{
+			name:   "IsNamespaceNotSupported",
+			code:   octonomy.CodeNamespaceNotSupported,
+			status: 400,
+			is:     octonomy.IsNamespaceNotSupported,
+			call: func(ctx context.Context) error {
+				// /api/v1 is global-only and rejects X-Namespace-* by name.
+				// WithNamespace on a v1 client never gets that far --
+				// checkScopeCoherence refuses it before anything is sent, which
+				// is the point of that guard. But Config.HTTPClient is exported
+				// and an http.RoundTripper is this SDK's sanctioned extension
+				// point (see architecture.md), so a wrapper transport can add
+				// the headers AFTER the guard has run, and a v1 client built by
+				// New then receives the server's real envelope. That is exactly
+				// the case IsNamespaceNotSupported's own doc comment describes:
+				// reaching it means the namespace came from something other
+				// than WithNamespace.
+				//
+				// It is contrived as a way to CALL Octonomy and nobody should
+				// write it. It is the honest way to check the claim this suite
+				// exists to check -- that the server really sends this code, on
+				// this status, from this route -- and the alternative was to
+				// list the helper as unreachable, which would have been untrue.
+				v1, err := octonomy.New(octonomy.Config{
+					BaseURL:    h.baseURL,
+					Token:      h.wildcardToken,
+					TenantID:   h.tenantID,
+					APIVersion: octonomy.APIV1,
+					HTTPClient: &http.Client{
+						Timeout:   30 * time.Second,
+						Transport: namespaceInjectingTransport(h.namespaceType, h.merchantA.id),
+					},
+				})
+				if err != nil {
+					return err
+				}
+				_, err = v1.Tags.List(ctx, nil)
 				return err
 			},
 		},

@@ -79,33 +79,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comments claim. Those are properties of authorization and persistence, and a fake answers whatever
   its fixture says, so none of them was previously checked anywhere.
   - **Namespace isolation, across every read method the SDK exposes.** Thirteen endpoints, each
-    probed five times against two seeded merchants. Three runs must find the row — without them
-    "merchant A cannot see merchant B" also passes when merchant B was never written — and two must
-    not. The two negatives are *different mechanisms* and each must hold alone: an exact merchant
-    grant is refused at the permission layer before any queryset runs, while a wildcard token is
-    authorized for everything and is stopped only by the server's namespace filter. Testing one
-    would pass against a server that had lost the other. Verified to fail: pointing one negative run
-    at the wrong namespace reports a leak on all thirteen.
+    probed six times against two seeded merchants. Three runs must find the row — without them
+    "merchant A cannot see merchant B" also passes when merchant B was never written — and three
+    must not, covering three *different mechanisms*, each of which has to hold alone: the namespace
+    filter under a merchant token; the filter alone under a wildcard token, which is authorized for
+    both merchants so nothing refuses it; and authorization, where merchant A **asks for** merchant
+    B and is refused 403 before any queryset runs. The third is the request an attacker actually
+    makes and is not implied by the others — a token reading its own namespace exercises the filter
+    whatever the permission layer does — so a suite with only the filter runs stays green through a
+    permission regression on any individual route. Both directions verified to fail by mutation.
+  - **An error is not evidence of isolation unless it is the right error.** The SDK turns every
+    non-2xx into an `*APIError` by design, so a bare "did it error?" check would read a crashed
+    container's 500, a proxy 502 and an unrouted HTML 404 as a successful boundary. The negatives
+    accept only the two shapes a correctly filtered read produces — `not_found` for a row addressed
+    by id, `validation_error` for resolution — and the authorization run requires a 403 `forbidden`
+    specifically.
   - **`include_global` is fail-closed, proved with a token that has no global authority.** The option
     widens what a request ASKS for; whether global rows come back depends on the grant. A merchant
     token that asks for them gets a 200, its own rows, and nothing in the response saying the opt-in
     was declined — unfalsifiable from a fixture, and unreachable with a wildcard token, for which the
-    opt-in always succeeds.
+    opt-in always succeeds. A second merchant is seeded here too, because the parameter widens a read
+    to the tenant-shared rows and **never across the namespace axis**: without another merchant's row
+    in the database, a server that had come to read it as "all partitions" would satisfy every other
+    assertion in the test. Each case reads one response and asks every membership question of it,
+    rather than making a separate request per row and describing them as one.
   - **Assignment idempotence: 201 once, 200 forever after, same row.** The status split is the only
     thing `AssignmentService.Create`'s documented idempotency rests on, and `doData` deliberately
     surfaces no 2xx status — so this is the suite's one assertion made off the wire rather than
     through a method.
   - **Bulk partial failure is atomic, and reports no existence oracle.** A bulk assign naming one good
     id and one bad one writes neither. More importantly, an id naming a real tag in ANOTHER merchant
-    must be reported exactly as an id naming nothing at all: the two messages are compared with the
-    offending id normalised out and must be byte-identical, because any difference lets a caller
-    enumerate another merchant's tag ids one guess at a time.
-  - **Deactivation cascade, per-namespace slug uniqueness, and every `Is*` helper** against the error
-    the server really sends — including two a caller is most likely to get wrong: an unmatched
-    resolution slug is a 400 `validation_error`, not a 404, and a rejected bearer token arrives as a
-    **403** whose code is `authentication_required`, so status alone cannot tell authentication from
-    authorization. Five helpers are structurally out of reach against a working harness and are
-    listed with reasons rather than quietly omitted.
+    must be reported exactly as an id naming nothing at all — and the comparison is over the WHOLE
+    canonicalised envelope (status, code, message, every details key, with the offending id
+    substituted out), not one field. An oracle does not have to live where the test happens to look:
+    a reworded message or one extra details key would name which of the two ids was real while a
+    single-field check stayed green.
+  - **Deactivation cascade, per-namespace slug uniqueness** — asserted on the status as well as the
+    code, since `IsConflict` reads the code alone and #17 asks for a **409** — **and every `Is*`
+    helper** against the error the server really sends, including two a caller is most likely to get
+    wrong: an unmatched resolution slug is a 400 `validation_error`, not a 404, and a rejected bearer
+    token arrives as a **403** whose code is `authentication_required`, so status alone cannot tell
+    authentication from authorization. Four helpers are structurally out of reach against a working
+    harness and are listed with reasons rather than quietly omitted.
 
   **The harness gained the tokens this needs** and the two version lines are unaffected by them.
   `scripts/octonomy-harness.sh` now mints, alongside the wildcard grant, one EXACT merchant grant on

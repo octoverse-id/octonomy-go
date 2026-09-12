@@ -223,6 +223,30 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 
 	ns := octonomy.WithNamespace(h.namespaceType, namespaceID)
 
+	// EACH CLEANUP IS REGISTERED THE MOMENT ITS ROW EXISTS, never in one block at
+	// the end. Every create below is followed by t.Fatalf on failure, and a
+	// Fatalf skips whatever has not been registered yet -- so a single trailing
+	// t.Cleanup leaks the vocabulary when the tag create fails, and the
+	// vocabulary and the tag when the alias create fails. Those leaks land in the
+	// long-lived harness a developer is explicitly invited to reuse, where they
+	// accumulate as active rows in the very namespaces this suite reads.
+	//
+	// Cleanups run last-registered-first, which gives the order this needs for
+	// free: alias, then tag, then vocabulary. That matters because deleting a tag
+	// cascades deactivation to its aliases (TestIntegration_DeactivationCascade
+	// asserts it), and the reverse order would leave the alias cleanup deleting a
+	// row the tag cleanup had already deactivated -- not an error on this server,
+	// but it would make a real cleanup failure unreadable.
+	cleanup := func(label string, del func(context.Context) error) {
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cancel()
+			if err := del(cleanupCtx); err != nil {
+				t.Errorf("cleanup %s: %s: %v", namespaceID, label, err)
+			}
+		})
+	}
+
 	vocab, err := c.Vocabularies.Create(ctx, octonomy.VocabularyCreate{
 		ApplicationID: octonomy.String(h.applicationID),
 		Name:          "integration " + namespaceID,
@@ -234,6 +258,9 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 		}
 		t.Fatalf("seed %s: Vocabularies.Create: %v", namespaceID, err)
 	}
+	cleanup("Vocabularies.Delete", func(ctx context.Context) error {
+		return c.Vocabularies.Delete(ctx, vocab.ID, h.scoped(namespaceID)...)
+	})
 
 	tag, err := c.Tags.Create(ctx, octonomy.TagCreate{
 		ApplicationID: octonomy.String(h.applicationID),
@@ -244,6 +271,9 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 	if err != nil {
 		t.Fatalf("seed %s: Tags.Create: %v", namespaceID, err)
 	}
+	cleanup("Tags.Delete", func(ctx context.Context) error {
+		return c.Tags.Delete(ctx, tag.ID, h.scoped(namespaceID)...)
+	})
 
 	alias, err := c.Aliases.Create(ctx, octonomy.TagAliasCreate{
 		ApplicationID: octonomy.String(h.applicationID),
@@ -254,6 +284,9 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 	if err != nil {
 		t.Fatalf("seed %s: Aliases.Create: %v", namespaceID, err)
 	}
+	cleanup("Aliases.Delete", func(ctx context.Context) error {
+		return c.Aliases.Delete(ctx, alias.ID, h.scoped(namespaceID)...)
+	})
 
 	fixture := namespaceFixture{
 		namespaceID:  namespaceID,
@@ -264,6 +297,10 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 		resourceID:   uniqueSlug("int-cart"),
 	}
 
+	// Assignments are deliberately left behind rather than cleaned up. Deleting
+	// the tag deactivates it, which is what the server means by delete, and every
+	// assertion in this suite is keyed on ids minted by this run -- so a leftover
+	// row cannot reach the next one.
 	if _, err := c.Resources.ReplaceTags(ctx, fixture.resourceType, fixture.resourceID, octonomy.ResourceReplace{
 		ApplicationID: h.applicationID,
 		TagIDs:        []string{tag.ID},
@@ -271,31 +308,6 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 	}, ns); err != nil {
 		t.Fatalf("seed %s: Resources.ReplaceTags: %v", namespaceID, err)
 	}
-
-	// Alias before tag: deleting a tag cascades deactivation to its aliases
-	// (asserted by TestIntegration_DeactivationCascade), so the other order would
-	// leave this cleanup deleting a row the previous step had already
-	// deactivated. That is not an error on this server, but it would make the
-	// cleanup's own failures unreadable.
-	//
-	// Assignments are deliberately left behind. Deleting the tag deactivates it,
-	// which is what the server means by delete, and every assertion in this suite
-	// is keyed on ids minted by this run -- so a leftover row cannot reach the
-	// next one.
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-		defer cancel()
-		opts := h.scoped(namespaceID)
-		if err := c.Aliases.Delete(cleanupCtx, alias.ID, opts...); err != nil {
-			t.Errorf("cleanup %s: Aliases.Delete: %v", namespaceID, err)
-		}
-		if err := c.Tags.Delete(cleanupCtx, tag.ID, opts...); err != nil {
-			t.Errorf("cleanup %s: Tags.Delete: %v", namespaceID, err)
-		}
-		if err := c.Vocabularies.Delete(cleanupCtx, vocab.ID, opts...); err != nil {
-			t.Errorf("cleanup %s: Vocabularies.Delete: %v", namespaceID, err)
-		}
-	})
 
 	return fixture
 }
@@ -343,26 +355,53 @@ func (h harness) rawPost(ctx context.Context, t *testing.T, token, namespaceID, 
 	return resp.StatusCode, payload
 }
 
-// requireServerRefusal asserts that err is a refusal the SERVER made, without
-// caring what it said.
+// requireFilteredRefusal asserts that err is the server declining to produce a
+// row the caller is not entitled to -- and NOT any of the other ways a request
+// can fail.
 //
-// The distinction is load-bearing wherever a test accepts an error as evidence
-// of isolation. A transport failure -- a wrong port, a torn-down container, a
-// client-side option guard -- is also an error, and treating it as "the read was
-// refused" would make every such assertion pass against a harness that is not
-// even running. An *APIError means a real Octonomy response came back carrying a
-// real error envelope.
+// "Any error counts as isolation" is the trap this closes, and it is a wide one,
+// because the SDK turns EVERY non-2xx into an *APIError by design. Under a
+// bare AsAPIError check a crashed container's 500, a proxy's 502, an unrouted
+// HTML 404 (CodeUnexpectedStatus), an expired token's 401 and an unrelated
+// validation failure all read as "merchant A could not see merchant B" -- so the
+// isolation assertions would go green against a server that had stopped serving
+// altogether.
 //
-// Separate from requireAPIError only so that the discard lives here, once, with
-// this comment on it, rather than as a bare `_ =` at a call site: *APIError
-// satisfies error, so errcheck reads an ignored return as an ignored error.
-func requireServerRefusal(t *testing.T, err error, what string) {
+// So the accepted set is exactly the two shapes a correctly filtered read
+// produces on this server:
+//
+//	not_found         a row addressed by id that is not in the caller's partition
+//	validation_error  tag resolution, which answers an unmatched slug 400 rather
+//	                  than 404 (deliberately indistinguishable from "not
+//	                  authorized to see it", so the endpoint discloses nothing)
+//
+// List routes answer 200 with the row absent and reach this function not at all.
+// Everything else -- including forbidden, which would mean the request never
+// reached the filter, and is asserted separately where it IS the expected
+// outcome -- is a failure.
+func requireFilteredRefusal(t *testing.T, err error, what string) {
 	t.Helper()
-	_ = requireAPIError(t, err, what)
+	apiErr := requireAPIError(t, err, what)
+	switch apiErr.Code {
+	case octonomy.CodeNotFound, octonomy.CodeValidation:
+	default:
+		t.Errorf("%s: a filtered read failed with {status:%d code:%q}, want %q or %q -- this is not the server declining to show a row, it is something else going wrong, and accepting it here would let the isolation assertion pass against a broken server",
+			what, apiErr.StatusCode, apiErr.Code, octonomy.CodeNotFound, octonomy.CodeValidation)
+	}
+	if apiErr.StatusCode >= 500 {
+		t.Errorf("%s: a filtered read got HTTP %d: a server error is not evidence of isolation", what, apiErr.StatusCode)
+	}
 }
 
-// requireAPIError is requireServerRefusal for the callers that go on to inspect
-// the envelope: it returns the decoded *APIError.
+// requireAPIError asserts that err is a refusal the SERVER made, and returns the
+// decoded envelope.
+//
+// The distinction from a transport-level failure is load-bearing wherever a test
+// accepts an error as evidence of anything. A wrong port, a torn-down container
+// or a client-side option guard is also an error, and treating one as a server
+// response would make these assertions pass against a harness that is not even
+// running. An *APIError means a real Octonomy response came back carrying a real
+// error envelope.
 func requireAPIError(t *testing.T, err error, what string) *octonomy.APIError {
 	t.Helper()
 	if err == nil {
@@ -373,6 +412,29 @@ func requireAPIError(t *testing.T, err error, what string) *octonomy.APIError {
 		t.Fatalf("%s: expected a server error envelope, got a transport-level failure: %v", what, err)
 	}
 	return apiErr
+}
+
+// roundTripperFunc adapts a function to http.RoundTripper.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// namespaceInjectingTransport stamps the X-Namespace-* pair onto every outbound
+// request, after the SDK's own scope guard has already run.
+//
+// It exists for exactly one assertion -- the namespace_not_supported case in
+// TestIntegration_ErrorEnvelopes -- and is deliberately not a general utility.
+// See that case for why the detour is the honest way to reach the server's
+// envelope rather than a way anyone should call Octonomy.
+func namespaceInjectingTransport(nsType, nsID string) http.RoundTripper {
+	return roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		// Clone before mutating: net/http may retry, and a RoundTripper is
+		// documented as not modifying the request it is handed.
+		clone := req.Clone(req.Context())
+		clone.Header.Set("X-Namespace-Type", nsType)
+		clone.Header.Set("X-Namespace-ID", nsID)
+		return http.DefaultTransport.RoundTrip(clone)
+	})
 }
 
 // detailStrings flattens one field of an error envelope's details into strings.

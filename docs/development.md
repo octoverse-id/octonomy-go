@@ -140,22 +140,32 @@ make dev-server-down
 Three things are worth knowing before adding to it.
 
 **The isolation test asserts in both directions, and both halves are load-bearing.** Each read method
-is probed five times: three runs that must *find* the row (they prove the fixture exists and the
-endpoint works) and two that must not. The two negatives are different mechanisms — an exact merchant
-grant is refused at the permission layer, while a wildcard token is authorized for everything and is
-stopped only by the server's namespace filter. Testing one alone would pass against a server that had
-lost the other.
+is probed six times: three runs that must *find* the row (they prove the fixture exists and the
+endpoint works) and three that must not. The negatives cover three distinct mechanisms:
+
+| run | mechanism |
+|---|---|
+| merchant A reads its **own** namespace, B's row must be absent | the namespace filter, under a merchant token |
+| a **wildcard** token scoped to A, B's row must be absent | the namespace filter alone — this token *is* authorized for B, so nothing refuses it |
+| merchant A **asks for** merchant B | authorization: 403 before any queryset runs |
+
+The third is the request an attacker actually makes, and it is not implied by the other two — a token
+reading its own namespace exercises the filter no matter what the permission layer does. A suite with
+only the filter runs stays green through a permission regression on any individual route; one with
+only the authorization run stays green through a lost namespace filter.
 
 **A new read method needs a probe.** `readProbes` in `integration_suite_test.go` lists every
 authenticated read in the SDK and carries the reasoning for the one deliberate exclusion (the health
 probes, which are unauthenticated and outside the namespace axis). A read endpoint nobody probed is
 where a cross-merchant leak lives.
 
-**Five `Is*` helpers are out of reach here and are listed rather than omitted** — the doc comment on
+**Four `Is*` helpers are out of reach here and are listed rather than omitted** — the doc comment on
 `TestIntegration_ErrorEnvelopes` names each one and why: two are deployment kill-switches this
-harness must have *on*, one needs a broken database under a live app, one is refused by the SDK's own
-`checkScopeCoherence` before it reaches the wire, and one is unreachable through the server's HTTP
-surface at all.
+harness must have *on*, one needs a broken database under a live app, and one is unreachable through
+the server's HTTP surface at all. `IsNamespaceNotSupported` looks like a fifth — `WithNamespace` on a
+v1 client never leaves the process — but `Config.HTTPClient` is exported and an `http.RoundTripper`
+is this SDK's sanctioned extension point, so a wrapper transport reaches the server's real envelope.
+The suite does exactly that, with a comment saying it is not how anyone should call Octonomy.
 
 CI runs it in the **`integration suite`** job, on its own container, with `OCTONOMY_SMOKE_REQUIRED=1`
 for the same reason the smoke job sets it. Like `contract inventory`, it fails the PR but is **not
