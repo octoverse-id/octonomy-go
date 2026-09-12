@@ -261,3 +261,66 @@ jobs:
       - name: Tear down the harness
         if: always()
         run: make dev-server-down
+
+  # The full integration suite (#17), on its own container.
+  #
+  # WHY A SECOND DOCKER JOB RATHER THAN A STEP IN `smoke`. The two ask different
+  # questions and are promoted on different schedules. `smoke` is the minimal,
+  # blocking check that the server's response SHAPES match what this SDK decodes
+  # -- it is what stands between #32 and a release, and it must stay fast and
+  # hard to break. This job asserts SEMANTICS: namespace isolation across every
+  # read endpoint, fail-closed include_global, atomic bulk failure, the
+  # deactivation cascade. A required check and a new check cannot live in one
+  # job, because branch protection names JOBS: folding this in would either
+  # promote it on day one or demote the smoke test.
+  #
+  # NOT YET A MERGE GATE, exactly as `contract inventory` above is not. A failure
+  # here fails the PR and is meant to be read; it does not block the merge until
+  # its check context is added to main's branch protection, which today requires
+  # lint, test (1.24), test (1.25), and vuln. The required-context name would be
+  # the DISPLAY name, "integration suite", not the job id `integration`.
+  #
+  # Deliberately NOT `continue-on-error`. That flag would mark the step
+  # successful, which silently disables the `if: failure()` log capture below --
+  # and a failing isolation assertion with no container logs is the one outcome
+  # this job must never produce. Advisory here means "not in branch protection",
+  # not "invisible".
+  #
+  # PROMOTE IT when it has run green across a few weeks of merges. The property
+  # it guards -- that a merchant-A client can never read a merchant-B row -- is
+  # the one whose regression is least likely to be caught anywhere else and most
+  # expensive to ship.
+  integration:
+    name: integration suite
+    runs-on: ubuntu-latest
+    # Same bound and same reasoning as the smoke job: pull, migrate, readiness,
+    # then a suite that runs in seconds. Hitting 20 minutes means Docker or the
+    # registry hung, not the tests.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Boot the Octonomy harness
+        uses: ./.github/actions/octonomy-harness
+      - name: Full integration suite against the real server
+        env:
+          # Without this the suite SKIPS when the credentials did not survive
+          # $GITHUB_ENV, and a skip is a green job. Every test in the file gates
+          # on OCTONOMY_TEST_BASE_URL, so a broken export would report success
+          # having asserted nothing about isolation -- which is worse here than
+          # anywhere else in this workflow.
+          OCTONOMY_SMOKE_REQUIRED: "1"
+        # `make test-integration` rather than an inline `go test`, so CI and a
+        # laptop run byte-identical logic -- including the guard that fails when
+        # no TestIntegration_* test ran at all.
+        run: make test-integration
+      - name: Capture container logs
+        if: failure()
+        run: make dev-server-logs
+      - name: Tear down the harness
+        if: always()
+        run: make dev-server-down

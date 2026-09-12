@@ -29,6 +29,7 @@ make test        # go test -race -cover ./...
 make cover       # prints total coverage
 make examples    # go build ./examples/...
 make smoke       # integration smoke test against a booted server (see below)
+make test-integration # the full integration suite against a booted server (see below)
 make contract-check # vendored contract vs the SDK, offline (see Contract drift)
 make contract-drift # also fetches the server's contract and compares (network)
 make check       # fmt-check + vet + build (fast pre-push gate)
@@ -78,11 +79,12 @@ mean to send verbatim — list envelopes and error envelopes.
 That is also the structural limit of this suite, and worth internalizing before adding a resource:
 **a unit test cannot catch a fixture-versus-server divergence**, because it asserts the client
 against the fixtures it ships with. Both sides can be wrong together and stay green. Anything that
-depends on the server's real response shape needs the smoke test below.
+depends on the server's real response shape needs the smoke test below — and anything that depends
+on the server's *authorization or persistence* needs the full suite after it.
 
 ### Integration smoke test
 
-`integration_test.go` (build tag `integration`) is the only test that talks to a real server. It has
+`integration_test.go` (build tag `integration`) is the shape check against a real server. It has
 grown with each resource into a single ordered walk — `TestSmoke_RealServer` — covering what a unit
 suite structurally cannot: both response envelopes on writes and reads, list pagination and an `Each`
 walk, `DecodeMetadata` against metadata the server itself stored, real error envelopes including
@@ -91,9 +93,10 @@ assignments including both bulk composites, the resource-tag replace composite, 
 a side effect of the mutations above, and request-id correlation. The steps share state deliberately,
 so read it top to bottom rather than treating any one as standalone.
 
-It is still a **smoke** test, not the full suite — that is
-[#17](https://github.com/octoverse-id/octonomy-go/issues/17). It gates on `OCTONOMY_TEST_BASE_URL`
-and skips when that is empty, so `go test ./...` stays hermetic.
+It is deliberately a **smoke** test: one ordered walk that asks whether the payloads match, kept
+small and fast because it is the blocking check. The semantic assertions live in the full suite
+below. It gates on `OCTONOMY_TEST_BASE_URL` and skips when that is empty, so `go test ./...` stays
+hermetic.
 
 ```bash
 make dev-server   # boots a real Octonomy, writes .octonomy-harness.env
@@ -110,6 +113,55 @@ check context, **`integration smoke test`** (the job's display name, not the `sm
 to main's branch-protection required contexts, which currently list `lint`, `test (1.24)`,
 `test (1.25)`, and `vuln`.
 
+### Full integration suite
+
+`integration_suite_test.go` and `integration_harness_test.go` (same `integration` build tag) are
+[#17](https://github.com/octoverse-id/octonomy-go/issues/17). Where the smoke test asks *does the
+payload match*, this asks *does the server behave the way our doc comments say* — properties of
+authorization and persistence that no fixture can settle, because a fake answers whatever the fixture
+says:
+
+| Test | What it pins |
+|---|---|
+| `TestIntegration_NamespaceIsolation` | A merchant-A client never sees a merchant-B row, on **every** read method this SDK exposes |
+| `TestIntegration_IncludeGlobalFailsClosed` | `WithIncludeGlobal` widens what is *asked for*; a token with no global authority still sees no global rows |
+| `TestIntegration_AssignmentIdempotence` | `201` once, then `200` returning the same row — the contract `AssignmentService.Create` documents |
+| `TestIntegration_BulkPartialFailure` | A partial bulk assign writes nothing, and an out-of-scope tag is reported identically to a nonexistent one |
+| `TestIntegration_DeactivationCascade` | `Delete` deactivates rather than deletes, and a tag's aliases go with it |
+| `TestIntegration_DuplicateSlugScopedPerNamespace` | Slug uniqueness is per namespace, not per tenant |
+| `TestIntegration_ErrorEnvelopes` | Every `Is*` helper against the error the server really sends, on the status it really uses |
+
+```bash
+make dev-server
+make test-integration   # the whole tagged package, including the smoke walk
+make dev-server-down
+```
+
+Three things are worth knowing before adding to it.
+
+**The isolation test asserts in both directions, and both halves are load-bearing.** Each read method
+is probed five times: three runs that must *find* the row (they prove the fixture exists and the
+endpoint works) and two that must not. The two negatives are different mechanisms — an exact merchant
+grant is refused at the permission layer, while a wildcard token is authorized for everything and is
+stopped only by the server's namespace filter. Testing one alone would pass against a server that had
+lost the other.
+
+**A new read method needs a probe.** `readProbes` in `integration_suite_test.go` lists every
+authenticated read in the SDK and carries the reasoning for the one deliberate exclusion (the health
+probes, which are unauthenticated and outside the namespace axis). A read endpoint nobody probed is
+where a cross-merchant leak lives.
+
+**Five `Is*` helpers are out of reach here and are listed rather than omitted** — the doc comment on
+`TestIntegration_ErrorEnvelopes` names each one and why: two are deployment kill-switches this
+harness must have *on*, one needs a broken database under a live app, one is refused by the SDK's own
+`checkScopeCoherence` before it reaches the wire, and one is unreachable through the server's HTTP
+surface at all.
+
+CI runs it in the **`integration suite`** job, on its own container, with `OCTONOMY_SMOKE_REQUIRED=1`
+for the same reason the smoke job sets it. Like `contract inventory`, it fails the PR but is **not
+yet a required context** — promote it by adding `integration suite` to main's branch protection once
+it has run green across a few weeks of merges.
+
 ## Running against a real Octonomy
 
 `make dev-server` boots a complete, verified Octonomy in one command. It needs Docker and `curl`,
@@ -122,17 +174,25 @@ make dev-server-down   # tear everything down
 ```
 
 It starts Postgres 16 and the pinned `ghcr.io/octoverse-id/octonomy:3.1.0` image on a private Docker
-network, applies migrations, mints a service token, waits for `/health/ready`, and then **proves the
-environment actually works** before reporting success. Credentials land in `.octonomy-harness.env`
-(git-ignored, mode 600):
+network, applies migrations, mints three service tokens, waits for `/health/ready`, and then **proves
+the environment actually works** before reporting success. Credentials land in
+`.octonomy-harness.env` (git-ignored, mode 600):
 
 | Variable | Meaning |
 |---|---|
 | `OCTONOMY_TEST_BASE_URL` | Server root. Integration suites gate on this — when it is empty they skip |
-| `OCTONOMY_TEST_TOKEN` | Bearer token with `tags:read`, `tags:write`, `audit:read` |
+| `OCTONOMY_TEST_TOKEN` | Bearer token with `tags:read`, `tags:write`, `audit:read`, and a **wildcard** namespace grant |
 | `OCTONOMY_TEST_TENANT_ID` | `X-Tenant-ID` for every request |
 | `OCTONOMY_TEST_APPLICATION_ID` | Parent application. Required on namespaced requests |
 | `OCTONOMY_TEST_NAMESPACE_TYPE` / `_ID` | The `X-Namespace-*` pair to scope v2 calls with |
+| `OCTONOMY_TEST_NAMESPACE_A_ID` / `_A_TOKEN` | A second merchant namespace and a token holding an **exact** grant for it alone |
+| `OCTONOMY_TEST_NAMESPACE_B_ID` / `_B_TOKEN` | A third, likewise — the other side of the isolation boundary |
+
+The wildcard token and the exact grants are not interchangeable, and picking the wrong one is how an
+isolation test comes to assert nothing. A wildcard grant matches every partition including global, so
+for that token authorization never says no: it can prove what the server's namespace *filter* does
+and nothing about what its *authorization* does. The exact grants are the only way to reach the
+refusal path, and the only way `include_global`'s fail-closed branch executes at all.
 
 ```bash
 make dev-server
@@ -150,7 +210,7 @@ side. See the header of [`scripts/octonomy-harness.sh`](../scripts/octonomy-harn
 
 ### Why it is a script and not `docker run`
 
-`docker run` alone produces an environment that looks healthy and silently fails. Four things the
+`docker run` alone produces an environment that looks healthy and silently fails. Five things the
 harness does that a naive bootstrap does not:
 
 - **Migrations.** The image entrypoint runs `manage.py check`, never `migrate`. Without an explicit
@@ -166,6 +226,12 @@ harness does that a naive bootstrap does not:
   a `201` whose response actually carries `namespace_type`/`namespace_id`. A 201 with null namespace
   fields would mean the row persisted globally, and every downstream namespace assertion would be
   testing global behaviour under a namespaced name.
+- **The exact merchant grants, proved in both directions.** After minting them the harness requires a
+  `201` from merchant A inside its own namespace and a `403` from the same token reaching for
+  merchant B. The negative is the one worth the round trip: a grant that reached every namespace
+  would still satisfy the positive probe, and the whole isolation suite rests on it not doing that.
+  Unlike the bullet above, this is about diagnosis rather than vacuity — thirty 403s inside Go
+  assertions read as an SDK defect when the fault is a token minted with the wrong grant shape.
 
 Both version lines call the same script, so the Go 1.13 compat line and the modern `/v2` line cannot
 drift apart on setup. CI reaches it through the `.github/actions/octonomy-harness` composite action.

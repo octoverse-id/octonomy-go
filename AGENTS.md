@@ -199,6 +199,23 @@ stays a faithful, ergonomic client.
 - A unit suite cannot see a fixture-versus-server divergence: it asserts the client against the
   fixtures it ships with. New response shapes need an assertion in `integration_test.go`
   (`make smoke`) as well.
+- **There are two integration files behind the `integration` tag and they answer different
+  questions.** `integration_test.go` (`make smoke`, blocking in CI) asks whether the SERVER'S PAYLOAD
+  matches what the SDK decodes — that is #32's class, and it stays one fast ordered walk.
+  `integration_suite_test.go` (`make test-integration`, #17) asks whether the SERVER BEHAVES the way
+  a doc comment claims: namespace isolation, fail-closed `include_global`, assignment idempotence,
+  atomic bulk failure, the deactivation cascade, per-namespace slug uniqueness, and every `Is*`
+  helper against a real envelope. A new response shape goes in the first; a new claim about
+  authorization or persistence goes in the second.
+- **A new read method needs a probe in `readProbes`.** That table is what makes "a merchant-A client
+  never sees a merchant-B row" a statement about the whole read surface rather than about whichever
+  endpoints someone remembered. A read endpoint nobody probed is where a cross-merchant leak lives.
+- **Which harness token a test uses IS the test.** The wildcard grant matches every partition,
+  global included, so under it authorization never refuses anything — it can only demonstrate the
+  server's namespace FILTER. The per-merchant exact grants
+  (`OCTONOMY_TEST_NAMESPACE_A_TOKEN`/`_B_TOKEN`) are the only way to reach the refusal path, and the
+  only way `include_global`'s fail-closed branch runs at all. Reaching for the wildcard token because
+  it is the convenient one is how an isolation assertion comes to assert nothing.
 - Run tests with `-race`. Keep new code covered.
 
 ## Local Development

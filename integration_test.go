@@ -1,4 +1,5 @@
 //go:build integration
+// +build integration
 
 // Narrow integration smoke test for the modern line.
 //
