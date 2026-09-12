@@ -169,6 +169,64 @@ stays a faithful, ergonomic client.
   with `omitempty` so PATCH sends only what the caller set.
 - No new exported surface without doc comments and tests.
 
+## Webhook Rules
+
+`webhook/` (`github.com/octoverse-id/octonomy-go/v2/webhook`) verifies the HMAC signature on an
+inbound delivery. It is **one-way**: it may import the root package, and the root must never import
+it. It imports neither today, and adding a root import to it is a decision, not a convenience.
+
+- **`Verify` takes `[]byte`. Do not add an `*http.Request` overload, and do not "helpfully" read the
+  body for the caller.** The HMAC is over the raw bytes, so a body that middleware, a logger, or
+  `json.NewDecoder(r.Body)` read first verifies as empty or partial — a check that appears to run,
+  always fails, and gets deleted by whoever is asked to fix it. Bytes cannot be handed an unread
+  stream. The same reasoning is why no `http.Handler` ships here (#22): with no handler, bounding
+  the body is visibly the caller's job, and the package says so rather than doing it invisibly.
+- **`hmac.Equal`, over the decoded digest bytes. Never `==`, never `bytes.Equal`, never on the hex
+  text.** `TestVerifyComparesDigestsInConstantTime` parses `verify.go` and fails on the wrong
+  spelling, because the wrong comparison passes every functional test in the package — correct
+  signatures still verify, forged ones are still refused — while leaking how far a forgery got. If
+  that test's guarded identifiers stop matching the source it says so and fails; update it rather
+  than weakening it.
+- **Every refusal is its own sentinel, and none may be indistinguishable from another or from
+  success.** A verifier whose failures collapse cannot tell an operator whether the deployment is
+  misconfigured or under attack. `ErrEmptyBody` and `ErrNoSecret` are *policy* refusals of
+  cryptographically valid inputs — HMAC of the empty message, and under an empty key, are both well
+  defined — and each is documented as such where it is declared.
+- **The signature covers the BODY and nothing else, so no `X-Octonomy-*` header may drive a
+  decision** — not routing, not partitioning, not authorization, and not after a `Verify` that
+  returned nil. A wholly genuine delivery replayed with `X-Octonomy-Tenant-ID` rewritten verifies
+  exactly as it did the first time, so a consumer that routed on that header sends a real event to
+  the wrong tenant. The header constants exist to name the contract the server documents and to log
+  it; anything load-bearing is read from the parsed body. Do not reintroduce "cheap pre-parse
+  routing" advice — an earlier draft of this package's own doc comment carried it.
+- **A new refusal ABOUT THE SIGNATURE CONTRACT needs a vector in
+  `webhook/testdata/signature_vectors.json` and a row in `rejectReasons`.** A refusal proved only by
+  a Go test is one no other SDK can adopt. The exception is a refusal that is a fact about the Go
+  RUNTIME rather than about the contract — `ErrUnusableSecret`, which exists because
+  `crypto/hmac.New` panics on a short key under `GODEBUG=fips140=only`. Nothing portable can be
+  written about that, so it is proved by a subprocess test instead; every sentinel is still checked
+  for distinctness against the source, so one cannot be added and forgotten.
+- **The vectors are generated, not written, and not by this package.**
+  `webhook/testdata/generate_vectors.py` mirrors the server's `_webhook_signature`; regenerate with
+  it rather than pasting a digest Go produced, since a vector computed by the implementation under
+  test proves only that the implementation agrees with itself. A regeneration that changes an
+  existing digest means the contract moved — stop and read, do not commit.
+- **Nothing in that file may become Go-specific or payload-specific.** Reasons are language-neutral
+  strings the Go binding maps to sentinels, and bodies are format vectors rather than event
+  fixtures. That is what keeps them valid as payloads evolve and usable by another language's SDK.
+- **`Verify` must not panic, including on input the RUNTIME refuses.** `crypto/hmac.New` panics
+  rather than erroring for a key under 112 bits when `GODEBUG=fips140=only` is set, which would take
+  a panic out of a library that promises never to raise one — inside an HTTP handler, where it
+  becomes a 500 and a stack trace instead of a diagnosable error. The `recover` that catches it is
+  scoped to that one call, never to `Verify` as a whole, so it cannot swallow a bug elsewhere. Do
+  not replace it with a length check of our own: how long a signing secret must be is a policy this
+  SDK has no business asserting, and outside that mode a short secret verifies genuine deliveries
+  perfectly well.
+- **Replay is not preventable here and no future change makes it so.** The server sends no timestamp
+  header, so there is no signed freshness claim to check. Do not add a "freshness" option that
+  reads an unsigned header or the local clock; dedupe belongs to the consumer, on the envelope's
+  stable `id`.
+
 ## Go Conventions
 
 - **Two lines, two Go floors — check which one you are on before you write anything.** This branch

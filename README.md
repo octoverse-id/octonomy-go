@@ -421,6 +421,70 @@ and sends the same request: no `Authorization`, no `X-Tenant-ID`, no `/api` pref
 point. `ErrUnreachable` is not health-specific — every method in the package wraps it around a
 request that got no response. See [`docs/api.md`](docs/api.md#health-probes).
 
+## Verifying webhooks
+
+`octonomy/webhook` is a separate package with one function in it. Octonomy signs each webhook
+delivery with HMAC-SHA256 over the **raw request body**, and `Verify` is the check:
+
+```go
+import "github.com/octoverse-id/octonomy-go/v2/webhook"
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	// The ceiling is yours: this SDK ships no handler, so nothing else bounds the read.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "unreadable body", http.StatusBadRequest)
+		return
+	}
+
+	// Verify BEFORE parsing, and refuse on any error.
+	if err := webhook.Verify(secret, r.Header.Get(webhook.HeaderSignature), body); err != nil {
+		log.Printf("octonomy webhook rejected: %v", err)
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	var event struct{ /* ... */ }
+	_ = json.Unmarshal(body, &event)
+}
+```
+
+**`Verify` takes `[]byte`, never an `*http.Request`, and that is the point.** The signature covers
+the exact bytes, so anything that reads the body first — a logging middleware, a tracer that copies
+it, `json.NewDecoder(r.Body)` — leaves the check hashing an empty or partial body: a check that
+appears to run, always fails, and gets "fixed" by deleting it. Taking bytes the caller has already
+read makes handing it an unread stream structurally impossible, and leaves the read, and its size
+limit, where you can see them. Zero bytes are refused as `ErrEmptyBody` rather than as a mismatch,
+precisely so that failure names itself.
+
+Digests are compared with `hmac.Equal`, in constant time, over the decoded bytes — never `==` on the
+hex. Every refusal is a distinct error (`ErrMissingSignature`, `ErrUnsupportedAlgorithm`,
+`ErrMalformedSignature`, `ErrSignatureMismatch`, `ErrEmptyBody`, `ErrNoSecret`, `ErrUnusableSecret`),
+because a verifier whose failures are indistinguishable cannot tell you whether it is misconfigured
+or under attack. And it never panics — not even on a secret the runtime itself refuses, which
+`crypto/hmac.New` signals with a panic under `GODEBUG=fips140=only`.
+
+**A valid signature is authenticity, not freshness.** The server sends no timestamp header, so there
+is no window to enforce and **replay cannot be prevented here**. Octonomy's outbox is at-least-once
+and redelivers on its own, so deduplicate on the envelope's stable `id` and make the handler
+idempotent. Route on the **verified body** — `(tenant_id, application_id, namespace_type,
+namespace_id)`, where a null `namespace_type` is the concrete global namespace and not a wildcard —
+and not on the unsigned `X-Octonomy-*` headers.
+
+[`webhook/testdata/signature_vectors.json`](webhook/testdata/signature_vectors.json) holds the
+known-good vectors, and the deliveries that must be rejected with the reason for each. They are
+generated from the server's own signing code rather than from this package, confirmed independently
+against `openssl`, and carry nothing Go-specific or payload-specific: **an SDK in any language can
+drive its verifier from that one file**, and should. See
+[`webhook/testdata/README.md`](webhook/testdata/README.md).
+
+The typed event surface and an `http.Handler` adapter are deliberately not here
+([#22](https://github.com/octoverse-id/octonomy-go/issues/22)): no deployment emits webhooks yet
+(`OUTBOX_TRANSPORT` defaults to `logging`), so those would be built for a consumer who does not
+exist, on payload shapes that may still move. The signature contract is fixed, and getting it wrong
+is silent — which is why this half shipped first.
+
 ## Transport, observability, and connection reuse
 
 The library never logs, never mutates global state, and adds no retry loop of its own. Everything at
@@ -544,6 +608,8 @@ make help    # list all targets
 - [Contract coverage](docs/contract-coverage.yaml) — the machine-checked operation inventory, and the
   spec-versus-server divergences it records. Enforced by the
   [drift gate](docs/development.md#contract-drift).
+- [Webhook signature vectors](webhook/testdata/README.md) — the portable known-good vectors, their
+  provenance, and what they deliberately do not cover.
 - [CHANGELOG](CHANGELOG.md)
 
 ## Contributing & security
