@@ -476,6 +476,7 @@ func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
 	var fallbackAPIErr *octonomy.APIError
 	if errors.As(fallbackErr, &fallbackAPIErr) {
 		observation.FallbackCode = fallbackAPIErr.Code
+		observation.FallbackStatus = fallbackAPIErr.StatusCode
 	}
 
 	truncatedPrefix, truncatedErr := driveTruncatedBody(apiVersion)
@@ -484,7 +485,9 @@ func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
 	var truncatedAPIErr *octonomy.APIError
 	if errors.As(truncatedErr, &truncatedAPIErr) {
 		observation.TruncatedCode = truncatedAPIErr.Code
+		observation.TruncatedStatus = truncatedAPIErr.StatusCode
 	}
+	observation.TruncatedCause = errors.Is(truncatedErr, errBodyDropped)
 	return observation, nil
 }
 
@@ -492,9 +495,14 @@ func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
 // is the shape unreadableBodyError is written for.
 type errAfterSomeBytes struct{ sent bool }
 
+// errBodyDropped is the read failure this drive injects, kept as a value so the
+// drive can ask whether the SDK still carries it: an *APIError that loses its
+// cause leaves the caller unable to say why the body never arrived.
+var errBodyDropped = errors.New("contractdrift: the connection dropped mid-body")
+
 func (r *errAfterSomeBytes) Read(p []byte) (int, error) {
 	if r.sent {
-		return 0, fmt.Errorf("contractdrift: the connection dropped mid-body")
+		return 0, errBodyDropped
 	}
 	r.sent = true
 	n := copy(p, []byte(`{"error":`))
@@ -714,6 +722,7 @@ type ErrorObservation struct {
 	FallbackCode       string
 	FallbackUnexpected bool
 	FallbackPrefix     string
+	FallbackStatus     int
 
 	// TruncatedCode, TruncatedUnexpected and TruncatedPrefix are the OTHER path
 	// that manufactures CodeUnexpectedStatus: a non-2xx whose body cannot be read
@@ -724,6 +733,12 @@ type ErrorObservation struct {
 	TruncatedCode       string
 	TruncatedUnexpected bool
 	TruncatedPrefix     string
+	TruncatedStatus     int
+
+	// TruncatedCause is whether the read failure is still reachable through
+	// errors.Is. `err: cause` dropped to nil left the *APIError intact and the
+	// caller with nothing to say WHY the body did not arrive.
+	TruncatedCause bool
 
 	// Helpers maps each semantic helper's name to the names of ALL the helpers that
 	// answered true when that helper's own code was sent. Each must answer for

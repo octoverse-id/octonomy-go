@@ -2518,10 +2518,13 @@ func envelopeObservation(surface string) ErrorObservation {
 		FallbackPrefix:     "/api/" + surface,
 		FallbackCode:       unexpectedStatusCode,
 		FallbackUnexpected: true,
+		FallbackStatus:     502,
 
 		TruncatedPrefix:     "/api/" + surface,
 		TruncatedCode:       unexpectedStatusCode,
 		TruncatedUnexpected: true,
+		TruncatedStatus:     409,
+		TruncatedCause:      true,
 	}
 }
 
@@ -3022,6 +3025,12 @@ func TestEveryHelperIsDriven(t *testing.T) {
 	// `\w+ error` and not `err error`: the parameter's NAME is the author's choice,
 	// and `func IsConflictAlias(cause error) bool` was an exported helper this scan
 	// did not see at all.
+	//
+	// KNOWN LIMIT: the parameter must be spelled `error`, not a type ALIAS for it.
+	// Seeing through `type helperError = error` needs go/types, and this file is
+	// the one place in the tool that reads Go source as text rather than calling
+	// it. Declaring the convention is the cheaper half of the trade, and this
+	// comment is the declaration: helpers in errors.go take a plain `error`.
 	declared := regexp.MustCompile(`(?m)^func (Is[A-Za-z]+)\(\w+ error\) bool`).FindAllStringSubmatch(string(raw), -1)
 	if len(declared) < 10 {
 		t.Fatalf("found only %d Is* helpers; the pattern stopped matching", len(declared))
@@ -3173,4 +3182,107 @@ func TestUnreadableBodyFallbackIsAsserted(t *testing.T) {
 		o.TruncatedCode = "conflict"
 		o.TruncatedUnexpected = false
 	}), "whose body could not be read produced code `conflict`")
+}
+
+// --- the workflows ---------------------------------------------------------------
+
+// TestTheNetworkedJobNeverRunsOnAPullRequest is acceptance criterion (d) of #18,
+// and the one property nothing tested.
+//
+// The whole argument for splitting this gate in two is that the half reaching
+// into another repository must never stand between a correct change and its
+// merge: the first time it goes red because raw.githubusercontent.com had a bad
+// minute, the team learns to merge past a red check, and the check is then worth
+// less than nothing. That argument is written at the top of the workflow and was
+// enforced by nothing at all -- adding `pull_request:` to it was clean.
+func TestTheNetworkedJobNeverRunsOnAPullRequest(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", "contract-drift.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		On map[string]yaml.Node `yaml:"on"`
+	}
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	if len(workflow.On) == 0 {
+		t.Fatal("read no triggers from contract-drift.yml -- the shape changed and this test stopped testing")
+	}
+	for trigger := range workflow.On {
+		switch trigger {
+		case "schedule", "workflow_dispatch":
+		default:
+			t.Errorf("contract-drift.yml triggers on %q; the networked half runs on a schedule and on demand, and on nothing else", trigger)
+		}
+	}
+	if _, scheduled := workflow.On["schedule"]; !scheduled {
+		t.Error("contract-drift.yml has no schedule -- a gate that only runs on demand is one nobody runs")
+	}
+}
+
+// TestTheOfflineJobDoesRunOnAPullRequest is the other half of that split: the
+// half that CAN be trusted on a pull request has to actually be there, or the
+// argument above becomes an excuse for checking nothing on a PR at all.
+func TestTheOfflineJobDoesRunOnAPullRequest(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		On   map[string]yaml.Node `yaml:"on"`
+		Jobs map[string]struct {
+			Name  string `yaml:"name"`
+			Steps []struct {
+				Run string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	if _, onPR := workflow.On["pull_request"]; !onPR {
+		t.Fatal("ci.yml does not run on pull_request")
+	}
+	for _, job := range workflow.Jobs {
+		for _, step := range job.Steps {
+			if strings.Contains(step.Run, "contract-check") {
+				return
+			}
+		}
+	}
+	t.Error("no ci.yml job runs `make contract-check` -- the offline half is the part a pull request can be held to, and nothing holds it")
+}
+
+// TestThePullRequestJobIsNeverTheNetworkedOne: `make contract-drift` fetches from
+// another repository. A step that runs it inside ci.yml would undo the split
+// without changing either workflow's triggers.
+func TestThePullRequestJobIsNeverTheNetworkedOne(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The RUN steps, not the raw text: ci.yml explains the split in a comment that
+	// names the other workflow, and a scan that reads comments reports the
+	// explanation as the violation.
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Run string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	if len(workflow.Jobs) == 0 {
+		t.Fatal("read no jobs from ci.yml -- the shape changed and this test stopped testing")
+	}
+	for name, job := range workflow.Jobs {
+		for _, step := range job.Steps {
+			if strings.Contains(step.Run, "contract-drift") || strings.Contains(step.Run, "contract-fetch") {
+				t.Errorf("ci.yml job %q runs the networked half: %q", name, strings.TrimSpace(step.Run))
+			}
+		}
+	}
 }

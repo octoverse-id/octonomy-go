@@ -860,6 +860,9 @@ func checkErrorEnvelope(in Inputs, r *Report) {
 		} else if observation.FallbackCode != unexpectedStatusCode || !observation.FallbackUnexpected {
 			items = append(items, fmt.Sprintf("`%s`: a 502 carrying no envelope produced code `%s` with `IsUnexpectedStatus` %v -- a body with no code in it cannot establish one, and inventing one from the status is what that constant exists to forbid",
 				surface, observation.FallbackCode, observation.FallbackUnexpected))
+		} else if observation.FallbackStatus != http.StatusBadGateway {
+			items = append(items, fmt.Sprintf("`%s`: a 502 carrying no envelope produced status %d -- the code is the one thing that branch may not take from the status, and the status is the one thing it must keep",
+				surface, observation.FallbackStatus))
 		}
 		// And the other path to the same constant: a body that starts arriving and
 		// stops. It reaches unreadableBodyError rather than parseError, so a code
@@ -869,6 +872,10 @@ func checkErrorEnvelope(in Inputs, r *Report) {
 		} else if observation.TruncatedCode != unexpectedStatusCode || !observation.TruncatedUnexpected {
 			items = append(items, fmt.Sprintf("`%s`: a 409 whose body could not be read produced code `%s` with `IsUnexpectedStatus` %v -- an unread body cannot have carried a code",
 				surface, observation.TruncatedCode, observation.TruncatedUnexpected))
+		} else if observation.TruncatedStatus != http.StatusConflict {
+			items = append(items, fmt.Sprintf("`%s`: a 409 whose body could not be read produced status %d", surface, observation.TruncatedStatus))
+		} else if !observation.TruncatedCause {
+			items = append(items, fmt.Sprintf("`%s`: a 409 whose body could not be read produced an error that no longer wraps the read failure -- `errors.Is` cannot reach it, and the caller has nothing to say about WHY the body did not arrive", surface))
 		}
 
 		if len(observation.Sent) == 0 {
