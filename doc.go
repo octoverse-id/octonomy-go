@@ -4,7 +4,7 @@
 // Octonomy is a multi-tenant, multi-application REST service for vocabularies,
 // tags, aliases, tag assignments, and the audit history of every mutation to
 // them. This SDK targets the server's primary
-// surface, /api/v2 (server release 3.1.1), and can be pointed at /api/v1
+// surface, /api/v2 (server release 3.2.0), and can be pointed at /api/v1
 // instead. The bundled docs/openapi-v2.yaml and docs/openapi.yaml are the
 // contracts this client is written against.
 //

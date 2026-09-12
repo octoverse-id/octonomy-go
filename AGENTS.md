@@ -31,7 +31,7 @@ stays a faithful, ergonomic client.
 - Tag aliases are alternate identifiers that resolve to canonical tags and follow tenant/application
   compatibility rules.
 - Keep the SDK faithful to the bundled contract references: `docs/openapi-v2.yaml` (`/api/v2`, the
-  default surface) and `docs/openapi.yaml` (`/api/v1`), both vendored at server **3.1.1**. Read the
+  default surface) and `docs/openapi.yaml` (`/api/v1`), both vendored at server **3.2.0**. Read the
   **v2** spec when adding a resource — v1 has no namespace axis, so its schemas omit the
   `namespace_type` / `namespace_id` fields every model needs. Where the live server
   diverges from the generated spec — notably the **two response envelopes** the spec omits:

@@ -617,7 +617,7 @@ func TestRecordedVersionMismatchFails(t *testing.T) {
 	repo := stageRepo(t)
 	edit(t, filepath.Join(repo, "docs", "versioning.md"),
 		"<!-- contract-version:",
-		"<!-- contract-version: 3.1.1 -->",
+		"<!-- contract-version: 3.2.0 -->",
 		"<!-- contract-version: 2.0.0 -->")
 
 	assertFinding(t, runLocal(t, repo), "docs/versioning.md records server 2.0.0")

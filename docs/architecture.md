@@ -53,7 +53,7 @@ turns each of those into an error ([#32](https://github.com/octoverse-id/octonom
 ## Conventions that keep it faithful
 
 - **Contract reference:** `docs/openapi-v2.yaml` (`/api/v2`, the default surface) and
-  `docs/openapi.yaml` (`/api/v1`) are vendored from the server, both at release 3.1.1. Types mirror
+  `docs/openapi.yaml` (`/api/v1`) are vendored from the server, both at release 3.2.0. Types mirror
   them field-for-field; read the **v2** spec when adding a resource, since v1's schemas have no
   namespace fields. Where they disagree with the running server, the server wins and the SDK follows
   it. The divergences **begin** with the two response envelopes the generated spec omits — the server

@@ -18,8 +18,8 @@ name: Contract drift
 #
 # WHAT IT DOES ON DRIFT: writes the report to the job summary and fails. It does
 # NOT open an issue, and that was a decision rather than an omission. Drift here
-# is usually one recurring fact ("the server is at 3.2.0, we vendor 3.1.1") that
-# stays true every week until someone refreshes the contracts, so an issue-opening
+# is usually one recurring fact ("the server publishes a contract newer than the
+# one we vendor") that stays true every week until someone refreshes the contracts, so an issue-opening
 # job needs search-and-update logic to avoid filing the same issue weekly -- and
 # the failure notification already reaches the owner named above. Revisit if this
 # ever has more than one watcher.

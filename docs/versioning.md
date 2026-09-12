@@ -9,9 +9,9 @@ source of truth for how a change maps to a version bump.
 | ------- | ----- | ------- |
 | **Module path** | `module` line in `go.mod` | Which release line you are on. The `/v2` suffix is what makes the two lines *different modules* to Go. |
 | **SDK version** | `Version` in `version.go` + git tag `vX.Y.Z` | Canonical SemVer for the SDK and CHANGELOG. Go modules resolve versions from git tags. |
-| **Targeted server contract** | this document + the vendored `docs/openapi-v2.yaml` / `docs/openapi.yaml` | Which Octonomy REST contract the SDK is written against. **Both surfaces track server `3.1.1`**: `/api/v2` is the default, `/api/v1` is selectable via `Config.APIVersion`. |
+| **Targeted server contract** | this document + the vendored `docs/openapi-v2.yaml` / `docs/openapi.yaml` | Which Octonomy REST contract the SDK is written against. **Both surfaces track server `3.2.0`**: `/api/v2` is the default, `/api/v1` is selectable via `Config.APIVersion`. |
 
-<!-- contract-version: 3.1.1 -->
+<!-- contract-version: 3.2.0 -->
 
 > The marker above is read by [`tools/contractdrift`](../tools/contractdrift) and must name the same
 > server release as `info.version` in both vendored specs. It exists because this row is prose: a
