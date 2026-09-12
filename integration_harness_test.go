@@ -176,18 +176,28 @@ func (h harness) merchantClient(t *testing.T, m merchant) *octonomy.Client {
 	return h.client(t, m.token, "v2-integration-"+m.id)
 }
 
-// scoped is the option pair every namespaced read in this suite carries.
+// scoped is the option set every read in this suite carries.
 //
-// Both, always. Namespace isolation sits below application on the server, so a
-// namespaced bodyless request that names no application is refused -- by the
-// SDK's own checkScopeCoherence before it is even sent. Spelling the pair once
-// keeps a probe from accidentally asserting "the SDK refused my call" instead of
-// "the server refused my read".
-func (h harness) scoped(namespaceID string) []octonomy.RequestOption {
-	return []octonomy.RequestOption{
-		octonomy.WithNamespace(h.namespaceType, namespaceID),
-		octonomy.WithApplication(h.applicationID),
+// Namespace AND application, always, on a namespaced read: namespace isolation
+// sits below application on the server, so a namespaced bodyless request that
+// names no application is refused -- by the SDK's own checkScopeCoherence before
+// it is even sent. Spelling the pair once keeps a probe from accidentally
+// asserting "the SDK refused my call" instead of "the server refused my read".
+//
+// An EMPTY namespaceID means the global namespace, which the server selects by
+// the absence of the headers -- so the option is omitted rather than sent blank
+// (WithNamespace rejects a blank id outright, and rightly). The application is
+// still named, because the global fixture's rows are application-scoped.
+//
+// It returns a fresh slice every call, so a caller may append to the result
+// without reaching into anything shared.
+func (h harness) scoped(namespaceID string, extra ...octonomy.RequestOption) []octonomy.RequestOption {
+	opts := make([]octonomy.RequestOption, 0, 2+len(extra))
+	if namespaceID != "" {
+		opts = append(opts, octonomy.WithNamespace(h.namespaceType, namespaceID))
 	}
+	opts = append(opts, octonomy.WithApplication(h.applicationID))
+	return append(opts, extra...)
 }
 
 // namespaceFixture is one merchant's worth of rows: enough that every read
@@ -221,7 +231,15 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)
 	defer cancel()
 
-	ns := octonomy.WithNamespace(h.namespaceType, namespaceID)
+	// An empty namespaceID seeds the GLOBAL namespace, which the server selects
+	// by the absence of the headers. The include_global runs in the isolation
+	// matrix need a global counterpart of every fixture row, and duplicating this
+	// function to make three global rows would be three more places to forget a
+	// cleanup.
+	var ns []octonomy.RequestOption
+	if namespaceID != "" {
+		ns = append(ns, octonomy.WithNamespace(h.namespaceType, namespaceID))
+	}
 
 	// EACH CLEANUP IS REGISTERED THE MOMENT ITS ROW EXISTS, never in one block at
 	// the end. Every create below is followed by t.Fatalf on failure, and a
@@ -251,7 +269,7 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 		ApplicationID: octonomy.String(h.applicationID),
 		Name:          "integration " + namespaceID,
 		Slug:          uniqueSlug("int-vocab"),
-	}, ns)
+	}, ns...)
 	if err != nil {
 		if octonomy.IsNamespacedWritesDisabled(err) {
 			t.Fatalf("namespaced writes are disabled on this deployment: the harness must set OCTONOMY_NAMESPACE_WRITE_ENABLED=true (the server default is false): %v", err)
@@ -267,7 +285,7 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 		Name:          "integration " + namespaceID,
 		Slug:          uniqueSlug("int-tag"),
 		Type:          "label",
-	}, ns)
+	}, ns...)
 	if err != nil {
 		t.Fatalf("seed %s: Tags.Create: %v", namespaceID, err)
 	}
@@ -280,7 +298,7 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 		TagID:         tag.ID,
 		Name:          "integration alias " + namespaceID,
 		Slug:          uniqueSlug("int-alias"),
-	}, ns)
+	}, ns...)
 	if err != nil {
 		t.Fatalf("seed %s: Aliases.Create: %v", namespaceID, err)
 	}
@@ -305,7 +323,7 @@ func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) name
 		ApplicationID: h.applicationID,
 		TagIDs:        []string{tag.ID},
 		AssignedBy:    octonomy.String("v2-integration"),
-	}, ns); err != nil {
+	}, ns...); err != nil {
 		t.Fatalf("seed %s: Resources.ReplaceTags: %v", namespaceID, err)
 	}
 
@@ -355,41 +373,45 @@ func (h harness) rawPost(ctx context.Context, t *testing.T, token, namespaceID, 
 	return resp.StatusCode, payload
 }
 
-// requireFilteredRefusal asserts that err is the server declining to produce a
-// row the caller is not entitled to -- and NOT any of the other ways a request
-// can fail.
+// requireFilteredOutcome asserts that a read which should not have produced the
+// row declined in exactly the way THIS endpoint declines -- not merely that
+// something went wrong.
 //
 // "Any error counts as isolation" is the trap this closes, and it is a wide one,
-// because the SDK turns EVERY non-2xx into an *APIError by design. Under a
-// bare AsAPIError check a crashed container's 500, a proxy's 502, an unrouted
-// HTML 404 (CodeUnexpectedStatus), an expired token's 401 and an unrelated
-// validation failure all read as "merchant A could not see merchant B" -- so the
-// isolation assertions would go green against a server that had stopped serving
+// because the SDK turns EVERY non-2xx into an *APIError by design. Under a bare
+// AsAPIError check a crashed container's 500, a proxy's 502, an unrouted HTML
+// 404 (CodeUnexpectedStatus), an expired token's 401 and an unrelated validation
+// failure all read as "merchant A could not see merchant B" -- so the isolation
+// assertions would go green against a server that had stopped serving
 // altogether.
 //
-// So the accepted set is exactly the two shapes a correctly filtered read
-// produces on this server:
-//
-//	not_found         a row addressed by id that is not in the caller's partition
-//	validation_error  tag resolution, which answers an unmatched slug 400 rather
-//	                  than 404 (deliberately indistinguishable from "not
-//	                  authorized to see it", so the endpoint discloses nothing)
-//
-// List routes answer 200 with the row absent and reach this function not at all.
-// Everything else -- including forbidden, which would mean the request never
-// reached the filter, and is asserted separately where it IS the expected
-// outcome -- is a failure.
-func requireFilteredRefusal(t *testing.T, err error, what string) {
+// A shared two-code allowlist is not enough either, which is the second half of
+// the same lesson: it would accept a list route that began answering 400, or an
+// object lookup that began answering 409 not_found, both of which are the server
+// changing behaviour rather than filtering correctly. The expected shape is
+// therefore a property of the probe, and both halves of it -- status AND code --
+// are asserted.
+func requireFilteredOutcome(t *testing.T, err error, what string, want filteredOutcome) {
 	t.Helper()
-	apiErr := requireAPIError(t, err, what)
-	switch apiErr.Code {
-	case octonomy.CodeNotFound, octonomy.CodeValidation:
-	default:
-		t.Errorf("%s: a filtered read failed with {status:%d code:%q}, want %q or %q -- this is not the server declining to show a row, it is something else going wrong, and accepting it here would let the isolation assertion pass against a broken server",
-			what, apiErr.StatusCode, apiErr.Code, octonomy.CodeNotFound, octonomy.CodeValidation)
+
+	if want == filteredEmpty {
+		// No error at all: the route answers 200 with the row simply absent, and
+		// the caller has already checked that it was absent.
+		if err != nil {
+			t.Errorf("%s: a filtered read failed with %v, want a 200 whose page does not contain the row", what, err)
+		}
+		return
 	}
-	if apiErr.StatusCode >= 500 {
-		t.Errorf("%s: a filtered read got HTTP %d: a server error is not evidence of isolation", what, apiErr.StatusCode)
+
+	wantCode, wantStatus := octonomy.CodeNotFound, 404
+	if want == filteredValidation {
+		wantCode, wantStatus = octonomy.CodeValidation, 400
+	}
+
+	apiErr := requireAPIError(t, err, what)
+	if apiErr.Code != wantCode || apiErr.StatusCode != wantStatus {
+		t.Errorf("%s: a filtered read failed with {status:%d code:%q}, want {%d %q} -- this endpoint declines an out-of-namespace row one specific way, and anything else is the server doing something other than filtering",
+			what, apiErr.StatusCode, apiErr.Code, wantStatus, wantCode)
 	}
 }
 
@@ -457,4 +479,13 @@ func detailStrings(details map[string]any, field string) []string {
 // joinDetails renders a whole details map for a failure message.
 func joinDetails(details map[string]any) string {
 	return fmt.Sprintf("%#v", details)
+}
+
+// describeScope names a fixture's partition for a failure message. seed("")
+// creates rows in the global namespace, where "merchant " would be wrong.
+func describeScope(namespaceID string) string {
+	if namespaceID == "" {
+		return "global"
+	}
+	return "merchant-" + namespaceID
 }

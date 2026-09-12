@@ -88,21 +88,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     makes and is not implied by the others — a token reading its own namespace exercises the filter
     whatever the permission layer does — so a suite with only the filter runs stays green through a
     permission regression on any individual route. Both directions verified to fail by mutation.
-  - **An error is not evidence of isolation unless it is the right error.** The SDK turns every
-    non-2xx into an `*APIError` by design, so a bare "did it error?" check would read a crashed
-    container's 500, a proxy 502 and an unrouted HTML 404 as a successful boundary. The negatives
-    accept only the two shapes a correctly filtered read produces — `not_found` for a row addressed
-    by id, `validation_error` for resolution — and the authorization run requires a 403 `forbidden`
-    specifically.
-  - **`include_global` is fail-closed, proved with a token that has no global authority.** The option
-    widens what a request ASKS for; whether global rows come back depends on the grant. A merchant
-    token that asks for them gets a 200, its own rows, and nothing in the response saying the opt-in
-    was declined — unfalsifiable from a fixture, and unreachable with a wildcard token, for which the
-    opt-in always succeeds. A second merchant is seeded here too, because the parameter widens a read
-    to the tenant-shared rows and **never across the namespace axis**: without another merchant's row
-    in the database, a server that had come to read it as "all partitions" would satisfy every other
-    assertion in the test. Each case reads one response and asks every membership question of it,
-    rather than making a separate request per row and describing them as one.
+  - **An error is not evidence of isolation unless it is the right error, from the right route.** The
+    SDK turns every non-2xx into an `*APIError` by design, so a bare "did it error?" check would read
+    a crashed container's 500, a proxy 502 and an unrouted HTML 404 as a successful boundary. Nor is
+    a shared allowlist enough: each endpoint declares how *it* declines an out-of-namespace row — a
+    200 with the row absent, a 404 `not_found`, or resolution's 400 `validation_error` — and both
+    status and code are asserted against that, so a list route that began answering 400, or an object
+    lookup answering 409, is a failure rather than a pass. The authorization runs require a 403
+    `forbidden` specifically.
+  - **`include_global` is fail-closed, proved with a token that has no global authority — and proved
+    on every read endpoint, not one.** The option widens what a request ASKS for; whether global rows
+    come back depends on the grant. A merchant token that asks for them gets a 200, its own rows, and
+    nothing in the response saying the opt-in was declined — unfalsifiable from a fixture, and
+    unreachable with a wildcard token, for which the opt-in always succeeds. It runs as a matrix over
+    the same thirteen endpoints because the server threads `request_include_global` through the tag
+    detail, resolution, vocabulary, alias, resource and audit views *separately*, so one view can
+    misuse it while `Tags.List` stays correct. Four runs per endpoint: the default read excludes the
+    global rows; an authorized token can opt in (the control, without which "the merchant saw
+    nothing" also passes on a route that ignores the option); the merchant token still sees none; and
+    the option widens to **global, never to every namespace** — that last asserted with the wildcard
+    token, which *is* authorized for the second merchant, so authorization cannot be what withholds
+    the row.
   - **Assignment idempotence: 201 once, 200 forever after, same row.** The status split is the only
     thing `AssignmentService.Create`'s documented idempotency rests on, and `doData` deliberately
     surfaces no 2xx status — so this is the suite's one assertion made off the wire rather than

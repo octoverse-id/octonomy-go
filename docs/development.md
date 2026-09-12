@@ -124,7 +124,7 @@ says:
 | Test | What it pins |
 |---|---|
 | `TestIntegration_NamespaceIsolation` | A merchant-A client never sees a merchant-B row, on **every** read method this SDK exposes |
-| `TestIntegration_IncludeGlobalFailsClosed` | `WithIncludeGlobal` widens what is *asked for*; a token with no global authority still sees no global rows |
+| `TestIntegration_IncludeGlobalFailsClosed` | `WithIncludeGlobal` widens what is *asked for*; a token with no global authority still sees no global rows — on **every** read method, because the server threads the flag through each view separately |
 | `TestIntegration_AssignmentIdempotence` | `201` once, then `200` returning the same row — the contract `AssignmentService.Create` documents |
 | `TestIntegration_BulkPartialFailure` | A partial bulk assign writes nothing, and an out-of-scope tag is reported identically to a nonexistent one |
 | `TestIntegration_DeactivationCascade` | `Delete` deactivates rather than deletes, and a tag's aliases go with it |
@@ -157,7 +157,14 @@ only the authorization run stays green through a lost namespace filter.
 **A new read method needs a probe.** `readProbes` in `integration_suite_test.go` lists every
 authenticated read in the SDK and carries the reasoning for the one deliberate exclusion (the health
 probes, which are unauthenticated and outside the namespace axis). A read endpoint nobody probed is
-where a cross-merchant leak lives.
+where a cross-merchant leak lives. Two tests share that table through `runProbeMatrix`, so one entry
+buys coverage in both.
+
+Each probe also declares **how its endpoint declines a row that is out of scope** — a 200 with the row
+absent, a 404 `not_found`, or resolution's 400 `validation_error` — and the negatives assert that
+exact status and code. "It errored" is not evidence of isolation: the SDK turns every non-2xx into an
+`*APIError` by design, so a crashed container and a working namespace filter would otherwise look
+identical.
 
 **Four `Is*` helpers are out of reach here and are listed rather than omitted** — the doc comment on
 `TestIntegration_ErrorEnvelopes` names each one and why: two are deployment kill-switches this

@@ -64,8 +64,40 @@ const nilUUID = "00000000-0000-0000-0000-000000000000"
 // is only whether the row came back.
 type readProbe struct {
 	name string
-	find func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error)
+
+	// filtered is what THIS endpoint does when the request is authorized but the
+	// row is outside the caller's namespace. It is per-probe rather than a
+	// shared allowlist because the three answers are not interchangeable, and
+	// accepting any of them everywhere re-opens the hole a shared "did it
+	// error?" check had: a list route that started answering 400, or an object
+	// lookup that started answering 409, would read as correct filtering.
+	filtered filteredOutcome
+
+	// find answers the probe's question. extra carries per-run options -- today
+	// WithIncludeGlobal -- on top of the namespace and application pair every
+	// read in this suite sends.
+	find func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error)
 }
+
+// filteredOutcome is how one endpoint declines to show a row that is out of the
+// caller's namespace. Verified against server 3.2.0, route by route.
+type filteredOutcome int
+
+const (
+	// filteredEmpty: 200 with the row simply absent. Every list and filter
+	// route, plus the audit routes, which query by id without loading the row.
+	filteredEmpty filteredOutcome = iota
+
+	// filteredNotFound: 404 not_found. A row addressed by id -- or a route whose
+	// PARENT is addressed by id, which is refused the same way.
+	filteredNotFound
+
+	// filteredValidation: 400 validation_error. Resolution only, and
+	// deliberately: it answers "no match" and "not authorized to see the match"
+	// identically so the endpoint discloses nothing. TagService.Resolve
+	// documents it, and it is the one a caller is most likely to get wrong.
+	filteredValidation
+)
 
 // readProbes covers every authenticated read method this SDK exposes.
 //
@@ -101,15 +133,16 @@ func readProbes(h harness) []readProbe {
 
 	return []readProbe{
 		{
-			name: "Tags.List",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+			name:     "Tags.List",
+			filtered: filteredEmpty,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
 				// Filtered by the fixture's own slug rather than paged: an empty
 				// page under an exact filter means the row is genuinely not
 				// visible, with no page-boundary caveat at all.
 				page, err := c.Tags.List(ctx, &octonomy.TagListParams{
 					Slug:        octonomy.String(want.tag.Slug),
 					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
-				}, h.scoped(readNS)...)
+				}, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -122,9 +155,10 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Tags.Get",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
-				row, err := c.Tags.Get(ctx, want.tag.ID, h.scoped(readNS)...)
+			name:     "Tags.Get",
+			filtered: filteredNotFound,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
+				row, err := c.Tags.Get(ctx, want.tag.ID, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -132,12 +166,13 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Tags.Resolve",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+			name:     "Tags.Resolve",
+			filtered: filteredValidation,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
 				// The slug, not the id: resolution is the one read that takes a
 				// caller-chosen name, which makes it the one a caller could most
 				// plausibly use to probe another merchant's vocabulary.
-				resolved, err := c.Tags.Resolve(ctx, want.tag.Slug, nil, h.scoped(readNS)...)
+				resolved, err := c.Tags.Resolve(ctx, want.tag.Slug, nil, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -145,11 +180,12 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Tags.ListAliases",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+			name:     "Tags.ListAliases",
+			filtered: filteredNotFound,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
 				page, err := c.Tags.ListAliases(ctx, want.tag.ID, &octonomy.TagListAliasesParams{
 					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
-				}, h.scoped(readNS)...)
+				}, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -162,11 +198,12 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Tags.ListResources",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+			name:     "Tags.ListResources",
+			filtered: filteredNotFound,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
 				page, err := c.Tags.ListResources(ctx, want.tag.ID, &octonomy.TagListResourcesParams{
 					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
-				}, h.scoped(readNS)...)
+				}, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -179,11 +216,12 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Tags.ListAuditLogs",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+			name:     "Tags.ListAuditLogs",
+			filtered: filteredEmpty,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
 				page, err := c.Tags.ListAuditLogs(ctx, want.tag.ID, &octonomy.TagListAuditLogsParams{
 					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
-				}, h.scoped(readNS)...)
+				}, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -193,13 +231,14 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Aliases.List",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+			name:     "Aliases.List",
+			filtered: filteredEmpty,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
 				// Exact slug filter, same reasoning as Tags.List.
 				page, err := c.Aliases.List(ctx, &octonomy.TagAliasListParams{
 					Slug:        octonomy.String(want.alias.Slug),
 					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
-				}, h.scoped(readNS)...)
+				}, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -212,9 +251,10 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Aliases.Get",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
-				row, err := c.Aliases.Get(ctx, want.alias.ID, h.scoped(readNS)...)
+			name:     "Aliases.Get",
+			filtered: filteredNotFound,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
+				row, err := c.Aliases.Get(ctx, want.alias.ID, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -222,8 +262,9 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Vocabularies.List",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+			name:     "Vocabularies.List",
+			filtered: filteredEmpty,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
 				// VocabularyListParams exposes no slug or free-text filter (#36
 				// covers the gap), so this is the one probe that must WALK the
 				// collection rather than narrow it. Each stops on the server's
@@ -232,7 +273,7 @@ func readProbes(h harness) []readProbe {
 				found := false
 				_, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: scopedLimit},
 					func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Vocabulary], error) {
-						return c.Vocabularies.List(ctx, &octonomy.VocabularyListParams{ListOptions: o}, h.scoped(readNS)...)
+						return c.Vocabularies.List(ctx, &octonomy.VocabularyListParams{ListOptions: o}, h.scoped(readNS, extra...)...)
 					},
 					func(row octonomy.Vocabulary) error {
 						if row.ID == want.vocabulary.ID {
@@ -247,9 +288,10 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Vocabularies.Get",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
-				row, err := c.Vocabularies.Get(ctx, want.vocabulary.ID, h.scoped(readNS)...)
+			name:     "Vocabularies.Get",
+			filtered: filteredNotFound,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
+				row, err := c.Vocabularies.Get(ctx, want.vocabulary.ID, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -257,11 +299,12 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Resources.ListTags",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+			name:     "Resources.ListTags",
+			filtered: filteredEmpty,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
 				page, err := c.Resources.ListTags(ctx, want.resourceType, want.resourceID,
 					&octonomy.ResourceListTagsParams{ListOptions: octonomy.ListOptions{Limit: scopedLimit}},
-					h.scoped(readNS)...)
+					h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -274,11 +317,12 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "Resources.ListAuditLogs",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+			name:     "Resources.ListAuditLogs",
+			filtered: filteredEmpty,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
 				page, err := c.Resources.ListAuditLogs(ctx, want.resourceType, want.resourceID,
 					&octonomy.ResourceListAuditLogsParams{ListOptions: octonomy.ListOptions{Limit: scopedLimit}},
-					h.scoped(readNS)...)
+					h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -286,13 +330,14 @@ func readProbes(h harness) []readProbe {
 			},
 		},
 		{
-			name: "AuditLogs.List",
-			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture) (bool, error) {
+			name:     "AuditLogs.List",
+			filtered: filteredEmpty,
+			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
 				page, err := c.AuditLogs.List(ctx, &octonomy.AuditLogListParams{
 					EntityType:  octonomy.String("tag"),
 					EntityID:    octonomy.String(want.tag.ID),
 					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
-				}, h.scoped(readNS)...)
+				}, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
@@ -326,6 +371,70 @@ const (
 	// inferred from one.
 	outcomeForbidden
 )
+
+// probeRun is one row of a read matrix: who reads, where, what they are looking
+// for, and what they are entitled to get.
+type probeRun struct {
+	name string
+
+	// client and readNS are the reader; want is the row looked for.
+	client *octonomy.Client
+	readNS string
+	want   namespaceFixture
+
+	// extra carries per-run request options on top of the namespace and
+	// application pair every read in this suite sends.
+	extra  []octonomy.RequestOption
+	expect outcome
+}
+
+// runProbeMatrix asks every read endpoint this SDK exposes every question in
+// runs, and holds each answer to what that endpoint is supposed to do.
+//
+// One matrix rather than a handful of hand-written cases, because the property
+// under test is about the READ SURFACE and not about any endpoint: a rule that
+// holds on twelve routes and not the thirteenth is not a rule a caller can rely
+// on, and the thirteenth is where the leak lives.
+func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+	t.Helper()
+
+	for _, probe := range readProbes(h) {
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				t.Run(run.name, func(t *testing.T) {
+					found, err := probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+
+					switch run.expect {
+					case outcomeVisible:
+						if err != nil {
+							t.Fatalf("%s: %v", probe.name, err)
+						}
+						if !found {
+							t.Fatalf("%s did not return the row it was entitled to see: the negative runs of this probe prove nothing", probe.name)
+						}
+
+					case outcomeFiltered:
+						requireFilteredOutcome(t, err, probe.name, probe.filtered)
+						if found {
+							t.Errorf("%s returned a %s row to a client reading %s: this is a cross-scope data leak",
+								probe.name, describeScope(run.want.namespaceID), describeScope(run.readNS))
+						}
+
+					case outcomeForbidden:
+						apiErr := requireAPIError(t, err, probe.name)
+						if !octonomy.IsForbidden(err) || apiErr.StatusCode != 403 {
+							t.Errorf("%s: reaching into another merchant gave {status:%d code:%q}, want {403 %q} -- the permission layer must refuse the request, not leave it to the namespace filter",
+								probe.name, apiErr.StatusCode, apiErr.Code, octonomy.CodeForbidden)
+						}
+						if found {
+							t.Errorf("%s returned a %s row on a request that should have been refused", probe.name, describeScope(run.want.namespaceID))
+						}
+					}
+				})
+			}
+		})
+	}
+}
 
 // TestIntegration_NamespaceIsolation is the 2am-Friday test.
 //
@@ -368,14 +477,7 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 	fixtureA := h.seed(t, wildcard, h.merchantA.id)
 	fixtureB := h.seed(t, wildcard, h.merchantB.id)
 
-	runs := []struct {
-		name string
-		// client and readNS are the reader; want is the row looked for.
-		client *octonomy.Client
-		readNS string
-		want   namespaceFixture
-		expect outcome
-	}{
+	runProbeMatrix(ctx, t, h, []probeRun{
 		{
 			name:   "a wildcard token reading merchant B sees merchant B",
 			client: wildcard,
@@ -426,50 +528,11 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 			want:   fixtureB,
 			expect: outcomeForbidden,
 		},
-	}
-
-	for _, probe := range readProbes(h) {
-		t.Run(probe.name, func(t *testing.T) {
-			for _, run := range runs {
-				t.Run(run.name, func(t *testing.T) {
-					found, err := probe.find(ctx, run.client, run.readNS, run.want)
-
-					switch run.expect {
-					case outcomeVisible:
-						if err != nil {
-							t.Fatalf("%s: %v", probe.name, err)
-						}
-						if !found {
-							t.Fatalf("%s did not return the row it was entitled to see: the negative runs of this probe prove nothing", probe.name)
-						}
-
-					case outcomeFiltered:
-						if err != nil {
-							requireFilteredRefusal(t, err, probe.name)
-						}
-						if found {
-							t.Errorf("%s returned a merchant-%s row to a client reading merchant %s: this is a cross-merchant data leak",
-								probe.name, run.want.namespaceID, run.readNS)
-						}
-
-					case outcomeForbidden:
-						apiErr := requireAPIError(t, err, probe.name)
-						if !octonomy.IsForbidden(err) || apiErr.StatusCode != 403 {
-							t.Errorf("%s: reaching into another merchant gave {status:%d code:%q}, want {403 %q} -- the permission layer must refuse the request, not leave it to the namespace filter",
-								probe.name, apiErr.StatusCode, apiErr.Code, octonomy.CodeForbidden)
-						}
-						if found {
-							t.Errorf("%s returned a merchant-%s row on a request that should have been refused", probe.name, run.want.namespaceID)
-						}
-					}
-				})
-			}
-		})
-	}
+	})
 }
 
 // TestIntegration_IncludeGlobalFailsClosed pins the one option whose failure
-// mode is silent.
+// mode is silent, across the whole read surface.
 //
 // WithIncludeGlobal widens what a namespaced read ASKS for. Whether the global
 // rows actually come back is decided separately, by whether the token holds
@@ -479,9 +542,28 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 // the opt-in was declined.
 //
 // That is unfalsifiable from a fixture: a canned server returns whatever the
-// fixture says, and a wildcard token makes the opt-in always succeed, so the
+// fixture says, and a WILDCARD token makes the opt-in always succeed, so the
 // fail-closed branch would never execute. It needs a token that genuinely cannot
 // see global rows, which is why the harness mints exact grants.
+//
+// It runs as a matrix over every read endpoint for the same reason the isolation
+// test does, and it is not a theoretical concern here: server 3.2.0 threads
+// request_include_global through the tag detail, resolution, vocabulary, alias,
+// resource and audit views SEPARATELY. One view can misuse the flag while
+// Tags.List stays correct, and a single-endpoint test would never see it.
+//
+// The four runs, and why each is needed:
+//
+//	default             a namespaced read excludes global rows with no option at
+//	                    all -- otherwise the parameter means nothing
+//	authorized opt-in   the CONTROL. Without it "the merchant saw no global row"
+//	                    also passes on a route that ignores the option outright
+//	fail-closed         the assertion: an exact merchant grant asking for global
+//	                    rows still gets none
+//	no axis widening    global, never "every namespace". Asserted with the
+//	                    WILDCARD token, which is authorized for merchant B, so
+//	                    authorization cannot be what withholds that row -- only
+//	                    the meaning of the parameter can
 func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
 	h := loadHarness(t)
 	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)
@@ -489,110 +571,59 @@ func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
 
 	wildcard := h.wildcard(t)
 	clientA := h.merchantClient(t, h.merchantA)
+
 	fixtureA := h.seed(t, wildcard, h.merchantA.id)
-
-	// Merchant B exists here for one reason: `include_global` must widen a read
-	// to the GLOBAL rows, never to every namespace. Without a second merchant's
-	// row in the database, a server that had come to read the parameter as "all
-	// partitions" would satisfy every other assertion in this test -- the default
-	// read still excludes global, the wildcard control still finds it, and the
-	// merchant token is still clamped back to its own namespace by
-	// authorization. Nothing would notice.
 	fixtureB := h.seed(t, wildcard, h.merchantB.id)
+	// Rows with no namespace at all: the tenant-shared set the option exists to
+	// reach.
+	fixtureGlobal := h.seed(t, wildcard, "")
 
-	// A tenant-shared global row: no namespace, no application. It is assignable
-	// and visible tenant-wide, which is exactly what makes "can this merchant
-	// opt into seeing it" a real question.
-	globalTag, err := wildcard.Tags.Create(ctx, octonomy.TagCreate{
-		Name: "integration global",
-		Slug: uniqueSlug("int-global-tag"),
-		Type: "label",
-	})
-	if err != nil {
-		t.Fatalf("Tags.Create (global): %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-		defer cancel()
-		if err := wildcard.Tags.Delete(cleanupCtx, globalTag.ID); err != nil {
-			t.Errorf("Tags.Delete (global): %v", err)
-		}
-	})
+	includeGlobal := []octonomy.RequestOption{octonomy.WithIncludeGlobal()}
 
-	// visibleTags runs ONE namespaced list in merchant A and returns the set of
-	// tag ids it yielded.
-	//
-	// One request, one set, every membership question answered from it. The
-	// alternative -- a `sees(id)` helper called once per id -- makes three
-	// separate requests while the assertions read as if they were describing a
-	// single response, so "the SAME request returned A but not global" would be
-	// a claim the code never actually checked.
-	//
-	// It WALKS rather than taking one page: merchant A's namespace is small, but
-	// "the leaked row was on page two" must not be able to read as "the leaked
-	// row was absent", and TagListParams has no filter that covers three
-	// different slugs at once.
-	visibleTags := func(t *testing.T, c *octonomy.Client, opts ...octonomy.RequestOption) map[string]bool {
-		t.Helper()
-		seen := map[string]bool{}
-		scoped := append(h.scoped(h.merchantA.id), opts...)
-		if _, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 200},
-			func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Tag], error) {
-				return c.Tags.List(ctx, &octonomy.TagListParams{ListOptions: o}, scoped...)
-			},
-			func(row octonomy.Tag) error {
-				seen[row.ID] = true
-				return nil
-			}); err != nil {
-			t.Fatalf("Tags.List (merchant A): %v", err)
-		}
-		return seen
-	}
-
-	t.Run("a namespaced read excludes global rows by default", func(t *testing.T) {
-		seen := visibleTags(t, wildcard)
-		if seen[globalTag.ID] {
-			t.Error("a namespaced list returned a global row without include_global: the parameter would then be meaningless")
-		}
-		if !seen[fixtureA.tag.ID] {
-			t.Error("the same read returned none of merchant A's own rows, so it proves nothing about what it excluded")
-		}
-	})
-
-	t.Run("an authorized token can opt into global rows", func(t *testing.T) {
-		// The control for the assertion below. Without it, "merchant A sees no
-		// global row" also passes on a server that ignores include_global
-		// entirely, and the fail-closed claim would be resting on a broken
-		// feature rather than a working guard.
-		seen := visibleTags(t, wildcard, octonomy.WithIncludeGlobal())
-		if !seen[globalTag.ID] {
-			t.Error("a wildcard token asking for include_global did not get the global row: the opt-in is not working at all")
-		}
-		// GLOBAL, not every namespace -- and this token is authorized for
-		// merchant B, so authorization cannot be what withholds it. Only the
-		// meaning of the parameter can.
-		if seen[fixtureB.tag.ID] {
-			t.Error("include_global returned a row from ANOTHER MERCHANT: the parameter widens a read to the tenant-shared rows, never across the namespace axis")
-		}
-	})
-
-	t.Run("an exact merchant grant cannot opt into global rows", func(t *testing.T) {
-		// One request; three things asserted about it.
-		seen := visibleTags(t, clientA, octonomy.WithIncludeGlobal())
-		if seen[globalTag.ID] {
-			t.Error("an exact merchant grant saw a global row via include_global: the opt-in must be fail-closed, and a merchant token has no global authority to widen with")
-		}
-		if seen[fixtureB.tag.ID] {
-			t.Error("an exact merchant grant saw another merchant's row via include_global")
-		}
-		// The same response must still have carried merchant A's OWN rows.
-		// Without this the two assertions above pass whenever the request
-		// failed, was refused, or returned an empty page -- none of which is the
-		// fail-closed behaviour being claimed, which is that the global rows are
-		// withheld and the read otherwise works.
-		if !seen[fixtureA.tag.ID] {
-			t.Error("the same include_global response carried none of merchant A's own rows: fail-closed means the global rows are withheld, not that the read fails")
-		}
+	runProbeMatrix(ctx, t, h, []probeRun{
+		{
+			name:   "a namespaced read excludes the global rows by default",
+			client: wildcard,
+			readNS: h.merchantA.id,
+			want:   fixtureGlobal,
+			expect: outcomeFiltered,
+		},
+		{
+			name:   "an authorized token can opt into the global rows",
+			client: wildcard,
+			readNS: h.merchantA.id,
+			want:   fixtureGlobal,
+			extra:  includeGlobal,
+			expect: outcomeVisible,
+		},
+		{
+			name:   "an exact merchant grant cannot opt into the global rows",
+			client: clientA,
+			readNS: h.merchantA.id,
+			want:   fixtureGlobal,
+			extra:  includeGlobal,
+			expect: outcomeFiltered,
+		},
+		{
+			name:   "include_global does not widen a merchant-A read to merchant B",
+			client: wildcard,
+			readNS: h.merchantA.id,
+			want:   fixtureB,
+			extra:  includeGlobal,
+			expect: outcomeFiltered,
+		},
+		{
+			// The read still works. Without this the three negatives above pass
+			// whenever the request failed or came back empty -- none of which is
+			// the fail-closed behaviour being claimed, which is that the global
+			// rows are withheld and the read is otherwise normal.
+			name:   "the same opt-in read still returns merchant A's own rows",
+			client: clientA,
+			readNS: h.merchantA.id,
+			want:   fixtureA,
+			extra:  includeGlobal,
+			expect: outcomeVisible,
+		},
 	})
 }
 
@@ -847,8 +878,13 @@ func TestIntegration_DeactivationCascade(t *testing.T) {
 	// Two aliases, not one. A cascade that deactivated only the first alias it
 	// found would pass a single-alias test.
 	//
-	// They need no cleanup of their own: the tag deletion above cascades to
-	// them, which is the very property under test.
+	// Each gets its OWN cleanup, and leaning on the tag deletion to cascade to
+	// them would be exactly wrong: the cascade is the thing under test, so on the
+	// failure path this cleanup has to run it is by definition not working. Worse,
+	// it could not run even in principle -- deactivate_tag returns early for an
+	// already-inactive tag (octonomy/tags/services.py:348-354) and never reaches
+	// the alias sweep, so the tag cleanup below cannot repair an alias the server
+	// left active. LIFO puts these before it.
 	aliasIDs := make([]string, 0, 2)
 	for i := 0; i < 2; i++ {
 		alias, err := clientA.Aliases.Create(ctx, octonomy.TagAliasCreate{
@@ -861,6 +897,14 @@ func TestIntegration_DeactivationCascade(t *testing.T) {
 			t.Fatalf("Aliases.Create: %v", err)
 		}
 		aliasIDs = append(aliasIDs, alias.ID)
+		id := alias.ID
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cancel()
+			if err := clientA.Aliases.Delete(cleanupCtx, id, scoped...); err != nil {
+				t.Errorf("cleanup: Aliases.Delete: %v", err)
+			}
+		})
 	}
 
 	// activeAliases counts what the default list returns: the server filters to
