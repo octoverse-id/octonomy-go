@@ -433,8 +433,9 @@ func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
 	_, callErr := client.Tags.Get(context.Background(), "ERRID")
 
 	observation := ErrorObservation{
-		Sent:    errorObject(body),
-		Helpers: map[string][]string{},
+		Sent:         errorObject(body),
+		Helpers:      map[string][]string{},
+		HelperPrefix: map[string]string{},
 	}
 	if len(rec.requests) > 0 {
 		observation.Prefix = versionPrefix(rec.requests[0].URL.Path)
@@ -452,7 +453,8 @@ func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
 
 	// One drive per helper, each answered with that helper's own code.
 	for _, helper := range semanticHelpers {
-		err := driveHelperCode(spec, apiVersion, helper.Code)
+		prefix, err := driveHelperCode(spec, apiVersion, helper.Code, true)
+		observation.HelperPrefix[helper.Name] = prefix
 		if err == nil {
 			observation.Helpers[helper.Name] = []string{"<no error at all>"}
 			continue
@@ -465,43 +467,126 @@ func runErrorEnvelope(spec *Spec, surface string) (ErrorObservation, error) {
 		}
 		observation.Helpers[helper.Name] = answered
 	}
+
+	// And the envelope-less branch, which is where CodeUnexpectedStatus actually
+	// comes from.
+	fallbackPrefix, fallbackErr := driveHelperCode(spec, apiVersion, "", false)
+	observation.FallbackPrefix = fallbackPrefix
+	observation.FallbackUnexpected = octonomy.IsUnexpectedStatus(fallbackErr)
+	var fallbackAPIErr *octonomy.APIError
+	if errors.As(fallbackErr, &fallbackAPIErr) {
+		observation.FallbackCode = fallbackAPIErr.Code
+	}
+
+	truncatedPrefix, truncatedErr := driveTruncatedBody(apiVersion)
+	observation.TruncatedPrefix = truncatedPrefix
+	observation.TruncatedUnexpected = octonomy.IsUnexpectedStatus(truncatedErr)
+	var truncatedAPIErr *octonomy.APIError
+	if errors.As(truncatedErr, &truncatedAPIErr) {
+		observation.TruncatedCode = truncatedAPIErr.Code
+	}
 	return observation, nil
 }
 
-// driveHelperCode answers one call with an envelope carrying exactly `code`, and
-// returns the error the client produced from it.
-func driveHelperCode(spec *Spec, apiVersion octonomy.APIVersion, code string) error {
-	envelope, err := synthesizeSchema(spec, "ErrorResponse", 0, witnessPopulated)
-	if err != nil {
-		return err
+// errAfterSomeBytes is a response body that starts arriving and then fails, which
+// is the shape unreadableBodyError is written for.
+type errAfterSomeBytes struct{ sent bool }
+
+func (r *errAfterSomeBytes) Read(p []byte) (int, error) {
+	if r.sent {
+		return 0, fmt.Errorf("contractdrift: the connection dropped mid-body")
 	}
-	if inner, ok := envelope["error"].(map[string]any); ok {
-		inner["code"] = code
-	}
-	body, err := json.Marshal(envelope)
-	if err != nil {
-		return err
-	}
+	r.sent = true
+	n := copy(p, []byte(`{"error":`))
+	return n, nil
+}
+
+func (r *errAfterSomeBytes) Close() error { return nil }
+
+// driveTruncatedBody answers one call with a non-2xx whose body cannot be read to
+// completion.
+func driveTruncatedBody(apiVersion octonomy.APIVersion) (string, error) {
+	rec := &recorder{respond: func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusConflict,
+			Header:        http.Header{"Content-Type": []string{"application/json"}},
+			Body:          &errAfterSomeBytes{},
+			ContentLength: 256,
+			Request:       req,
+		}, nil
+	}}
 	client, err := octonomy.New(octonomy.Config{
 		APIVersion: apiVersion,
 		BaseURL:    "https://contractdrift.invalid",
 		Token:      strings.TrimPrefix(ExpectedValue("authorization", 0), "Bearer "),
 		TenantID:   ExpectedValue("x-tenant-id", 0),
-		HTTPClient: &http.Client{Transport: &recorder{respond: func(req *http.Request) (*http.Response, error) {
-			return &http.Response{
-				StatusCode:    http.StatusConflict,
-				Header:        http.Header{"Content-Type": []string{"application/json"}},
-				Body:          io.NopCloser(bytes.NewReader(body)),
-				ContentLength: int64(len(body)),
-				Request:       req,
-			}, nil
-		}}},
+		HTTPClient: &http.Client{Transport: rec},
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	_, callErr := client.Tags.Get(context.Background(), "ERRID")
-	return callErr
+	prefix := ""
+	if len(rec.requests) > 0 {
+		prefix = versionPrefix(rec.requests[0].URL.Path)
+	}
+	return prefix, callErr
+}
+
+// driveHelperCode answers one call with an envelope carrying exactly `code` --
+// or, when enveloped is false, with a body that is NOT an envelope at all -- and
+// returns the error the client produced and the /api/<version> the call really
+// reached.
+//
+// The prefix is returned rather than assumed. A drive that returns a fabricated
+// error without issuing a request answers every question correctly about
+// something no client produced, and the prefix is what makes that visible.
+func driveHelperCode(spec *Spec, apiVersion octonomy.APIVersion, code string, enveloped bool) (string, error) {
+	// The shape a server that predates the versioned URLconf really returns, and
+	// the shape any proxy returns: HTML, no envelope, nothing parseError can read a
+	// code out of.
+	body := []byte("<h1>Bad Gateway</h1>")
+	if enveloped {
+		envelope, err := synthesizeSchema(spec, "ErrorResponse", 0, witnessPopulated)
+		if err != nil {
+			return "", err
+		}
+		if inner, ok := envelope["error"].(map[string]any); ok {
+			inner["code"] = code
+		}
+		if body, err = json.Marshal(envelope); err != nil {
+			return "", err
+		}
+	}
+	status, contentType := http.StatusConflict, "application/json"
+	if !enveloped {
+		status, contentType = http.StatusBadGateway, "text/html"
+	}
+	rec := &recorder{respond: func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    status,
+			Header:        http.Header{"Content-Type": []string{contentType}},
+			Body:          io.NopCloser(bytes.NewReader(body)),
+			ContentLength: int64(len(body)),
+			Request:       req,
+		}, nil
+	}}
+	client, err := octonomy.New(octonomy.Config{
+		APIVersion: apiVersion,
+		BaseURL:    "https://contractdrift.invalid",
+		Token:      strings.TrimPrefix(ExpectedValue("authorization", 0), "Bearer "),
+		TenantID:   ExpectedValue("x-tenant-id", 0),
+		HTTPClient: &http.Client{Transport: rec},
+	})
+	if err != nil {
+		return "", err
+	}
+	_, callErr := client.Tags.Get(context.Background(), "ERRID")
+	prefix := ""
+	if len(rec.requests) > 0 {
+		prefix = versionPrefix(rec.requests[0].URL.Path)
+	}
+	return prefix, callErr
 }
 
 // errorObject pulls the inner `error` object out of a synthesized envelope, which
@@ -614,6 +699,31 @@ type ErrorObservation struct {
 	// an unasserted claim is not a claim: with these unrecorded, StatusCode: 0 in
 	// parseError and an IsConflict rewired to CodeValidation were both green.
 	Status int
+
+	// HelperPrefix is where each helper's drive actually went, keyed by helper
+	// name. Without it the drive can stop driving: replacing driveHelperCode's body
+	// with a fabricated *APIError bypasses synthesis, transport and decoding, and
+	// every helper still answered correctly about an error no client produced.
+	HelperPrefix map[string]string
+
+	// FallbackCode, FallbackUnexpected and FallbackPrefix are one more drive, for
+	// the branch of parseError that no envelope reaches: a non-2xx whose body is
+	// NOT the contract's shape. That is where CodeUnexpectedStatus is really
+	// manufactured, and driving IsUnexpectedStatus through a synthesized envelope
+	// carrying `unexpected_status` proved it for a response no server sends.
+	FallbackCode       string
+	FallbackUnexpected bool
+	FallbackPrefix     string
+
+	// TruncatedCode, TruncatedUnexpected and TruncatedPrefix are the OTHER path
+	// that manufactures CodeUnexpectedStatus: a non-2xx whose body cannot be read
+	// to completion. No envelope was decoded there either, so no semantic code was
+	// established -- and guessing one from the status is precisely what that
+	// constant exists to forbid. It is a separate drive because a complete body,
+	// however unparseable, reaches parseError instead.
+	TruncatedCode       string
+	TruncatedUnexpected bool
+	TruncatedPrefix     string
 
 	// Helpers maps each semantic helper's name to the names of ALL the helpers that
 	// answered true when that helper's own code was sent. Each must answer for

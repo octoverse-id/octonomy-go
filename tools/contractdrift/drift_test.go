@@ -2513,7 +2513,25 @@ func envelopeObservation(surface string) ErrorObservation {
 		Prefix:    "/api/" + surface,
 		Status:    409,
 		Helpers:   cleanHelpers(),
+
+		HelperPrefix:       cleanHelperPrefixes(surface),
+		FallbackPrefix:     "/api/" + surface,
+		FallbackCode:       unexpectedStatusCode,
+		FallbackUnexpected: true,
+
+		TruncatedPrefix:     "/api/" + surface,
+		TruncatedCode:       unexpectedStatusCode,
+		TruncatedUnexpected: true,
 	}
+}
+
+// cleanHelperPrefixes is every helper's drive having reached this surface.
+func cleanHelperPrefixes(surface string) map[string]string {
+	out := map[string]string{}
+	for _, helper := range semanticHelpers {
+		out[helper.Name] = "/api/" + surface
+	}
+	return out
 }
 
 // cleanHelpers is every helper answering for itself and nothing else.
@@ -2533,8 +2551,15 @@ func envelopeReport(t *testing.T, mutate func(o *ErrorObservation)) *Report {
 		mutate(&observation)
 		envelope[surface] = observation
 	}
+	sdk, err := LoadSDKPackage(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := &Report{}
-	checkErrorEnvelope(Inputs{Conformance: &Conformance{ErrorEnvelope: envelope}}, r)
+	checkErrorEnvelope(Inputs{
+		SDK:         sdk,
+		Conformance: &Conformance{ErrorEnvelope: envelope},
+	}, r)
 	return r
 }
 
@@ -2994,7 +3019,10 @@ func TestEveryHelperIsDriven(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	declared := regexp.MustCompile(`(?m)^func (Is[A-Za-z]+)\(err error\) bool`).FindAllStringSubmatch(string(raw), -1)
+	// `\w+ error` and not `err error`: the parameter's NAME is the author's choice,
+	// and `func IsConflictAlias(cause error) bool` was an exported helper this scan
+	// did not see at all.
+	declared := regexp.MustCompile(`(?m)^func (Is[A-Za-z]+)\(\w+ error\) bool`).FindAllStringSubmatch(string(raw), -1)
 	if len(declared) < 10 {
 		t.Fatalf("found only %d Is* helpers; the pattern stopped matching", len(declared))
 	}
@@ -3006,6 +3034,11 @@ func TestEveryHelperIsDriven(t *testing.T) {
 		if !driven[match[1]] {
 			t.Errorf("errors.go declares %s and semanticHelpers does not drive it -- a helper nobody exercises is one that can be rewired in silence", match[1])
 		}
+		delete(driven, match[1])
+	}
+	// And the other way, so the two lists cannot drift apart in either direction.
+	for name := range driven {
+		t.Errorf("semanticHelpers drives %s and errors.go does not declare it -- the two lists have come apart", name)
 	}
 }
 
@@ -3029,8 +3062,12 @@ func TestRewiredHelperIsCaught(t *testing.T) {
 		}
 		answered[helper.Name] = []string{helper.Name}
 	}
+	sdk, err := LoadSDKPackage(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := &Report{}
-	checkErrorEnvelope(Inputs{Conformance: &Conformance{ErrorEnvelope: map[string]ErrorObservation{
+	checkErrorEnvelope(Inputs{SDK: sdk, Conformance: &Conformance{ErrorEnvelope: map[string]ErrorObservation{
 		"v1": withHelpers(envelopeObservation("v1"), answered),
 		"v2": withHelpers(envelopeObservation("v2"), answered),
 	}}}, r)
@@ -3078,4 +3115,62 @@ func TestSimilarlyNamedFunctionIsNotACall(t *testing.T) {
 	if len(unreadable) != 0 {
 		t.Errorf("an unrelated function was reported as an unreadable call: %v", unreadable)
 	}
+}
+
+// TestAnExtraHelperAnsweringIsReported pins the "AND NOTHING ELSE" half, which no
+// test covered: every case exercised a helper that answered FALSE, so loosening
+// the comparison from `len(answered) == 1` to `len(answered) > 0` was clean, and
+// a helper answering true for its own code AND someone else's went unreported.
+func TestAnExtraHelperAnsweringIsReported(t *testing.T) {
+	assertFinding(t, envelopeReport(t, func(o *ErrorObservation) {
+		o.Helpers["IsTenantMismatch"] = []string{"IsTenantMismatch", "IsApplicationMismatch"}
+	}), "answer true, and only `IsTenantMismatch` should")
+}
+
+// TestUndrivenHelperDriveIsReported: a drive that returns a fabricated error
+// without issuing a request answers every question correctly about something no
+// client produced.
+func TestUndrivenHelperDriveIsReported(t *testing.T) {
+	assertFinding(t, envelopeReport(t, func(o *ErrorObservation) {
+		o.HelperPrefix["IsConflict"] = ""
+	}), "the drive for `IsConflict` went to")
+}
+
+// TestEnvelopelessFallbackIsAsserted: CodeUnexpectedStatus is manufactured by the
+// branch of parseError that no envelope reaches, and driving IsUnexpectedStatus
+// through a synthesized envelope carrying `unexpected_status` proved it for a
+// response no server sends. A status-to-code mapping bolted into that branch --
+// the one thing the constant exists to forbid -- was clean.
+func TestEnvelopelessFallbackIsAsserted(t *testing.T) {
+	assertFinding(t, envelopeReport(t, func(o *ErrorObservation) {
+		o.FallbackCode = "conflict"
+		o.FallbackUnexpected = false
+	}), "a 502 carrying no envelope produced code `conflict`")
+}
+
+// TestHelperTablePairingIsDerived: swapping the Code AND the Is of two rows
+// together redefines what the table asserts, so two correspondingly broken
+// helpers agreed with it and passed. The constant carrying a code has to be the
+// one its helper is named after, and that is derived from errors.go rather than
+// read off the table.
+func TestHelperTablePairingIsDerived(t *testing.T) {
+	in := load(t, stageRepo(t), "")
+	saved := semanticHelpers[0].Code
+	semanticHelpers[0].Code = octonomy.CodeConflict
+	defer func() { semanticHelpers[0].Code = saved }()
+
+	r := &Report{}
+	checkErrorEnvelope(in, r)
+	assertFinding(t, r, "the helper table pairs `"+semanticHelpers[0].Name+"` with `conflict`")
+}
+
+// TestUnreadableBodyFallbackIsAsserted: a body that starts arriving and stops
+// reaches unreadableBodyError, not parseError, so a code invented there is
+// invisible to the envelope-less drive. An unread body cannot have carried a
+// code, and guessing one from the status is what CodeUnexpectedStatus forbids.
+func TestUnreadableBodyFallbackIsAsserted(t *testing.T) {
+	assertFinding(t, envelopeReport(t, func(o *ErrorObservation) {
+		o.TruncatedCode = "conflict"
+		o.TruncatedUnexpected = false
+	}), "whose body could not be read produced code `conflict`")
 }

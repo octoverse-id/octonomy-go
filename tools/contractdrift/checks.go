@@ -746,6 +746,18 @@ func checkErrorCodesImplemented(in Inputs, r *Report) {
 	r.Add("Error codes", items)
 }
 
+// helperNameExceptions are the helpers whose name is not `Is` plus their
+// constant's name. One, recorded here rather than derived, because it is an
+// exported identifier and renaming it breaks every caller.
+var helperNameExceptions = map[string]string{
+	"IsAuthError": "CodeAuthRequired",
+}
+
+// unexpectedStatusCode is the wire value of octonomy.CodeUnexpectedStatus. Held
+// as a literal on purpose: reading it from the SDK would make the assertion below
+// agree with whatever the SDK says, which is not an assertion.
+const unexpectedStatusCode = "unexpected_status"
+
 // quoted wraps each name in backticks for a report line.
 func quoted(names []string) []string {
 	out := make([]string, len(names))
@@ -800,12 +812,36 @@ func checkErrorEnvelope(in Inputs, r *Report) {
 		// Asserting one of them -- IsConflict, because it was the code this drive
 		// already sent -- left the other fifteen unexercised, and rewiring
 		// IsNotFound to CodeForbidden was clean.
+		carriedBy := map[string]string{}
+		for constant, code := range in.SDK.ErrorConstants() {
+			carriedBy[code] = constant
+		}
 		for _, helper := range semanticHelpers {
-			answered := observation.Helpers[helper.Name]
-			if len(answered) == 1 && answered[0] == helper.Name {
+			// The table's own name-to-code pairing, DERIVED rather than trusted.
+			// Swapping the Code and the Is of two rows together redefined what the
+			// table asserts, and two correspondingly broken helpers passed. The
+			// constant carrying this code has to be the one the helper is named
+			// after.
+			if constant, known := carriedBy[helper.Code]; known {
+				if want := "Is" + strings.TrimPrefix(constant, "Code"); want != helper.Name && helperNameExceptions[helper.Name] != constant {
+					items = append(items, fmt.Sprintf("`%s`: the helper table pairs `%s` with `%s`, which `%s` carries -- the helper for that code is `%s`",
+						surface, helper.Name, helper.Code, constant, want))
+					continue
+				}
+			} else {
+				items = append(items, fmt.Sprintf("`%s`: the helper table pairs `%s` with `%s`, and no `Code*` constant carries that value",
+					surface, helper.Name, helper.Code))
 				continue
 			}
+			if want := "/api/" + surface; observation.HelperPrefix[helper.Name] != want {
+				items = append(items, fmt.Sprintf("`%s`: the drive for `%s` went to %q, not %q -- it did not exercise a request at all",
+					surface, helper.Name, observation.HelperPrefix[helper.Name], want))
+				continue
+			}
+
+			answered := observation.Helpers[helper.Name]
 			switch {
+			case len(answered) == 1 && answered[0] == helper.Name:
 			case len(answered) == 0:
 				items = append(items, fmt.Sprintf("`%s`: an envelope carrying `%s` makes `%s` answer false -- the helper and the code it is named after have come apart",
 					surface, helper.Code, helper.Name))
@@ -813,6 +849,26 @@ func checkErrorEnvelope(in Inputs, r *Report) {
 				items = append(items, fmt.Sprintf("`%s`: an envelope carrying `%s` makes %s answer true, and only `%s` should",
 					surface, helper.Code, strings.Join(quoted(answered), " and "), helper.Name))
 			}
+		}
+
+		// The envelope-less branch, which is where CodeUnexpectedStatus is really
+		// manufactured. Driving IsUnexpectedStatus through a synthesized envelope
+		// carrying `unexpected_status` proved it for a response no server sends,
+		// while a status-to-code mapping bolted into parseError went unnoticed.
+		if want := "/api/" + surface; observation.FallbackPrefix != want {
+			items = append(items, fmt.Sprintf("`%s`: the envelope-less drive went to %q, not %q", surface, observation.FallbackPrefix, want))
+		} else if observation.FallbackCode != unexpectedStatusCode || !observation.FallbackUnexpected {
+			items = append(items, fmt.Sprintf("`%s`: a 502 carrying no envelope produced code `%s` with `IsUnexpectedStatus` %v -- a body with no code in it cannot establish one, and inventing one from the status is what that constant exists to forbid",
+				surface, observation.FallbackCode, observation.FallbackUnexpected))
+		}
+		// And the other path to the same constant: a body that starts arriving and
+		// stops. It reaches unreadableBodyError rather than parseError, so a code
+		// invented there is invisible to the drive above.
+		if want := "/api/" + surface; observation.TruncatedPrefix != want {
+			items = append(items, fmt.Sprintf("`%s`: the unreadable-body drive went to %q, not %q", surface, observation.TruncatedPrefix, want))
+		} else if observation.TruncatedCode != unexpectedStatusCode || !observation.TruncatedUnexpected {
+			items = append(items, fmt.Sprintf("`%s`: a 409 whose body could not be read produced code `%s` with `IsUnexpectedStatus` %v -- an unread body cannot have carried a code",
+				surface, observation.TruncatedCode, observation.TruncatedUnexpected))
 		}
 
 		if len(observation.Sent) == 0 {

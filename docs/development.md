@@ -347,7 +347,18 @@ so each of the sixteen is a claim. Each is driven with its own code and must ans
 nothing else, which is what catches `IsNotFound` pointed at `CodeForbidden`: every set stays intact
 through that, and both helpers then answer true for one envelope. A test fails if `errors.go` grows
 a helper the table does not drive. The envelope carries **real** codes rather than name-shaped
-witnesses, since a helper answers `false` for `cd~code` quite correctly.
+witnesses, since a helper answers `false` for `cd~code` quite correctly. The table's own pairing is
+**derived, not declared**: the `Code*` constant carrying a helper's code has to be the one the helper
+is named after, so swapping a row's code and function together — which would otherwise redefine what
+the table asserts — is reported. Each drive also reports the `/api/<version>` it reached, because a
+drive that returns a fabricated error without issuing a request answers every question correctly
+about something no client produced.
+
+Two further drives cover where `CodeUnexpectedStatus` is really manufactured, which is **not** an
+envelope: a non-2xx carrying a body that is not the contract's shape, and one whose body cannot be
+read to completion. Both must produce that code and no other — inventing a semantic code from a
+status is the one thing that constant exists to forbid, and driving `IsUnexpectedStatus` through a
+synthesized envelope carrying `unexpected_status` proved it for a response no server sends.
 
 **And what the route check proves.** Each driver runs twice per surface with different path values,
 so a route that varies with the value it is given is reported; each placeholder has its own sentinel,
