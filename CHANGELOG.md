@@ -71,8 +71,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#17](https://github.com/octoverse-id/octonomy-go/issues/17)). Behind the same `integration` build
   tag as the smoke test, so `go test ./...` is unchanged — still fast, still offline, still hermetic.
   No exported API moves. `make test-integration` runs it against a harness booted by
-  `make dev-server`; CI runs it in the new **`integration suite`** job, which fails the PR but is not
-  yet a required context.
+  `make dev-server`; CI runs it in the new **`integration suite`** job, which is a **required check**
+  on `main` — promoted on introduction, because the property it guards is the one whose regression is
+  least likely to be caught anywhere else, and it boots the same container the already-blocking smoke
+  job does, so it adds little flake risk of its own.
 
   The smoke test asks whether the server's PAYLOAD matches what this SDK decodes, which is #32's
   class of defect. This suite asks the next question down: whether the server BEHAVES the way our doc

@@ -90,9 +90,9 @@ jobs:
   #
   # NOT YET A MERGE GATE. Like the smoke job before it, this fails the PR but does
   # not block the merge until its check context is added to main's branch
-  # protection -- which today requires lint, test (1.24), test (1.25), and vuln,
-  # and nothing else. The required-context name is the DISPLAY name, "contract
-  # inventory", not the job id `contract`.
+  # protection -- which today requires lint, test (1.24), test (1.25), vuln, and
+  # "integration suite", and nothing else. The required-context name is the
+  # DISPLAY name, "contract inventory", not the job id `contract`.
   contract:
     name: contract inventory
     runs-on: ubuntu-latest
@@ -197,8 +197,8 @@ jobs:
   # smoke test", not the job id `smoke`. Add that string to main's
   # branch-protection required contexts -- dropping continue-on-error makes this
   # blocking on the PR, not on the merge. Today main requires lint, test (1.24),
-  # test (1.25), and vuln; the advisory `harness` job was never among them, so
-  # replacing it strands no required context.
+  # test (1.25), vuln, and "integration suite"; the advisory `harness` job was
+  # never among them, so replacing it strands no required context.
   smoke:
     name: integration smoke test
     runs-on: ubuntu-latest
@@ -274,22 +274,24 @@ jobs:
   # job, because branch protection names JOBS: folding this in would either
   # promote it on day one or demote the smoke test.
   #
-  # NOT YET A MERGE GATE, exactly as `contract inventory` above is not. A failure
-  # here fails the PR and is meant to be read; it does not block the merge until
-  # its check context is added to main's branch protection, which today requires
-  # lint, test (1.24), test (1.25), and vuln. The required-context name would be
-  # the DISPLAY name, "integration suite", not the job id `integration`.
+  # A MERGE GATE. Its context, "integration suite" -- the job's DISPLAY name, not
+  # the job id `integration` -- is in main's branch-protection required contexts
+  # alongside lint, test (1.24), test (1.25), and vuln. It was promoted on
+  # introduction rather than after a soak: the property it guards, that a
+  # merchant-A client can never read a merchant-B row, is the one whose
+  # regression is least likely to be caught anywhere else and most expensive to
+  # ship, and the incremental flake risk over the already-blocking `smoke` job is
+  # small -- both boot the same container the same way, so a registry or Docker
+  # hiccup reddens that one too.
+  #
+  # RENAMING THIS JOB BREAKS THE BRANCH. A required context that never reports
+  # blocks every PR, and `name:` is what reports it. If the name has to change,
+  # change the branch-protection context in the same hour.
   #
   # Deliberately NOT `continue-on-error`. That flag would mark the step
   # successful, which silently disables the `if: failure()` log capture below --
   # and a failing isolation assertion with no container logs is the one outcome
-  # this job must never produce. Advisory here means "not in branch protection",
-  # not "invisible".
-  #
-  # PROMOTE IT when it has run green across a few weeks of merges. The property
-  # it guards -- that a merchant-A client can never read a merchant-B row -- is
-  # the one whose regression is least likely to be caught anywhere else and most
-  # expensive to ship.
+  # this job must never produce.
   integration:
     name: integration suite
     runs-on: ubuntu-latest

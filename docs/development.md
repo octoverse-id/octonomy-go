@@ -111,7 +111,7 @@ job runs `make smoke`, so CI and your laptop execute identical logic, guard incl
 The job is no longer advisory: it fails the PR. It does not yet *block the merge* — that needs its
 check context, **`integration smoke test`** (the job's display name, not the `smoke` job id), added
 to main's branch-protection required contexts, which currently list `lint`, `test (1.24)`,
-`test (1.25)`, and `vuln`.
+`test (1.25)`, `vuln`, and `integration suite`.
 
 ### Full integration suite
 
@@ -175,9 +175,19 @@ is this SDK's sanctioned extension point, so a wrapper transport reaches the ser
 The suite does exactly that, with a comment saying it is not how anyone should call Octonomy.
 
 CI runs it in the **`integration suite`** job, on its own container, with `OCTONOMY_SMOKE_REQUIRED=1`
-for the same reason the smoke job sets it. Like `contract inventory`, it fails the PR but is **not
-yet a required context** — promote it by adding `integration suite` to main's branch protection once
-it has run green across a few weeks of merges.
+for the same reason the smoke job sets it. It is a **required context**: `integration suite` sits in
+main's branch protection alongside `lint`, `test (1.24)`, `test (1.25)` and `vuln`, so a failure here
+blocks the merge.
+
+It was promoted on introduction rather than after a soak. The property it guards — that a merchant-A
+client can never read a merchant-B row — is the one whose regression is least likely to be caught
+anywhere else and most expensive to ship, and it adds little flake risk over the already-blocking
+smoke job: both boot the same container the same way, so a registry or Docker hiccup reddens that one
+too.
+
+**Renaming the job breaks the branch.** A required context that never reports blocks every PR, and
+the `name:` field is what reports it. If the job name has to change, change the branch-protection
+context in the same hour.
 
 ## Running against a real Octonomy
 
@@ -474,8 +484,8 @@ part of the contract no driver touches is still a change nobody is asked about.
 version. It runs on every pull request as the **`contract inventory`** job and is safe to block a
 merge, because it can only fail on something in this repository. It does not block one *yet* — that
 needs its check context added to main's branch protection, which today requires `lint`, `test (1.24)`,
-`test (1.25)`, and `vuln`. Until then it fails the PR and nothing more, exactly as the
-`integration smoke test` job does.
+`test (1.25)`, `vuln`, and `integration suite`. Until then it fails the PR and nothing more, exactly
+as the `integration smoke test` job does.
 
 `make contract-drift` adds the cross-repository comparison and runs **weekly**, in
 [`contract-drift.yml`](../.github/workflows/contract-drift.yml). It is deliberately not a pull-request
