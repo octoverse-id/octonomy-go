@@ -57,11 +57,15 @@ const nilUUID = "00000000-0000-0000-0000-000000000000"
 // readProbe is one read endpoint of this SDK, expressed as a single question:
 // reading in namespace readNS, can this client see the row named by want?
 //
-// Phrasing every endpoint as the same question is what makes the isolation test
-// exhaustive rather than anecdotal. The endpoints answer differently when a row
-// is out of scope -- some 404, some return an empty page, resolution returns a
-// 400 -- and none of those differences is the property under test. What matters
-// is only whether the row came back.
+// Phrasing every endpoint as the same question is what makes the isolation and
+// include_global matrices exhaustive rather than anecdotal: one entry in this
+// table buys coverage in both.
+//
+// Whether the row came back is the headline, but it is not the whole assertion.
+// The endpoints decline an out-of-scope row differently -- some 404, some answer
+// an empty page, resolution answers 400 -- and each probe declares WHICH,
+// because "it errored" is not evidence of isolation when the SDK turns every
+// non-2xx into an *APIError by design.
 type readProbe struct {
 	name string
 
@@ -362,7 +366,7 @@ const (
 	// or refuse the row by id (404 not_found, or 400 validation_error on
 	// resolution) -- but nothing else. Accepting "any error" here is how this
 	// assertion would come to pass against a crashed container; see
-	// requireFilteredRefusal.
+	// requireFilteredOutcome.
 	outcomeFiltered
 
 	// outcomeForbidden: the request must never reach a queryset at all. This is
@@ -552,7 +556,7 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 // resource and audit views SEPARATELY. One view can misuse the flag while
 // Tags.List stays correct, and a single-endpoint test would never see it.
 //
-// The four runs, and why each is needed:
+// The five runs, and why each is needed:
 //
 //	default             a namespaced read excludes global rows with no option at
 //	                    all -- otherwise the parameter means nothing
@@ -564,6 +568,9 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 //	                    WILDCARD token, which is authorized for merchant B, so
 //	                    authorization cannot be what withholds that row -- only
 //	                    the meaning of the parameter can
+//	own rows still come the read WORKS. Without it the three negatives above pass
+//	                    whenever the request failed or came back empty, none of
+//	                    which is the fail-closed behaviour being claimed
 func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
 	h := loadHarness(t)
 	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)

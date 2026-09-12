@@ -103,12 +103,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     unreachable with a wildcard token, for which the opt-in always succeeds. It runs as a matrix over
     the same thirteen endpoints because the server threads `request_include_global` through the tag
     detail, resolution, vocabulary, alias, resource and audit views *separately*, so one view can
-    misuse it while `Tags.List` stays correct. Four runs per endpoint: the default read excludes the
+    misuse it while `Tags.List` stays correct. Five runs per endpoint: the default read excludes the
     global rows; an authorized token can opt in (the control, without which "the merchant saw
-    nothing" also passes on a route that ignores the option); the merchant token still sees none; and
-    the option widens to **global, never to every namespace** — that last asserted with the wildcard
-    token, which *is* authorized for the second merchant, so authorization cannot be what withholds
-    the row.
+    nothing" also passes on a route that ignores the option); the merchant token still sees none; the
+    option widens to **global, never to every namespace** — that one asserted with the wildcard token,
+    which *is* authorized for the second merchant, so authorization cannot be what withholds the row;
+    and the same opt-in read still returns the caller's OWN rows, without which each of the negatives
+    would also pass on a request that failed or came back empty.
   - **Assignment idempotence: 201 once, 200 forever after, same row.** The status split is the only
     thing `AssignmentService.Create`'s documented idempotency rests on, and `doData` deliberately
     surfaces no 2xx status — so this is the suite's one assertion made off the wire rather than

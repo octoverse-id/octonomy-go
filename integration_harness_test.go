@@ -10,7 +10,7 @@
 // the file compiles into an ordinary `go test` run.
 //
 // What lives here: loading the credentials scripts/octonomy-harness.sh exports,
-// building clients against them, and seeding one merchant's worth of rows. The
+// building clients against them, and seeding one scope's worth of rows. The
 // assertions live in integration_suite_test.go. uniqueSlug and cleanupTimeout
 // come from integration_test.go, which carries the same build tag.
 //
@@ -200,12 +200,16 @@ func (h harness) scoped(namespaceID string, extra ...octonomy.RequestOption) []o
 	return append(opts, extra...)
 }
 
-// namespaceFixture is one merchant's worth of rows: enough that every read
-// endpoint the SDK exposes has something of that merchant's to find.
+// namespaceFixture is one SCOPE's worth of rows -- one merchant's, or the
+// global namespace's -- enough that every read endpoint the SDK exposes has
+// something of that scope's to find.
 //
 // The resource carries the tag, so the assignment, resource-tag, and audit
-// routes all resolve to the same underlying write -- which is what makes a
-// single fixture sufficient for the whole read surface.
+// routes all resolve to the same underlying write, which is what makes a single
+// fixture sufficient for the whole read surface.
+//
+// A blank namespaceID means the global namespace. describeScope renders it for
+// failure messages, where "merchant " would be wrong.
 type namespaceFixture struct {
 	namespaceID string
 
@@ -218,13 +222,18 @@ type namespaceFixture struct {
 }
 
 // seed creates one fixture inside namespaceID using c, which must be a client
-// whose grant reaches that namespace -- in practice the wildcard one, since a
-// single call has to populate both merchants.
+// whose grant reaches that scope -- in practice the wildcard one, since a single
+// caller has to populate both merchants and the global namespace.
 //
-// Every write here is namespaced, so a run against a deployment with
-// OCTONOMY_NAMESPACE_WRITE_ENABLED unset fails on the first create with a named
-// message rather than seeding nothing and leaving the assertions to report
-// "isolation holds" about rows that were never written.
+// An EMPTY namespaceID seeds the global namespace; see the comment on the option
+// list below for why that mode exists.
+//
+// For a NAMESPACED seed every write goes through the namespace axis, so a run
+// against a deployment with OCTONOMY_NAMESPACE_WRITE_ENABLED unset fails on the
+// first create with a named message rather than seeding nothing and leaving the
+// assertions to report "isolation holds" about rows that were never written. A
+// global seed does not touch that kill-switch, which is correct: global writes
+// are not what it gates.
 func (h harness) seed(t *testing.T, c *octonomy.Client, namespaceID string) namespaceFixture {
 	t.Helper()
 
