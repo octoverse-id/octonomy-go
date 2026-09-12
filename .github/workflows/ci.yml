@@ -35,6 +35,18 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+      # The drift gate is a nested module, so the run above cannot see it: `./...`
+      # stops at a go.mod boundary, and so do `go vet ./...` and `go build ./...`
+      # in the test job. Only `gofmt -l .` above crosses it, because it walks the
+      # filesystem rather than the package graph. AGENTS.md asks for a
+      # golangci-lint-clean tree, and a directory nothing lints is where that stops
+      # being true quietly. Same config, second invocation.
+      - name: golangci-lint (contract drift gate)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          working-directory: tools/contractdrift
+          args: --config ../../.golangci.yml
 
   test:
     runs-on: ubuntu-latest
@@ -55,6 +67,54 @@ jobs:
         run: go build ./examples/...
       - name: Test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
+
+  # The offline half of the contract drift gate (#18).
+  #
+  # Safe to make blocking, and the only half that is: it compares the VENDORED
+  # contracts against this repository and touches nothing outside the checkout.
+  # The cross-repository half -- the same program with -upstream -- runs on a
+  # schedule in contract-drift.yml, because a job that reaches into
+  # octoverse-id/octonomy can go red for reasons that have nothing to do with the
+  # change under review, and a merge gate that does that is one people learn to
+  # route around.
+  #
+  # What it catches on a pull request: an endpoint the vendored contract publishes
+  # that docs/contract-coverage.yaml does not account for; an inventory row whose
+  # Go method is gone, renamed, or now requests a different route; a query
+  # parameter that operation's own method never sends; a schema field the Go model
+  # has no place to decode into; a recorded response shape the spec no longer
+  # matches; and docs/versioning.md disagreeing with the specs about which server
+  # this SDK targets. A contract refresh that lands without the follow-through
+  # fails here -- which is the case the cross-repository job structurally cannot
+  # see, since after a refresh both sides of it are the same file.
+  #
+  # NOT YET A MERGE GATE. Like the smoke job before it, this fails the PR but does
+  # not block the merge until its check context is added to main's branch
+  # protection -- which today requires lint, test (1.24), test (1.25), and vuln,
+  # and nothing else. The required-context name is the DISPLAY name, "contract
+  # inventory", not the job id `contract`.
+  contract:
+    name: contract inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache: true
+          # The gate lives in its own module (tools/contractdrift) so its YAML
+          # parser is not a dependency of the SDK. That module's go.sum is the only
+          # one in the repository.
+          cache-dependency-path: tools/contractdrift/go.sum
+      # First that the gate still works, then what it says. A drift gate that has
+      # never been shown to fail cannot be told apart from one that cannot fail,
+      # and these tests assert findings against deliberately modified contracts.
+      - name: Test the gate
+        run: make contract-test
+      - name: Check the vendored contract against the SDK
+        run: make contract-check
 
   vuln:
     runs-on: ubuntu-latest
@@ -103,6 +163,15 @@ jobs:
       # failed install would report a green scan that never happened. Calling the
       # binary directly makes a missing one a failing step.
       - name: govulncheck
+        run: govulncheck ./...
+      # The drift gate's nested module, which the scan above cannot reach:
+      # `./...` stops at a go.mod boundary. Its one dependency is a YAML parser
+      # that no consumer ever compiles -- it is CI tooling, like golangci-lint --
+      # but "nothing ships from there" is a reason to keep it out of the SDK's
+      # dependency graph, not a reason to leave it unscanned. Same binary, same
+      # database, one directory over.
+      - name: govulncheck (contract drift gate)
+        working-directory: tools/contractdrift
         run: govulncheck ./...
 
   # The harness boot AND its only real consumer, in one job.

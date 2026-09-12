@@ -1,0 +1,89 @@
+name: Contract drift
+
+# Does the Octonomy server still publish the contract this SDK was written
+# against? (#18)
+#
+# OWNER: @yokz (.github/CODEOWNERS). An unowned scheduled job is one people learn
+# to ignore, so this line is part of the job, not decoration. GitHub mails a
+# scheduled-workflow failure to the account that last changed this file, which is
+# the same person -- if that ever stops being true, change both together.
+#
+# WHY THIS IS NOT ON pull_request. It reaches into another repository. A job that
+# can go red because raw.githubusercontent.com had a bad minute must never stand
+# between a correct change and its merge; the first time it does, the team learns
+# to merge past a red check, and the check is then worth less than nothing. The
+# half that CAN be trusted on a pull request -- the vendored contracts against
+# this repository, entirely offline -- runs in ci.yml as `contract inventory`, and
+# it is the same program in its -local mode.
+#
+# WHAT IT DOES ON DRIFT: writes the report to the job summary and fails. It does
+# NOT open an issue, and that was a decision rather than an omission. Drift here
+# is usually one recurring fact ("the server is at 3.2.0, we vendor 3.1.1") that
+# stays true every week until someone refreshes the contracts, so an issue-opening
+# job needs search-and-update logic to avoid filing the same issue weekly -- and
+# the failure notification already reaches the owner named above. Revisit if this
+# ever has more than one watcher.
+#
+# NOTE the 60-day rule: GitHub disables scheduled workflows in a repository with
+# no activity for 60 days. On a quiet repository this job stops running silently,
+# which is why `workflow_dispatch` is here -- and why a green Actions tab is not
+# on its own evidence that anything ran.
+
+on:
+  schedule:
+    # Mondays, 06:23 UTC. Off the hour on purpose: the top of the hour is the
+    # busiest slot on GitHub's scheduler and the one most likely to be delayed.
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  # Read-only, and that is the whole credential. Both repositories are public, so
+  # the fetch needs nothing beyond the built-in token's rate limit -- no PAT, no
+  # secret to rotate, nothing this workflow could leak.
+  contents: read
+
+concurrency:
+  group: contract-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: contract drift
+    runs-on: ubuntu-latest
+    # Three small HTTP fetches and a comparison over two 80 KB documents. Ten
+    # minutes means something hung, not that the work was large.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache: true
+          # The SDK module has no dependencies and therefore no go.sum; the gate's
+          # own module is the only thing here worth caching.
+          cache-dependency-path: tools/contractdrift/go.sum
+
+      # Before trusting the answer, prove the gate can still produce one. These
+      # tests feed deliberately modified contracts and assert the finding, so a
+      # regexp that stopped matching, or a comparison that dropped half the
+      # document, fails HERE -- rather than reporting a clean comparison it never
+      # made. This job is green most weeks by design, and a permanently green
+      # broken gate is indistinguishable from a working one.
+      - name: Prove the gate can still fail
+        run: make contract-test
+
+      # `make contract-drift`, not an inline fetch-and-compare, so this job and a
+      # developer's laptop run byte-identical logic. The target fetches into a
+      # temp directory, compares, and writes the report to $GITHUB_STEP_SUMMARY.
+      #
+      # The two failure modes stay distinguishable without reading exit codes:
+      # a fetch that could not complete annotates `::error::contract-fetch:` and
+      # leaves the summary empty, while drift leaves the full report in the
+      # summary. "Could not compare" and "compared and found a difference" are
+      # different outcomes and must never be read as the same one.
+      - name: Fetch the server's contract and compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make contract-drift

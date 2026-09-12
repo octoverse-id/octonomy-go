@@ -1,6 +1,10 @@
 # Compiled binaries and the example binary
 /quickstart
 examples/quickstart/quickstart
+# The contract drift gate is built to a temp directory and run from there (see the
+# Makefile, which says why it is never `go run`). A stray `go build ./...` inside
+# its own directory still leaves this behind.
+/tools/contractdrift/contractdrift
 *.exe
 *.test
 *.out

@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check require-tools \
-	version-check dev-server dev-server-down dev-server-logs smoke
+	version-check dev-server dev-server-down dev-server-logs smoke \
+	contract-check contract-drift contract-test
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -23,9 +24,15 @@ fmt-check: ## Fail if any file is not gofmt-clean
 vet: ## Run go vet
 	go vet ./...
 
-lint: ## Run golangci-lint (skipped if not installed; release-check requires it)
+# Both modules, and both statuses, for the reasons spelled out over `vuln` below.
+# CI lints tools/contractdrift as its own step; this target did not, so
+# release-check could pass on a tree CI would reject.
+lint: ## Run golangci-lint on the SDK and on the contract gate's module
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run; \
+		status=0; \
+		golangci-lint run || status=$$?; \
+		(cd tools/contractdrift && golangci-lint run) || status=$$?; \
+		exit $$status; \
 	else \
 		echo "golangci-lint not installed; skipping. Install: https://golangci-lint.run/welcome/install/"; \
 	fi
@@ -74,9 +81,26 @@ cover: ## Run tests and print total coverage
 	go test -race -coverprofile=coverage.out ./...
 	go tool cover -func=coverage.out | tail -1
 
-vuln: ## Run govulncheck (skipped if not installed; release-check requires it)
+# Both modules. The SDK module has no dependencies, so its scan covers the
+# standard library it builds against; the drift gate's nested module has one, and
+# `govulncheck ./...` at the root stops at that go.mod and never sees it. Nothing
+# there ships to a consumer -- it is CI tooling -- but an unscanned directory is
+# an unscanned directory, and this is the target that says otherwise.
+#
+# BOTH statuses, not just the last one. `sh` gives an `if` body the exit status of
+# the command that ended it, so adding the second scan under the first silently
+# discarded the first's: a root scan that found a vulnerability left `make vuln`
+# exiting 0, and release-check runs this target. Caught in review on #56.
+#
+# Captured rather than chained with `&&`, because a scanner should say everything
+# it found in one run -- `&&` would mean a root failure hides the nested module
+# entirely, and you would fix one and then discover the other.
+vuln: ## Run govulncheck on the SDK and on the contract gate's module
 	@if command -v govulncheck >/dev/null 2>&1; then \
-		govulncheck ./...; \
+		status=0; \
+		govulncheck ./... || status=$$?; \
+		(cd tools/contractdrift && govulncheck ./...) || status=$$?; \
+		exit $$status; \
 	else \
 		echo "govulncheck not installed; skipping. Install: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest"; \
 	fi
@@ -96,6 +120,55 @@ dev-server-down: ## Tear down the Octonomy container harness
 
 dev-server-logs: ## Dump container logs from the Octonomy container harness
 	@scripts/octonomy-harness.sh logs
+
+# --- Contract drift (#18) ------------------------------------------------------
+#
+# Three targets, and the split between the first two is the whole design. The
+# offline half compares the VENDORED contracts against this repository and is a
+# pull-request gate; the cross-repository half reaches into octoverse-id/octonomy
+# and runs on a schedule only, because a check that can fail for network reasons
+# must never stand between a correct change and its merge.
+#
+# The tool lives in its own module (tools/contractdrift) so its dependencies are
+# not the SDK's: a YAML parser, and the SDK itself, which it imports through a
+# replace in order to CALL the client and read the request off the wire. The
+# module boundary is what keeps both out of `go build ./...`, out of `go.sum`, and
+# out of anything a consumer resolves -- nothing flows back the other way.
+
+# `go build` then run, never `go run`. The tool exits 0 clean, 1 drift found, 2
+# comparison could not be made, and `go run` collapses that 2 into a shell exit of
+# 1 while printing "exit status 2" -- so a caller that reads the code learns the
+# opposite of what happened.
+#
+# Note what this does and does not buy. Make flattens ANY failed recipe to its own
+# exit 2, so these targets cannot pass the distinction on; it survives for anyone
+# invoking the binary directly, which is the case worth protecting. In CI the two
+# outcomes are told apart by shape instead: a fetch that could not complete
+# annotates `::error::contract-fetch:` and leaves the job summary empty, while
+# drift leaves the whole report in it.
+contract-check: ## Offline contract gate: vendored contracts vs this repository
+	@set -e; \
+	dir=$$(mktemp -d); trap 'rm -rf "$$dir"' EXIT; \
+	(cd tools/contractdrift && go build -o "$$dir/contractdrift" .); \
+	"$$dir/contractdrift" -repo . -local
+
+# `-summary` always gets a path so CI and a laptop run the same command: in CI it
+# is the job summary, locally it is /dev/null. A conditional flag here would mean
+# the two diverge in the one place nobody re-reads.
+contract-drift: ## Full contract gate: fetch the server's contract and report drift (network)
+	@set -e; \
+	dir=$$(mktemp -d); trap 'rm -rf "$$dir"' EXIT; \
+	(cd tools/contractdrift && go build -o "$$dir/contractdrift" .); \
+	scripts/contract-fetch.sh "$$dir/upstream"; \
+	"$$dir/contractdrift" -repo . -upstream "$$dir/upstream" \
+		-source "$$(cat "$$dir/upstream/source.txt")" \
+		-summary "$${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+# -race like every other suite here (AGENTS.md), and vet because the root
+# `go vet ./...` stops at the nested module's go.mod and never sees this
+# directory.
+contract-test: ## Run the contract gate's own tests (proves the gate can still fail)
+	@cd tools/contractdrift && go vet ./... && go test -race ./...
 
 version-check: ## Verify version.go matches the latest CHANGELOG.md release heading
 	@code_ver=$$(grep -E '^const Version = ' version.go | sed -E 's/.*"([^"]+)".*/\1/'); \
@@ -140,6 +213,11 @@ require-tools: ## Verify the tools release-check needs are on PATH
 # leave the tool check racing the full race-enabled test suite it exists to run
 # ahead of. As a prerequisite of a recipe that then invokes the rest, the
 # ordering is a property of the target rather than of how it was invoked.
+# contract-check, not contract-drift: the release gate asserts that this tree is
+# internally consistent -- the inventory, the methods it names, the parameters the
+# client sends, the recorded contract version. Whether the SERVER has moved since
+# is a different question, it is the scheduled job's, and a release must not be
+# blocked by a network round trip to another repository.
 release-check: require-tools ## Full pre-release gate
-	@$(MAKE) --no-print-directory fmt-check vet lint test vuln examples version-check
-	@echo "release-check passed: all seven checks ran"
+	@$(MAKE) --no-print-directory fmt-check vet lint test vuln examples version-check contract-check
+	@echo "release-check passed: all eight checks ran"

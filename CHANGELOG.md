@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A contract drift gate** ([#18](https://github.com/octoverse-id/octonomy-go/issues/18)). Nothing
+  told this SDK when the Octonomy server's contract moved — it sat on a server 1.0.0 contract while
+  the server shipped 3.1.0 and made a second API surface primary, and the gap was found by reading
+  the server's repository rather than by any mechanism. `tools/contractdrift` is that mechanism. No
+  change to the SDK's exported API, and no new dependency for consumers: the gate is its own Go
+  module, so the YAML parser it needs is invisible to `go build ./...`, to `go.sum`, and to anything
+  a consumer resolves.
+  - **It compares schemas and parameters, not just paths.** A path-to-method inventory reports the
+    drift that prompted this as green: what actually changed was query parameters, error codes,
+    response schemas, and the arrival of a second surface. The gate compares the contract version,
+    operations, per-operation parameters (by location *and* name), responses and request bodies,
+    `components.schemas` property by property, and — from the server's `core/errors.py`, because
+    `ErrorResponse` types `code` as a bare string and a schema comparison therefore cannot see it —
+    the error-code registry against this SDK's `Code*` constants, as a set in both directions **and**
+    as declarations, since a set cannot see two constants whose values are swapped.
+  - **The SDK side is driven, not read.** For each operation the gate calls the method with every
+    parameter populated, against a stub that records the request and answers with a body
+    **synthesized from the vendored schema**. The request is what it compares against the contract —
+    route, query parameters, headers, and request-body properties, **names and values**, in both
+    directions, on **both REST surfaces**. Values are comparable because every scalar and array input has
+    a canonical value per execution that the wire must carry exactly — proving those executions
+    rather than arbitrary propagation, a boundary `docs/development.md` states — so a parameter retyped in the contract, a params struct wiring
+    one input to another's name, two JSON tags swapped on a write model, the two namespace headers
+    crossed, a value hard-coded to what one execution expects, two swapped integers or booleans, an
+    emptied array and a wrong credential are each reported — every one of which keeps all the right names in place. The response is what it decodes,
+    twice: once with every property populated and once with every `nullable` property null, so a field
+    the model lacks, a type it cannot read, and a nullable state it cannot hold are all reported. And
+    because a JSON round trip structurally cannot see two response tags swapped — the same tags decode
+    and re-encode — each model's Go field name is checked against the property it decodes. One extra
+    drive per surface answers a **409** with an envelope built from `ErrorResponse` — the most
+    referenced schema in either contract, and for a while the one nothing exercised, since the stub
+    only ever answered `200` or `204` — so a renamed `error.code` is reported, instead of silently
+    turning every `IsNotFound`, `IsConflict` and `IsValidation` into `false`. **This found a real gap on its first run** — `VocabularyListParams` is missing `q` and `slug`
+    ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)). An earlier draft read the package
+    statically instead and was replaced: inferring control flow from an AST answered *clean* for a
+    method that stopped passing its query builder, one that branched between two private helpers, and
+    a schema property whose type changed.
+  - **Two halves, only one of which gates a pull request.** The offline half (`make contract-check`,
+    CI job `contract inventory`) compares the *vendored* contracts against this repository and fails
+    the PR; it catches a contract refresh that landed without the follow-through, which the
+    cross-repository half structurally cannot see, since after a refresh both its sides are the same
+    file. The cross-repository half (`make contract-drift`) runs **weekly** and never gates a merge —
+    a job that reaches into another repository can go red for reasons unrelated to the change under
+    review.
+  - **`docs/contract-coverage.yaml`** is the new inventory: every published operation, each naming
+    the Go method that implements it or carrying a written reason it does not. An operation missing
+    from it fails the gate, which is what turns "not implemented" into a decision rather than an
+    oversight. It also **vendors the server's error registry**, the way the two OpenAPI documents are
+    vendored and for the same reason — the codes are in neither contract, so without a copy here they
+    could only ever be checked with the network, leaving them the one item where "refresh now,
+    implement later" was still possible.
+  - **The spec-versus-server envelope divergence is recorded, not suppressed.** Each row carries what
+    the spec documents and what the server really returns. The documented shape is checked against the
+    spec, and the recorded one is what the gate's stub answers with — so a row naming the wrong
+    envelope hands the real client a shape it cannot decode. The gate stays quiet while the divergence
+    holds and speaks up the day it ends.
+  - `docs/versioning.md` gained a `<!-- contract-version: X.Y.Z -->` marker so the contract version in
+    prose can be checked against the vendored specs.
+
 ## [2.0.0-alpha.1] - 2026-09-11
 
 **The first published release of the modern line** (`main`, module

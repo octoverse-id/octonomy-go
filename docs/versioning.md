@@ -11,9 +11,19 @@ source of truth for how a change maps to a version bump.
 | **SDK version** | `Version` in `version.go` + git tag `vX.Y.Z` | Canonical SemVer for the SDK and CHANGELOG. Go modules resolve versions from git tags. |
 | **Targeted server contract** | this document + the vendored `docs/openapi-v2.yaml` / `docs/openapi.yaml` | Which Octonomy REST contract the SDK is written against. **Both surfaces track server `3.1.1`**: `/api/v2` is the default, `/api/v1` is selectable via `Config.APIVersion`. |
 
+<!-- contract-version: 3.1.1 -->
+
+> The marker above is read by [`tools/contractdrift`](../tools/contractdrift) and must name the same
+> server release as `info.version` in both vendored specs. It exists because this row is prose: a
+> contract refresh that updates the two YAML files and not this sentence leaves the documentation
+> quietly claiming a server the SDK was not written against. `make contract-check` fails when the
+> three disagree. Update it in the same commit that refreshes the specs.
+
 The SDK versions **independently** of the Octonomy server. A new SDK release does not require a new
 server release, and vice versa. `make version-check` asserts `version.go` matches the latest
-`CHANGELOG.md` release heading.
+`CHANGELOG.md` release heading, and `make contract-check` asserts the vendored contracts match both
+this document and the SDK's own inventory in
+[`docs/contract-coverage.yaml`](contract-coverage.yaml).
 
 ## Two release lines
 

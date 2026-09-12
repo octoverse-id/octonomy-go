@@ -16,6 +16,23 @@ updates:
           - "minor"
           - "patch"
 
+  # The contract drift gate's own module (#18). Separate entry because Dependabot
+  # scans one directory per entry and the root module has no dependencies at all
+  # -- gopkg.in/yaml.v3 lives here and nowhere else, and it is a tool dependency,
+  # not one the SDK carries.
+  - package-ecosystem: "gomod"
+    directory: "/tools/contractdrift"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    groups:
+      contractdrift:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

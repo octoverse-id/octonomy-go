@@ -541,6 +541,9 @@ make help    # list all targets
 - [Versioning](docs/versioning.md) — SemVer policy and which server contract this SDK targets.
 - [Release](docs/release.md) — the release runbook.
 - [Roadmap](docs/roadmap.md) — known gaps inside implemented resources, plus the non-resource backlog.
+- [Contract coverage](docs/contract-coverage.yaml) — the machine-checked operation inventory, and the
+  spec-versus-server divergences it records. Enforced by the
+  [drift gate](docs/development.md#contract-drift).
 - [CHANGELOG](CHANGELOG.md)
 
 ## Contributing & security
