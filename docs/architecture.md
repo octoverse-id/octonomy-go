@@ -63,7 +63,8 @@ turns each of those into an error ([#32](https://github.com/octoverse-id/octonom
   and the resource-tag replace are composites the spec describes wrongly or not at all.
   **[`api.md`](api.md) carries the complete list**; each is also noted in code. Only the list envelope
   was known before #32 — the rest were found by running against a real container, which is now
-  `make smoke`.
+  `make smoke`, with `make test-integration` alongside it for the semantics a payload check cannot
+  reach (namespace isolation, fail-closed `include_global`, idempotence, atomicity).
 - **Pointers for optionality:** nullable server fields decode into `*string`; write structs use
   pointers + `omitempty` so PATCH only sends what the caller set.
 - **No hidden behavior:** the client never panics, never logs, never mutates global state, and adds

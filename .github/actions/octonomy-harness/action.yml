@@ -1,7 +1,8 @@
 name: Octonomy container harness
 description: >-
   Boot a real Octonomy server (Postgres + the pinned GHCR image), apply
-  migrations, mint a namespace-capable service token, and export the resulting
+  migrations, mint a namespace-capable service token plus one exact merchant
+  grant each side of the isolation boundary, and export the resulting
   OCTONOMY_TEST_* credentials to the job environment.
 
 # Both SDK version lines call this action so neither grows a bootstrap of its
@@ -50,11 +51,17 @@ runs:
           case "$line" in
             ''|'#'*) continue ;;
           esac
-          # Mask the bearer token before it can reach any later log line. The
-          # harness mints a real credential; an unmasked echo of it in a job log
+          # Mask every bearer token before it can reach any later log line. The
+          # harness mints real credentials; an unmasked echo of one in a job log
           # is a leak even though the server is ephemeral.
-          case "$line" in
-            OCTONOMY_TEST_TOKEN=*) echo "::add-mask::${line#OCTONOMY_TEST_TOKEN=}" ;;
+          #
+          # Keyed on the NAME ending in _TOKEN rather than on the one variable
+          # that existed when this was written: the harness now mints three
+          # (#17 added a per-namespace grant each side of the isolation
+          # boundary), and a mask list that has to be extended by hand is a mask
+          # list that will one day be a token in a log.
+          case "${line%%=*}" in
+            *_TOKEN) echo "::add-mask::${line#*=}" ;;
           esac
           echo "$line" >> "$GITHUB_ENV"
         done < "$env_file"

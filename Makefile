@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check require-tools \
-	version-check dev-server dev-server-down dev-server-logs smoke \
+	version-check dev-server dev-server-down dev-server-logs smoke test-integration \
 	contract-check contract-drift contract-test
 
 help: ## List available targets
@@ -75,6 +75,41 @@ smoke: ## Run the integration smoke test against a booted harness (see dev-serve
 		echo "smoke: TestSmoke_RealServer was not selected by -run."; \
 		echo "smoke: \`go test -run\` exits 0 when its pattern matches nothing, so this would"; \
 		echo "smoke: otherwise report success having asserted nothing. Was the test renamed?"; \
+		exit 1; }
+
+# The FULL integration suite (#17), not just the smoke test.
+#
+# Everything the `smoke` target's header says about redirection, `|| status=$$?`,
+# `cat || true`, and -count=1 applies here unchanged and is not repeated; read it
+# there. Three things are different:
+#
+#   * No -run. `smoke` narrows to one test because it is the blocking check and
+#     wants to stay fast and minimal; this target is the whole tagged package,
+#     which is exactly the acceptance criterion -- `go test -tags=integration`
+#     boots against a real server and passes. TestSmoke_RealServer runs here too,
+#     and that overlap is deliberate: a developer running one command should not
+#     have to know which file an assertion lives in.
+#   * -race, which `smoke` omits. AGENTS.md asks for it on every suite, and while
+#     nothing here runs concurrently, the cost is one compile against a container
+#     that already took a minute to boot.
+#   * The not-selected guard keys on the suite's own prefix. `go test` with no
+#     -run cannot select nothing, but a package whose TestIntegration_* functions
+#     were all renamed or removed still exits 0 having asserted none of this --
+#     the same vacuous green in a different shape. SKIP is accepted for the same
+#     reason it is there: no harness is a developer's normal case, and
+#     OCTONOMY_SMOKE_REQUIRED (which CI sets) is the mechanism that closes it.
+test-integration: ## Run the full integration suite against a booted harness (see dev-server)
+	@set -e; \
+	if [ -f .octonomy-harness.env ]; then set -a; . ./.octonomy-harness.env; set +a; fi; \
+	log=$$(mktemp); trap 'rm -f "$$log"' EXIT; \
+	status=0; \
+	go test -tags=integration -race -count=1 -v ./... >"$$log" 2>&1 || status=$$?; \
+	cat "$$log" || true; \
+	[ $$status -eq 0 ] || exit $$status; \
+	grep -qE -- '^--- (PASS|SKIP): TestIntegration_' "$$log" || { \
+		echo "test-integration: no TestIntegration_* test ran."; \
+		echo "test-integration: the package compiled and exited 0 having asserted none of the"; \
+		echo "test-integration: suite. Were the tests renamed, or is the build tag missing?"; \
 		exit 1; }
 
 cover: ## Run tests and print total coverage

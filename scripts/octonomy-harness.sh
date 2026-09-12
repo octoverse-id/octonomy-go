@@ -87,6 +87,28 @@ APPLICATION_ID="${OCTONOMY_HARNESS_APPLICATION_ID:-harness-app}"
 NAMESPACE_TYPE="${OCTONOMY_HARNESS_NAMESPACE_TYPE:-merchant}"
 NAMESPACE_ID="${OCTONOMY_HARNESS_NAMESPACE_ID:-harness-merchant}"
 
+# Two further merchant namespaces, each with a token holding an EXACT grant for
+# it and nothing else. The wildcard token above cannot stand in for these, and
+# the difference is the whole point of #17's isolation suite:
+#
+#   * A wildcard grant matches every partition, global included
+#     (grant_matches_namespace, octonomy/core/auth.py:206-213). So a suite
+#     driven by it can only ever assert what the SERVER's namespace FILTER does
+#     -- never what AUTHORIZATION does, because authorization never says no.
+#   * An exact grant matches its own partition alone, so a merchant-A token
+#     asking for merchant-B is refused rather than filtered. That is the
+#     cross-merchant boundary a caller actually relies on.
+#   * include_global is fail-closed against exactly this shape
+#     (request_include_global, auth.py:53-67): asking for global rows widens the
+#     REQUESTED set, and a token with no global authority still sees none. With a
+#     wildcard token the opt-in always succeeds, so the fail-closed branch is
+#     unreachable and would be tested vacuously.
+#
+# An exact namespace grant requires an application (create_service_token refuses
+# otherwise), so both are bound to APPLICATION_ID above.
+NAMESPACE_A_ID="${OCTONOMY_HARNESS_NAMESPACE_A_ID:-harness-merchant-a}"
+NAMESPACE_B_ID="${OCTONOMY_HARNESS_NAMESPACE_B_ID:-harness-merchant-b}"
+
 PG_DB=octonomy
 PG_USER=octonomy
 PG_PASSWORD=octonomy
@@ -133,6 +155,39 @@ octonomy_env_args() {
 oneshot() {
     # shellcheck disable=SC2046 # deliberate word splitting of the env flag list
     docker run --rm --network "$NET" $(octonomy_env_args) "$HARNESS_IMAGE" "$@"
+}
+
+# Mint one service token and print it on stdout. $1 is the client name; every
+# remaining argument is passed to create_service_token verbatim, which is how the
+# grant shape (wildcard vs exact) varies between callers.
+#
+# The scopes are fixed here rather than per-caller: every token this harness
+# mints exists to drive the same SDK suites, and a token quietly missing
+# audit:read surfaces as a 403 inside an audit assertion rather than as a
+# harness fault. Narrowing one token's scopes is a deliberate change to make when
+# a suite needs to assert a scope denial, not a knob to leave open.
+#
+# Called as `TOK="$(mint_token ...)"`: `fail` inside the command substitution
+# exits the subshell non-zero, `set -e` then ends the script, and the message
+# still reaches the terminal because fail writes to stderr, which is not
+# captured. Logging goes to stderr for the same reason -- a log line on stdout
+# would be parsed as part of the token.
+mint_token() {
+    _mint_name="$1"
+    shift
+    _mint_output="$(
+        oneshot python manage.py create_service_token \
+            --name "$_mint_name" \
+            --tenant "$TENANT_ID" \
+            --scope tags:read \
+            --scope tags:write \
+            --scope audit:read \
+            "$@"
+    )" || fail "could not mint the service token ${_mint_name}"
+    _mint_token="$(printf '%s\n' "$_mint_output" | sed -n 's/^Token: //p')"
+    [ -n "$_mint_token" ] ||
+        fail "could not parse a token out of create_service_token output for ${_mint_name}: ${_mint_output}"
+    printf '%s\n' "$_mint_token"
 }
 
 dump_logs() {
@@ -275,6 +330,58 @@ assert_namespaced_write() {
     log "namespaced write confirmed (201, namespace persisted)"
 }
 
+# Print the HTTP status of one bounded request, discarding the body. "000" is
+# curl's own "no response arrived", which --max-time produces on a wedged socket.
+probe_status() {
+    _ps_method="$1"
+    _ps_url="$2"
+    _ps_token="$3"
+    _ps_namespace="$4"
+    shift 4
+    curl -sS -o /dev/null -w '%{http_code}' \
+        --max-time "$REQUEST_TIMEOUT" \
+        -X "$_ps_method" "$_ps_url" \
+        -H "Authorization: Bearer ${_ps_token}" \
+        -H "X-Tenant-ID: ${TENANT_ID}" \
+        -H "X-Namespace-Type: ${NAMESPACE_TYPE}" \
+        -H "X-Namespace-ID: ${_ps_namespace}" \
+        "$@"
+}
+
+# The exact merchant grants, proved in both directions.
+#
+# Unlike assert_namespaced_write above, the failure this guards against is not a
+# vacuous pass in the isolation suite -- a token that reached nothing would make
+# every assertion there fail loudly. It is a MISDIAGNOSIS: thirty 403s inside
+# Go assertions read as an SDK defect, and the actual fault is a token minted
+# with the wrong grant shape. Two requests here say so in one line instead.
+#
+# The negative direction is the one worth the round trip. A grant that reached
+# every namespace would still satisfy the positive probe, and the whole suite
+# rests on it not doing that.
+assert_exact_grants() {
+    log "asserting each exact merchant grant reaches its own namespace and no other"
+
+    code="$(
+        probe_status POST "${BASE_URL}/api/v2/vocabularies" \
+            "$NAMESPACE_A_TOKEN" "$NAMESPACE_A_ID" \
+            -H "Content-Type: application/json" \
+            -d "{\"application_id\":\"${APPLICATION_ID}\",\"name\":\"Harness Probe A\",\"slug\":\"harness-probe-a\"}"
+    )"
+    [ "$code" = "201" ] || fail "the ${NAMESPACE_A_ID} grant could not write in its own namespace (HTTP ${code}, want 201)"
+
+    # Refused, not merely filtered: an exact grant that does not match the
+    # request's partition never reaches a queryset (BearerTokenPermission,
+    # octonomy/core/auth.py:402-408).
+    code="$(
+        probe_status GET "${BASE_URL}/api/v2/tags?application_id=${APPLICATION_ID}" \
+            "$NAMESPACE_A_TOKEN" "$NAMESPACE_B_ID"
+    )"
+    [ "$code" = "403" ] || fail "the ${NAMESPACE_A_ID} grant was not refused in ${NAMESPACE_B_ID} (HTTP ${code}, want 403): these tokens are not namespace-isolated, so the isolation suite would be asserting nothing"
+
+    log "exact merchant grants confirmed (201 inside, 403 across)"
+}
+
 # --- Commands ------------------------------------------------------------------
 
 cmd_down() {
@@ -319,18 +426,24 @@ cmd_up() {
     oneshot python manage.py migrate --noinput >/dev/null || fail "migrations failed"
 
     # --namespace-wildcard is load-bearing; see assert_namespaced_write.
-    log "minting a service token"
-    mint_output="$(
-        oneshot python manage.py create_service_token \
-            --name octonomy-go-harness \
-            --tenant "$TENANT_ID" \
-            --namespace-wildcard \
-            --scope tags:read \
-            --scope tags:write \
-            --scope audit:read
-    )" || fail "could not mint a service token"
-    SERVICE_TOKEN="$(printf '%s\n' "$mint_output" | sed -n 's/^Token: //p')"
-    [ -n "$SERVICE_TOKEN" ] || fail "could not parse a token out of create_service_token output: ${mint_output}"
+    log "minting the wildcard service token"
+    SERVICE_TOKEN="$(
+        mint_token octonomy-go-harness --namespace-wildcard
+    )"
+
+    # The two exact merchant grants. See NAMESPACE_A_ID above for why a wildcard
+    # token cannot stand in for them.
+    log "minting the exact merchant grants (${NAMESPACE_A_ID}, ${NAMESPACE_B_ID})"
+    NAMESPACE_A_TOKEN="$(
+        mint_token octonomy-go-harness-ns-a \
+            --application "$APPLICATION_ID" \
+            --namespace-type "$NAMESPACE_TYPE" --namespace-id "$NAMESPACE_A_ID"
+    )"
+    NAMESPACE_B_TOKEN="$(
+        mint_token octonomy-go-harness-ns-b \
+            --application "$APPLICATION_ID" \
+            --namespace-type "$NAMESPACE_TYPE" --namespace-id "$NAMESPACE_B_ID"
+    )"
 
     log "starting Octonomy on port ${PORT}"
     # shellcheck disable=SC2046 # deliberate word splitting of the env flag list
@@ -341,6 +454,7 @@ cmd_up() {
     wait_for_ready
 
     assert_namespaced_write
+    assert_exact_grants
 
     # Remove first, then create under a restrictive umask: `>` truncates an
     # existing file but leaves its old mode, so a previously world-readable
@@ -358,6 +472,14 @@ OCTONOMY_TEST_TENANT_ID=${TENANT_ID}
 OCTONOMY_TEST_APPLICATION_ID=${APPLICATION_ID}
 OCTONOMY_TEST_NAMESPACE_TYPE=${NAMESPACE_TYPE}
 OCTONOMY_TEST_NAMESPACE_ID=${NAMESPACE_ID}
+# Two merchant namespaces under the same type, each with a token holding an
+# EXACT grant for it alone. The full integration suite (#17) reads these; the
+# smoke test and the compat line use only the wildcard credentials above, so
+# they are unaffected by their presence.
+OCTONOMY_TEST_NAMESPACE_A_ID=${NAMESPACE_A_ID}
+OCTONOMY_TEST_NAMESPACE_A_TOKEN=${NAMESPACE_A_TOKEN}
+OCTONOMY_TEST_NAMESPACE_B_ID=${NAMESPACE_B_ID}
+OCTONOMY_TEST_NAMESPACE_B_TOKEN=${NAMESPACE_B_TOKEN}
 ENV_EOF
 
     trap - EXIT
