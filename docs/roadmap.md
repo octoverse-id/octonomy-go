@@ -109,17 +109,48 @@ Each has an issue; none is a missing endpoint group.
 
 Deferred by design, not gaps: the webhook typed-event surface and `http.Handler`
 ([#22](https://github.com/octoverse-id/octonomy-go/issues/22) — no deployment emits webhooks, since
-`OUTBOX_TRANSPORT` defaults to `logging`) and the client-side tag-tree helper
+`OUTBOX_TRANSPORT` defaults to `logging`, so those would be built for a consumer who does not exist,
+on payload shapes that may still move) and the client-side tag-tree helper
 ([#20](https://github.com/octoverse-id/octonomy-go/issues/20) — needs consumer-defined semantics).
+The *verification* half of webhooks did not wait on an emitter and has shipped — see below.
 
 ## What is planned that is not a resource
 
 An empty resource queue is not an empty backlog. The
 [v2.0.0-alpha.2 milestone](https://github.com/octoverse-id/octonomy-go/milestone/3) is additive work
-alongside the client rather than inside it: `octonomy/webhook` with HMAC `Verify` and signature test
-vectors ([#16](https://github.com/octoverse-id/octonomy-go/issues/16)), the full integration suite
-against the published container ([#17](https://github.com/octoverse-id/octonomy-go/issues/17)), the
-OpenAPI contract drift gate that would have caught this documentation's own drift automatically
-([#18](https://github.com/octoverse-id/octonomy-go/issues/18)), and a runnable example per resource
-group ([#19](https://github.com/octoverse-id/octonomy-go/issues/19)). Cutting
-`v2.0.0-alpha.1` itself is [#29](https://github.com/octoverse-id/octonomy-go/issues/29).
+alongside the client rather than inside it. Landed: the OpenAPI contract drift gate that would have
+caught this documentation's own drift automatically
+([#18](https://github.com/octoverse-id/octonomy-go/issues/18)), the full integration suite against
+the published container ([#17](https://github.com/octoverse-id/octonomy-go/issues/17)), and
+`octonomy/webhook` ([#16](https://github.com/octoverse-id/octonomy-go/issues/16)). Still open: a
+runnable example per resource group ([#19](https://github.com/octoverse-id/octonomy-go/issues/19)).
+Cutting `v2.0.0-alpha.1` itself was [#29](https://github.com/octoverse-id/octonomy-go/issues/29).
+
+### `octonomy/webhook` ([#16](https://github.com/octoverse-id/octonomy-go/issues/16))
+
+`Verify(secret, signatureHeader string, body []byte) error`, its distinct refusals, and portable
+signature vectors. One-way dependency: it may import the root package, and the root never imports it.
+
+**It shipped ahead of the typed events it would normally come with, and the split is the design.**
+Verification is the half that is dangerous to get wrong — a `==` instead of `hmac.Equal` leaks
+timing, a body parsed before it is verified acts on unverified data, and **a broken check still
+returns 200**, so nothing ever reports it — and it is the half that stays correct no matter how
+payloads evolve, because it depends on the signature contract rather than on any event shape. The
+typed half is the opposite on both counts, which is why it waits for an emitter
+([#22](https://github.com/octoverse-id/octonomy-go/issues/22)).
+
+**`Verify` takes `[]byte` and not an `*http.Request`, deliberately.** The HMAC is over the raw
+bytes, so a body any middleware, logger, or `json.NewDecoder(r.Body)` read first verifies as empty
+or partial — a check that appears to run, always fails, and gets "fixed" by deletion. Bytes cannot
+be handed an unread stream. Since no `http.Handler` ships, bounding the body with
+`http.MaxBytesReader` is the caller's job and the package says so.
+
+**Replay is not prevented and cannot be**: the server sends no timestamp header, so there is no
+window to enforce. Signature proves authenticity, not freshness; dedupe on the envelope's stable
+`id`, which the outbox's at-least-once delivery makes necessary anyway.
+
+The vectors in [`webhook/testdata/`](../webhook/testdata/README.md) are the durable artifact. They
+are generated from the server's own signing code rather than from this package, independently
+confirmed against `openssl`, and free of anything Go-specific or payload-specific, so another
+language's SDK can drive its verifier from the same file instead of re-deriving the contract from
+Python.

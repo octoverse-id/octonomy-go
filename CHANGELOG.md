@@ -8,6 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`octonomy/webhook` — HMAC signature verification and portable test vectors**
+  ([#16](https://github.com/octoverse-id/octonomy-go/issues/16)). A new package with one function:
+  `Verify(secret, signatureHeader string, body []byte) error`. Standard library only, like the rest
+  of the SDK, and a one-way dependency — it may import the root package, and the root never imports
+  it. No change to any existing exported API.
+  - **It ships without the typed events it would normally come with, and the split is the point.**
+    No Octonomy deployment emits webhooks today — `OUTBOX_TRANSPORT` defaults to `logging` — so
+    typed envelopes, 11 event types, and an `http.Handler` would be built for a consumer who does
+    not exist, on payload shapes that may still be refined
+    ([#22](https://github.com/octoverse-id/octonomy-go/issues/22) tracks them). Verification is the
+    opposite case: it depends on the signature contract rather than on any payload, so it is correct
+    now and stays correct, and it is the half where a mistake is both easy and silent — comparing
+    digests with `==` leaks timing, parsing before verifying acts on unverified data, and **a broken
+    check still answers 200**, so nothing ever reports it. Roughly thirty correct lines here beat
+    every consumer deriving them from the server's Python later.
+  - **`Verify` takes `[]byte`, never an `*http.Request`.** The HMAC covers the raw bytes, so a body
+    that any middleware, logger, or `json.NewDecoder(r.Body)` read first is verified as empty or
+    partial: a check that appears to run, always fails, and gets "fixed" by deleting it. Accepting
+    bytes the caller has already read makes handing it an unread stream structurally impossible.
+    Zero bytes are refused as `ErrEmptyBody` — a *policy* refusal, since HMAC of the empty message
+    is perfectly well defined — so the drained-stream case names itself instead of surfacing as a
+    permanent mismatch. An empty secret is refused as `ErrNoSecret` for the same reason: HMAC under
+    an empty key verifies, and the key is then one every attacker also has.
+  - **Digests are compared with `hmac.Equal`, over the decoded bytes.** Never `==`, never on the hex
+    text. A test parses `verify.go` and fails the build on `bytes.Equal`, `reflect.DeepEqual`, or an
+    `==` that touches a digest, because the wrong comparison passes every functional test while
+    leaking how far a forgery got — the defect is invisible to behavior, so it is checked in the
+    source. Six distinct errors (`ErrNoSecret`, `ErrMissingSignature`, `ErrUnsupportedAlgorithm`,
+    `ErrMalformedSignature`, `ErrSignatureMismatch`, `ErrEmptyBody`), none of which can be mistaken
+    for another or for success: a verifier whose failures are indistinguishable cannot say whether
+    it is misconfigured or under attack.
+  - **The signature vectors are the durable artifact**
+    ([`webhook/testdata/signature_vectors.json`](webhook/testdata/signature_vectors.json)): fixed
+    secrets, fixed bodies, and the correct digests, plus sixteen deliveries that must be rejected
+    with a language-neutral reason for each. They are generated from the server's own signing code
+    rather than from this package — a vector computed by the implementation under test proves only
+    that it agrees with itself — and every one was independently confirmed against `openssl`. They
+    carry nothing Go-specific and nothing payload-specific, so **an SDK in any language can drive
+    its verifier from the same file** rather than re-deriving the contract from Python, and they
+    stay valid as event payloads evolve.
+  - **Replay is not prevented, and this package cannot prevent it.** The server sends no timestamp
+    header, so there is no signed freshness claim and no window to enforce; the outbox is
+    at-least-once and redelivers on its own besides. The package documents that, points callers at
+    the envelope's stable `id` for dedupe, and documents that bounding the body with
+    `http.MaxBytesReader` is the caller's job — since no handler ships, nothing else will do it.
 - **A contract drift gate** ([#18](https://github.com/octoverse-id/octonomy-go/issues/18)). Nothing
   told this SDK when the Octonomy server's contract moved — it sat on a server 1.0.0 contract while
   the server shipped 3.1.0 and made a second API surface primary, and the gap was found by reading
