@@ -3,8 +3,8 @@
 How SDK methods map to Octonomy REST endpoints. The vendored specs are the reference for endpoints,
 parameters, and field names; this page is the client-side view.
 
-- [`openapi-v2.yaml`](openapi-v2.yaml) — `/api/v2`, server **3.1.1**. The default surface.
-- [`openapi.yaml`](openapi.yaml) — `/api/v1`, server **3.1.1**. Both specs now track the same server
+- [`openapi-v2.yaml`](openapi-v2.yaml) — `/api/v2`, server **3.2.0**. The default surface.
+- [`openapi.yaml`](openapi.yaml) — `/api/v1`, server **3.2.0**. Both specs now track the same server
   release.
 
 **One exception, and it is load-bearing: the vendored spec is wrong about response envelopes.** On

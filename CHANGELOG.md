@@ -67,6 +67,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `docs/versioning.md` gained a `<!-- contract-version: X.Y.Z -->` marker so the contract version in
     prose can be checked against the vendored specs.
 
+### Changed
+- **The vendored contracts now track server `3.2.0`**
+  ([#57](https://github.com/octoverse-id/octonomy-go/issues/57)). A bookkeeping refresh and nothing
+  more: server 3.2.0 is a minor release for operator-facing capability — subpath deployments,
+  self-hosted API-docs assets, two new system checks — and both generated schemas regenerate
+  byte-identical apart from `info.version`. Diffing the vendored files against the server confirms
+  it: one line changed in each, and `core/errors.py` is unchanged, so the error-code registry is
+  too. No SDK behavior changes, and no exported API moves.
+
+  It is recorded rather than skipped because the vendored files and `docs/versioning.md` are how
+  this SDK states which server it was written against, and a claim of 3.1.1 stops being true the
+  moment 3.2.0 ships. This is also the first refresh the new gate drove end to end: it reported the
+  version delta and nothing else — every schema, parameter, response and error-code comparison came
+  back clean — then failed the half-finished refresh that moved the specs without the marker, which
+  is the state it exists to forbid.
+
 ## [2.0.0-alpha.1] - 2026-09-11
 
 **The first published release of the modern line** (`main`, module

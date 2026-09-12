@@ -10,7 +10,7 @@ implemented resources, at the bottom of this page.
 This page is therefore two things: the **recipe** for adding the next resource the server ships, and
 the **register of known gaps**. Neither is a list of what exists.
 
-**Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.1.1), not from memory.** Every endpoint
+**Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.2.0), not from memory.** Every endpoint
 and parameter below was enumerated from the vendored v2 spec. **Response shapes are a different
 matter** and were verified against a running server: the spec omits both `data` envelopes, describes
 the two bulk composites and the resource-tag replace wrongly or not at all, and carries no schema for
@@ -28,7 +28,7 @@ were written against the v2-aware transport and cover a nested list route (`Tags
 well as the collection — then:
 
 1. Read the matching schema(s) in [`openapi-v2.yaml`](openapi-v2.yaml). Read the **v2** spec, not
-   [`openapi.yaml`](openapi.yaml): both are vendored at server 3.1.1, but v1 has no namespace axis,
+   [`openapi.yaml`](openapi.yaml): both are vendored at server 3.2.0, but v1 has no namespace axis,
    so its schemas omit the `namespace_type` / `namespace_id` fields every new resource needs.
 2. Create `<resource>.go` with: the model struct, `*Create`/`*Update` write structs (pointer +
    `omitempty`), `*ListParams` with a `query()` method, and a `*Service` whose methods take

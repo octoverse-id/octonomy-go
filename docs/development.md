@@ -182,7 +182,7 @@ drift apart on setup. CI reaches it through the `.github/actions/octonomy-harnes
 ## Keeping the contract current
 
 `docs/openapi-v2.yaml` (`/api/v2`) and `docs/openapi.yaml` (`/api/v1`) are vendored from the Octonomy
-server, both at release **3.1.1**. When targeting a new server contract, refresh **both** (the server
+server, both at release **3.2.0**. When targeting a new server contract, refresh **both** (the server
 generates one per `--api-version` with `make openapi`; copy the files here), reconcile any type
 changes, and update:
 
