@@ -122,8 +122,26 @@ test-integration: ## Run the full integration suite against a booted harness (se
 # Nothing is lost by the exclusion. `make test` still compiles and runs every
 # package, `make examples` is what proves the examples build, and no claim
 # anywhere says an example is covered by a test.
+# The package list is built and CHECKED before anything is tested, rather than
+# inlined as `go test $$(go list ./... | grep -v ...)`. That form hides two
+# failures behind a green run: /bin/sh has no `pipefail`, so the substitution
+# takes grep's status and a broken `go list` disappears, and an EMPTY
+# substitution leaves `go test` testing the current directory alone -- which
+# still passes, and still prints a total. A figure that measures a fraction of
+# the library while claiming to measure the library is the same vacuous green the
+# smoke target's header is about. `|| :` on the grep is there so the emptiness
+# guard below is what reports it, with a sentence, rather than `set -e` killing
+# the recipe on grep's no-match status.
 cover: ## Run tests and print total library coverage (examples excluded)
-	go test -race -coverprofile=coverage.out $$(go list ./... | grep -v '/examples/')
+	@set -e; \
+	all=$$(go list ./...); \
+	pkgs=$$(printf '%s\n' "$$all" | grep -v '/examples/' || :); \
+	[ -n "$$pkgs" ] || { \
+		echo "cover: package discovery produced no packages to test."; \
+		echo "cover: the total below would have measured the current directory alone while"; \
+		echo "cover: reporting it as the library's. Is this a module root?"; \
+		exit 1; }; \
+	go test -race -coverprofile=coverage.out $$pkgs; \
 	go tool cover -func=coverage.out | tail -1
 
 # Both modules. The SDK module has no dependencies, so its scan covers the
@@ -194,6 +212,11 @@ dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and print the ex
 # matters is a freshly minted token: something to copy, never to retype. It is
 # also separate from `dev-server` so the block can be reprinted into a second
 # terminal without rebooting the container.
+#
+# IT PRINTS A SECRET, deliberately and to a developer's own terminal. Nothing in
+# CI calls it -- the workflows drive scripts/octonomy-harness.sh directly and the
+# composite action masks every token it exports -- and nothing should: a job log
+# is not a terminal, and this target does no masking of its own.
 #
 # Values are single-quoted so a copied line survives a space, and the env file is
 # sourced through an explicit ./ prefix when it is relative -- POSIX `.` searches

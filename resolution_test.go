@@ -184,8 +184,8 @@ func TestTags_Resolve_NoMatchIsValidationNotNotFound(t *testing.T) {
 	}
 }
 
-// Whichever code the envelope carries is the code the caller sees, and the two
-// this route can produce map to DIFFERENT helpers.
+// Whichever code the envelope carries is the code the caller sees, and these two
+// reach DIFFERENT helpers. Only one of them is a code this route produces.
 //
 // The type row is the reachable one: two canonical tags sharing a slug under
 // different types really do produce a plain validation_error carrying

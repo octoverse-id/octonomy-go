@@ -105,6 +105,11 @@ func main() {
 //
 // Every example reads the same three variables, so one export block drives all
 // of them. `make dev-server` prints exactly this block.
+//
+// It is repeated in every example rather than shared, deliberately: an example is
+// copied whole, and a helper package would move the one part a reader has to
+// adapt -- how the client gets its credentials -- out of the file they are
+// reading.
 
 func mustClient() *octonomy.Client {
 	client, err := octonomy.New(octonomy.Config{

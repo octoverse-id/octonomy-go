@@ -127,6 +127,11 @@ func deref(s *string) string {
 //
 // Every example reads the same three variables, plus OCTONOMY_APPLICATION_ID
 // here. `make dev-server` prints exactly this block.
+//
+// It is repeated in every example rather than shared, deliberately: an example is
+// copied whole, and a helper package would move the one part a reader has to
+// adapt -- how the client gets its credentials -- out of the file they are
+// reading.
 
 func mustClient() *octonomy.Client {
 	client, err := octonomy.New(octonomy.Config{
