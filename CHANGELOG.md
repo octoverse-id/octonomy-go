@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [2.0.0-alpha.2] - 2026-09-13
+
 ### Added
 - **`BuildTagTree`: the client-side tag hierarchy, assembled once from a fetched slice**
   ([#20](https://github.com/octoverse-id/octonomy-go/issues/20)). `TagTree`, `TagNode`, and the
@@ -1161,10 +1165,11 @@ of all the default surface, which is now `/api/v2`.
 - `WithActor` per-request option, and `String`/`Bool`/`Int` pointer helpers for optional fields.
 - Runnable `examples/quickstart` program and a vendored `docs/openapi.yaml` contract reference.
 
-[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.1...main
+[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.2...main
+[2.0.0-alpha.2]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.1...v2.0.0-alpha.2
 [2.0.0-alpha.1]: https://github.com/octoverse-id/octonomy-go/releases/tag/v2.0.0-alpha.1
 
-<!-- Both links point at THIS line. The compat line is a different module with its own
+<!-- Every link here points at THIS line. The compat line is a different module with its own
      versions and its own copy of this file on support/go1.13, so a link to v1.0.0 from
      here would compare a consumer of /v2 against code they cannot install.
      There is still no [0.1.0] link definition, because that tag does not exist: the
