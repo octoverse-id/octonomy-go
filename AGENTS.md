@@ -280,12 +280,17 @@ it. It imports neither today, and adding a root import to it is a decision, not 
 
 - Run `make check` before pushing and `make release-check` before a release.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
-- **An example is RUN, not written.** Every program under `examples/` targets a real server through
-  `make dev-server` — which prints the export block they all read — and must demonstrate a semantic a
-  caller can get wrong, not only a create call. Run it against the container before committing: a
-  comment in an example is documentation a reader will copy, and one the server contradicts is worse
-  than no example at all. Writing `examples/resolution` is how the `ambiguous_resolution` claim in
-  `TagResolveParams` was found to be unreachable (#19).
+- **An example is RUN, not written.** Every program under `examples/` is exercised before it is
+  committed, and it must demonstrate a semantic a caller can get wrong rather than only a create
+  call — a comment in an example is documentation a reader will copy, and one the server contradicts
+  is worse than no example at all. Writing `examples/resolution` is how the `ambiguous_resolution`
+  claim in `TagResolveParams` was found to be unreachable (#19).
+  - An example that CALLS the API is run against a real server through `make dev-server`, which
+    prints the export block they all read.
+  - `examples/webhook` is the exception and needs no server: it is a receiver, it makes no Octonomy
+    request, and no deployment emits webhooks by default (#22). It is exercised by starting it and
+    sending it the two deliveries it prints — the genuine one must answer 204 and the tampered one
+    401.
 - **Examples repeat their configuration block rather than sharing one.** An example is copied whole,
   and a helper package would move the one part a reader has to adapt — how the client gets its
   credentials — out of the file they are reading. `make examples` compile-checks every one and fails
