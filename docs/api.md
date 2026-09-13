@@ -216,9 +216,15 @@ serializers, and `{}` sets the stored object to `{}`.
 
 `TagListParams` exposes the full server filter set: `application_id`, `include_shared`, `is_active`,
 `parent_id`, `q` (as `Query`), `slug`, `type`, `vocabulary_id`, plus `Limit`/`Offset` from the embedded
-`ListOptions`. `VocabularyListParams` exposes `application_id`, `include_shared`, `is_active`, and
-paging. `TagAliasListParams` exposes `application_id`, `include_shared`, `is_active`, `q` (as
-`Query`), `slug`, `tag_id`, and paging.
+`ListOptions`. `VocabularyListParams` exposes `application_id`, `include_shared`, `is_active`,
+`q` (as `Query`), `slug`, and paging — it was missing the `q`/`slug` pair until
+[#36](https://github.com/octoverse-id/octonomy-go/issues/36), which is why older code pages the
+whole list to find a vocabulary by slug. `TagAliasListParams` exposes `application_id`,
+`include_shared`, `is_active`, `q` (as `Query`), `slug`, `tag_id`, and paging.
+
+**`slug` is an exact match and `q` is not.** On all three lists the server matches `slug` exactly
+and reads `q` as a case-insensitive substring of the name *or* the slug, so `q` is the search box
+and `slug` is the lookup.
 
 **`is_active` absent means active rows only.** The server applies that default on the tag, vocabulary,
 and alias lists alike, so a nil `IsActive` is not "every row". Since `Delete` is deactivation,

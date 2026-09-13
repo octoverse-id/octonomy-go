@@ -104,7 +104,6 @@ Each has an issue; none is a missing endpoint group.
 
 | Gap | Issue |
 | --- | ----- |
-| **`VocabularyListParams` is missing `q` and `slug`.** Both have been on `GET /vocabularies` since server 1.0.0 — not v2 drift but a gap against the contract the SDK already vendored. `TagListParams` has the matching pair and is complete. | [#36](https://github.com/octoverse-id/octonomy-go/issues/36) |
 | **The tags-ordering caveats want revisiting** once the server adds an `ORDER BY` to the annotated tags list (upstream `octonomy#162`). | [#49](https://github.com/octoverse-id/octonomy-go/issues/49) |
 
 Deferred by design, not gaps: the webhook typed-event surface and `http.Handler`

@@ -78,6 +78,117 @@ func TestVocabularies_List(t *testing.T) {
 	}
 }
 
+// Every filter VocabularyListParams offers, on the wire, one case at a time.
+//
+// Table-driven rather than a single set-everything call, for two reasons. A
+// full-house case cannot tell a parameter emitted under its OWN name from one
+// emitted under a neighbour's -- swap the q and slug lines in query() and a
+// combined assertion still passes -- so `q` and `slug` each get a row where they
+// are the only filter set. And each case asserts the query string EXACTLY: a
+// parameter nobody asked for is as wrong as a missing one, and the nil-params row
+// is what proves an unset filter stays off the wire rather than going out empty.
+//
+// TestVocabularies_List above covers the decode; this covers the request (#36).
+func TestVocabularies_List_Params(t *testing.T) {
+	tests := []struct {
+		name   string
+		params *VocabularyListParams
+		want   map[string]string
+	}{
+		{
+			name: "every filter",
+			params: &VocabularyListParams{
+				ListOptions:   ListOptions{Limit: 25, Offset: 50},
+				ApplicationID: String("commerce"),
+				IncludeShared: Bool(true),
+				IsActive:      Bool(false),
+				Query:         String("promo"),
+				Slug:          String("labels"),
+			},
+			want: map[string]string{
+				"limit":          "25",
+				"offset":         "50",
+				"application_id": "commerce",
+				"include_shared": "true",
+				"is_active":      "false",
+				"q":              "promo",
+				"slug":           "labels",
+			},
+		},
+		{
+			name:   "q alone",
+			params: &VocabularyListParams{Query: String("promo")},
+			want:   map[string]string{"q": "promo"},
+		},
+		{
+			name:   "slug alone",
+			params: &VocabularyListParams{Slug: String("labels")},
+			want:   map[string]string{"slug": "labels"},
+		},
+		{
+			// nil and &"" are different requests, and which one the caller meant
+			// is not this package's call to make: nil omits the parameter, &""
+			// sends it empty. The server happens to read a blank value as no
+			// filter on both (`if value:` / `if q:` in vocabulary_selectors.py),
+			// but applying that rule HERE -- dropping the key because the value
+			// looks empty -- would be the SDK re-implementing server validation,
+			// which AGENTS.md rules out.
+			name:   "empty strings are still sent",
+			params: &VocabularyListParams{Query: String(""), Slug: String("")},
+			want:   map[string]string{"q": "", "slug": ""},
+		},
+		{
+			name:   "nil params",
+			params: nil,
+			want:   map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v2/vocabularies" {
+					t.Errorf("got %s %s, want GET /api/v2/vocabularies", r.Method, r.URL.Path)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+					t.Errorf("Authorization = %q, want Bearer test-token", got)
+				}
+				if got := r.Header.Get("X-Tenant-ID"); got != "tenant-1" {
+					t.Errorf("X-Tenant-ID = %q, want tenant-1", got)
+				}
+				q := r.URL.Query()
+				for k, v := range tt.want {
+					got, ok := q[k]
+					if !ok {
+						t.Errorf("query is missing %s (want %q); raw query = %q", k, v, r.URL.RawQuery)
+						continue
+					}
+					if len(got) != 1 || got[0] != v {
+						t.Errorf("query[%s] = %v, want [%q]", k, got, v)
+					}
+				}
+				for k := range q {
+					if _, ok := tt.want[k]; !ok {
+						t.Errorf("unexpected query param %s=%q", k, q.Get(k))
+					}
+				}
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"data":       []Vocabulary{{ID: "voc_1"}},
+					"pagination": map[string]any{"limit": 25, "offset": 50, "count": 1},
+				})
+			})
+
+			page, err := c.Vocabularies.List(context.Background(), tt.params)
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if len(page.Data) != 1 || page.Data[0].ID != "voc_1" {
+				t.Errorf("unexpected page: %+v", page.Data)
+			}
+		})
+	}
+}
+
 // The other previously untested doData route -- see TestTags_Get.
 func TestVocabularies_Get(t *testing.T) {
 	created := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)

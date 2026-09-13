@@ -36,6 +36,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,18 +302,79 @@ func TestSmoke_RealServer(t *testing.T) {
 	if vocabs.Pagination.Limit != 50 {
 		t.Errorf("vocabulary pagination did not decode: %+v", vocabs.Pagination)
 	}
-	// Look for the row we created, not merely for a non-empty page. "some
-	// vocabulary came back" still passes if a tenancy, filter, or visibility
-	// regression is returning the wrong tenant's rows.
-	found := false
-	for _, v := range vocabs.Data {
-		if v.ID == vocab.ID {
-			found = true
-			break
+
+	// 5a. The two filters #36 added. Only a real server can prove either one is
+	// READ rather than merely sent: an unknown query parameter is dropped in
+	// silence, so a name the SDK got wrong -- or one this route never supported
+	// -- comes back as a full, plausible page that looks exactly like a filter
+	// that worked. The unit test asserts the wire; this asserts the effect.
+	//
+	// A SECOND ROW IS WHAT MAKES THAT ASSERTION MEAN ANYTHING, and it is the
+	// whole reason this decoy exists. A freshly booted harness holds exactly one
+	// globally visible active vocabulary -- the one created above, since the
+	// harness's own probe rows are namespaced and invisible to this global
+	// client -- so "the filtered page holds only our row" is equally true of a
+	// server that ignored the parameter and returned the entire collection. With
+	// a second visible row present, an ignored filter returns two and every
+	// assertion below fails, which is the point.
+	//
+	// Its slug shares no substring with vocabSlug (`smoke-decoy-` against
+	// `smoke-vocab-`, each with its own pid/nanos suffix), so it cannot be swept
+	// in by the free-text lookup either.
+	decoySlug := uniqueSlug("smoke-decoy")
+	decoy, err := client.Vocabularies.Create(ctx, octonomy.VocabularyCreate{
+		Name:        "v2 smoke decoy",
+		Slug:        decoySlug,
+		Description: octonomy.String("a second visible vocabulary, so a filtered lookup has something to exclude"),
+	})
+	if err != nil {
+		t.Fatalf("Vocabularies.Create decoy: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cleanupCancel()
+		if err := client.Vocabularies.Delete(cleanupCtx, decoy.ID); err != nil {
+			t.Errorf("Vocabularies.Delete decoy: %v", err)
+		}
+	})
+
+	// Each slug returns its OWN row, which is two assertions in one: the filter
+	// includes the match, and it excludes the other row that is provably visible
+	// to this same client -- provably, because the other lookup just returned it.
+	for _, tc := range []struct {
+		slug string
+		want string
+	}{
+		{slug: vocabSlug, want: vocab.ID},
+		{slug: decoySlug, want: decoy.ID},
+	} {
+		page, err := client.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
+			Slug:        octonomy.String(tc.slug),
+			ListOptions: octonomy.ListOptions{Limit: 50},
+		})
+		if err != nil {
+			t.Fatalf("Vocabularies.List(slug=%s): %v", tc.slug, err)
+		}
+		if len(page.Data) != 1 || page.Data[0].ID != tc.want {
+			t.Fatalf("Vocabularies.List(slug=%s) returned %d rows, want only %s: %+v",
+				tc.slug, len(page.Data), tc.want, page.Data)
 		}
 	}
-	if !found {
-		t.Errorf("Vocabularies.List returned %d rows, none of them the created %s", len(vocabs.Data), vocab.ID)
+
+	// `q` is a case-insensitive substring of the name OR the slug on the server,
+	// so the slug in a different case is a match the exact filter above would
+	// miss -- which is what tells the two filters apart from here, rather than
+	// leaving `q` proved by a value `slug` would have matched anyway.
+	byQuery, err := client.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
+		Query:       octonomy.String(strings.ToUpper(vocabSlug)),
+		ListOptions: octonomy.ListOptions{Limit: 50},
+	})
+	if err != nil {
+		t.Fatalf("Vocabularies.List by q: %v", err)
+	}
+	if len(byQuery.Data) != 1 || byQuery.Data[0].ID != vocab.ID {
+		t.Fatalf("Vocabularies.List(q=%s) returned %d rows, want only %s: %+v",
+			strings.ToUpper(vocabSlug), len(byQuery.Data), vocab.ID, byQuery.Data)
 	}
 
 	// 5b. Each over a real multi-page collection (#14). The unit tests drive it

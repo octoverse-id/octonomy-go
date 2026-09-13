@@ -392,7 +392,8 @@ has no field for is dropped on the way back out, and one whose type the model ca
 decode.
 
 That is what caught `q` and `slug` missing from `VocabularyListParams`
-([#36](https://github.com/octoverse-id/octonomy-go/issues/36)).
+([#36](https://github.com/octoverse-id/octonomy-go/issues/36), since fixed — the client sends both
+now, and the allowlist rows that carried the gap are gone).
 
 This replaced a 700-line static reader of the same package, and the reason is worth keeping: that
 reader had to infer control flow — which call is the transport call, which struct builds the query,

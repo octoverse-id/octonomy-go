@@ -28,9 +28,12 @@ import (
 // `Name`; that is the shape of promise a review should not have to take on trust,
 // and now it does not.
 //
-// Where the client genuinely cannot send a documented parameter -- `q` and `slug`
-// on vocabularies, which VocabularyListParams has no field for (#36) -- that IS
-// the finding, and it belongs in the YAML's unsent_query_parameters with a reason.
+// Where the client genuinely cannot send a documented parameter, that IS the
+// finding, and it belongs in the YAML's unsent_inputs with a reason -- not in a
+// driver that quietly skips it. The worked example used to be `q` and `slug` on
+// vocabularies, which this gate found missing from VocabularyListParams and #36
+// then added; what remains listed is a decision rather than a gap (`application_id`
+// on writes, which travels in the body).
 //
 // The scope options need care rather than uniformity, and the reasons are the
 // SDK's own rules (AGENTS.md): WithApplication is refused on a request with a
@@ -131,6 +134,8 @@ func Drivers() []Driver {
 				ApplicationID: env.Str("application_id"),
 				IncludeShared: env.Bool("include_shared"),
 				IsActive:      env.Bool("is_active"),
+				Query:         env.Str("q"),
+				Slug:          env.Str("slug"),
 			}, env.ListScope()...)
 		}},
 		{Op: "post /vocabularies", SDK: "VocabularyService.Create", Call: func(ctx context.Context, env *Env) (any, error) {
