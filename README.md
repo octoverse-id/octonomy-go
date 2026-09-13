@@ -445,8 +445,21 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var event struct{ /* ... */ }
-	_ = json.Unmarshal(body, &event)
+	var event struct{ /* id, tenant_id, event_type, namespace_type, payload, ... */ }
+	if err := json.Unmarshal(body, &event); err != nil {
+		// A signed body that will not parse is not a delivery you can process,
+		// and ANY 2xx here acknowledges it: the sender marks the event published
+		// and never retries, so it is gone. Refuse, and let it be retried and
+		// eventually dead-lettered where someone will see it.
+		http.Error(w, "malformed event", http.StatusBadRequest)
+		return
+	}
+
+	// ... handle it idempotently, keyed on event.ID ...
+
+	// Explicit, because a handler that simply returns sends an implicit 200 --
+	// the same silent acknowledgement, reached by falling off the end.
+	w.WriteHeader(http.StatusNoContent)
 }
 ```
 
@@ -457,6 +470,11 @@ appears to run, always fails, and gets "fixed" by deleting it. Taking bytes the 
 read makes handing it an unread stream structurally impossible, and leaves the read, and its size
 limit, where you can see them. Zero bytes are refused as `ErrEmptyBody` rather than as a mismatch,
 precisely so that failure names itself.
+
+**Every 2xx is an acknowledgement.** The dispatcher treats one as delivered and marks the event
+published, so it is never retried — which makes a handler that answers 200 on a path it did not
+actually process the way a delivery disappears for good. Refuse with a non-2xx and let the sender's
+retry and dead-letter machinery surface it.
 
 Digests are compared with `hmac.Equal`, in constant time, over the decoded bytes — never `==` on the
 hex. Every refusal is a distinct error (`ErrMissingSignature`, `ErrUnsupportedAlgorithm`,

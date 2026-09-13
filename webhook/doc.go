@@ -54,6 +54,12 @@
 //     on both ends forever. Return 401 and let the sender's retry and
 //     dead-letter machinery make the failure visible.
 //
+//     This outlives the signature check. EVERY 2xx is an acknowledgement: the
+//     dispatcher marks the event published and never retries it, so any path
+//     that answers 200 without actually processing the delivery -- a discarded
+//     json.Unmarshal error, a handler that just falls off the end -- is how one
+//     disappears for good.
+//
 // # What a valid signature proves, and what it does not
 //
 // A nil error from Verify means these exact bytes were signed by a holder of

@@ -550,6 +550,9 @@ func TestVerifyComparesDigestsInConstantTime(t *testing.T) {
 // that secret. The second is what stops a "harden it" patch from tightening the
 // parser until real deliveries stop verifying.
 func FuzzVerify(f *testing.F) {
+	// Seeds are a best effort: a corpus is an optimization, and an unreadable or
+	// malformed vector file is already a hard failure in
+	// TestSignatureVectorsAreUsable. Failing here too would only report it twice.
 	vectors := signatureVectors{}
 	if raw, err := os.ReadFile(vectorsPath); err == nil {
 		_ = json.Unmarshal(raw, &vectors)
