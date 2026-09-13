@@ -82,6 +82,28 @@ against the fixtures it ships with. Both sides can be wrong together and stay gr
 depends on the server's real response shape needs the smoke test below — and anything that depends
 on the server's *authorization or persistence* needs the full suite after it.
 
+### Webhook signature vectors
+
+`webhook/` is the one package here that is not tested against `httptest`, because it has no wire
+contract to assert — it verifies bytes. Its suite is driven by
+[`webhook/testdata/signature_vectors.json`](../webhook/testdata/README.md): fixed secrets, fixed
+bodies, correct digests, and the deliveries that must be refused with a reason for each.
+
+**Never compute a known-good digest in Go.** A vector produced by the implementation under test
+proves only that the implementation agrees with itself — the same structural blind spot as a fixture
+written against the vendored spec. The vectors come from `webhook/testdata/generate_vectors.py`,
+which mirrors the server's `_webhook_signature`, and every accept vector was confirmed independently
+against `openssl dgst -sha256 -hmac`. Regenerate with:
+
+```bash
+cd webhook/testdata && python3 generate_vectors.py > signature_vectors.json
+```
+
+Output is deterministic. A regeneration that changes an existing digest means the signature contract
+moved, which is worth stopping over rather than committing. A new refusal needs a vector and a row
+in `rejectReasons` — the suite asserts every sentinel is reachable from the shared file, so a refusal
+proved only by a Go test is one no other language's SDK can adopt.
+
 ### Integration smoke test
 
 `integration_test.go` (build tag `integration`) is the shape check against a real server. It has
