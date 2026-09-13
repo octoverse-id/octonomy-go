@@ -77,7 +77,7 @@ jobs:
   # then misled a reviewer on PR #50, who read it and filed a finding against
   # documentation that was correct. Ask the API instead:
   #
-  #   gh api repos/:owner/:repo/branches/support%2Fgo1.13/protection \
+  #   gh api 'repos/{owner}/{repo}/branches/support%2Fgo1.13/protection' \
   #     --jq '.required_status_checks.contexts'
   go113:
     name: go1.13

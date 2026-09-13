@@ -80,7 +80,7 @@ Which of those checks mechanically blocks a merge is branch-protection state, an
 repository can observe it — so none of them claims to. Ask the API:
 
 ```console
-$ gh api repos/:owner/:repo/branches/support%2Fgo1.13/protection \
+$ gh api 'repos/{owner}/{repo}/branches/support%2Fgo1.13/protection' \
     --jq '.required_status_checks.contexts'
 ```
 
