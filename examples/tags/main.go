@@ -1,6 +1,8 @@
 // Command tags demonstrates the tag endpoints: a two-level hierarchy, the
-// (type, slug) uniqueness rule that decides when a create is a conflict, and
-// the free-text search that finds a tag without knowing its id.
+// (type, slug) uniqueness rule that decides when a create is a conflict, the
+// free-text search that finds a tag without knowing its id, and assembling the
+// hierarchy client-side with BuildTagTree -- including the orphan a deactivated
+// parent leaves behind.
 //
 //	make dev-server       # boots a real Octonomy and prints these exports
 //	go run ./examples/tags
@@ -11,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	octonomy "github.com/octoverse-id/octonomy-go/v2"
@@ -44,7 +47,9 @@ func main() {
 	fmt.Printf("created parent %s (%s)\n", parent.Slug, parent.ID)
 
 	// The hierarchy is one field: ParentID. There is no /tags/{id}/children
-	// route -- the tree is walked by filtering the list on each parent in turn.
+	// route and no tree endpoint, so a browser either filters the list once per
+	// parent -- one request per node -- or fetches the set and assembles it
+	// locally, which is what BuildTagTree does at the bottom of this file.
 	child, err := client.Tags.Create(ctx, octonomy.TagCreate{
 		Name:         "Rain jackets",
 		Slug:         unique("rain-jackets"),
@@ -105,6 +110,69 @@ func main() {
 	}
 	for _, tag := range hits.Data {
 		fmt.Printf("search hit: %s (%s) type=%s usage=%d\n", tag.Name, tag.Slug, tag.Type, tag.UsageCount)
+	}
+
+	// The tags this run created, in ONE request. The vocabulary filter is what
+	// makes that possible: it narrows the list to a set small enough for a
+	// single page, which is also the only fully safe size to walk -- GET /tags
+	// has no ORDER BY at all, so paging it can repeat or miss rows.
+	fetch := func(what string) []octonomy.Tag {
+		page, err := client.Tags.List(ctx, &octonomy.TagListParams{
+			VocabularyID: octonomy.String(vocab.ID),
+			ListOptions:  octonomy.ListOptions{Limit: 200},
+		})
+		if err != nil {
+			log.Fatalf("list %s: %v", what, err)
+		}
+		return page.Data
+	}
+
+	tree, err := octonomy.BuildTagTree(fetch("the vocabulary's tags"))
+	if err != nil {
+		log.Fatalf("build tree: %v", err)
+	}
+	fmt.Printf("assembled %d tag(s) from one list call:\n", tree.Len())
+	if err := tree.Walk(func(n *octonomy.TagNode) error {
+		fmt.Printf("  %s%s\n", strings.Repeat("  ", n.Depth), n.Tag.Name)
+		return nil
+	}); err != nil {
+		log.Fatalf("walk: %v", err)
+	}
+
+	// Now the case that sends a hand-written assembler wrong. Deleting the
+	// parent DEACTIVATES it; the cascade reaches the tag's aliases and never
+	// its children, and an unfiltered list returns active rows only. So the
+	// child comes back alone, still naming a parent this page does not hold.
+	if err := client.Tags.Delete(ctx, parent.ID); err != nil {
+		log.Fatalf("delete parent: %v", err)
+	}
+	orphaned, err := octonomy.BuildTagTree(fetch("the tags that are still active"))
+	if err != nil {
+		log.Fatalf("build tree after the delete: %v", err)
+	}
+	// Kept and reported, never dropped: an orphan is promoted to a root, so
+	// walking Roots still reaches every tag you fetched.
+	fmt.Printf("after deactivating %s: %d tag(s), %d orphan(s)\n",
+		parent.Slug, orphaned.Len(), len(orphaned.Orphans))
+	for _, node := range orphaned.Orphans {
+		fmt.Printf("  orphan %s names parent %s, which is not in this page\n", node.Tag.Slug, *node.Tag.ParentID)
+	}
+
+	// The fix is a fetch, not a guess: Get reads deactivated rows.
+	deactivated, err := client.Tags.Get(ctx, parent.ID)
+	if err != nil {
+		log.Fatalf("get the deactivated parent: %v", err)
+	}
+	repaired, err := octonomy.BuildTagTree(append(fetch("the active tags again"), *deactivated))
+	if err != nil {
+		log.Fatalf("rebuild: %v", err)
+	}
+	fmt.Printf("refetched the parent (is_active=%t): %d orphan(s)\n",
+		deactivated.IsActive, len(repaired.Orphans))
+	if node := repaired.Node(child.ID); node != nil {
+		for _, step := range node.Path() {
+			fmt.Printf("  breadcrumb: %s\n", step.Name)
+		}
 	}
 }
 

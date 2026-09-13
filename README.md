@@ -144,7 +144,7 @@ Each one demonstrates a semantic that is easy to get wrong, not just a create ca
 | ------- | ------------- |
 | [`quickstart`](examples/quickstart/main.go) | Configure, create, list, walk every page with `Each`, decode typed metadata |
 | [`vocabularies`](examples/vocabularies/main.go) | Exact-slug lookup; `Metadata` replaces and never merges; `Delete` is deactivation |
-| [`tags`](examples/tags/main.go) | Hierarchy via `ParentID`; uniqueness is on `(type, slug)`, so the same slug under another type is legal |
+| [`tags`](examples/tags/main.go) | Hierarchy via `ParentID`; uniqueness is on `(type, slug)`, so the same slug under another type is legal; assembling the tree, and the orphan a deactivated parent leaves |
 | [`aliases`](examples/aliases/main.go) | Two routes for the same rows; re-pointing an alias; the cascade from a deactivated tag |
 | [`resolution`](examples/resolution/main.go) | Alias matches; an unmatched slug is a `400`, not a `404`; the type tie and how to break it |
 | [`assignments`](examples/assignments/main.go) | Assignment is idempotent; the alias form; bulk counters; bulk is all-or-nothing |
@@ -356,6 +356,61 @@ De-duplicate on ID to remove double delivery. To *detect* the missed half, compa
 only for a complete walk from offset 0: `Count` is the size of the whole collection, so a resumed walk
 legitimately sees fewer. **Fewer proves rows were missed; equal proves nothing**, since a concurrent
 create and delete cancel out. See the `Each` doc comment for the full picture.
+
+## Assembling the tag hierarchy
+
+Tags nest through `ParentID` and the server returns them flat — there is no tree endpoint and no
+children route, so a category browser either filters the list once per parent (one request per node)
+or fetches the set and assembles it locally. `octonomy.BuildTagTree` is that assembly: it makes no
+request, takes no context, and never consults the server.
+
+```go
+page, err := client.Tags.List(ctx, &octonomy.TagListParams{
+	VocabularyID: octonomy.String(vocab.ID),
+	ListOptions:  octonomy.ListOptions{Limit: 200},
+})
+tree, err := octonomy.BuildTagTree(page.Data)
+
+tree.Walk(func(n *octonomy.TagNode) error {
+	fmt.Println(strings.Repeat("  ", n.Depth) + n.Tag.Name)
+	return nil
+})
+```
+
+**No tag is ever dropped.** On success `tree.Len() == len(tags)` and every tag is reachable from
+`Roots` exactly once. Ambiguity is an error rather than a quiet choice — a helper that is *almost*
+right is worse than none, because the workaround outlives the bug. That leaves four questions, and
+Octonomy's own behavior answers all four:
+
+| Case | What happens | Why |
+| ---- | ------------ | --- |
+| Parent not in the slice | The tag becomes a root and is listed in `Orphans` (`node.IsOrphan()`) | It is **ordinary**, not corruption — see below |
+| Inactive tags | Kept, untouched | Pruning is a filter (`TagListParams.IsActive`); the server allows an *active* tag under an *inactive* parent, so pruning here would orphan live children |
+| A parent cycle | `ErrTagCycle`, naming the chain | The server permits one: the database forbids only `parent_id = id`, and the parent validator never walks the ancestry. Every tag in a cycle has a parent in the set, so a naive assembler silently returns fewer rows than it was given |
+| Depth | Reported on each node, never limited | Assembly, the cycle check and `Walk` all use explicit stacks, so a deep chain costs memory rather than a stack overflow |
+
+**A missing parent is the normal case, and three routine things produce one:** a deactivated parent
+(delete is deactivation, the cascade reaches the tag's *aliases* and never its children, and an
+unfiltered list returns active rows only), namespace scope (a namespaced tag may name a **global**
+parent, which a read without `WithIncludeGlobal` does not return), and any filter or page at all. So
+an orphan is promoted to a root rather than dropped, and named in `Orphans` rather than disguised as
+a real root. The remedy is a fetch, not a guess — `Tags.Get` reads deactivated rows:
+
+```go
+for _, node := range tree.Orphans {
+	parent, err := client.Tags.Get(ctx, *node.Tag.ParentID) // readable even when deactivated
+	...
+}
+```
+
+`TagNode.Path()` is the breadcrumb — root first, the node last — and `tree.Node(id)` is where it
+starts. `Roots`, `Orphans` and every `Children` slice are in **input order**; nothing is sorted,
+because `GET /tags` has no `ORDER BY` to preserve in the first place.
+
+A repeated id is refused with `ErrDuplicateTagID` rather than resolved: the copies may disagree about
+`ParentID`, and choosing between them is the one place assembly could silently build a *different*
+tree. An `Each` walk can deliver a row twice, so de-duplicate on id first — the two-line form is in
+the `BuildTagTree` doc comment.
 
 ## Typed metadata
 
