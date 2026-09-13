@@ -34,19 +34,30 @@ func main() {
 	// same as being visible to every merchant -- a namespaced read excludes it
 	// by default, and reaches it only when the caller opts in AND is authorized
 	// for global. Both halves are below.
+	//
+	// It names the SAME application as the merchant row that follows, and that
+	// is load-bearing rather than tidy: the server splits slug uniqueness across
+	// three constraints, and a pair differing on the application axis as well
+	// would land in two different ones -- so it would say nothing about
+	// namespaces. Held constant, the namespace is the only thing left that can
+	// explain the second create succeeding.
 	slug := unique("returns-policy")
 	global, err := client.Tags.Create(ctx, octonomy.TagCreate{
 		Name: "Returns policy", Slug: slug, Type: "label",
+		ApplicationID: octonomy.String(appID),
 	})
 	if err != nil {
 		log.Fatalf("create the global tag: %v", err)
 	}
 	fmt.Printf("global tag %s: namespace=%v\n", global.Slug, global.NamespaceType)
 
-	// The same slug again, inside a merchant namespace. It is not a conflict:
-	// slug uniqueness is scoped per namespace, so a merchant may carry its own
-	// row under a name the tenant already uses. A namespaced write names its
-	// application in the BODY -- the query parameter is not authoritative there.
+	// The same slug, the same type, the same application -- and a merchant
+	// namespace. It is not a conflict: slug uniqueness is scoped PER NAMESPACE,
+	// so a merchant may carry its own row under a name the tenant already uses.
+	// Creating this one in the global namespace instead would be a 409.
+	//
+	// A namespaced write names its application in the BODY -- the query
+	// parameter is not authoritative there.
 	scoped, err := client.Tags.Create(ctx, octonomy.TagCreate{
 		Name: "Returns policy (merchant)", Slug: slug, Type: "label",
 		ApplicationID: octonomy.String(appID),
@@ -74,6 +85,11 @@ func main() {
 	// widens what the request asks for, and a token holding an exact merchant
 	// grant with no global authority still sees no global rows -- silently
 	// absent, not an error. This example's token is a wildcard, so it sees them.
+	//
+	// It widens the NAMESPACE axis only. The application axis is a separate
+	// filter and is unaffected -- though note that one is not narrow either:
+	// application_id matches that application OR the tenant-shared rows unless
+	// TagListParams.IncludeShared says otherwise.
 	both, err := client.Tags.List(ctx, &octonomy.TagListParams{Slug: octonomy.String(slug)},
 		octonomy.WithNamespace(nsType, nsID), octonomy.WithApplication(appID), octonomy.WithIncludeGlobal())
 	if err != nil {
