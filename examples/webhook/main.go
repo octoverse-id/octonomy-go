@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -133,12 +134,22 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Bind BEFORE announcing. ListenAndServe in a goroutine would let this
+	// program print "listening" and a curl command while the socket is not yet
+	// accepting -- so the first delivery gets connection refused -- and would
+	// report a bind failure (a port already in use) only after claiming to have
+	// succeeded. net.Listen here makes both impossible: the address is held by
+	// the time anything is printed, and a failure is the program's exit status.
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("listen on %s: %v", addr, err)
+	}
 	go func() {
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("listen: %v", err)
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("serve: %v", err)
 		}
 	}()
-	printTryItCommands(addr, secret)
+	printTryItCommands(listener.Addr().String(), secret)
 
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

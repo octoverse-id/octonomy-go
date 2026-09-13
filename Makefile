@@ -112,8 +112,18 @@ test-integration: ## Run the full integration suite against a booted harness (se
 		echo "test-integration: suite. Were the tests renamed, or is the build tag missing?"; \
 		exit 1; }
 
-cover: ## Run tests and print total coverage
-	go test -race -coverprofile=coverage.out ./...
+# Examples are excluded, and the reason is arithmetic rather than taste. They are
+# main packages with no tests, so every statement in them lands in the profile
+# uncovered: adding the ten examples on #19 moved this number from 96.7% to 54.0%
+# without one line of the library becoming less tested. A figure that reads
+# "coverage collapsed" when nothing collapsed is worse than no figure, and this
+# is the number AGENTS.md's "keep new code covered" is read off.
+#
+# Nothing is lost by the exclusion. `make test` still compiles and runs every
+# package, `make examples` is what proves the examples build, and no claim
+# anywhere says an example is covered by a test.
+cover: ## Run tests and print total library coverage (examples excluded)
+	go test -race -coverprofile=coverage.out $$(go list ./... | grep -v '/examples/')
 	go tool cover -func=coverage.out | tail -1
 
 # Both modules. The SDK module has no dependencies, so its scan covers the
@@ -188,6 +198,13 @@ dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and print the ex
 # Values are single-quoted so a copied line survives a space, and the env file is
 # sourced through an explicit ./ prefix when it is relative -- POSIX `.` searches
 # PATH for a bare name, which would source something else entirely.
+#
+# Every value is checked for emptiness before anything is printed, which is the
+# vacuous-green rule the smoke target states at length, in this target's shape: a
+# file that exists proves nothing, and an interrupted boot leaves a stale or
+# partial one behind. Printing OCTONOMY_TOKEN='' and exiting 0 would say the
+# examples can run while handing over credentials that cannot authenticate, and
+# the failure would surface three commands later as a blanket 401.
 dev-server-env: ## Print the export block the examples read (needs a booted dev-server)
 	@set -e; \
 	env_file=$$(scripts/octonomy-harness.sh env); \
@@ -196,6 +213,19 @@ dev-server-env: ## Print the export block the examples read (needs a booted dev-
 		echo "dev-server-env: $$env_file does not exist -- run \`make dev-server\` first."; \
 		exit 1; }; \
 	set -a; . "$$env_file"; set +a; \
+	missing=""; \
+	for var in OCTONOMY_TEST_BASE_URL OCTONOMY_TEST_TOKEN OCTONOMY_TEST_TENANT_ID \
+		OCTONOMY_TEST_APPLICATION_ID OCTONOMY_TEST_NAMESPACE_TYPE OCTONOMY_TEST_NAMESPACE_ID; do \
+		eval "value=\$$$$var"; \
+		[ -n "$$value" ] || missing="$$missing $$var"; \
+	done; \
+	[ -z "$$missing" ] || { \
+		echo "dev-server-env: $$env_file is missing a value for:$$missing"; \
+		echo "dev-server-env: printing the block anyway would hand you blank credentials and a"; \
+		echo "dev-server-env: green exit -- the examples would then fail somewhere else. The file"; \
+		echo "dev-server-env: is written whole at the end of a successful boot, so a partial one"; \
+		echo "dev-server-env: means an interrupted or stale run: \`make dev-server\` again."; \
+		exit 1; }; \
 	echo; \
 	echo "Run any example against this server:"; \
 	echo; \

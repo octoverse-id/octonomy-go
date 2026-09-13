@@ -29,8 +29,11 @@ func main() {
 	// startup, and every call site would still look correct. Scope is
 	// per-request, where the data is asked for.
 	//
-	// A tag created with no namespace option is GLOBAL -- tenant-shared, and
-	// visible to every merchant.
+	// A tag created with no namespace option is GLOBAL: it lives in the
+	// tenant-shared namespace rather than in any merchant's. That is not the
+	// same as being visible to every merchant -- a namespaced read excludes it
+	// by default, and reaches it only when the caller opts in AND is authorized
+	// for global. Both halves are below.
 	slug := unique("returns-policy")
 	global, err := client.Tags.Create(ctx, octonomy.TagCreate{
 		Name: "Returns policy", Slug: slug, Type: "label",
@@ -138,6 +141,11 @@ func mustEnv(key string) string {
 
 // unique keeps repeat runs against one long-lived dev server from colliding on
 // the server's slug uniqueness constraint.
+//
+// The WHOLE nanosecond timestamp, not a remainder of it: taking it modulo a
+// second reduces the namespace to "which nanosecond within this second", so two
+// runs a second apart at the same offset produce the same slug -- and the
+// collision surfaces as the conflict this helper exists to avoid.
 func unique(prefix string) string {
-	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()%1e9)
+	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }

@@ -256,6 +256,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     directory. CI now calls the target instead of the bare command, so there is one definition. The
     emptiness guard is the same vacuous-green rule the `smoke` and `test-integration` targets carry
     — `find` matching nothing would otherwise report success having compiled nothing.
+  - **`make cover` now excludes the examples, and the reason is arithmetic.** They are main packages
+    with no tests, so every statement in them lands in the profile uncovered: the ten new examples
+    moved the reported total from 96.7% to 54.0% without one line of the library becoming less
+    tested. That figure is what "keep new code covered" is read off, and a number that says
+    "coverage collapsed" when nothing collapsed is worse than no number. `make test` still runs
+    every package and `make examples` is what proves the examples build.
   - **The webhook example is a receiver, not a handler the SDK ships.** `webhook.Handler` was
     deferred with the rest of the typed-event surface (#22) because no deployment emits webhooks
     yet, so the example is the shape a consumer has to write: bound the body, read it, verify, and
@@ -282,6 +288,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     words — and a code that arrives in an envelope is preserved verbatim whatever raised it.
   - **An example is what found this.** The first draft of `examples/resolution` demonstrated the
     application tie, and it would not reproduce.
+  - `TestTags_Resolve_AmbiguityAxes` keeps both rows and now says what each one proves: the type row
+    is a route behaviour, the application row is a code-preservation case asking whether a code that
+    ARRIVES in an envelope is surfaced verbatim whatever raised it. Its earlier comment read that
+    fixture as evidence the route emits one.
+  - The same claim stands in the `2.0.0-alpha.1` entry below and is **left alone**. A released
+    changelog entry records what was believed when it shipped; this entry is the correction that
+    supersedes it, and rewriting history would remove the only trace that the SDK ever said
+    otherwise.
 - **`AuditLog.RequestID` no longer claims the SDK cannot send one.** Its doc comment still said
   "this SDK does not send one yet (#5)", which stopped being true when `WithRequestID` shipped —
   and the smoke test has been asserting the caller-supplied id lands in `audit.request_id` ever

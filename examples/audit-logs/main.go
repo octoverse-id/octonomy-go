@@ -158,6 +158,11 @@ func mustEnv(key string) string {
 
 // unique keeps repeat runs against one long-lived dev server from colliding on
 // the server's slug uniqueness constraint.
+//
+// The WHOLE nanosecond timestamp, not a remainder of it: taking it modulo a
+// second reduces the namespace to "which nanosecond within this second", so two
+// runs a second apart at the same offset produce the same slug -- and the
+// collision surfaces as the conflict this helper exists to avoid.
 func unique(prefix string) string {
-	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()%1e9)
+	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }

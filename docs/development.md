@@ -26,7 +26,7 @@ make fmt-check   # gofmt -l . (no output = clean)
 make vet         # go vet ./...
 make lint        # golangci-lint (if installed)
 make test        # go test -race -cover ./...
-make cover       # prints total coverage
+make cover       # prints total library coverage (examples excluded -- see the Makefile)
 make examples    # compile-check every runnable example
 make smoke       # integration smoke test against a booted server (see below)
 make test-integration # the full integration suite against a booted server (see below)
