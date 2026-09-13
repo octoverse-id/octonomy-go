@@ -278,42 +278,28 @@ operations:
 # on every list route, and `resource_type` is legitimately absent from a body while
 # being required in the path. A name-keyed allowlist would silence all of them.
 #
-# The two below are a real gap, not a decision — and this gate found them. The
-# first draft compared parameter names against the whole package, which read `q`
-# and `slug` as implemented because tags.go sends them; the per-operation check
-# that replaced it surfaced exactly the gap #36 already records. They stay listed
-# rather than fixed here because adding two exported fields is a client change,
-# not a CI one.
+# This list held a real gap once, and what became of it is the intended lifecycle
+# rather than a footnote. The gate reported `q` and `slug` unsent on
+# GET /vocabularies — the first draft compared parameter names against the whole
+# package and read them as implemented because tags.go sends them; the
+# per-operation check that replaced it surfaced the gap #36 already recorded. The
+# rows carried that reason until #36 added the two fields, at which point the gate
+# reported them as stale rows and they were dropped. A row is a parking place with
+# an expiry, not a permanent exemption: the moment the client starts sending an
+# input, its own row fails.
+#
+# Every row below is ONE RULE, applied eleven times, and it is a decision
+# rather than a gap: every write documents `application_id` as a query parameter
+# and the SDK sends it in the body instead. The rows exist because the gate reads
+# the wire — so the rule has to be stated somewhere it can be checked, and if the
+# SDK ever starts putting it on the query string, all eleven turn into stale-row
+# findings at once.
+#
+# The reason is written once and referenced, so it cannot rot in ten copies —
+# and `carried_in: body` is not prose at all: the gate requires the property to
+# really be in that request's payload, so each row proves its own replacement
+# path instead of merely asserting one.
 unsent_inputs:
-  - path: /vocabularies
-    method: get
-    in: query
-    name: q
-    reason: >-
-      VocabularyListParams has no free-text search field. On GET /vocabularies
-      since server 1.0.0, so this is a gap against a contract the SDK already
-      vendored rather than v2 drift; TagListParams carries the matching pair.
-      Tracked in https://github.com/octoverse-id/octonomy-go/issues/36 and in
-      docs/roadmap.md.
-  - path: /vocabularies
-    method: get
-    in: query
-    name: slug
-    reason: >-
-      The other half of the same gap. See the row above and
-      https://github.com/octoverse-id/octonomy-go/issues/36.
-
-  # The rest of this list is ONE RULE, applied eleven times, and it is a decision
-  # rather than a gap: every write documents `application_id` as a query parameter
-  # and the SDK sends it in the body instead. The rows exist because the gate reads
-  # the wire — so the rule has to be stated somewhere it can be checked, and if the
-  # SDK ever starts putting it on the query string, all eleven turn into stale-row
-  # findings at once.
-  #
-  # The reason is written once and referenced, so it cannot rot in ten copies —
-  # and `carried_in: body` is not prose at all: the gate requires the property to
-  # really be in that request's payload, so each row proves its own replacement
-  # path instead of merely asserting one.
   - path: /tags
     method: post
     in: query

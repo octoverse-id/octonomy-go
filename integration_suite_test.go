@@ -121,13 +121,14 @@ const (
 // A new read method is expected to arrive here alongside its resource file. A
 // read endpoint nobody probed is the one a cross-merchant leak lives in.
 //
-// PAGINATION IS NOT AN EXHAUSTIVENESS ARGUMENT. Every list probe below either
-// narrows to the fixture with an exact server-side filter, or walks the whole
-// collection with octonomy.Each. A single page -- even at the server's 200-row
-// clamp -- proves only that the row is not on the FIRST page, and "not on page
-// one" is not "not visible": a long-lived harness, or a run that leaked
-// fixtures, pushes a genuinely leaked row past the boundary and turns the leak
-// into a pass. The routes scoped to one fixture row (a tag's aliases, a
+// PAGINATION IS NOT AN EXHAUSTIVENESS ARGUMENT. Every list probe below narrows
+// to the fixture with an exact server-side filter; a route whose params struct
+// offered no such filter would have to walk the whole collection with
+// octonomy.Each instead, as Vocabularies.List did until #36 gave it a slug
+// filter. A single page -- even at the server's 200-row clamp -- proves only
+// that the row is not on the FIRST page, and "not on page one" is not "not
+// visible": a long-lived harness, or a run that leaked fixtures, pushes a
+// genuinely leaked row past the boundary and turns the leak into a pass. The routes scoped to one fixture row (a tag's aliases, a
 // resource's tags, one entity's audit rows) hold a handful of rows by
 // construction and are read with an explicit generous limit.
 func readProbes(h harness) []readProbe {
@@ -269,26 +270,25 @@ func readProbes(h harness) []readProbe {
 			name:     "Vocabularies.List",
 			filtered: filteredEmpty,
 			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
-				// VocabularyListParams exposes no slug or free-text filter (#36
-				// covers the gap), so this is the one probe that must WALK the
-				// collection rather than narrow it. Each stops on the server's
-				// own end-of-collection signal, so "absent" here means absent
-				// from the endpoint, not merely from page one.
-				found := false
-				_, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: scopedLimit},
-					func(ctx context.Context, o octonomy.ListOptions) (*octonomy.List[octonomy.Vocabulary], error) {
-						return c.Vocabularies.List(ctx, &octonomy.VocabularyListParams{ListOptions: o}, h.scoped(readNS, extra...)...)
-					},
-					func(row octonomy.Vocabulary) error {
-						if row.ID == want.vocabulary.ID {
-							found = true
-						}
-						return nil
-					})
+				// Filtered by the fixture's own slug, same reasoning as Tags.List.
+				// This probe used to WALK the collection instead, because
+				// VocabularyListParams exposed no slug filter (#36); with the
+				// filter in place it narrows like every other one, and an empty
+				// page means the row is genuinely not visible rather than merely
+				// absent from the page we looked at.
+				page, err := c.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
+					Slug:        octonomy.String(want.vocabulary.Slug),
+					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
+				}, h.scoped(readNS, extra...)...)
 				if err != nil {
 					return false, err
 				}
-				return found, nil
+				for _, row := range page.Data {
+					if row.ID == want.vocabulary.ID {
+						return true, nil
+					}
+				}
+				return false, nil
 			},
 		},
 		{

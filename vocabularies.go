@@ -66,11 +66,18 @@ type VocabularyUpdate struct {
 
 // VocabularyListParams filters and pages the vocabulary list. A nil *params lists
 // with server defaults.
+//
+// Query and Slug are the same pair TagListParams carries, with the same
+// server-side semantics: Slug is an exact match, and Query maps to the free-text
+// `q` parameter, which matches name OR slug case-insensitively. Both have been on
+// GET /vocabularies since server 1.0.0; they were missing here until #36.
 type VocabularyListParams struct {
 	ListOptions
 	ApplicationID *string
 	IncludeShared *bool
 	IsActive      *bool
+	Query         *string
+	Slug          *string
 }
 
 func (p *VocabularyListParams) query() url.Values {
@@ -87,6 +94,12 @@ func (p *VocabularyListParams) query() url.Values {
 	}
 	if p.IsActive != nil {
 		q.Set("is_active", strconv.FormatBool(*p.IsActive))
+	}
+	if p.Query != nil {
+		q.Set("q", *p.Query)
+	}
+	if p.Slug != nil {
+		q.Set("slug", *p.Slug)
 	}
 	return q
 }

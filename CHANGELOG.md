@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`VocabularyListParams` gained the `q` and `slug` filters**
+  ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)). `Query *string` (the server's `q`)
+  and `Slug *string` — the pair `TagListParams` and `TagAliasListParams` already carried. Two optional
+  pointer fields on an existing params struct, omitted from the query string while nil like every
+  other filter, so a MINOR-shaped addition: existing callers keep compiling and behaving identically,
+  with the one caveat `docs/versioning.md` states for every field addition — an *unkeyed* composite
+  literal of `VocabularyListParams` in a consumer's code stops compiling, which `go vet`'s
+  `composites` check flags and no example here writes.
+  - **This is a gap against a contract this repository already vendored, not v2 drift.** Both
+    parameters have been on `GET /vocabularies` since server **1.0.0**, they are in the SDK's own
+    `docs/openapi.yaml`, and both surfaces document the same vocabulary filters — v2 adds only the
+    namespace axis (`X-Namespace-*`, `include_global`) on top of them. Verified against the server
+    source rather than the spec, as the rules here require: `slug` is an exact match, and `q` filters
+    `name__icontains OR slug__icontains` — byte-identical to `filter_tags`, which
+    `TagListParams.Query` already maps.
+  - **Until now an SDK caller could not look up a vocabulary by slug at all.** The only way to find
+    one was to page the whole collection and filter in Go — correct until a tenant outgrows the page
+    you happened to ask for, and then quietly wrong. The integration suite's own namespace-isolation
+    probe for `Vocabularies.List` was written that way, and was the single probe in that table that
+    walked rather than narrowed; it now uses the exact slug filter like every other one, which
+    removes the page-boundary caveat from an isolation assertion.
+  - **The contract gate found this, and the same gate is what proves it closed.** `q` and `slug` sat
+    in `docs/contract-coverage.yaml` under `unsent_inputs` with a written reason; the driver in
+    `tools/contractdrift/drivers.go` now populates both, so the gate requires them on the wire and
+    reports the two rows as stale unless they are dropped. They are. A row there is a parking place
+    with an expiry rather than a permanent exemption, and this is the first one to reach it.
+  - **Two tests, because they answer different questions.** A table-driven unit test asserts each
+    filter on the query string one at a time — a combined "set everything" case cannot tell a
+    parameter emitted under its own name from one emitted under its neighbour's — and asserts the
+    query string *exactly*, so an unset filter is proved to stay off the wire rather than go out
+    empty. `make smoke` then asserts both against a real server, which is the only place a filter can
+    be shown to be **read**: an unknown query parameter is silently dropped, so a name the SDK got
+    wrong comes back as a full, plausible page that looks exactly like a filter that worked. That
+    assertion needed a **second** visible vocabulary to mean anything — a freshly booted harness holds
+    exactly one, the smoke test's own, since the harness probe rows are namespaced and invisible to a
+    global client, so "the filtered page holds only our row" would have been equally true of a server
+    that ignored the parameter. With a decoy row present an ignored filter returns two rows and the
+    test fails, which was confirmed by deleting the emission and watching it go red against the
+    container.
 - **`octonomy/webhook` — HMAC signature verification and portable test vectors**
   ([#16](https://github.com/octoverse-id/octonomy-go/issues/16)). A new package with one function:
   `Verify(secret, signatureHeader string, body []byte) error`. Standard library only, like the rest
@@ -92,8 +131,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     drive per surface answers a **409** with an envelope built from `ErrorResponse` — the most
     referenced schema in either contract, and for a while the one nothing exercised, since the stub
     only ever answered `200` or `204` — so a renamed `error.code` is reported, instead of silently
-    turning every `IsNotFound`, `IsConflict` and `IsValidation` into `false`. **This found a real gap on its first run** — `VocabularyListParams` is missing `q` and `slug`
-    ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)). An earlier draft read the package
+    turning every `IsNotFound`, `IsConflict` and `IsValidation` into `false`. **This found a real gap on its first run** — `VocabularyListParams` was missing `q` and `slug`
+    ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)), closed later in this same
+    unreleased cycle; the entry above is the fix. An earlier draft read the package
     statically instead and was replaced: inferring control flow from an AST answered *clean* for a
     method that stopped passing its query builder, one that branched between two private helpers, and
     a schema property whose type changed.
