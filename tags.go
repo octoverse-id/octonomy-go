@@ -59,42 +59,81 @@ type TagCreate struct {
 	IsActive      *bool    `json:"is_active,omitempty"`
 }
 
-// TagUpdate is the PATCH body for updating a tag. Only non-nil fields are sent.
+// TagUpdate is the PATCH body for updating a tag. Every field is an Optional,
+// so each one says exactly one of three things:
+//
+//	octonomy.TagUpdate{Name: octonomy.Set("Autumn")}       // {"name":"Autumn"}
+//	octonomy.TagUpdate{ParentID: octonomy.Null[string]()}  // {"parent_id":null} -- un-nests the tag
+//	octonomy.TagUpdate{}                                   // {} -- touches nothing
+//
+// A PATCH replaces rather than merges, field by field: the server leaves every
+// column whose key is absent alone, and overwrites the ones that arrive.
+//
+// # Which nulls the server accepts, and which it refuses
+//
+// The vendored v2 contract marks seven properties nullable across the three
+// patch schemas, three of which are application_id -- refused on every resource
+// as a scope change -- so the REACHABLE set is four, three of them here.
+// Verified live against a running server, one PATCH per row, re-reading the row
+// after each:
+//
+//	{"parent_id": null}       200  link cleared
+//	{"vocabulary_id": null}   200  link cleared
+//	{"description": null}     200  cleared to null
+//	{"application_id": null}  409  scope_immutable -- when the row HAS an application
+//	{"name": null}            400  validation_error: "This field may not be null."
+//	{"slug": null}            400  likewise; also type, metadata and is_active
+//
+// **A null ApplicationID on a row that is already tenant-shared answers 200.**
+// The server refuses a scope CHANGE, not the literal null, so the no-op case
+// passes. That is not permission to clear one -- see IsScopeImmutable.
+//
+// This package refuses none of the 400s locally. Which fields are nullable is a
+// server rule, and re-running server validation in the client is out of bounds
+// here; the server names the offending field in APIError.Details.
+//
+// # Clearing a parent is how a cycle gets broken
+//
+// A parent cycle is reachable on the server -- the database forbids only
+// parent_id = id, and nothing walks the ancestry -- so BuildTagTree refuses one
+// with ErrTagCycle. Null[string]() on ParentID is the repair: before #64 the
+// request could not be expressed at all, and the ring had to be broken by
+// re-pointing a link at a third tag or deactivating a row instead.
 type TagUpdate struct {
-	ApplicationID *string `json:"application_id,omitempty"`
-	Name          *string `json:"name,omitempty"`
-	Slug          *string `json:"slug,omitempty"`
-	Type          *string `json:"type,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	ParentID      *string `json:"parent_id,omitempty"`
-	VocabularyID  *string `json:"vocabulary_id,omitempty"`
+	ApplicationID Optional[string] `json:"application_id,omitzero"`
+	Name          Optional[string] `json:"name,omitzero"`
+	Slug          Optional[string] `json:"slug,omitzero"`
+	Type          Optional[string] `json:"type,omitzero"`
+	Description   Optional[string] `json:"description,omitzero"`
+	ParentID      Optional[string] `json:"parent_id,omitzero"`
+	VocabularyID  Optional[string] `json:"vocabulary_id,omitzero"`
 
-	// Metadata REPLACES the stored object rather than merging into it, and is a
-	// POINTER so that "clear it" can be said at all:
+	// Metadata REPLACES the stored object rather than merging into it:
 	//
-	//	&Metadata{"team": "growth"}  -> replaces the stored object
-	//	&Metadata{}                  -> sends "metadata": {}, emptying it
-	//	nil                          -> omits the key, leaving it untouched
+	//	octonomy.Set(octonomy.Metadata{"team": "growth"})  // replaces the stored object
+	//	octonomy.Set(octonomy.Metadata{})                  // sends {} -- empties it
+	//	octonomy.Optional[octonomy.Metadata]{}             // omits the key -- untouched
 	//
-	// The pointer is load-bearing, not stylistic. Metadata is map[string]any,
-	// and encoding/json counts a zero-length map as empty under omitempty -- so
-	// while this was a plain Metadata, Metadata{} sent NO metadata key, and a
-	// caller asking to clear the object got a 200 with the old object still in
-	// place and no error: a request that looked like it worked and silently did
-	// nothing, which is the failure this SDK refuses everywhere else (#37).
-	// Dropping omitempty instead is not an option -- it would put
-	// "metadata": null on every PATCH that does not touch metadata.
+	// Emptying it is Set of an EMPTY MAP, never Null: the server answers
+	// "metadata": null with a 400 ("This field may not be null"), so
+	// Null[Metadata]() compiles and is always refused. Set of a NIL map
+	// (var m Metadata; Set(m)) encodes as null and is refused the same way --
+	// write Set(Metadata{}).
 	//
-	// A pointer to a NIL map (var m Metadata; u.Metadata = &m) marshals as
-	// "metadata": null, which is neither of the two intents above. Use
-	// &Metadata{} to clear.
+	// This field is what #37 was about. While it was a plain Metadata,
+	// encoding/json counted a zero-length map as empty under omitempty, so
+	// Metadata{} sent NO metadata key and a caller asking to clear the object
+	// got a 200 with the old object still in place and no error. omitzero
+	// cannot repeat that: it consults Optional.IsZero, which reports which of
+	// the three states the field is in and never inspects the payload, so an
+	// empty map that was Set explicitly still goes out.
 	//
 	// VocabularyUpdate and TagAliasUpdate carry the same field for the same
-	// reason and point here; all three moved together so that no resource is the
-	// pointer-typed outlier.
-	Metadata *Metadata `json:"metadata,omitempty"`
+	// reason and point here; all three moved together so that no resource is
+	// the outlier.
+	Metadata Optional[Metadata] `json:"metadata,omitzero"`
 
-	IsActive *bool `json:"is_active,omitempty"`
+	IsActive Optional[bool] `json:"is_active,omitzero"`
 }
 
 // TagListParams filters and pages the tag list. A nil *params lists with server

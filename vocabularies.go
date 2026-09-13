@@ -49,19 +49,29 @@ type VocabularyCreate struct {
 	IsActive      *bool    `json:"is_active,omitempty"`
 }
 
-// VocabularyUpdate is the PATCH body for updating a vocabulary. Only non-nil
-// fields are sent, so the server updates exactly what you set.
+// VocabularyUpdate is the PATCH body for updating a vocabulary. Every field is
+// an Optional: the zero value omits the key, Set sends a value, and Null sends
+// an explicit JSON null. See TagUpdate for the three states and for the table
+// of which nulls the server accepts.
+//
+// Description is the one nullable field reachable here -- {"description": null}
+// answers 200 and clears it. ApplicationID is nullable in the contract but
+// clears nothing: on a row that HAS an application it is a 409 scope_immutable
+// (IsScopeImmutable), and on one that is already tenant-shared it is a 200
+// no-op, since the server refuses a scope CHANGE rather than the literal null.
+// Name, Slug, Metadata and IsActive answer 400 on a null.
 type VocabularyUpdate struct {
-	ApplicationID *string `json:"application_id,omitempty"`
-	Name          *string `json:"name,omitempty"`
-	Slug          *string `json:"slug,omitempty"`
-	Description   *string `json:"description,omitempty"`
+	ApplicationID Optional[string] `json:"application_id,omitzero"`
+	Name          Optional[string] `json:"name,omitzero"`
+	Slug          Optional[string] `json:"slug,omitzero"`
+	Description   Optional[string] `json:"description,omitzero"`
 
-	// Metadata replaces the stored object; &Metadata{} clears it and nil omits
-	// the key. See TagUpdate.Metadata for why this one field is a pointer (#37).
-	Metadata *Metadata `json:"metadata,omitempty"`
+	// Metadata replaces the stored object; Set(Metadata{}) empties it and the
+	// zero Optional omits the key. See TagUpdate.Metadata for why Null is not
+	// the way to empty it (#37, #64).
+	Metadata Optional[Metadata] `json:"metadata,omitzero"`
 
-	IsActive *bool `json:"is_active,omitempty"`
+	IsActive Optional[bool] `json:"is_active,omitzero"`
 }
 
 // VocabularyListParams filters and pages the vocabulary list. A nil *params lists

@@ -9,12 +9,17 @@ import (
 // the `metadata` field on vocabularies, tags, aliases, and audit logs.
 type Metadata = map[string]any
 
-// String returns a pointer to v. It is a convenience for setting optional or
-// nullable request fields such as TagCreate.Description.
+// String returns a pointer to v. It is a convenience for the optional fields of
+// a *Create struct and a *ListParams struct, such as TagCreate.Description and
+// TagListParams.Slug.
+//
+// It is NOT how a *Update struct is filled. Those fields are Optional[T], which
+// has a third state a pointer cannot express -- see Optional and Set.
 func String(v string) *string { return &v }
 
-// Bool returns a pointer to v, for optional boolean request fields such as
-// TagCreate.IsActive.
+// Bool returns a pointer to v, for the optional boolean fields of a *Create or
+// *ListParams struct, such as TagCreate.IsActive. On a *Update struct use
+// Set instead; see String.
 func Bool(v bool) *bool { return &v }
 
 // Int returns a pointer to v, for optional integer fields.

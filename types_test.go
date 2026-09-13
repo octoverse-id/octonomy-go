@@ -269,23 +269,24 @@ func TestMetadataIsStillAnAlias(t *testing.T) {
 
 // --- Metadata on PATCH bodies ---------------------------------------------
 
-// nilMetadata returns a pointer to a nil Metadata, the one spelling that is
-// neither "clear it" nor "leave it alone". It exists as a helper because
-// &Metadata(nil) is not addressable.
-func nilMetadata() *Metadata {
+// nilMapMetadata returns an Optional holding a NIL Metadata map, the one
+// spelling that looks like "clear it" and is not: it encodes as null, which the
+// server refuses. It exists as a helper so the intent is named at the call site.
+func nilMapMetadata() Optional[Metadata] {
 	var m Metadata
-	return &m
+	return Set(m)
 }
 
 // The three PATCH bodies that carry Metadata must agree on what each spelling
 // of the field puts on the wire.
 //
-// The pointer exists for exactly this. While Metadata was a plain map,
-// encoding/json counted a zero-length one as empty under omitempty, so
+// The three-state field exists for exactly this. While Metadata was a plain
+// map, encoding/json counted a zero-length one as empty under omitempty, so
 // Metadata{} sent NO metadata key: "clear the stored object" was
 // indistinguishable from "leave it alone", and the caller got a 200 with the old
 // object still in place and no error (#37). That is the silent-success shape
-// this SDK refuses everywhere else.
+// this SDK refuses everywhere else. omitzero cannot repeat it -- it consults
+// Optional.IsZero, which reports the state and never inspects the payload.
 //
 // All three resources are walked rather than one sampled, because what the fix
 // promises is that none of them is the outlier -- and the assertion is on the
@@ -296,17 +297,17 @@ func TestUpdateMetadata_OmitClearAndReplaceOnEveryPatchBody(t *testing.T) {
 		name string
 		path string
 		resp any
-		call func(*Client, *Metadata) error
+		call func(*Client, Optional[Metadata]) error
 	}{
-		{"tags", "/api/v2/tags/tag_1", Tag{ID: "tag_1"}, func(c *Client, m *Metadata) error {
+		{"tags", "/api/v2/tags/tag_1", Tag{ID: "tag_1"}, func(c *Client, m Optional[Metadata]) error {
 			_, err := c.Tags.Update(context.Background(), "tag_1", TagUpdate{Metadata: m})
 			return err
 		}},
-		{"vocabularies", "/api/v2/vocabularies/voc_1", Vocabulary{ID: "voc_1"}, func(c *Client, m *Metadata) error {
+		{"vocabularies", "/api/v2/vocabularies/voc_1", Vocabulary{ID: "voc_1"}, func(c *Client, m Optional[Metadata]) error {
 			_, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{Metadata: m})
 			return err
 		}},
-		{"tag-aliases", "/api/v2/tag-aliases/alias_1", TagAlias{ID: "alias_1"}, func(c *Client, m *Metadata) error {
+		{"tag-aliases", "/api/v2/tag-aliases/alias_1", TagAlias{ID: "alias_1"}, func(c *Client, m Optional[Metadata]) error {
 			_, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{Metadata: m})
 			return err
 		}},
@@ -314,17 +315,19 @@ func TestUpdateMetadata_OmitClearAndReplaceOnEveryPatchBody(t *testing.T) {
 
 	bodies := []struct {
 		name string
-		meta *Metadata
+		meta Optional[Metadata]
 		// want is the raw JSON expected under "metadata"; empty means the key
 		// must not be on the wire at all.
 		want string
 	}{
-		{"nil omits the key", nil, ""},
-		{"empty map clears the stored object", &Metadata{}, `{}`},
-		{"populated map replaces it", &Metadata{"team": "growth"}, `{"team":"growth"}`},
-		// Documented on TagUpdate.Metadata: a pointer to a NIL map is neither
-		// intent and marshals as null. Pinned so the doc comment stays true.
-		{"pointer to a nil map is null", nilMetadata(), `null`},
+		{"the zero Optional omits the key", Optional[Metadata]{}, ""},
+		{"Set of an empty map clears the stored object", Set(Metadata{}), `{}`},
+		{"Set of a populated map replaces it", Set(Metadata{"team": "growth"}), `{"team":"growth"}`},
+		// Documented on TagUpdate.Metadata: neither of these is how the object
+		// is emptied, and both reach the server as a null it answers 400 to.
+		// Pinned so the doc comment stays true.
+		{"Set of a nil map is null", nilMapMetadata(), `null`},
+		{"Null is null", Null[Metadata](), `null`},
 	}
 
 	for _, res := range resources {

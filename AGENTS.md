@@ -165,8 +165,18 @@ stays a faithful, ergonomic client.
   `/api/v2` satisfy `IsNotFound`, so a caller's not-found branch read a missing route as an empty
   taxonomy with no error (#7). A code that arrives *in* an envelope is preserved verbatim, including
   one this SDK has no constant for.
-- Server read-only fields are decode-only; write structs (`*Create`/`*Update`) use pointer fields
-  with `omitempty` so PATCH sends only what the caller set.
+- Server read-only fields are decode-only. `*Create` structs use pointer fields with `omitempty`.
+- **Every field of a `*Update` struct is an `Optional[T]` tagged `omitzero`, with no exceptions.** A
+  PATCH has to express three things — leave it alone, set it, clear it — and a pointer carries two,
+  so the nullable fields could not be cleared at all (#64). `omitempty` is wrong here and silently
+  so: it never omits a struct, so a field tagged with it would put `"field": null` on every PATCH
+  that does not touch it. `TestUpdateBodiesTagEveryOptionalOmitzero` parses this package's source
+  and fails on either mistake for any type whose name ends in `Update`, and
+  `Optional.MarshalJSON` refuses to encode an omitted value rather than falling back to null.
+  **Do not add a field-by-field guard for which nulls the server accepts.** Which fields are
+  nullable is a server rule and the server names the offending field; the reachable set (four
+  fields) is documented on `TagUpdate` and asserted against a real server in
+  `TestIntegration_NullClearsOnlyTheNullableFields`, not enforced here.
 - No new exported surface without doc comments and tests.
 
 ## Webhook Rules

@@ -211,7 +211,7 @@ func TestTags_Update(t *testing.T) {
 		writeData(t, w, http.StatusOK, Tag{ID: "tag_1", IsActive: false})
 	})
 
-	tag, err := c.Tags.Update(context.Background(), "tag_1", TagUpdate{IsActive: Bool(false)})
+	tag, err := c.Tags.Update(context.Background(), "tag_1", TagUpdate{IsActive: Set(false)})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}

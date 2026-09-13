@@ -187,29 +187,84 @@ new method is added in one place. Every group the vendored contracts publish is 
 
 ### Update bodies
 
-**A PATCH sends only the fields you set, and each one replaces rather than merges.** `*Update`
-structs use pointer fields with `omitempty`, so a nil field never reaches the wire and the server
-leaves that column alone. Nothing is deep-merged: setting `Metadata` replaces the whole stored object
-rather than adding keys to it.
+**A PATCH sends only the fields you set, and each one replaces rather than merges.** A field the
+server never sees is a column it leaves alone; nothing is deep-merged, so setting `Metadata`
+replaces the whole stored object rather than adding keys to it.
 
-`Metadata` is a pointer for that reason — it is the one field whose "empty" and "absent" would
-otherwise be the same bytes:
+Every field of `TagUpdate`, `VocabularyUpdate`, and `TagAliasUpdate` is an `octonomy.Optional[T]`,
+which says one of **three** things:
 
 ```go
-octonomy.TagUpdate{Metadata: &octonomy.Metadata{"team": "growth"}} // replaces the stored object
-octonomy.TagUpdate{Metadata: &octonomy.Metadata{}}                 // sends {} — clears it
-octonomy.TagUpdate{}                                               // omits the key — untouched
+octonomy.TagUpdate{Name: octonomy.Set("Autumn")}       // {"name":"Autumn"}    — set it
+octonomy.TagUpdate{ParentID: octonomy.Null[string]()}  // {"parent_id":null}   — clear it
+octonomy.TagUpdate{}                                   // {}                   — touch nothing
 ```
 
-`Metadata` is `map[string]any`, and `encoding/json` counts a zero-length map as empty under
-`omitempty`. While the field was a plain map, `Metadata{}` therefore sent **no** `metadata` key at
-all, and a caller asking to clear the object got a 200 with the old object still in place and no
-error ([#37](https://github.com/octoverse-id/octonomy-go/issues/37)). A pointer to a *nil* map
-(`var m octonomy.Metadata; u.Metadata = &m`) is neither intent and marshals as `"metadata": null`;
-use `&octonomy.Metadata{}` to clear. `TagUpdate`, `VocabularyUpdate`, and `TagAliasUpdate` all carry
-the field this way, so no resource behaves differently from the others.
+Read one back with `Get`, and tell the other two apart with `IsZero` (omitted) and `IsNull`:
 
-The server supports the clear: `metadata` is a plain optional JSON field on all three patch
+```go
+if id, ok := update.ParentID.Get(); ok {
+	// the PATCH will set parent_id to id
+} else if update.ParentID.IsNull() {
+	// the PATCH will clear it
+}
+```
+
+**Why three states and not a pointer.** Every optional field used to be a `*T` with `omitempty`,
+where `nil` meant "leave this one alone". That spends the pointer's one spare state on
+absent-versus-set and leaves nothing to say `null` with, so **a caller could not un-nest a tag,
+detach it from a vocabulary, or remove a description at all** — the request was inexpressible rather
+than awkward ([#64](https://github.com/octoverse-id/octonomy-go/issues/64)). Nothing about the old
+shape was a lie; what was missing was a way to say the third thing. The field tag is `omitzero`
+(Go 1.24), not `omitempty`, because `omitempty` never omits a struct.
+
+#### Which nulls the server accepts
+
+The vendored v2 contract marks seven properties `nullable: true` across the three patch schemas.
+Three of the seven are `application_id`, which every resource refuses as a scope change, so the
+**reachable** set is four. Verified live, one PATCH per row, re-reading the row after each:
+
+| Field | `Null[T]()` | |
+| ----- | ----------- | --- |
+| `TagUpdate.ParentID` | `200` | link cleared |
+| `TagUpdate.VocabularyID` | `200` | link cleared |
+| `TagUpdate.Description` | `200` | cleared to null |
+| `VocabularyUpdate.Description` | `200` | cleared to null |
+| `*Update.ApplicationID` | `409` *or* `200` | `scope_immutable` when the row **has** an application; a no-op that clears nothing when it is already tenant-shared — see below |
+| everything else | `400` | `validation_error`: "This field may not be null." |
+
+`TagAliasUpdate` has **no** clearable field: `application_id` is its only nullable property, and
+nulling it clears nothing either way.
+
+A null `ApplicationID` on a row that is **already** tenant-shared answers `200` — the server refuses
+a scope *change*, not the literal null, so the no-op case passes. That is not permission to clear
+one.
+
+The SDK refuses none of these locally. Which fields are nullable is a server rule; re-running server
+validation in the client is out of bounds here, and the server names the offending field in
+`APIError.Details`.
+
+#### Metadata is emptied with `Set`, never with `Null`
+
+```go
+octonomy.TagUpdate{Metadata: octonomy.Set(octonomy.Metadata{"team": "growth"})} // replaces the object
+octonomy.TagUpdate{Metadata: octonomy.Set(octonomy.Metadata{})}                 // sends {} — empties it
+octonomy.TagUpdate{}                                                            // omits the key
+```
+
+`metadata` is **not** nullable on any of the three patch serializers — `"metadata": null` is a `400`
+— so `octonomy.Null[octonomy.Metadata]()` compiles and is always refused. `Set` of a *nil* map
+(`var m octonomy.Metadata; octonomy.Set(m)`) encodes as `null` and is refused the same way; write
+`Set(octonomy.Metadata{})`.
+
+This field is what [#37](https://github.com/octoverse-id/octonomy-go/issues/37) was about. `Metadata`
+is `map[string]any`, and `encoding/json` counts a zero-length map as empty under `omitempty`, so
+while the field was a plain map `Metadata{}` sent **no** `metadata` key at all and a caller asking to
+clear the object got a 200 with the old object still in place and no error. `omitzero` cannot repeat
+that: it consults `Optional.IsZero`, which reports which of the three states the field is in and
+never inspects the payload, so an empty map that was `Set` explicitly still goes out.
+
+The server supports the empty: `metadata` is a plain optional JSON field on all three patch
 serializers, and `{}` sets the stored object to `{}`.
 
 ### List parameters

@@ -34,7 +34,7 @@ func main() {
 	// and a row here name the same string.
 	requestID := unique("req-example")
 	if _, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{
-		Name: octonomy.String("Seasonal (renamed)"),
+		Name: octonomy.Set("Seasonal (renamed)"),
 	}, octonomy.WithRequestID(requestID)); err != nil {
 		log.Fatalf("rename tag: %v", err)
 	}

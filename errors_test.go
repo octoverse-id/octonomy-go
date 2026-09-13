@@ -419,15 +419,15 @@ func TestIsScopeImmutable_OnEveryDocumentedPatch(t *testing.T) {
 		call func(*Client) error
 	}{
 		{"tags", "/tags/tag_1", func(c *Client) error {
-			_, err := c.Tags.Update(context.Background(), "tag_1", TagUpdate{ApplicationID: String("other")})
+			_, err := c.Tags.Update(context.Background(), "tag_1", TagUpdate{ApplicationID: Set("other")})
 			return err
 		}},
 		{"vocabularies", "/vocabularies/voc_1", func(c *Client) error {
-			_, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{ApplicationID: String("other")})
+			_, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{ApplicationID: Set("other")})
 			return err
 		}},
 		{"tag-aliases", "/tag-aliases/alias_1", func(c *Client) error {
-			_, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{ApplicationID: String("other")})
+			_, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{ApplicationID: Set("other")})
 			return err
 		}},
 	}

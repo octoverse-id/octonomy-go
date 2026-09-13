@@ -70,7 +70,7 @@ func main() {
 	// through TagID is an ordinary edit -- what PATCH refuses is a change of
 	// SCOPE (application or namespace), which is a 409 IsScopeImmutable.
 	repointed, err := client.Aliases.Update(ctx, alias.ID, octonomy.TagAliasUpdate{
-		TagID: octonomy.String(trainers.ID),
+		TagID: octonomy.Set(trainers.ID),
 	})
 	if err != nil {
 		log.Fatalf("re-point alias: %v", err)

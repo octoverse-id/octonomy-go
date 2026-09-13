@@ -283,7 +283,7 @@ func TestAliases_Update(t *testing.T) {
 		writeData(t, w, http.StatusOK, TagAlias{ID: "alias_1", TagID: "tag_2", Slug: "on-sale"})
 	})
 
-	alias, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{TagID: String("tag_2")})
+	alias, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{TagID: Set("tag_2")})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestAliases_UpdateScopeImmutable(t *testing.T) {
 		})
 	})
 
-	_, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{ApplicationID: String("other")})
+	_, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{ApplicationID: Set("other")})
 	apiErr, ok := AsAPIError(err)
 	if !ok {
 		t.Fatalf("expected *APIError, got %v", err)

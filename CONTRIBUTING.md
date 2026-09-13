@@ -56,8 +56,9 @@ These mirror [AGENTS.md](AGENTS.md):
   specific to this line; `support/go1.13` has no type parameters and declares a `*TagList` /
   `*VocabularyList` per resource instead.
 - Non-2xx responses become `*APIError`; add `Is<Code>` helpers for common codes.
-- Write structs use pointer fields with `omitempty` so PATCH sends only what is set; server
-  read-only fields are decode-only.
+- `*Create` structs use pointer fields with `omitempty` so a create sends only what is set.
+  **`*Update` structs use `Optional[T]` with `omitzero`** — three states, because a PATCH has to be
+  able to say null as well as "leave it alone" (#64). Server read-only fields are decode-only.
 - The library never panics, exits, or logs — it returns wrapped errors (`octonomy:` prefix, `%w`).
 - Keep types faithful to the vendored contracts — `docs/openapi-v2.yaml` (`/api/v2`, the default
   surface) and `docs/openapi.yaml` (`/api/v1`), both at server 3.2.0. Read the **v2** spec when

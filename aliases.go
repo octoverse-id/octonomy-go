@@ -66,25 +66,34 @@ type TagAliasCreate struct {
 	IsActive      *bool    `json:"is_active,omitempty"`
 }
 
-// TagAliasUpdate is the PATCH body for updating an alias. Only non-nil fields are
-// sent, so the server updates exactly what you set.
+// TagAliasUpdate is the PATCH body for updating an alias. Every field is an
+// Optional: the zero value omits the key, Set sends a value, and Null sends an
+// explicit JSON null. See TagUpdate for the three states and for the table of
+// which nulls the server accepts.
 //
 // TagID re-points the alias at a different tag; the new target must satisfy the
 // same compatibility rules a create does. ApplicationID is present because the
 // server's patch schema carries it, but changing it is a 409 scope_immutable
 // (IsScopeImmutable) -- see AliasService.Update.
+//
+// **No field on this struct is clearable.** ApplicationID is the only nullable
+// property in PatchedTagAliasPatch, and nulling it clears nothing: on a row that
+// HAS an application it is a 409 scope_immutable, and on one that is already
+// tenant-shared it is a 200 no-op, because the server refuses a scope CHANGE
+// rather than the literal null. Every other field answers 400 on a null, so Null
+// belongs on none of them.
 type TagAliasUpdate struct {
-	ApplicationID *string `json:"application_id,omitempty"`
-	TagID         *string `json:"tag_id,omitempty"`
-	Name          *string `json:"name,omitempty"`
-	Slug          *string `json:"slug,omitempty"`
+	ApplicationID Optional[string] `json:"application_id,omitzero"`
+	TagID         Optional[string] `json:"tag_id,omitzero"`
+	Name          Optional[string] `json:"name,omitzero"`
+	Slug          Optional[string] `json:"slug,omitzero"`
 
-	// Metadata REPLACES the stored object; it does not merge. &Metadata{} clears
-	// it and nil omits the key. See TagUpdate.Metadata for why this one field is
-	// a pointer (#37).
-	Metadata *Metadata `json:"metadata,omitempty"`
+	// Metadata REPLACES the stored object; it does not merge. Set(Metadata{})
+	// empties it and the zero Optional omits the key. See TagUpdate.Metadata
+	// for why Null is not the way to empty it (#37, #64).
+	Metadata Optional[Metadata] `json:"metadata,omitzero"`
 
-	IsActive *bool `json:"is_active,omitempty"`
+	IsActive Optional[bool] `json:"is_active,omitzero"`
 }
 
 // TagAliasListParams filters and pages the alias list. A nil *params lists with
