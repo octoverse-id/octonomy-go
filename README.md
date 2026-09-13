@@ -369,13 +369,26 @@ page, err := client.Tags.List(ctx, &octonomy.TagListParams{
 	VocabularyID: octonomy.String(vocab.ID),
 	ListOptions:  octonomy.ListOptions{Limit: 200},
 })
-tree, err := octonomy.BuildTagTree(page.Data)
+if err != nil {
+	return err
+}
 
-tree.Walk(func(n *octonomy.TagNode) error {
+tree, err := octonomy.BuildTagTree(page.Data)
+if err != nil {
+	return err // a cycle or a repeated id -- see below
+}
+
+// Walk, not a loop over Roots: a root's Depth is always 0, and its children
+// are not in that slice.
+err = tree.Walk(func(n *octonomy.TagNode) error {
 	fmt.Println(strings.Repeat("  ", n.Depth) + n.Tag.Name)
 	return nil
 })
 ```
+
+**Check that second error.** `BuildTagTree` returns `(nil, err)` on a refusal, and every method here
+tolerates a nil receiver — so a snippet that drops it walks an empty tree and renders nothing, which
+turns the loud refusal below into the silent empty page it exists to prevent.
 
 **No tag is ever dropped.** On success `tree.Len() == len(tags)` and every tag is reachable from
 `Roots` exactly once. Ambiguity is an error rather than a quiet choice — a helper that is *almost*

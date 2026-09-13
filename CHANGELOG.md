@@ -57,6 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     process down and this library promises not to panic. Every method tolerates a nil receiver for
     the same reason: `BuildTagTree` returns `(nil, err)` on a refusal, and the natural call site
     reaches `Len` with it.
+  - **`Walk` refuses a nil callback and every method tolerates a nil receiver**, in the same words
+    `Each` uses. A `Walk` that dereferenced a nil callback would panic only on a tree with at least
+    one node — the shape that passes a test suite and fails in production — and `BuildTagTree`
+    returns `(nil, err)` on a refusal, so the natural call site reaches these methods with a nil
+    tree. The copy of each `Tag` is SHALLOW and the doc comment says so rather than cloning six
+    `*string` fields per node: a `Tag` decoded from a response owns pointers no caller holds, so
+    the sharing is reachable only for a hand-built slice, and both halves are pinned by tests.
   - **Order is INPUT order**, for `Roots`, `Orphans` and every `Children` slice, and nothing is
     sorted. `GET /tags` has no `ORDER BY` at all, so there is no server order to preserve and none
     to invent; `Walk` visits a node before its children, so sorting `Children` inside the callback

@@ -28,6 +28,10 @@ func ids(nodes []*TagNode) []string {
 	return out
 }
 
+// label is how cycleError renders one tag: "id (slug)". The tag helper gives
+// every tag a slug equal to its id.
+func label(id string) string { return id + " (" + id + ")" }
+
 // walkIDs is the pre-order walk as a flat list of ids.
 func walkIDs(t *testing.T, tree *TagTree) []string {
 	t.Helper()
@@ -281,10 +285,24 @@ func TestBuildTagTree_RefusesACycle(t *testing.T) {
 		{
 			// The node that hangs BELOW the cycle is unreachable too. The
 			// message must name the cycle itself, not the innocent descendant.
+			//
+			// The descendant is FIRST in the input on purpose: the walk up
+			// starts from the first unreached tag, so this is the ordering that
+			// exercises the prefix trim in cycleError. With the cycle first the
+			// walk begins inside it and trims nothing, and a regression that
+			// dropped the trim would pass.
 			name:       "a descendant of a cycle is not named",
-			tags:       []Tag{tag("a", "b"), tag("b", "a"), tag("hanger", "a")},
+			tags:       []Tag{tag("hanger", "a"), tag("a", "b"), tag("b", "a")},
 			wantIDs:    []string{"a", "b"},
 			wantAbsent: []string{"hanger"},
+		},
+		{
+			// Two independent cycles: the report names the one the first
+			// unreached tag leads to, and nothing from the other.
+			name:       "two independent cycles report the first",
+			tags:       []Tag{tag("x", "y"), tag("y", "x"), tag("p", "q"), tag("q", "p")},
+			wantIDs:    []string{"x", "y"},
+			wantAbsent: []string{"p", "q"},
 		},
 	}
 
@@ -300,13 +318,17 @@ func TestBuildTagTree_RefusesACycle(t *testing.T) {
 			if !errors.Is(err, ErrTagCycle) {
 				t.Fatalf("error does not match ErrTagCycle: %v", err)
 			}
+			// Matched as the whole LABEL ("id (slug)") rather than as a bare
+			// substring: a one-character id matches half the sentence
+			// otherwise -- "p" appears in the word "parent" -- and an absence
+			// assertion that cannot fail is worse than none.
 			for _, id := range tc.wantIDs {
-				if !strings.Contains(err.Error(), id) {
+				if !strings.Contains(err.Error(), label(id)) {
 					t.Errorf("message does not name %q: %v", id, err)
 				}
 			}
 			for _, id := range tc.wantAbsent {
-				if strings.Contains(err.Error(), id) {
+				if strings.Contains(err.Error(), label(id)) {
 					t.Errorf("message names %q, which is not in the cycle: %v", id, err)
 				}
 			}
@@ -413,16 +435,52 @@ func TestBuildTagTree_RefusesABlankID(t *testing.T) {
 	}
 }
 
-func TestBuildTagTree_DoesNotAliasTheInputSlice(t *testing.T) {
-	tags := []Tag{tag("root", ""), tag("kid", "root")}
-	tree, err := BuildTagTree(tags)
-	if err != nil {
-		t.Fatalf("BuildTagTree: %v", err)
-	}
-	tags[0].Name = "rewritten after the build"
-	if got := tree.Node("root").Tag.Name; got != "ROOT" {
-		t.Errorf("the tree followed an edit to the input slice: Name = %q", got)
-	}
+func TestBuildTagTree_CopySemantics(t *testing.T) {
+	t.Run("an edit to the input slice does not reach the tree", func(t *testing.T) {
+		tags := []Tag{tag("root", ""), tag("kid", "root")}
+		tree, err := BuildTagTree(tags)
+		if err != nil {
+			t.Fatalf("BuildTagTree: %v", err)
+		}
+		tags[0].Name = "rewritten after the build"
+		if got := tree.Node("root").Tag.Name; got != "ROOT" {
+			t.Errorf("the tree followed an edit to the input slice: Name = %q", got)
+		}
+	})
+
+	// The other half, pinned because the doc comment states it rather than
+	// defending against it: the copy is SHALLOW, so a pointer the caller still
+	// holds reaches into the node. Cloning six *string fields per node to
+	// prevent this would be an allocation per node per field, and a Tag decoded
+	// from a response owns pointers no caller holds -- so this is reachable
+	// only for a hand-built slice, and it is documented rather than fixed.
+	t.Run("a pointer the caller still holds is shared, and is documented so", func(t *testing.T) {
+		parentID := "parent"
+		description := "a description"
+		tags := []Tag{
+			{ID: "parent", Slug: "parent"},
+			{ID: "child", Slug: "child", ParentID: &parentID, Description: &description},
+		}
+		tree, err := BuildTagTree(tags)
+		if err != nil {
+			t.Fatalf("BuildTagTree: %v", err)
+		}
+		parentID = "somewhere else"
+		description = "rewritten"
+
+		child := tree.Node("child")
+		if got := *child.Tag.ParentID; got != "somewhere else" {
+			t.Errorf("Tag.ParentID = %q: the pointer was cloned after all, and the doc comment now says it is not", got)
+		}
+		if got := *child.Tag.Description; got != "rewritten" {
+			t.Errorf("Tag.Description = %q: the pointer was cloned after all", got)
+		}
+		// The ASSEMBLED shape was computed at build time and does not move with
+		// the pointer, which is the part that would otherwise be a silent lie.
+		if child.Parent == nil || child.Parent.Tag.ID != "parent" {
+			t.Errorf("the link moved with the caller's pointer: %#v", child.Parent)
+		}
+	})
 }
 
 func TestTagTree_Walk(t *testing.T) {
@@ -492,6 +550,36 @@ func TestTagTree_Walk(t *testing.T) {
 		}
 		if want := []string{"r", "a", "z"}; !slices.Equal(got, want) {
 			t.Errorf("Walk = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a nil callback is an error rather than a panic", func(t *testing.T) {
+		// Each refuses a nil callback in the same words. A Walk that
+		// dereferenced it would panic out of a library that promises not to,
+		// and only on a tree with at least one node -- the shape that survives
+		// a test suite and fails in production.
+		empty, err := BuildTagTree(nil)
+		if err != nil {
+			t.Fatalf("BuildTagTree(nil): %v", err)
+		}
+		for _, tc := range []struct {
+			name string
+			call func() error
+		}{
+			{"populated tree", func() error { return tree.Walk(nil) }},
+			{"empty tree", func() error { return empty.Walk(nil) }},
+			{"nil tree", func() error { var nilTree *TagTree; return nilTree.Walk(nil) }},
+			{"node", func() error { return tree.Roots[0].Walk(nil) }},
+			{"nil node", func() error { var nilNode *TagNode; return nilNode.Walk(nil) }},
+		} {
+			err := tc.call()
+			if err == nil {
+				t.Errorf("%s: Walk(nil) returned no error", tc.name)
+				continue
+			}
+			if !strings.Contains(err.Error(), "callback is nil") {
+				t.Errorf("%s: Walk(nil) = %v, want a nil-callback error", tc.name, err)
+			}
 		}
 	})
 

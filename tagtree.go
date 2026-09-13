@@ -30,14 +30,22 @@ var ErrDuplicateTagID = errors.New("octonomy: duplicate tag id")
 
 // TagNode is one tag's position in an assembled tree.
 //
-// Tag is a COPY of the input value, so the tree does not alias the slice you
-// passed and later edits to either are independent -- with the usual shallow
-// caveat that Metadata is a map and is therefore shared with the original.
+// Tag is a SHALLOW copy of the input value: the struct is copied, so replacing
+// an element of the slice you passed does not reach the tree, but its POINTER
+// and MAP fields still point where they did. Tag carries six *string fields and
+// a Metadata map, so a caller who kept a pointer it stored in one can still
+// change what a node reports through it. That is only reachable for a
+// hand-built slice -- a Tag decoded from a response owns pointers nothing else
+// holds -- and cloning them here would be an allocation per node per field to
+// defend against it. Build the tree from tags you are not still editing.
 //
-// Parent, Children and Depth are a SNAPSHOT computed by BuildTagTree. They are
-// exported to be read and walked, not rewired: appending to Children yourself
-// leaves Parent and Depth describing the tree as it was built. Build a new tree
-// from an edited slice instead.
+// Parent, Children and Depth are a SNAPSHOT computed by BuildTagTree, exported
+// to be read and walked rather than rewired. Rewiring them is not defended
+// against and cannot be in Go: Walk and Path follow the links they find, so a
+// Parent or Children edited into a loop does not terminate, and emptying Roots
+// leaves Len reporting tags that Walk no longer reaches. Appending to Children
+// also leaves Parent and Depth describing the tree as it was built. Edit the
+// slice and build a new tree instead.
 type TagNode struct {
 	// Tag is the tag this node carries.
 	Tag Tag
@@ -97,9 +105,12 @@ type TagTree struct {
 //	if err != nil {
 //		return err
 //	}
-//	for _, root := range tree.Roots {
-//		fmt.Println(strings.Repeat("  ", root.Depth) + root.Tag.Name)
-//	}
+//	// Walk, not a loop over Roots: a root's Depth is always 0, and its
+//	// children are not in that slice.
+//	err = tree.Walk(func(node *octonomy.TagNode) error {
+//		fmt.Println(strings.Repeat("  ", node.Depth) + node.Tag.Name)
+//		return nil
+//	})
 //
 // # NO TAG IS EVER DROPPED
 //
@@ -127,7 +138,10 @@ type TagTree struct {
 //     reaches the tag's ALIASES ONLY and never its children, and an unfiltered
 //     list returns active rows only (is_active defaults to true in the server's
 //     filter). So a live child of a deactivated parent is returned while its
-//     parent is not. Pass IsActive explicitly to see both.
+//     parent is not. NO SINGLE LIST CALL RECOVERS BOTH: IsActive is a *bool
+//     that selects one side or the other, so fetch the missing parent by id
+//     (Tags.Get reads deactivated rows) or list the inactive ones separately,
+//     then rebuild from the combined slice.
 //   - Namespace scope. A namespaced tag may name a GLOBAL parent -- the server
 //     permits exactly that -- and a namespaced read without WithIncludeGlobal
 //     does not return global rows.
@@ -333,9 +347,19 @@ func (t *TagTree) Node(id string) *TagNode {
 //
 //	var errFound = errors.New("found")
 //
+// A nil fn is an error rather than a panic, and a nil tree walks nothing.
+//
 // The walk reads Children, so fn may sort them -- a node's children are visited
 // after fn has run on it. It may not safely ADD or REMOVE nodes mid-walk.
 func (t *TagTree) Walk(fn func(*TagNode) error) error {
+	// Refused here as well as in TagNode.Walk, so an empty or nil tree answers
+	// the same way a populated one does. A nil callback is caller misuse, and
+	// Each refuses it in the same words rather than dereferencing it: the
+	// library never panics, and "it only panicked on an empty tree" is the
+	// shape that reaches production.
+	if fn == nil {
+		return errors.New("octonomy: TagTree.Walk: callback is nil")
+	}
 	if t == nil {
 		return nil
 	}
@@ -348,8 +372,12 @@ func (t *TagTree) Walk(fn func(*TagNode) error) error {
 }
 
 // Walk calls fn on this node and then, pre-order, on everything beneath it.
-// It stops at the first error fn returns and returns it unchanged.
+// It stops at the first error fn returns and returns it unchanged. A nil fn is
+// an error rather than a panic, and a nil node walks nothing.
 func (n *TagNode) Walk(fn func(*TagNode) error) error {
+	if fn == nil {
+		return errors.New("octonomy: TagNode.Walk: callback is nil")
+	}
 	if n == nil {
 		return nil
 	}
