@@ -124,9 +124,9 @@ func main() {
 
 ### Runnable examples
 
-One per resource group, each a single `main.go` you can run against a real Octonomy in about five
-minutes. `make dev-server` boots one — Postgres, the published container, migrations, a minted
-service token — and ends by printing the export block every example reads:
+One per resource group, each a single `main.go`, and you can be running them against a real Octonomy
+in about five minutes. `make dev-server` boots one — Postgres, the published container, migrations, a
+minted service token — and ends by printing the export block the API examples read:
 
 ```bash
 make dev-server          # boots, then prints the exports; `make dev-server-env` reprints them
@@ -152,6 +152,10 @@ Each one demonstrates a semantic that is easy to get wrong, not just a create ca
 | [`health`](examples/health/main.go) | Credential-free probes, and unreachable versus answered-but-not-ready |
 | [`namespaces`](examples/namespaces/main.go) | Merchant scoping, what `include_global` widens, and the options the SDK refuses |
 | [`webhook`](examples/webhook/main.go) | A receiver: bound, read, verify, then parse — and why routing comes from the body |
+
+[`webhook`](examples/webhook/main.go) is the one that needs no server: it is a receiver, it makes no
+Octonomy request, and no deployment emits webhooks by default. Run it on its own — it prints a
+genuine delivery and a tampered one as `curl` commands, which answer `204` and `401`.
 
 `make examples` compile-checks all of them and runs inside `make release-check`.
 

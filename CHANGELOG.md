@@ -235,7 +235,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#19](https://github.com/octoverse-id/octonomy-go/issues/19)). Ten new programs under
   `examples/` — `vocabularies`, `tags`, `aliases`, `resolution`, `assignments`, `resources`,
   `audit-logs`, `health`, `namespaces`, `webhook` — beside the quickstart that was the only one
-  before. Every one runs against `make dev-server` with no file edits.
+  before. The ten that call the API run against `make dev-server` with no file edits; `webhook` is a
+  receiver and needs no server at all, which the bullet below says more about.
   - **They demonstrate the semantics that are easy to get wrong, not the happy call.** Assignment
     being idempotent rather than a conflict; `ReplaceTags` replacing rather than merging, and an
     empty request clearing the resource outright; `Delete` being deactivation, which is why an
