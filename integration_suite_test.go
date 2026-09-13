@@ -26,6 +26,11 @@
 //	bulk partial failure     -- atomic, and it does not leak the existence of
 //	                            another merchant's rows
 //	deactivation cascade     -- deleting a tag deactivates its aliases
+//	tag-tree orphans         -- and NOT its children, so a live child of a
+//	                            deactivated parent comes back from the default
+//	                            list alone: the shape TagTree.Orphans exists for
+//	tag-tree cycles          -- the server accepts A -> B -> A, so ErrTagCycle
+//	                            is reachable rather than defensive
 //	slug uniqueness          -- scoped per namespace, not per tenant
 //	error envelopes          -- every Is* helper this SDK exports, against the
 //	                            error the server really sends
@@ -42,6 +47,7 @@ package octonomy_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -1453,5 +1459,292 @@ func TestIntegration_ErrorEnvelopes(t *testing.T) {
 				t.Error("the decoded error carried no request id: the server stamps one on every envelope, and it is how a caller correlates a failure with the server's logs")
 			}
 		})
+	}
+}
+
+// TestIntegration_DeactivatedParentOrphansItsLiveChildren proves the shape
+// TagTree.Orphans exists for, against the server that produces it (#20).
+//
+// BuildTagTree's central claim is that a missing parent is ORDINARY rather than
+// a data defect, and the commonest way a healthy Octonomy produces one is its
+// own delete: deletion is deactivation, the cascade reaches the tag's ALIASES
+// ONLY and never its children (octonomy/tags/services.py -- deactivate_tag
+// sweeps TagAlias and nothing else), and an unfiltered list returns active rows
+// only (filter_tags applies is_active=True when the parameter is absent). Put
+// together, a live child comes back from the default list carrying a ParentID
+// that the same list does not contain.
+//
+// No fixture can settle that: it is two server behaviours interacting, and a
+// canned response asserting it would only assert what this SDK already
+// believes. The design DECISION it grounds -- promote the orphan to a root and
+// name it in Orphans, never drop it -- is what makes the helper safe to render
+// a category browser from.
+func TestIntegration_DeactivatedParentOrphansItsLiveChildren(t *testing.T) {
+	h := loadHarness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)
+	defer cancel()
+
+	clientA := h.merchantClient(t, h.merchantA)
+	ns := octonomy.WithNamespace(h.namespaceType, h.merchantA.id)
+	scoped := h.scoped(h.merchantA.id)
+
+	// One prefix shared by both slugs, so a single q filter fetches exactly the
+	// rows this test wrote and nothing another run left behind.
+	prefix := uniqueSlug("int-orphan")
+	newTag := func(t *testing.T, name, suffix string, parentID *string) octonomy.Tag {
+		t.Helper()
+		tag, err := clientA.Tags.Create(ctx, octonomy.TagCreate{
+			ApplicationID: octonomy.String(h.applicationID),
+			Name:          name,
+			Slug:          prefix + suffix,
+			Type:          "category",
+			ParentID:      parentID,
+		}, ns)
+		if err != nil {
+			t.Fatalf("Tags.Create(%s): %v", name, err)
+		}
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cancel()
+			// Tolerant of an already-deactivated row: this test deletes the
+			// parent itself, and the server accepts a repeat delete.
+			if err := clientA.Tags.Delete(cleanupCtx, tag.ID, scoped...); err != nil {
+				t.Errorf("cleanup: Tags.Delete(%s): %v", name, err)
+			}
+		})
+		return *tag
+	}
+
+	parent := newTag(t, "integration orphan parent", "-parent", nil)
+	child := newTag(t, "integration orphan child", "-child", octonomy.String(parent.ID))
+
+	// fetch is the default list -- no IsActive -- which is the call a consumer
+	// renders a browser from and the one whose filtering this test is about.
+	fetch := func(t *testing.T) []octonomy.Tag {
+		t.Helper()
+		page, err := clientA.Tags.List(ctx, &octonomy.TagListParams{
+			Query:       octonomy.String(prefix),
+			ListOptions: octonomy.ListOptions{Limit: 200},
+		}, scoped...)
+		if err != nil {
+			t.Fatalf("Tags.List: %v", err)
+		}
+		return page.Data
+	}
+
+	before := fetch(t)
+	if len(before) != 2 {
+		t.Fatalf("the default list returned %d rows before the delete, want 2: the assertion below would prove nothing", len(before))
+	}
+	intact, err := octonomy.BuildTagTree(before)
+	if err != nil {
+		t.Fatalf("BuildTagTree on two live rows: %v", err)
+	}
+	if len(intact.Orphans) != 0 {
+		t.Errorf("Orphans = %d on a complete fetch, want 0", len(intact.Orphans))
+	}
+	if len(intact.Roots) != 1 || intact.Roots[0].Tag.ID != parent.ID {
+		t.Fatalf("Roots = %v, want just the parent", intact.Roots)
+	}
+	if node := intact.Node(child.ID); node == nil || node.Parent == nil || node.Parent.Tag.ID != parent.ID {
+		t.Errorf("the child is not attached to its parent: %#v", node)
+	}
+
+	if err := clientA.Tags.Delete(ctx, parent.ID, scoped...); err != nil {
+		t.Fatalf("Tags.Delete(parent): %v", err)
+	}
+
+	// The server's half of the claim: the child survives its parent's
+	// deactivation, still carries the ParentID, and the default list no longer
+	// contains the parent.
+	after := fetch(t)
+	if len(after) != 1 {
+		t.Fatalf("the default list returned %d rows after deleting the parent, want 1 (the live child): %v", len(after), after)
+	}
+	if after[0].ID != child.ID {
+		t.Fatalf("the surviving row is %s, want the child %s", after[0].ID, child.ID)
+	}
+	if !after[0].IsActive {
+		t.Error("the child is inactive: the deactivation cascaded to a child, which the server is not supposed to do")
+	}
+	if after[0].ParentID == nil || *after[0].ParentID != parent.ID {
+		t.Fatalf("the child's ParentID is %v, want the deactivated parent %s: without it there is no orphan to assemble", after[0].ParentID, parent.ID)
+	}
+
+	// The SDK's half: kept, promoted, and named -- not dropped.
+	orphaned, err := octonomy.BuildTagTree(after)
+	if err != nil {
+		t.Fatalf("BuildTagTree on a row whose parent was deactivated: %v", err)
+	}
+	if orphaned.Len() != len(after) {
+		t.Errorf("Len = %d for %d fetched rows: a tag was dropped", orphaned.Len(), len(after))
+	}
+	if len(orphaned.Orphans) != 1 || orphaned.Orphans[0].Tag.ID != child.ID {
+		t.Fatalf("Orphans = %v, want just the child", orphaned.Orphans)
+	}
+	if !orphaned.Node(child.ID).IsOrphan() {
+		t.Error("IsOrphan reports false for a tag whose parent the server has deactivated")
+	}
+	if len(orphaned.Roots) != 1 || orphaned.Roots[0].Tag.ID != child.ID {
+		t.Errorf("Roots = %v, want the orphan promoted so that walking Roots still reaches it", orphaned.Roots)
+	}
+
+	// And the documented remedy: fetch the missing parent and rebuild. Get
+	// reads deactivated rows, which is what makes this recoverable at all.
+	deactivated, err := clientA.Tags.Get(ctx, parent.ID, scoped...)
+	if err != nil {
+		t.Fatalf("Tags.Get(deactivated parent): %v", err)
+	}
+	if deactivated.IsActive {
+		t.Fatal("the parent is still active: the delete did not deactivate it")
+	}
+	repaired, err := octonomy.BuildTagTree(append(after, *deactivated))
+	if err != nil {
+		t.Fatalf("BuildTagTree after refetching the parent: %v", err)
+	}
+	if len(repaired.Orphans) != 0 {
+		t.Errorf("Orphans = %v after refetching the missing parent, want none", repaired.Orphans)
+	}
+	if node := repaired.Node(child.ID); node == nil || node.Depth != 1 {
+		t.Errorf("the child did not reattach under the refetched parent: %#v", node)
+	}
+}
+
+// TestIntegration_ParentCycleIsReachableAndRefused proves ErrTagCycle is not
+// defensive programming (#20).
+//
+// The database forbids the one-hop case only -- the tag_parent_cannot_be_self
+// check constraint, parent_id != id -- and validate_tag_parent checks tenant,
+// application and namespace compatibility on a parent without ever walking the
+// ancestry. So A -> B -> A is two ordinary, individually valid PATCHes, and the
+// server answers 200 to the one that closes the ring.
+//
+// That is the whole justification for refusing a cycle rather than breaking it
+// quietly: the tags really can arrive this way, and every tag in a cycle has a
+// parent inside the set, so a naive assembler finds NO ROOT for any of them and
+// returns a tree silently missing rows.
+func TestIntegration_ParentCycleIsReachableAndRefused(t *testing.T) {
+	h := loadHarness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)
+	defer cancel()
+
+	clientA := h.merchantClient(t, h.merchantA)
+	ns := octonomy.WithNamespace(h.namespaceType, h.merchantA.id)
+	scoped := h.scoped(h.merchantA.id)
+
+	prefix := uniqueSlug("int-cycle")
+	newTag := func(t *testing.T, name, suffix string, parentID *string) octonomy.Tag {
+		t.Helper()
+		tag, err := clientA.Tags.Create(ctx, octonomy.TagCreate{
+			ApplicationID: octonomy.String(h.applicationID),
+			Name:          name,
+			Slug:          prefix + suffix,
+			Type:          "category",
+			ParentID:      parentID,
+		}, ns)
+		if err != nil {
+			t.Fatalf("Tags.Create(%s): %v", name, err)
+		}
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cancel()
+			if err := clientA.Tags.Delete(cleanupCtx, tag.ID, scoped...); err != nil {
+				t.Errorf("cleanup: Tags.Delete(%s): %v", name, err)
+			}
+		})
+		return *tag
+	}
+
+	first := newTag(t, "integration cycle first", "-first", nil)
+	second := newTag(t, "integration cycle second", "-second", octonomy.String(first.ID))
+
+	// The move the server does not stop. If this ever starts failing, the
+	// server grew an ancestry check and ErrTagCycle became unreachable through
+	// the API -- read the change before relaxing anything here, because the
+	// helper still has to survive a hand-built slice.
+	//
+	// ApplicationID is RESTATED rather than omitted, and it is load-bearing
+	// under an exact merchant grant: a write takes its application scope from
+	// the body (WithApplication is refused on a request that carries one), and
+	// the grant is checked against that pair, so a PATCH naming no application
+	// asks for tenant-wide authority and is answered 403 forbidden. Restating
+	// the value the row already holds is not a scope CHANGE, so it does not
+	// trip scope_immutable.
+	closed, err := clientA.Tags.Update(ctx, first.ID, octonomy.TagUpdate{
+		ApplicationID: octonomy.String(h.applicationID),
+		ParentID:      octonomy.String(second.ID),
+	}, ns)
+	if err != nil {
+		t.Fatalf("Tags.Update closing the cycle: %v -- if the server now rejects this, ErrTagCycle's justification has changed", err)
+	}
+	if closed.ParentID == nil || *closed.ParentID != second.ID {
+		t.Fatalf("the server echoed ParentID %v, want %s: the cycle was not stored", closed.ParentID, second.ID)
+	}
+
+	page, err := clientA.Tags.List(ctx, &octonomy.TagListParams{
+		Query:       octonomy.String(prefix),
+		ListOptions: octonomy.ListOptions{Limit: 200},
+	}, scoped...)
+	if err != nil {
+		t.Fatalf("Tags.List: %v", err)
+	}
+	if len(page.Data) != 2 {
+		t.Fatalf("the list returned %d rows, want the 2 this test wrote", len(page.Data))
+	}
+	// Neither row is a root: that is what a naive assembler loses silently.
+	for _, row := range page.Data {
+		if row.ParentID == nil {
+			t.Fatalf("tag %s came back with no parent: the cycle is not what this test is asserting on", row.Slug)
+		}
+	}
+
+	tree, err := octonomy.BuildTagTree(page.Data)
+	if err == nil {
+		t.Fatalf("BuildTagTree assembled a cycle into a tree with %d root(s)", len(tree.Roots))
+	}
+	if tree != nil {
+		t.Error("BuildTagTree returned a non-nil tree alongside the cycle error")
+	}
+	if !errors.Is(err, octonomy.ErrTagCycle) {
+		t.Fatalf("error does not match ErrTagCycle: %v", err)
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("the message does not name %s, so an operator cannot find the rows to fix: %v", id, err)
+		}
+	}
+
+	// Breaking the ring makes the same two rows assemble. Re-pointing the
+	// parent is how that is done through this SDK: TagUpdate.ParentID is a
+	// *string with omitempty, so nil omits the key rather than sending null,
+	// and a cycle is therefore broken by moving a link or deactivating a row,
+	// not by clearing one.
+	third := newTag(t, "integration cycle third", "-third", nil)
+	if _, err := clientA.Tags.Update(ctx, first.ID, octonomy.TagUpdate{
+		ApplicationID: octonomy.String(h.applicationID),
+		ParentID:      octonomy.String(third.ID),
+	}, ns); err != nil {
+		t.Fatalf("Tags.Update re-pointing out of the cycle: %v", err)
+	}
+
+	repaired, err := clientA.Tags.List(ctx, &octonomy.TagListParams{
+		Query:       octonomy.String(prefix),
+		ListOptions: octonomy.ListOptions{Limit: 200},
+	}, scoped...)
+	if err != nil {
+		t.Fatalf("Tags.List after breaking the cycle: %v", err)
+	}
+	tree, err = octonomy.BuildTagTree(repaired.Data)
+	if err != nil {
+		t.Fatalf("BuildTagTree after breaking the cycle: %v", err)
+	}
+	if tree.Len() != len(repaired.Data) {
+		t.Errorf("Len = %d for %d rows: a tag was dropped", tree.Len(), len(repaired.Data))
+	}
+	if len(tree.Roots) != 1 || tree.Roots[0].Tag.ID != third.ID {
+		t.Errorf("Roots = %v, want the one tag that is now nobody's child", tree.Roots)
+	}
+	if node := tree.Node(second.ID); node == nil || node.Depth != 2 {
+		t.Errorf("the chain did not reassemble as third -> first -> second: %#v", node)
 	}
 }

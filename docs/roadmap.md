@@ -106,12 +106,37 @@ Each has an issue; none is a missing endpoint group.
 | --- | ----- |
 | **The tags-ordering caveats want revisiting** once the server adds an `ORDER BY` to the annotated tags list (upstream `octonomy#162`). | [#49](https://github.com/octoverse-id/octonomy-go/issues/49) |
 
-Deferred by design, not gaps: the webhook typed-event surface and `http.Handler`
+Deferred by design, not a gap: the webhook typed-event surface and `http.Handler`
 ([#22](https://github.com/octoverse-id/octonomy-go/issues/22) — no deployment emits webhooks, since
 `OUTBOX_TRANSPORT` defaults to `logging`, so those would be built for a consumer who does not exist,
-on payload shapes that may still move) and the client-side tag-tree helper
-([#20](https://github.com/octoverse-id/octonomy-go/issues/20) — needs consumer-defined semantics).
-The *verification* half of webhooks did not wait on an emitter and has shipped — see below.
+on payload shapes that may still move). The *verification* half of webhooks did not wait on an
+emitter and has shipped — see below.
+
+**The client-side tag-tree helper ([#20](https://github.com/octoverse-id/octonomy-go/issues/20)) is
+no longer deferred: `BuildTagTree` shipped in `tagtree.go`.** It was held back for wanting
+consumer-defined semantics — four questions (an absent parent, inactive rows, a cycle, a depth
+limit) with no answer that suits everybody — and it was the one expansion candidate with *no
+grounding in a server contract*. What unblocked it was finding that grounding: the server answers
+three of the four, and the fourth is a filter the caller already applies when fetching. Both load-
+bearing answers are now pinned by the integration suite rather than asserted —
+`TestIntegration_DeactivatedParentOrphansItsLiveChildren` and
+`TestIntegration_ParentCycleIsReachableAndRefused` — because each is a property of the server's
+persistence that no fixture can settle:
+
+- **An absent parent is ordinary, so its tag is promoted to a root and named in `Orphans`, never
+  dropped.** `deactivate_tag` cascades to the tag's *aliases* and never to its children, and
+  `filter_tags` applies `is_active=True` when the parameter is absent, so a live child of a
+  deactivated parent comes back from the default list alone. Namespace scope and any filter or page
+  produce the same shape.
+- **Inactive tags are kept.** The server permits an *active* tag under an *inactive* parent, so
+  pruning during assembly would orphan live children. Pruning is `TagListParams.IsActive`, applied
+  when you fetch.
+- **A cycle is refused with `ErrTagCycle`.** The database forbids only `parent_id = id`
+  (`tag_parent_cannot_be_self`) and `validate_tag_parent` never walks the ancestry, so `A -> B -> A`
+  is two ordinary PATCHes — verified against a running 3.2.0, which answers `200` to the one that
+  closes the ring. Every tag in a cycle has a parent inside the set, so a naive assembler returns a
+  tree silently missing rows.
+- **Depth is reported, not limited** — a rendering decision that stays with the caller.
 
 ## What is planned that is not a resource
 

@@ -8,6 +8,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`BuildTagTree`: the client-side tag hierarchy, assembled once from a fetched slice**
+  ([#20](https://github.com/octoverse-id/octonomy-go/issues/20)). `TagTree`, `TagNode`, and the
+  refusals `ErrTagCycle` and `ErrDuplicateTagID`, in `tagtree.go`. Tags nest through `ParentID` and
+  the server returns them flat — there is no tree endpoint and no children route — so a category
+  browser either filters the list once per parent (one request per node) or assembles the set
+  locally. This is the assembly and nothing else: it makes no request, takes no `context.Context`,
+  and never consults the server.
+  - **It was deferred, and what unblocked it was grounding rather than a consumer.** #20 was held
+    back as the one expansion candidate with *no grounding in a server contract*, on four questions
+    with no answer that suits everybody: does a tag whose parent is absent become a root or get
+    dropped, are inactive tags pruned, is a cycle an error, is there a depth limit. Reading the
+    server settles three of them and turns the fourth into a filter the caller already applies. The
+    answers are not this SDK's taste; they are Octonomy's behavior, and two of them are now pinned
+    by the integration suite rather than asserted.
+  - **NO TAG IS EVER DROPPED.** On success `tree.Len() == len(tags)` and every input tag is
+    reachable from `Roots` exactly once. Ambiguity is an error rather than a quiet choice, because
+    the failure #20 named — a helper that is *almost* right, which consumers work around — outlives
+    the bug it hides.
+  - **A missing parent is ORDINARY, so the tag is promoted to a root and named in `Orphans`.**
+    Three routine things produce one, none a data defect: a deactivated parent (`deactivate_tag`
+    cascades to the tag's *aliases* and never its children, while `filter_tags` applies
+    `is_active=True` when the parameter is absent, so a live child comes back from the default list
+    alone); namespace scope (a namespaced tag may name a **global** parent, which a read without
+    `WithIncludeGlobal` does not return); and any filter or page at all. Dropping it would lose a
+    row silently, and disguising it as a real root would lie about the taxonomy — so it is kept,
+    promoted, and indexed. `TagNode.IsOrphan` is the per-node form.
+  - **Inactive tags are kept, untouched.** The server permits an *active* tag under an *inactive*
+    parent, so pruning during assembly would orphan live children of a deactivated category.
+    Pruning is a filter (`TagListParams.IsActive`), applied when you fetch — the SDK adds
+    ergonomics, not behavior.
+  - **A cycle is refused with `ErrTagCycle`, and it is not defensive programming.** The database
+    forbids only the one-hop case (`tag_parent_cannot_be_self`, `parent_id != id`) and
+    `validate_tag_parent` checks tenant, application and namespace compatibility without ever
+    walking the ancestry, so `A -> B -> A` is two ordinary PATCHes — **verified against a running
+    3.2.0, which answers `200` to the one that closes the ring**. Every tag in a cycle has a parent
+    inside the set and therefore never becomes a root, so a naive assembler returns a tree silently
+    missing that cycle and everything beneath it. The message names the chain, id and slug, in
+    parent-to-child order, deterministically.
+  - **A repeated id is refused with `ErrDuplicateTagID` rather than resolved.** Two copies may
+    disagree about `ParentID`, so choosing one is the single place assembly could silently build a
+    *different* tree. `Each`'s own doc comment already warns that offset drift can deliver a row
+    twice and says to de-duplicate on id; `BuildTagTree`'s doc comment carries the two-line form,
+    and a test runs that snippet so the documentation cannot rot.
+  - **Depth is reported, never limited**, and nothing here recurses: assembly, the cycle check,
+    `Walk` and `Path` all use explicit stacks, so a 50,000-deep chain costs memory rather than a
+    stack overflow — asserted by a test at exactly that depth, because recursion would take the
+    process down and this library promises not to panic. Every method tolerates a nil receiver for
+    the same reason: `BuildTagTree` returns `(nil, err)` on a refusal, and the natural call site
+    reaches `Len` with it.
+  - **`Walk` refuses a nil callback and every method tolerates a nil receiver**, in the same words
+    `Each` uses. A `Walk` that dereferenced a nil callback would panic only on a tree with at least
+    one node — the shape that passes a test suite and fails in production — and `BuildTagTree`
+    returns `(nil, err)` on a refusal, so the natural call site reaches these methods with a nil
+    tree. The copy of each `Tag` is SHALLOW and the doc comment says so rather than cloning: the
+    `*string` fields and the `Metadata` map still point where the input pointed, *including* when
+    the input is the slice a `Tags.List` response decoded into, so writing through one of them can
+    leave `Tag.ParentID` disagreeing with the `Parent` link assembled from it. Cloning six pointers
+    per node plus a faithful clone of an arbitrarily nested `map[string]any` is a much larger
+    contract than this helper should take on; the rule is to build again rather than mutate what
+    you assembled, and tests pin both halves.
+  - **Order is INPUT order**, for `Roots`, `Orphans` and every `Children` slice, and nothing is
+    sorted. `GET /tags` has no `ORDER BY` at all, so there is no server order to preserve and none
+    to invent; `Walk` visits a node before its children, so sorting `Children` inside the callback
+    is how a stable rendering is had.
+  - **Two integration tests, because each is a property of the server no fixture can settle**
+    (`integration_suite_test.go`): `TestIntegration_DeactivatedParentOrphansItsLiveChildren` walks
+    the whole shape — intact tree, delete the parent, the child comes back alone and lands in
+    `Orphans` with nothing dropped, then refetching the deactivated parent with `Tags.Get` repairs
+    it — and `TestIntegration_ParentCycleIsReachableAndRefused` closes a ring through the API,
+    proves the server stores it, and asserts `BuildTagTree` refuses it and names both rows.
+  - `examples/tags` now assembles the tree it creates and then deactivates the parent to produce a
+    real orphan, run against a live server as the rules here require. Its standing claim that "the
+    tree is walked by filtering the list on each parent in turn" was true and is now only half the
+    story, so it says both.
 - **`VocabularyListParams` gained the `q` and `slug` filters**
   ([#36](https://github.com/octoverse-id/octonomy-go/issues/36)). `Query *string` (the server's `q`)
   and `Slug *string` — the pair `TagListParams` and `TagAliasListParams` already carried. Two optional

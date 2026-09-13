@@ -271,6 +271,23 @@
 // this right. The pool belongs to the TRANSPORT, not the Client, so a per-request
 // Client defeats pooling only when it also builds a new *http.Transport each time.
 //
+// # Assembling the tag hierarchy
+//
+// Tags nest through ParentID and the server returns them flat: there is no tree
+// endpoint and no children route. BuildTagTree assembles a fetched slice into
+// that hierarchy locally -- it makes no request -- and its invariant is that NO
+// TAG IS EVER DROPPED: every tag handed in is reachable from Roots exactly once.
+//
+// The cases that send a hand-written assembler wrong are the point of it. A tag
+// whose parent is not in the slice keeps its place as a root and is named in
+// Orphans rather than vanishing, because a missing parent is ORDINARY -- the
+// server's delete deactivates a parent without touching its children, and the
+// default list returns active rows only, so a live child routinely comes back
+// alone. Inactive tags are never pruned, since pruning is a filter you apply
+// when you fetch. A parent cycle, which the server permits (only the one-hop
+// case is forbidden by a database constraint), is refused with ErrTagCycle
+// rather than silently dropping every row in it.
+//
 // # Typed metadata
 //
 // DecodeMetadata decodes a resource's Metadata into a struct of the caller's own
