@@ -44,19 +44,20 @@ func main() {
 	}
 	fmt.Printf("list by slug returned %d row(s)\n", len(page.Data))
 
-	// Metadata REPLACES the stored object; it never merges. The field is a
-	// *Metadata so that "clear it" can be said at all:
+	// Every field of an *Update is an Optional, which says one of three things:
 	//
-	//	&Metadata{"k": v}  replaces the object
-	//	&Metadata{}        empties it
-	//	nil                omits the key, leaving it untouched
+	//	octonomy.Set(v)          sends the value
+	//	octonomy.Null[string]()  sends an explicit null, asking the server to clear it
+	//	the zero value           omits the key, leaving the column untouched
+	//
+	// Metadata REPLACES the stored object; it never merges.
 	if _, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{
-		Metadata: &octonomy.Metadata{"owner": "merchandising", "tier": "gold"},
+		Metadata: octonomy.Set(octonomy.Metadata{"owner": "merchandising", "tier": "gold"}),
 	}); err != nil {
 		log.Fatalf("set metadata: %v", err)
 	}
 	replaced, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{
-		Metadata: &octonomy.Metadata{"owner": "growth"},
+		Metadata: octonomy.Set(octonomy.Metadata{"owner": "growth"}),
 	})
 	if err != nil {
 		log.Fatalf("replace metadata: %v", err)
@@ -65,21 +66,37 @@ func main() {
 	fmt.Printf("after replacing metadata: %v\n", replaced.Metadata)
 
 	renamed, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{
-		Name: octonomy.String("Catalog (renamed)"),
+		Name: octonomy.Set("Catalog (renamed)"),
 	})
 	if err != nil {
 		log.Fatalf("rename: %v", err)
 	}
-	// A nil Metadata sends no metadata key at all, so the rename left it alone.
+	// An unset Metadata sends no metadata key at all, so the rename left it alone.
 	fmt.Printf("after renaming to %q: metadata %v\n", renamed.Name, renamed.Metadata)
 
+	// Emptying metadata is Set of an EMPTY MAP, not Null: the server answers
+	// "metadata": null with a 400, so octonomy.Null[octonomy.Metadata]() would
+	// compile and always be refused.
 	cleared, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{
-		Metadata: &octonomy.Metadata{},
+		Metadata: octonomy.Set(octonomy.Metadata{}),
 	})
 	if err != nil {
 		log.Fatalf("clear metadata: %v", err)
 	}
-	fmt.Printf("after &Metadata{}: metadata %v (%d key(s))\n", cleared.Metadata, len(cleared.Metadata))
+	fmt.Printf("after Set(Metadata{}): metadata %v (%d key(s))\n", cleared.Metadata, len(cleared.Metadata))
+
+	// Description IS nullable on the server, so clearing it is Null -- and this
+	// is the difference the two spellings exist for. Before #64 every optional
+	// field was a *string where nil meant "leave it alone", so there was no
+	// value a caller could put in the struct that sent "description": null and
+	// the request could not be expressed at all.
+	detached, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{
+		Description: octonomy.Null[string](),
+	})
+	if err != nil {
+		log.Fatalf("clear description: %v", err)
+	}
+	fmt.Printf("after Null[string](): description is nil = %v\n", detached.Description == nil)
 
 	// Delete is DEACTIVATION, not removal. The row survives a Get, and the list
 	// filters it out only because IsActive is unset -- which is why

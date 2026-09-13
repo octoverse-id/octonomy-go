@@ -71,6 +71,31 @@ func main() {
 	}
 	fmt.Printf("%s has %d child tag(s)\n", parent.Slug, len(children.Data))
 
+	// Un-nesting is a NULL, not a nil. Every field of an *Update is an
+	// Optional: the zero value omits the key and leaves the link alone, Set
+	// re-points it, and Null[string]() sends "parent_id": null -- the only way
+	// to detach a child from its parent. Before #64 the field was a *string
+	// where nil already meant "leave it alone", so there was no value that sent
+	// null and the request could not be expressed at all.
+	detached, err := client.Tags.Update(ctx, child.ID, octonomy.TagUpdate{
+		ParentID: octonomy.Null[string](),
+	})
+	if err != nil {
+		log.Fatalf("un-nest child tag: %v", err)
+	}
+	fmt.Printf("after Null[string](): %s still has a parent = %v\n", detached.Slug, detached.ParentID != nil)
+
+	// This is also the repair for a parent CYCLE, which is reachable on the
+	// server -- the database forbids only parent_id = id and nothing walks the
+	// ancestry -- and which BuildTagTree below refuses with ErrTagCycle.
+	//
+	// Put the link back, since the tree assembly needs the hierarchy.
+	if _, err := client.Tags.Update(ctx, child.ID, octonomy.TagUpdate{
+		ParentID: octonomy.Set(parent.ID),
+	}); err != nil {
+		log.Fatalf("re-nest child tag: %v", err)
+	}
+
 	// Uniqueness is on the PAIR (type, slug), not on the slug alone. The same
 	// slug under the same type is a typed conflict...
 	_, err = client.Tags.Create(ctx, octonomy.TagCreate{

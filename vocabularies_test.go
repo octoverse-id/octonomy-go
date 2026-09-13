@@ -252,7 +252,7 @@ func TestVocabularies_Update(t *testing.T) {
 		writeData(t, w, http.StatusOK, Vocabulary{ID: "voc_1", Name: "Renamed"})
 	})
 
-	voc, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{Name: String("Renamed")})
+	voc, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{Name: Set("Renamed")})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}

@@ -143,7 +143,7 @@ Each one demonstrates a semantic that is easy to get wrong, not just a create ca
 | Example | What it shows |
 | ------- | ------------- |
 | [`quickstart`](examples/quickstart/main.go) | Configure, create, list, walk every page with `Each`, decode typed metadata |
-| [`vocabularies`](examples/vocabularies/main.go) | Exact-slug lookup; `Metadata` replaces and never merges; `Delete` is deactivation |
+| [`vocabularies`](examples/vocabularies/main.go) | Exact-slug lookup; `Metadata` replaces and never merges; clearing a field with `Null`; `Delete` is deactivation |
 | [`tags`](examples/tags/main.go) | Hierarchy via `ParentID`; uniqueness is on `(type, slug)`, so the same slug under another type is legal; assembling the tree, and the orphan a deactivated parent leaves |
 | [`aliases`](examples/aliases/main.go) | Two routes for the same rows; re-pointing an alias; the cascade from a deactivated tag |
 | [`resolution`](examples/resolution/main.go) | Alias matches; an unmatched slug is a `400`, not a `404`; the type tie and how to break it |
@@ -176,7 +176,7 @@ neither — they are unauthenticated and sit outside `/api/<version>`; see
 ```go
 // Attribute a single mutation to a specific actor.
 tag, err := client.Tags.Update(ctx, id, octonomy.TagUpdate{
-	IsActive: octonomy.Bool(false),
+	IsActive: octonomy.Set(false),
 }, octonomy.WithActor("svc-catalog"))
 ```
 
@@ -196,7 +196,7 @@ requestID := uuid.NewString() // or the trace id your service already carries
 log.Printf("updating tag %s request_id=%s", id, requestID)
 
 tag, err := client.Tags.Update(ctx, id, octonomy.TagUpdate{
-	Name: octonomy.String("Autumn"),
+	Name: octonomy.Set("Autumn"),
 }, octonomy.WithActor("svc-catalog"), octonomy.WithRequestID(requestID))
 ```
 
@@ -293,6 +293,35 @@ envelope are preserved verbatim, including ones this SDK has no constant for.
 Namespace errors have their own helpers. Two of them are **operator** states rather than caller
 mistakes: `IsNamespacedWritesDisabled` (403) and `IsNamespaceAPIDisabled` (503) mean a rollout flag
 is off on the server, so retrying or changing the payload will not help.
+
+## Partial updates
+
+Every field of `TagUpdate`, `VocabularyUpdate`, and `TagAliasUpdate` is an `octonomy.Optional[T]`,
+which says one of **three** things:
+
+```go
+octonomy.TagUpdate{Name: octonomy.Set("Autumn")}       // {"name":"Autumn"}    — set it
+octonomy.TagUpdate{ParentID: octonomy.Null[string]()}  // {"parent_id":null}   — clear it
+octonomy.TagUpdate{}                                   // {}                   — touch nothing
+```
+
+A PATCH replaces rather than merges, field by field: a key the server never sees is a column it
+leaves alone. Read a field back with `Get`, and tell the other two states apart with `IsZero`
+(omitted) and `IsNull`.
+
+**Three states, because a pointer only has two.** These fields used to be `*T` with `omitempty`,
+where `nil` meant "leave this one alone" — which spends the pointer's spare state on
+absent-versus-set and leaves nothing to say `null` with. A tag could not be un-nested, detached from
+its vocabulary, or stripped of its description at all; the request was inexpressible rather than
+awkward ([#64](https://github.com/octoverse-id/octonomy-go/issues/64)).
+
+The **server** decides which nulls clear something, and four do — `TagUpdate.ParentID`,
+`TagUpdate.VocabularyID`, `TagUpdate.Description`, and `VocabularyUpdate.Description`. A null
+anywhere else is a `400` that `IsValidation` matches, except `ApplicationID`: a `409` that
+`IsScopeImmutable` matches when the row **has** an application, and an ordinary `200` no-op when it
+is already tenant-shared — the server refuses a scope *change*, not the literal null. `Metadata` is emptied with `octonomy.Set(octonomy.Metadata{})`, **never**
+with `Null` — it is not a nullable field on any of the three patch schemas. The full table, the
+evidence, and the metadata rules are in [`docs/api.md`](docs/api.md#update-bodies).
 
 ## Pagination
 

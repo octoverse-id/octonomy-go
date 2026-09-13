@@ -30,7 +30,11 @@
 //	                            deactivated parent comes back from the default
 //	                            list alone: the shape TagTree.Orphans exists for
 //	tag-tree cycles          -- the server accepts A -> B -> A, so ErrTagCycle
-//	                            is reachable rather than defensive
+//	                            is reachable rather than defensive -- and
+//	                            clearing a parent link is the repair for one
+//	nullable fields          -- which of a PATCH body's fields the server will
+//	                            accept a null for, and the 400 or 409 it answers
+//	                            for the rest: the table TagUpdate publishes
 //	slug uniqueness          -- scoped per namespace, not per tenant
 //	error envelopes          -- every Is* helper this SDK exports, against the
 //	                            error the server really sends
@@ -1344,7 +1348,7 @@ func TestIntegration_ErrorEnvelopes(t *testing.T) {
 				// vocabulary, and the two go through different serializers on the
 				// server, so neither stands in for the other.
 				_, err := wildcard.Tags.Update(ctx, foreignTag.ID, octonomy.TagUpdate{
-					ApplicationID: octonomy.String(h.applicationID),
+					ApplicationID: octonomy.Set(h.applicationID),
 				})
 				return err
 			},
@@ -1671,8 +1675,8 @@ func TestIntegration_ParentCycleIsReachableAndRefused(t *testing.T) {
 	// the value the row already holds is not a scope CHANGE, so it does not
 	// trip scope_immutable.
 	closed, err := clientA.Tags.Update(ctx, first.ID, octonomy.TagUpdate{
-		ApplicationID: octonomy.String(h.applicationID),
-		ParentID:      octonomy.String(second.ID),
+		ApplicationID: octonomy.Set(h.applicationID),
+		ParentID:      octonomy.Set(second.ID),
 	}, ns)
 	if err != nil {
 		t.Fatalf("Tags.Update closing the cycle: %v -- if the server now rejects this, ErrTagCycle's justification has changed", err)
@@ -1714,17 +1718,20 @@ func TestIntegration_ParentCycleIsReachableAndRefused(t *testing.T) {
 		}
 	}
 
-	// Breaking the ring makes the same two rows assemble. Re-pointing the
-	// parent is how that is done through this SDK: TagUpdate.ParentID is a
-	// *string with omitempty, so nil omits the key rather than sending null,
-	// and a cycle is therefore broken by moving a link or deactivating a row,
-	// not by clearing one.
-	third := newTag(t, "integration cycle third", "-third", nil)
+	// Breaking the ring makes the same two rows assemble, and CLEARING the
+	// offending link is how an operator does it: ParentID is an Optional, so
+	// Null[string]() sends "parent_id": null and the row becomes a root (#64).
+	//
+	// That was inexpressible until #64. The field was a *string with omitempty
+	// where nil already meant "leave it alone", so the repair had to be a
+	// re-point at some third tag or a deactivation -- the obvious move, on data
+	// an operator is holding precisely because it is wrong, was the one the SDK
+	// could not make. ApplicationID is restated for the same reason as above.
 	if _, err := clientA.Tags.Update(ctx, first.ID, octonomy.TagUpdate{
-		ApplicationID: octonomy.String(h.applicationID),
-		ParentID:      octonomy.String(third.ID),
+		ApplicationID: octonomy.Set(h.applicationID),
+		ParentID:      octonomy.Null[string](),
 	}, ns); err != nil {
-		t.Fatalf("Tags.Update re-pointing out of the cycle: %v", err)
+		t.Fatalf("Tags.Update clearing the cycle's parent link: %v", err)
 	}
 
 	repaired, err := clientA.Tags.List(ctx, &octonomy.TagListParams{
@@ -1741,10 +1748,371 @@ func TestIntegration_ParentCycleIsReachableAndRefused(t *testing.T) {
 	if tree.Len() != len(repaired.Data) {
 		t.Errorf("Len = %d for %d rows: a tag was dropped", tree.Len(), len(repaired.Data))
 	}
-	if len(tree.Roots) != 1 || tree.Roots[0].Tag.ID != third.ID {
-		t.Errorf("Roots = %v, want the one tag that is now nobody's child", tree.Roots)
+	if len(tree.Roots) != 1 || tree.Roots[0].Tag.ID != first.ID {
+		t.Errorf("Roots = %v, want the tag whose parent link was cleared", tree.Roots)
 	}
-	if node := tree.Node(second.ID); node == nil || node.Depth != 2 {
-		t.Errorf("the chain did not reassemble as third -> first -> second: %#v", node)
+	if node := tree.Node(second.ID); node == nil || node.Depth != 1 {
+		t.Errorf("the chain did not reassemble as first -> second: %#v", node)
 	}
+}
+
+// Which fields the server will accept a NULL for, and which it refuses (#64).
+//
+// This is the claim the three-state Optional rests on, and only a real server
+// can settle it. A canned test proves that "parent_id": null leaves the client;
+// that the server then CLEARS the column, and answers 400 for the fields it does
+// not mark nullable, is its behavior rather than the SDK's -- and the doc
+// comments on TagUpdate, VocabularyUpdate and TagAliasUpdate publish a table of
+// exactly that, which nothing else would catch drifting.
+//
+// The vendored v2 contract marks seven properties nullable across the three
+// patch schemas. Three of the seven are application_id, refused on every
+// resource as a scope change, so the REACHABLE set is four -- and this walks all
+// four plus a representative refusal on every resource.
+//
+// It uses the WILDCARD token on purpose. The question here is which fields the
+// server will null, not who may write them; an exact merchant grant would add an
+// authorization failure mode to every row of the table and to none of the
+// assertions.
+func TestIntegration_NullClearsOnlyTheNullableFields(t *testing.T) {
+	h := loadHarness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)
+	defer cancel()
+
+	client := h.wildcard(t)
+	prefix := uniqueSlug("int-null")
+
+	cleanup := func(what string, del func(context.Context) error) {
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cancel()
+			if err := del(cleanupCtx); err != nil {
+				t.Errorf("cleanup: delete %s: %v", what, err)
+			}
+		})
+	}
+
+	vocab, err := client.Vocabularies.Create(ctx, octonomy.VocabularyCreate{
+		Name:        "null clears vocabulary",
+		Slug:        prefix + "-vocab",
+		Description: octonomy.String("set so that clearing it is visible"),
+	})
+	if err != nil {
+		t.Fatalf("Vocabularies.Create: %v", err)
+	}
+	cleanup("vocabulary", func(ctx context.Context) error { return client.Vocabularies.Delete(ctx, vocab.ID) })
+
+	parent, err := client.Tags.Create(ctx, octonomy.TagCreate{
+		Name: "null clears parent", Slug: prefix + "-parent", Type: "category",
+	})
+	if err != nil {
+		t.Fatalf("Tags.Create(parent): %v", err)
+	}
+	cleanup("parent tag", func(ctx context.Context) error { return client.Tags.Delete(ctx, parent.ID) })
+
+	tag, err := client.Tags.Create(ctx, octonomy.TagCreate{
+		Name: "null clears child", Slug: prefix + "-child", Type: "category",
+		Description:  octonomy.String("set so that clearing it is visible"),
+		ParentID:     octonomy.String(parent.ID),
+		VocabularyID: octonomy.String(vocab.ID),
+		Metadata:     octonomy.Metadata{"source": "int-null"},
+	})
+	if err != nil {
+		t.Fatalf("Tags.Create(child): %v", err)
+	}
+	cleanup("child tag", func(ctx context.Context) error { return client.Tags.Delete(ctx, tag.ID) })
+
+	alias, err := client.Aliases.Create(ctx, octonomy.TagAliasCreate{
+		TagID: tag.ID, Name: "null clears alias", Slug: prefix + "-alias",
+	})
+	if err != nil {
+		t.Fatalf("Aliases.Create: %v", err)
+	}
+	cleanup("alias", func(ctx context.Context) error { return client.Aliases.Delete(ctx, alias.ID) })
+
+	// The row starts out fully linked, or the clears below would pass against a
+	// server that ignores the null entirely.
+	if tag.ParentID == nil || tag.VocabularyID == nil || tag.Description == nil {
+		t.Fatalf("the fixture tag is not fully linked, so clearing proves nothing: %+v", tag)
+	}
+
+	// --- the four reachable clears ------------------------------------------
+
+	// Every clear is RE-READ rather than believed. What an Update returns is the
+	// serializer's view of the row it thinks it wrote, so a server that cleared
+	// an in-memory instance without persisting would answer with the field gone
+	// and still hand the next request the old value. Persistence is exactly the
+	// class of claim this suite exists for, and the PATCH response cannot settle
+	// it.
+	readTag := func(t *testing.T) *octonomy.Tag {
+		t.Helper()
+		got, err := client.Tags.Get(ctx, tag.ID)
+		if err != nil {
+			t.Fatalf("Tags.Get re-reading the row: %v", err)
+		}
+		return got
+	}
+	readVocab := func(t *testing.T) *octonomy.Vocabulary {
+		t.Helper()
+		got, err := client.Vocabularies.Get(ctx, vocab.ID)
+		if err != nil {
+			t.Fatalf("Vocabularies.Get re-reading the row: %v", err)
+		}
+		return got
+	}
+
+	t.Run("tag parent_id", func(t *testing.T) {
+		got, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{ParentID: octonomy.Null[string]()})
+		if err != nil {
+			t.Fatalf("Tags.Update clearing ParentID: %v -- the field is nullable in PatchedTagPatch", err)
+		}
+		if got.ParentID != nil {
+			t.Errorf("ParentID = %q after Null[string](), want it cleared", *got.ParentID)
+		}
+		if reread := readTag(t); reread.ParentID != nil {
+			t.Errorf("ParentID = %q on a re-read: the PATCH response cleared it, the stored row did not",
+				*reread.ParentID)
+		}
+	})
+
+	t.Run("tag vocabulary_id", func(t *testing.T) {
+		got, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{VocabularyID: octonomy.Null[string]()})
+		if err != nil {
+			t.Fatalf("Tags.Update clearing VocabularyID: %v", err)
+		}
+		if got.VocabularyID != nil {
+			t.Errorf("VocabularyID = %q after Null[string](), want it cleared", *got.VocabularyID)
+		}
+		if reread := readTag(t); reread.VocabularyID != nil {
+			t.Errorf("VocabularyID = %q on a re-read: the PATCH response cleared it, the stored row did not",
+				*reread.VocabularyID)
+		}
+	})
+
+	t.Run("tag description", func(t *testing.T) {
+		got, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{Description: octonomy.Null[string]()})
+		if err != nil {
+			t.Fatalf("Tags.Update clearing Description: %v", err)
+		}
+		if got.Description != nil {
+			t.Errorf("Description = %q after Null[string](), want it cleared", *got.Description)
+		}
+		reread := readTag(t)
+		if reread.Description != nil {
+			t.Errorf("Description = %q on a re-read: the PATCH response cleared it, the stored row did not",
+				*reread.Description)
+		}
+		// The neighbouring columns are untouched: a PATCH clears the field it
+		// names and nothing else.
+		if reread.Name != tag.Name || reread.Slug != tag.Slug || reread.Type != tag.Type {
+			t.Errorf("clearing Description also moved another column: %+v", reread)
+		}
+		if got := reread.Metadata["source"]; got != "int-null" {
+			t.Errorf("Metadata[source] = %v after clearing Description, want it untouched", got)
+		}
+	})
+
+	t.Run("vocabulary description", func(t *testing.T) {
+		got, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{
+			Description: octonomy.Null[string](),
+		})
+		if err != nil {
+			t.Fatalf("Vocabularies.Update clearing Description: %v", err)
+		}
+		if got.Description != nil {
+			t.Errorf("Description = %q after Null[string](), want it cleared", *got.Description)
+		}
+		if reread := readVocab(t); reread.Description != nil {
+			t.Errorf("Description = %q on a re-read: the PATCH response cleared it, the stored row did not",
+				*reread.Description)
+		}
+	})
+
+	// A clear is not a one-way door: the same field takes a value again, which
+	// is what makes ParentID a usable repair for a cycle rather than a way to
+	// strand a row.
+	t.Run("a cleared link can be set again", func(t *testing.T) {
+		got, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{ParentID: octonomy.Set(parent.ID)})
+		if err != nil {
+			t.Fatalf("Tags.Update re-pointing ParentID: %v", err)
+		}
+		if got.ParentID == nil || *got.ParentID != parent.ID {
+			t.Errorf("ParentID = %v, want %s", got.ParentID, parent.ID)
+		}
+		if reread := readTag(t); reread.ParentID == nil || *reread.ParentID != parent.ID {
+			t.Errorf("ParentID = %v on a re-read, want %s", reread.ParentID, parent.ID)
+		}
+	})
+
+	// --- the refusals --------------------------------------------------------
+
+	// Every one of these is expressible in the type system and answered by the
+	// SERVER, which is deliberate: rejecting them in the client would be
+	// re-running server validation here, and the server names the field.
+	refusals := []struct {
+		name  string
+		field string
+		call  func() error
+	}{
+		{"tag name", "name", func() error {
+			_, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{Name: octonomy.Null[string]()})
+			return err
+		}},
+		{"tag slug", "slug", func() error {
+			_, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{Slug: octonomy.Null[string]()})
+			return err
+		}},
+		{"tag type", "type", func() error {
+			_, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{Type: octonomy.Null[string]()})
+			return err
+		}},
+		{"tag is_active", "is_active", func() error {
+			_, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{IsActive: octonomy.Null[bool]()})
+			return err
+		}},
+		// The one a caller is most likely to reach for by analogy: metadata is
+		// emptied with Set(Metadata{}), never with Null. Both doc comments say
+		// so; this is why.
+		{"tag metadata", "metadata", func() error {
+			_, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{Metadata: octonomy.Null[octonomy.Metadata]()})
+			return err
+		}},
+		{"vocabulary name", "name", func() error {
+			_, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{Name: octonomy.Null[string]()})
+			return err
+		}},
+		{"vocabulary metadata", "metadata", func() error {
+			_, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{
+				Metadata: octonomy.Null[octonomy.Metadata](),
+			})
+			return err
+		}},
+		// TagAliasUpdate has NO clearable field at all -- application_id is its
+		// only nullable property and the server refuses that one as a scope
+		// change, which is what the struct's doc comment claims.
+		{"alias tag_id", "tag_id", func() error {
+			_, err := client.Aliases.Update(ctx, alias.ID, octonomy.TagAliasUpdate{TagID: octonomy.Null[string]()})
+			return err
+		}},
+		{"alias name", "name", func() error {
+			_, err := client.Aliases.Update(ctx, alias.ID, octonomy.TagAliasUpdate{Name: octonomy.Null[string]()})
+			return err
+		}},
+	}
+	for _, tc := range refusals {
+		t.Run("null "+tc.name+" is refused", func(t *testing.T) {
+			err := tc.call()
+			if !octonomy.IsValidation(err) {
+				t.Fatalf("error = %v, want a validation_error: the field is not nullable in the contract", err)
+			}
+			apiErr := requireAPIError(t, err, "null "+tc.name)
+			if got := detailStrings(apiErr.Details, tc.field); len(got) == 0 {
+				t.Errorf("details name no %q key, so a caller cannot tell which field was refused: %s",
+					tc.field, joinDetails(apiErr.Details))
+			}
+		})
+	}
+
+	// --- application_id, the nullable property that is refused anyway --------
+
+	// Three of the contract's seven nullable properties are application_id, and
+	// the server treats it as scope rather than data. The refusal is on the
+	// CHANGE, not on the literal null, which is why both halves are asserted:
+	// nulling it on a row that has one is a 409, and nulling it on a row that is
+	// already tenant-shared is an ordinary 200 no-op. Reading only the first
+	// would leave the doc comment claiming a refusal the server does not always
+	// make.
+	t.Run("application_id", func(t *testing.T) {
+		// All three resources, not one standing in for the others: the doc
+		// comment on every *Update struct claims this refusal, the server's
+		// patch serializers are separate code paths, and TagAliasUpdate's claim
+		// that it has NO clearable field rests entirely on this one.
+		scopedTag, err := client.Tags.Create(ctx, octonomy.TagCreate{
+			ApplicationID: octonomy.String(h.applicationID),
+			Name:          "null clears scoped", Slug: prefix + "-scoped", Type: "category",
+		})
+		if err != nil {
+			t.Fatalf("Tags.Create(application-scoped): %v", err)
+		}
+		cleanup("application-scoped tag", func(ctx context.Context) error {
+			return client.Tags.Delete(ctx, scopedTag.ID)
+		})
+
+		scopedVocab, err := client.Vocabularies.Create(ctx, octonomy.VocabularyCreate{
+			ApplicationID: octonomy.String(h.applicationID),
+			Name:          "null clears scoped vocabulary", Slug: prefix + "-scoped-vocab",
+		})
+		if err != nil {
+			t.Fatalf("Vocabularies.Create(application-scoped): %v", err)
+		}
+		cleanup("application-scoped vocabulary", func(ctx context.Context) error {
+			return client.Vocabularies.Delete(ctx, scopedVocab.ID)
+		})
+
+		// The alias has to hang off the application-scoped TAG: a tenant-shared
+		// target would not accept an application-scoped alias.
+		scopedAlias, err := client.Aliases.Create(ctx, octonomy.TagAliasCreate{
+			ApplicationID: octonomy.String(h.applicationID),
+			TagID:         scopedTag.ID,
+			Name:          "null clears scoped alias", Slug: prefix + "-scoped-alias",
+		})
+		if err != nil {
+			t.Fatalf("Aliases.Create(application-scoped): %v", err)
+		}
+		cleanup("application-scoped alias", func(ctx context.Context) error {
+			return client.Aliases.Delete(ctx, scopedAlias.ID)
+		})
+
+		refusals := []struct {
+			name string
+			call func() error
+		}{
+			{"tag", func() error {
+				_, err := client.Tags.Update(ctx, scopedTag.ID, octonomy.TagUpdate{
+					ApplicationID: octonomy.Null[string](),
+				})
+				return err
+			}},
+			{"vocabulary", func() error {
+				_, err := client.Vocabularies.Update(ctx, scopedVocab.ID, octonomy.VocabularyUpdate{
+					ApplicationID: octonomy.Null[string](),
+				})
+				return err
+			}},
+			{"alias", func() error {
+				_, err := client.Aliases.Update(ctx, scopedAlias.ID, octonomy.TagAliasUpdate{
+					ApplicationID: octonomy.Null[string](),
+				})
+				return err
+			}},
+		}
+		for _, tc := range refusals {
+			t.Run(tc.name+" with an application is 409", func(t *testing.T) {
+				if err := tc.call(); !octonomy.IsScopeImmutable(err) {
+					t.Errorf("error = %v, want scope_immutable", err)
+				}
+			})
+		}
+
+		// The other half, and the reason this is not a one-line assertion: the
+		// server refuses a scope CHANGE, not the literal null, so the same null
+		// on a row that is ALREADY tenant-shared is an ordinary 200 no-op.
+		// Asserting only the refusal would leave every doc comment claiming one
+		// the server does not always make.
+		t.Run("a row that has none is a 200 no-op", func(t *testing.T) {
+			shared, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{
+				ApplicationID: octonomy.Null[string](),
+			})
+			if err != nil {
+				t.Fatalf("clearing ApplicationID on a row that has none: %v -- "+
+					"the server refuses a scope CHANGE, not the null", err)
+			}
+			if shared.ApplicationID != nil {
+				t.Errorf("ApplicationID = %q, want it still unset", *shared.ApplicationID)
+			}
+			if reread := readTag(t); reread.ApplicationID != nil {
+				t.Errorf("ApplicationID = %q on a re-read, want it still unset", *reread.ApplicationID)
+			}
+		})
+	})
 }

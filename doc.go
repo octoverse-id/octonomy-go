@@ -131,6 +131,34 @@
 // your side; on a success the SDK returns (*T, error) and does not hand back the
 // server's id, while on a failure APIError.RequestID carries it.
 //
+// # Partial updates
+//
+// Every field of TagUpdate, VocabularyUpdate and TagAliasUpdate is an
+// Optional[T], which says one of three things:
+//
+//	octonomy.TagUpdate{Name: octonomy.Set("Autumn")}       // {"name":"Autumn"}  -- set it
+//	octonomy.TagUpdate{ParentID: octonomy.Null[string]()}  // {"parent_id":null} -- clear it
+//	octonomy.TagUpdate{}                                   // {}                 -- touch nothing
+//
+// A PATCH replaces rather than merges, field by field, and a key the server
+// never sees is a column it leaves alone. Read one back with Get, and separate
+// the other two states with IsZero and IsNull.
+//
+// The three states are why these fields are not pointers. A *T with omitempty
+// spends its one spare state on absent-versus-set, so there was no value a
+// caller could put in the struct that sent null -- and a tag could not be
+// un-nested, detached from its vocabulary, or stripped of its description at
+// all (#64).
+//
+// The SERVER decides which nulls clear something, and four do:
+// TagUpdate.ParentID, TagUpdate.VocabularyID, TagUpdate.Description and
+// VocabularyUpdate.Description. A null anywhere else is a 400 that IsValidation
+// matches, except ApplicationID -- a 409 IsScopeImmutable matches when the row
+// has an application, and a 200 no-op when it is already tenant-shared, since
+// the server refuses a scope CHANGE rather than the null. Metadata is EMPTIED
+// with Set(Metadata{}), never with Null. See TagUpdate for the table and the
+// evidence behind it.
+//
 // # Errors
 //
 // Non-2xx responses are returned as *APIError, which exposes the Octonomy error

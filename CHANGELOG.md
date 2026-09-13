@@ -377,6 +377,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since. `examples/audit-logs` demonstrates the correlation the comment denied.
 
 ### Changed
+- **BREAKING: every field of `TagUpdate`, `VocabularyUpdate`, and `TagAliasUpdate` is now an
+  `Optional[T]`, so a PATCH can say `null`**
+  ([#64](https://github.com/octoverse-id/octonomy-go/issues/64)). New exported surface in
+  `optional.go`: the generic type `Optional[T]` with `Set`, `Null`, `IsZero`, `IsNull`, and `Get`.
+  Field types change on three exported structs and `octonomy.String` / `octonomy.Bool` stop being how
+  those structs are filled — `octonomy.Set(v)` replaces both. `*Create` structs and every
+  `*ListParams` are untouched and still take the pointer helpers.
+
+  ```go
+  octonomy.TagUpdate{Name: octonomy.Set("Autumn")}       // {"name":"Autumn"}    — set it
+  octonomy.TagUpdate{ParentID: octonomy.Null[string]()}  // {"parent_id":null}   — clear it
+  octonomy.TagUpdate{}                                   // {}                   — touch nothing
+  ```
+
+  - **The request was inexpressible, not merely awkward.** Every optional field was a `*T` with
+    `omitempty`, where `nil` meant "leave this one alone" — which spends the pointer's one spare
+    state on absent-versus-set and leaves no value a caller can put in the struct that sends
+    `"parent_id": null`. **A caller could not un-nest a tag, detach it from a vocabulary, or remove a
+    description through this SDK at all.** This is the sibling of
+    [#37](https://github.com/octoverse-id/octonomy-go/issues/37), which hit the same wall on
+    `Metadata` and could still solve it by *adding* a pointer; here the pointer was already spent.
+  - **Nothing was previously lying, and the severity is not being overclaimed.** `nil` left the field
+    alone, which is exactly what it did; no call silently succeeded and nothing reported a clear that
+    had not happened. What was missing was a way to say the third thing.
+  - **Four fields are clearable, and the set is the server's rather than this SDK's.** The vendored
+    v2 contract marks seven properties `nullable: true` across the three patch schemas; three of the
+    seven are `application_id`, refused on every resource as a scope change, so the reachable set is
+    `TagUpdate.ParentID`, `TagUpdate.VocabularyID`, `TagUpdate.Description`, and
+    `VocabularyUpdate.Description`. **`TagAliasUpdate` has none.** A null anywhere else is a `400`
+    (`IsValidation`), and on `ApplicationID` a `409` (`IsScopeImmutable`). None of that is enforced
+    client-side — re-running server validation here is out of bounds, and the server names the
+    offending field in `APIError.Details`.
+  - **A null `ApplicationID` on a row that is already tenant-shared answers `200`, not `409`.** The
+    server refuses a scope *change*, not the literal null, so the no-op case passes. Both halves are
+    asserted, because reading only the first would leave the documentation claiming a refusal the
+    server does not always make.
+  - **`Metadata` is emptied with `Set(Metadata{})`, never with `Null`.** `metadata` is not nullable
+    on any of the three patch serializers, so `Null[Metadata]()` compiles and is always refused; so
+    is `Set` of a *nil* map, which encodes as `null`. The #37 semantics are otherwise unchanged —
+    and `omitzero` cannot re-open #37, because it consults `Optional.IsZero`, which reports which of
+    the three states the field is in and never inspects the payload.
+  - **`omitzero`, not `omitempty`, and the difference is silent.** `omitempty` never omits a struct,
+    so a field tagged with it would put `"field": null` on every PATCH that does not touch it —
+    clearing columns the caller never named, with a 200 and no error. Two guards, because a struct
+    tag has nothing else keeping it honest: `Optional.MarshalJSON` refuses to encode an omitted value
+    rather than falling back to `null`, and `TestUpdateBodiesTagEveryOptionalOmitzero` parses this
+    package's own source and fails on either mistake for **any** type whose name ends in `Update`, so
+    a `*Update` struct added for a future resource is covered by that test existing rather than by
+    somebody remembering. Both were confirmed by mutation: each guard was watched failing against a
+    deliberately broken field.
+  - **`Optional[T]` compares by value where `T` is comparable** — `Set("x") == Set("x")` is true,
+    which the `*string` it replaced never was. `Optional[Metadata]` is the exception, since a map is
+    not comparable, which also makes the three `*Update` structs non-comparable with `==`; that is a
+    compile error rather than a silently wrong answer.
+  - **It carries `UnmarshalJSON` as well**, so an `Optional` recovers an absent key, an explicit
+    null, and any value that does not itself encode as null — rather than decoding to nothing with a
+    nil error, which is the silent-zero family of #32 and #40. A *value* whose own encoding is the
+    literal `null` (`Set` of a nil map) is indistinguishable from `Null` on the wire and decodes to
+    the null state; that is JSON rather than this type, and both spellings are refused by the server
+    for the same reason.
+  - **Why now.** A type change on an exported struct is cheap before the first stable tag and
+    expensive after it — the same reasoning that made #24 blocking. This tree is
+    `v2.0.0-alpha.1`, and the `-alpha.N` suffix comes off at API freeze, so this is what an alpha
+    window is for. The compat line (`support/go1.13`) is unaffected: it has no generics, takes
+    security fixes only, and its server contract predates this.
+  - **Migration is mechanical wherever a field is assigned in Go**, and the compiler finds every
+    such site: `octonomy.String(v)` → `octonomy.Set(v)`, `octonomy.Bool(v)` → `octonomy.Set(v)`,
+    `&octonomy.Metadata{…}` → `octonomy.Set(octonomy.Metadata{…})`, and a field left unset stays
+    unset. Every old spelling fails to compile, so nothing in that shape changes silently.
+  - **The exception is a `*Update` struct you fill by DECODING JSON**, which keeps compiling and
+    does change behaviour — a gateway that unmarshals an inbound patch body into `octonomy.TagUpdate`
+    and forwards it is the realistic case. An incoming `{"description": null}` used to decode into a
+    nil `*string` and then be **dropped** from the outgoing PATCH; it now decodes to the null state
+    and clears the column. That is this issue's bug being fixed one layer further out — the caller
+    asked for a clear and was silently not getting one — but it is a behaviour change the compiler
+    cannot point at, so audit any code that decodes into these structs rather than assigning their
+    fields.
+  - **Verified against a running server**, one PATCH per field, re-reading the row after each:
+    `TestIntegration_NullClearsOnlyTheNullableFields` walks all four clears, a refusal on every
+    resource, and both `application_id` outcomes. `TestIntegration_ParentCycleIsReachableAndRefused`
+    now breaks its ring by **clearing** the offending link rather than re-pointing it at a third tag
+    — the repair an operator holding that data would actually make, and the one the old shape could
+    not express. `examples/tags` and `examples/vocabularies` demonstrate the clear and were run.
 - **The vendored contracts now track server `3.2.0`**
   ([#57](https://github.com/octoverse-id/octonomy-go/issues/57)). A bookkeeping refresh and nothing
   more: server 3.2.0 is a minor release for operator-facing capability — subpath deployments,

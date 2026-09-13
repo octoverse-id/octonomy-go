@@ -78,10 +78,25 @@ func (e *Env) Int(wireName string) int {
 	}
 	return value
 }
-func metap() *octonomy.Metadata {
-	m := meta()
-	return &m
+
+// Opt, OptBool and metaOpt are the *Update spellings of Str, Bool and meta.
+// Every field of a PATCH body is an octonomy.Optional since #64, so the gate
+// fills them the same way a caller would -- with Set, never with the zero
+// value, which would omit the key and make the driver prove nothing about that
+// property.
+func (e *Env) Opt(wireName string) octonomy.Optional[string] {
+	return octonomy.Set(ExpectedValue(wireName, e.pass))
 }
+
+func (e *Env) OptBool(wireName string) octonomy.Optional[bool] {
+	value, err := strconv.ParseBool(ExpectedValue(wireName, e.pass))
+	if err != nil {
+		panic("contractdrift: " + wireName + " is not a boolean in the expected-value table")
+	}
+	return octonomy.Set(value)
+}
+
+func metaOpt() octonomy.Optional[octonomy.Metadata] { return octonomy.Set(meta()) }
 
 func listOptions(env *Env) octonomy.ListOptions {
 	return octonomy.ListOptions{Limit: env.Int("limit"), Offset: env.Int("offset")}
@@ -117,10 +132,10 @@ func Drivers() []Driver {
 		}},
 		{Op: "patch /tags/{tag_id}", SDK: "TagService.Update", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Tags.Update(ctx, env.Path("tag_id"), octonomy.TagUpdate{
-				ApplicationID: env.Str("application_id"), Name: env.Str("name"), Slug: env.Str("slug"), Type: env.Str("type"),
-				Description: env.Str("description"), ParentID: env.Str("parent_id"),
-				VocabularyID: env.Str("vocabulary_id"),
-				Metadata:     metap(), IsActive: env.Bool("is_active"),
+				ApplicationID: env.Opt("application_id"), Name: env.Opt("name"), Slug: env.Opt("slug"), Type: env.Opt("type"),
+				Description: env.Opt("description"), ParentID: env.Opt("parent_id"),
+				VocabularyID: env.Opt("vocabulary_id"),
+				Metadata:     metaOpt(), IsActive: env.OptBool("is_active"),
 			}, env.Scope()...)
 		}},
 		{Op: "delete /tags/{tag_id}", SDK: "TagService.Delete", Call: func(ctx context.Context, env *Env) (any, error) {
@@ -149,8 +164,8 @@ func Drivers() []Driver {
 		}},
 		{Op: "patch /vocabularies/{vocabulary_id}", SDK: "VocabularyService.Update", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Vocabularies.Update(ctx, env.Path("vocabulary_id"), octonomy.VocabularyUpdate{
-				ApplicationID: env.Str("application_id"), Name: env.Str("name"), Slug: env.Str("slug"), Description: env.Str("description"),
-				Metadata: metap(), IsActive: env.Bool("is_active"),
+				ApplicationID: env.Opt("application_id"), Name: env.Opt("name"), Slug: env.Opt("slug"), Description: env.Opt("description"),
+				Metadata: metaOpt(), IsActive: env.OptBool("is_active"),
 			}, env.Scope()...)
 		}},
 		{Op: "delete /vocabularies/{vocabulary_id}", SDK: "VocabularyService.Delete", Call: func(ctx context.Context, env *Env) (any, error) {
@@ -180,8 +195,8 @@ func Drivers() []Driver {
 		}},
 		{Op: "patch /tag-aliases/{alias_id}", SDK: "AliasService.Update", Call: func(ctx context.Context, env *Env) (any, error) {
 			return env.Client.Aliases.Update(ctx, env.Path("alias_id"), octonomy.TagAliasUpdate{
-				ApplicationID: env.Str("application_id"), TagID: env.Str("tag_id"), Name: env.Str("name"), Slug: env.Str("slug"),
-				Metadata: metap(), IsActive: env.Bool("is_active"),
+				ApplicationID: env.Opt("application_id"), TagID: env.Opt("tag_id"), Name: env.Opt("name"), Slug: env.Opt("slug"),
+				Metadata: metaOpt(), IsActive: env.OptBool("is_active"),
 			}, env.Scope()...)
 		}},
 		{Op: "delete /tag-aliases/{alias_id}", SDK: "AliasService.Delete", Call: func(ctx context.Context, env *Env) (any, error) {

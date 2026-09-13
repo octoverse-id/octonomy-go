@@ -65,8 +65,12 @@ turns each of those into an error ([#32](https://github.com/octoverse-id/octonom
   was known before #32 — the rest were found by running against a real container, which is now
   `make smoke`, with `make test-integration` alongside it for the semantics a payload check cannot
   reach (namespace isolation, fail-closed `include_global`, idempotence, atomicity).
-- **Pointers for optionality:** nullable server fields decode into `*string`; write structs use
-  pointers + `omitempty` so PATCH only sends what the caller set.
+- **Optionality has two shapes, and the difference is a state count.** Nullable server fields decode
+  into `*string`, and `*Create` / `*ListParams` structs use pointers + `omitempty` — two states are
+  all a create or a filter needs. A **PATCH needs three** (leave it alone, set it, clear it), so
+  every field of a `*Update` struct is an `Optional[T]` tagged `omitzero`: a pointer spends its one
+  spare state on absent-versus-set, which left the nullable fields unclearable
+  ([#64](https://github.com/octoverse-id/octonomy-go/issues/64)).
 - **No hidden behavior:** the client never panics, never logs, never mutates global state, and adds
   no retry loop of its own. Retries, timeouts, and transport tuning are the caller's `*http.Client`. That
   makes an **`http.RoundTripper`** the sanctioned extension point for metrics, tracing, and request

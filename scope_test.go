@@ -293,7 +293,7 @@ func TestScopeGuards_RejectBeforeSendingAnything(t *testing.T) {
 			name:    "WithApplication on an update",
 			version: APIV2,
 			call: func(c *Client) error {
-				_, err := c.Tags.Update(context.Background(), "abc", TagUpdate{Name: String("N")}, WithApplication("shop"))
+				_, err := c.Tags.Update(context.Background(), "abc", TagUpdate{Name: Set("N")}, WithApplication("shop"))
 				return err
 			},
 			wantIn: "ApplicationID field of the request body",
