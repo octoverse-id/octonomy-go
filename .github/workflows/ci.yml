@@ -62,16 +62,23 @@ jobs:
       - name: Test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
 
-  # REQUIRED BY INTENT -- and not yet by branch protection, which does not exist
-  # for this branch. Until `support/go1.13` protection lists this job's context,
-  # a red run here does not block a merge. The only gate on this line's stdlib
-  # floor, so it should be the first context added.
+  # THE ONLY GATE ON THIS LINE'S STDLIB FLOOR.
   #
   # A modern toolchain enforces the *language* version from the `go` directive
   # but not the *stdlib* version: with `go 1.13` in go.mod, Go 1.25 rejects
   # generics and compiles `io.ReadAll` (Go 1.16) clean -- as do `go vet`,
   # `go vet -stdversion`, and staticcheck. Only a real go1.13 toolchain catches
-  # it, which is why this job is required rather than advisory.
+  # it. Nothing else in this workflow does, and neither does a contributor
+  # running a current Go locally.
+  #
+  # Whether a red run here blocks a merge is branch-protection state, which this
+  # file cannot observe, so it is deliberately not paraphrased here. The comment
+  # that used to paraphrase it went stale the moment the contexts were added and
+  # then misled a reviewer on PR #50, who read it and filed a finding against
+  # documentation that was correct. Ask the API instead:
+  #
+  #   gh api repos/:owner/:repo/branches/support%2Fgo1.13/protection \
+  #     --jq '.required_status_checks.contexts'
   go113:
     name: go1.13
     runs-on: ubuntu-latest
@@ -156,22 +163,21 @@ jobs:
           # and HTTP 400.
           repo-checkout: "false"
 
-  # REQUIRED BY INTENT, like the go113 job, and likewise not yet enforced by
-  # branch protection. The compat line's only check against a real server.
+  # THE COMPAT LINE'S ONLY CHECK AGAINST A REAL SERVER.
   #
-  # It replaces main's bootstrap-only `harness` job: on this line the smoke test
-  # IS the harness's consumer, so booting a container to assert only that the
-  # container booted would be a second Docker job for no added coverage. The
-  # credentials still cross a step boundary (the harness exports them, the test
-  # step reads them), which is what main's job was proving.
+  # It replaces the bootstrap-only `harness` job this workflow was forked from:
+  # on this line the smoke test IS the harness's consumer, so booting a container
+  # to assert only that the container booted would be a second Docker job for no
+  # added coverage. The credentials still cross a step boundary (the harness
+  # exports them, the test step reads them), which is what that job was proving.
   #
-  # Required rather than advisory, unlike main's. Main keeps its harness job
-  # advisory so a registry hiccup cannot block an unrelated PR; that reasoning
-  # does not transfer here. This line takes security fixes only, so a PR is rare
-  # and a flake costs a re-run -- while an unverified v1.x tag cannot be recalled
-  # at all (`retract` shipped in Go 1.16, after this line's floor). #29 makes a
-  # green smoke test a precondition for cutting the tag, and a `continue-on-error`
-  # job cannot satisfy a precondition.
+  # Why it is worth blocking a merge on -- the part that does not decay: this
+  # line takes security fixes only, so a PR here is rare and a flake costs a
+  # re-run, while an unverified `v1.x` tag cannot be recalled at all (`retract`
+  # shipped in Go 1.16, after this line's floor). #29 makes a green smoke test a
+  # precondition for cutting the tag, and a `continue-on-error` job cannot
+  # satisfy a precondition. As with the go113 job, what is actually enforced
+  # lives in the branch's protection settings, not in this file.
   smoke:
     name: go1.13 smoke test
     runs-on: ubuntu-latest

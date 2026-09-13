@@ -21,14 +21,20 @@ multi-application tag management and taxonomy service. This SDK is a hand-writte
 > - A published `v1.x` **cannot be recalled** for this audience: `retract` shipped in Go 1.16, so a
 >   Go 1.13 toolchain ignores it.
 >
-> **On Go 1.24 or newer?** Use the active line instead — different module path, different module:
+> **Able to run the active line's Go, or to upgrade to it?** Then use that line instead — a different
+> module path and a different module, with a floor far above this one's. Check the version it requires
+> before you switch; it is recorded where it can stay true, in
+> [`main`'s README](https://github.com/octoverse-id/octonomy-go/blob/main/README.md).
 >
 > ```bash
-> go get github.com/octoverse-id/octonomy-go/v2   # v2.x, Go 1.24+, active development
+> go get github.com/octoverse-id/octonomy-go/v2   # v2.x, active development
 > ```
 >
-> It has the remaining resources, `/api/v2`, and namespace support on its roadmap. See
-> [versioning.md](docs/versioning.md) for both policies.
+> That line is under active development, so what it implements keeps moving and this page does not
+> restate it. Its current surface is described on `main`:
+> [README](https://github.com/octoverse-id/octonomy-go/blob/main/README.md) and
+> [API mapping](https://github.com/octoverse-id/octonomy-go/blob/main/docs/api.md#implemented).
+> See [versioning.md](docs/versioning.md) for both lines' support policies.
 
 ## Install
 
@@ -140,7 +146,7 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 - **No `List[T]`.** Type parameters need Go 1.18. `TagList` and `VocabularyList` replace it; the
   fields are identical.
 - **No `CodeScopeImmutable` constant.** Server 3.1.0 added `409 scope_immutable` on tag, vocabulary,
-  and alias `PATCH` — the exact surface this line speaks to. The named constant and an `Is*` helper
+  and alias `PATCH`; this line exposes `PATCH` for the first two. The named constant and an `Is*` helper
   are absent, but nothing is lost at runtime: `parseError` preserves whatever `code` the server
   sends, so branch on the string directly.
 
@@ -174,7 +180,8 @@ version from `go.mod` but not the stdlib version, so `io.ReadAll` (Go 1.16) comp
 - [Development](docs/development.md) — setup, quality gates, testing.
 - [Versioning](docs/versioning.md) — SemVer policy and which server contract this SDK targets.
 - [Release](docs/release.md) — the release runbook.
-- [Roadmap](docs/roadmap.md) — what the `/v2` line is adding. **None of it comes to this line.**
+- [Roadmap](docs/roadmap.md) — what the `/v2` line has that this one does not. **None of it comes to
+  this line.**
 - [CHANGELOG](CHANGELOG.md)
 
 ## Contributing & security

@@ -16,12 +16,13 @@
 // them distinct to the go command:
 //
 //   - github.com/octoverse-id/octonomy-go      v1.x, Go 1.13, frozen, /api/v1 only
-//   - github.com/octoverse-id/octonomy-go/v2   v2.x, Go 1.24+, active development
+//   - github.com/octoverse-id/octonomy-go/v2   v2.x, a modern Go, active development
 //
 // Because the paths differ, version selection cannot move a consumer between the
 // two lines. This line receives security fixes only, takes no features, and has a
-// published sunset date; see docs/versioning.md. If your toolchain is Go 1.24 or
-// newer, use the /v2 path instead.
+// published sunset date; see docs/versioning.md. If your toolchain is current, use
+// the /v2 path instead -- its README on main states the minimum it requires, which
+// is not a number this frozen line can keep true.
 //
 // # Quickstart
 //
@@ -66,6 +67,6 @@
 // List methods return a per-resource envelope holding the Data slice and
 // Pagination metadata (limit, offset, count, next, previous): *TagList from
 // Tags.List and *VocabularyList from Vocabularies.List. Page with ListOptions on
-// each resource's *ListParams. (The modern line expresses these as a generic
-// List[T], which needs Go 1.18.)
+// each resource's *ListParams. One envelope type per resource, rather than one
+// generic envelope, because type parameters need Go 1.18.
 package octonomy

@@ -74,9 +74,9 @@ func (p *VocabularyListParams) query() url.Values {
 }
 
 // VocabularyList is the envelope GET /vocabularies returns: {"data": [...],
-// "pagination": {...}}. It is the Vocabulary instantiation of what the modern
-// line expresses as List[Vocabulary]; see pagination.go for why this line spells
-// it out per resource.
+// "pagination": {...}}. It is the Vocabulary instantiation of a shape that would
+// otherwise be one generic type; see pagination.go for why this line spells it
+// out per resource.
 type VocabularyList struct {
 	Data       []Vocabulary `json:"data"`
 	Pagination Pagination   `json:"pagination"`

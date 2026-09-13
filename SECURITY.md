@@ -15,7 +15,8 @@ support policy is this page plus [docs/versioning.md](docs/versioning.md).
 **The `1.x` line takes security fixes and nothing else.** No features, no ordinary bug fixes, no
 `/api/v2`, no namespaces, no webhooks — see the support policy in
 [docs/versioning.md](docs/versioning.md). If you need anything beyond a security fix, the upgrade is
-to Go 1.24+ and the `/v2` module.
+to the `/v2` module on a current Go toolchain — [`main`'s README](https://github.com/octoverse-id/octonomy-go/blob/main/README.md) states the floor it
+requires today.
 
 **Sunset: 2027-08-31.** After that date the `1.x` line receives nothing at all, including security
 fixes. Owner: the SDK maintainer (see [`.github/CODEOWNERS`](.github/CODEOWNERS)); revisable only by

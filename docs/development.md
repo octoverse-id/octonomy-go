@@ -71,11 +71,18 @@ What the floor rules out, and what to write instead:
 declared language version, and the deprecation postdates `go 1.13`), but golangci-lint's `govet`
 `inline` analyzer does object — it is disabled in `.golangci.yml` with that reasoning recorded.
 
-CI enforces the floor with a real-`go1.13` job — **intended** as a required check, though branch
-protection for this branch does not exist yet, so nothing mechanically blocks a merge on it until the
-maintainer adds the context. `scripts/compat-guard.sh` blocks a `go.mod` whose `go` directive drifts
+CI enforces the floor with a real-`go1.13` job — the only check that can, and the reason this line
+has CI at all. `scripts/compat-guard.sh` blocks a `go.mod` whose `go` directive drifts
 off `1.13` — the one mistake with no toolchain backstop, because
 a `v1.x` tag cut from a drifted `go.mod` keeps the same module path and resolves fine.
+
+Which of those checks mechanically blocks a merge is branch-protection state, and no file in this
+repository can observe it — so none of them claims to. Ask the API:
+
+```console
+$ gh api repos/:owner/:repo/branches/support%2Fgo1.13/protection \
+    --jq '.required_status_checks.contexts'
+```
 
 Optional local tools (CI installs them automatically):
 
@@ -121,8 +128,7 @@ make dev-server-down
 
 CI runs it on the **go1.13** toolchain against the pinned container image, with
 `OCTONOMY_SMOKE_REQUIRED=1` so a missing base URL fails instead of skipping — a skip would be a green
-job that asserted nothing. Like the `go1.13` job it is *intended* as a required check and is not yet
-enforced by branch protection. That combination — the frozen client, on its own toolchain, against the
+job that asserted nothing. That combination — the frozen client, on its own toolchain, against the
 current server — is the only one that proves this line still works, and it is what caught the
 single-resource envelope defect.
 
@@ -183,8 +189,10 @@ harness does that a naive bootstrap does not:
   fields would mean the row persisted globally, and every downstream namespace assertion would be
   testing global behaviour under a namespaced name.
 
-Both version lines call the same script, so the Go 1.13 compat line and the modern `/v2` line cannot
-drift apart on setup. CI reaches it through the `.github/actions/octonomy-harness` composite action.
+CI reaches it through the `.github/actions/octonomy-harness` composite action. The script on this
+branch is **this line's own copy**, frozen with the rest of it: it cannot pick up an edit made on the
+other line, and the two have already diverged. Read this one for what this line does, and do not
+assume a harness change made elsewhere reached it.
 
 The harness boots server **3.1.0**, which is newer than the `1.0.0` contract this line was written
 against. That is deliberate: the frozen client's remaining job is to keep working against the server
