@@ -243,8 +243,9 @@ for that token authorization never says no: it can prove what the server's names
 and nothing about what its *authorization* does. The exact grants are the only way to reach the
 refusal path, and the only way `include_global`'s fail-closed branch executes at all.
 
-`make dev-server` ends by printing the export block the examples read, so running one is a
-copy-paste and a `go run`. `make dev-server-env` reprints it — into a second terminal, or after the
+`make dev-server` ends by printing the export block the API examples read, so running one is a
+copy-paste and a `go run`. (`examples/webhook` reads none of it — it is a receiver and contacts no
+server; run it on its own.) `make dev-server-env` reprints it — into a second terminal, or after the
 first one scrolled away — without rebooting the container.
 
 ```bash

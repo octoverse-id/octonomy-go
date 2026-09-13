@@ -228,7 +228,7 @@ dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and print the ex
 # partial one behind. Printing OCTONOMY_TOKEN='' and exiting 0 would say the
 # examples can run while handing over credentials that cannot authenticate, and
 # the failure would surface three commands later as a blanket 401.
-dev-server-env: ## Print the export block the examples read (needs a booted dev-server)
+dev-server-env: ## Print the export block the API examples read (needs a booted dev-server)
 	@set -e; \
 	env_file=$$(scripts/octonomy-harness.sh env); \
 	case "$$env_file" in /*) ;; *) env_file="./$$env_file" ;; esac; \

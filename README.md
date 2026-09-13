@@ -124,9 +124,10 @@ func main() {
 
 ### Runnable examples
 
-One per resource group, each a single `main.go`, and you can be running them against a real Octonomy
-in about five minutes. `make dev-server` boots one — Postgres, the published container, migrations, a
-minted service token — and ends by printing the export block the API examples read:
+One per resource group, each a single `main.go`. Ten of them call the API, and you can be running
+those against a real Octonomy in about five minutes: `make dev-server` boots one — Postgres, the
+published container, migrations, a minted service token — and ends by printing the export block they
+read.
 
 ```bash
 make dev-server          # boots, then prints the exports; `make dev-server-env` reprints them
