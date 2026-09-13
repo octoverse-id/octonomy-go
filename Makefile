@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check require-tools \
-	version-check dev-server dev-server-down dev-server-logs smoke test-integration \
+	version-check dev-server dev-server-env dev-server-down dev-server-logs smoke test-integration \
 	contract-check contract-drift contract-test
 
 help: ## List available targets
@@ -140,15 +140,74 @@ vuln: ## Run govulncheck on the SDK and on the contract gate's module
 		echo "govulncheck not installed; skipping. Install: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest"; \
 	fi
 
+# One `go build` per directory with -o /dev/null, rather than the single
+# `go build ./examples/...` this used to be documented as. That form means two
+# different things depending on how many examples exist: with several main
+# packages the go command discards the results, but with exactly ONE it writes
+# that binary into the working directory. A compile check must not leave an
+# artifact behind on the day someone deletes the second-to-last example.
+#
+# The emptiness guard is the vacuous-green rule the smoke target states at
+# length, in its third shape: `find` matching nothing makes this target exit 0
+# having compiled nothing, and a renamed or moved examples/ directory looks
+# exactly like that. The count is echoed so a run that quietly stopped covering
+# half the tree is visible rather than merely non-zero.
 examples: ## Compile-check the runnable examples (no binaries emitted)
-	@find examples -name main.go -exec dirname {} \; | sort -u | while read -r dir; do \
-		echo "build ./$$dir"; go build -o /dev/null "./$$dir" || exit 1; \
-	done
+	@set -e; \
+	dirs=$$(find examples -name main.go -exec dirname {} \; | sort -u); \
+	[ -n "$$dirs" ] || { \
+		echo "examples: no main.go found under examples/."; \
+		echo "examples: this target would otherwise report success having compiled nothing."; \
+		exit 1; }; \
+	count=0; \
+	for dir in $$dirs; do \
+		echo "build ./$$dir"; go build -o /dev/null "./$$dir"; \
+		count=$$((count + 1)); \
+	done; \
+	echo "examples: $$count compiled"
 
 check: fmt-check vet build ## Fast pre-push gate (format, vet, build)
 
-dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and write .octonomy-harness.env
+dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and print the examples' env
 	@scripts/octonomy-harness.sh up
+	@$(MAKE) --no-print-directory dev-server-env
+
+# The bridge between the harness and the examples, and the reason it exists is
+# that the two use different variable names on purpose. The harness writes
+# OCTONOMY_TEST_* because the integration suites GATE on those names -- an empty
+# OCTONOMY_TEST_BASE_URL is what makes them skip instead of fail -- while an
+# example is a program a reader copies, and a consumer's program reads
+# OCTONOMY_*. Renaming either set to match the other would break one of those
+# two properties.
+#
+# It is a target rather than a paragraph in the README because the value that
+# matters is a freshly minted token: something to copy, never to retype. It is
+# also separate from `dev-server` so the block can be reprinted into a second
+# terminal without rebooting the container.
+#
+# Values are single-quoted so a copied line survives a space, and the env file is
+# sourced through an explicit ./ prefix when it is relative -- POSIX `.` searches
+# PATH for a bare name, which would source something else entirely.
+dev-server-env: ## Print the export block the examples read (needs a booted dev-server)
+	@set -e; \
+	env_file=$$(scripts/octonomy-harness.sh env); \
+	case "$$env_file" in /*) ;; *) env_file="./$$env_file" ;; esac; \
+	[ -f "$$env_file" ] || { \
+		echo "dev-server-env: $$env_file does not exist -- run \`make dev-server\` first."; \
+		exit 1; }; \
+	set -a; . "$$env_file"; set +a; \
+	echo; \
+	echo "Run any example against this server:"; \
+	echo; \
+	echo "  export OCTONOMY_BASE_URL='$$OCTONOMY_TEST_BASE_URL'"; \
+	echo "  export OCTONOMY_TOKEN='$$OCTONOMY_TEST_TOKEN'"; \
+	echo "  export OCTONOMY_TENANT_ID='$$OCTONOMY_TEST_TENANT_ID'"; \
+	echo "  export OCTONOMY_APPLICATION_ID='$$OCTONOMY_TEST_APPLICATION_ID'"; \
+	echo "  export OCTONOMY_NAMESPACE_TYPE='$$OCTONOMY_TEST_NAMESPACE_TYPE'"; \
+	echo "  export OCTONOMY_NAMESPACE_ID='$$OCTONOMY_TEST_NAMESPACE_ID'"; \
+	echo; \
+	echo "  go run ./examples/quickstart"; \
+	echo
 
 dev-server-down: ## Tear down the Octonomy container harness
 	@scripts/octonomy-harness.sh down

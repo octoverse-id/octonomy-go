@@ -27,7 +27,7 @@ make vet         # go vet ./...
 make lint        # golangci-lint (if installed)
 make test        # go test -race -cover ./...
 make cover       # prints total coverage
-make examples    # go build ./examples/...
+make examples    # compile-check every runnable example
 make smoke       # integration smoke test against a booted server (see below)
 make test-integration # the full integration suite against a booted server (see below)
 make contract-check # vendored contract vs the SDK, offline (see Contract drift)
@@ -243,15 +243,29 @@ for that token authorization never says no: it can prove what the server's names
 and nothing about what its *authorization* does. The exact grants are the only way to reach the
 refusal path, and the only way `include_global`'s fail-closed branch executes at all.
 
-```bash
-make dev-server
-set -a; . ./.octonomy-harness.env; set +a
+`make dev-server` ends by printing the export block the examples read, so running one is a
+copy-paste and a `go run`. `make dev-server-env` reprints it — into a second terminal, or after the
+first one scrolled away — without rebooting the container.
 
-OCTONOMY_BASE_URL="$OCTONOMY_TEST_BASE_URL" \
-OCTONOMY_TOKEN="$OCTONOMY_TEST_TOKEN" \
-OCTONOMY_TENANT_ID="$OCTONOMY_TEST_TENANT_ID" \
+```bash
+make dev-server          # boots, then prints the block below
+
+export OCTONOMY_BASE_URL='http://127.0.0.1:8000'
+export OCTONOMY_TOKEN='octo_...'
+export OCTONOMY_TENANT_ID='harness-tenant'
+export OCTONOMY_APPLICATION_ID='harness-app'
+export OCTONOMY_NAMESPACE_TYPE='merchant'
+export OCTONOMY_NAMESPACE_ID='harness-merchant'
+
 go run ./examples/quickstart
+go run ./examples/namespaces
 ```
+
+The two variable sets are deliberately not one. The harness writes `OCTONOMY_TEST_*` because the
+integration suites **gate** on those names — an empty `OCTONOMY_TEST_BASE_URL` is what makes them
+skip rather than fail — while an example is a program a reader copies into their own service, where
+the variables are `OCTONOMY_*`. `make dev-server-env` is the bridge, so neither set has to give up
+its property.
 
 Everything is overridable — `OCTONOMY_HARNESS_PORT`, `OCTONOMY_HARNESS_PREFIX`,
 `OCTONOMY_HARNESS_IMAGE`, `OCTONOMY_HARNESS_ENV_FILE` and friends — so two harnesses can run side by

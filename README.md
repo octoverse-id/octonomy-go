@@ -122,7 +122,38 @@ func main() {
 }
 ```
 
-A complete, runnable program lives in [`examples/quickstart`](examples/quickstart/main.go).
+### Runnable examples
+
+One per resource group, each a single `main.go` you can run against a real Octonomy in about five
+minutes. `make dev-server` boots one — Postgres, the published container, migrations, a minted
+service token — and ends by printing the export block every example reads:
+
+```bash
+make dev-server          # boots, then prints the exports; `make dev-server-env` reprints them
+export OCTONOMY_BASE_URL='http://127.0.0.1:8000' OCTONOMY_TOKEN='octo_...' OCTONOMY_TENANT_ID='harness-tenant'
+export OCTONOMY_APPLICATION_ID='harness-app' OCTONOMY_NAMESPACE_TYPE='merchant' OCTONOMY_NAMESPACE_ID='harness-merchant'
+
+go run ./examples/quickstart
+make dev-server-down     # when you are finished
+```
+
+Each one demonstrates a semantic that is easy to get wrong, not just a create call:
+
+| Example | What it shows |
+| ------- | ------------- |
+| [`quickstart`](examples/quickstart/main.go) | Configure, create, list, walk every page with `Each`, decode typed metadata |
+| [`vocabularies`](examples/vocabularies/main.go) | Exact-slug lookup; `Metadata` replaces and never merges; `Delete` is deactivation |
+| [`tags`](examples/tags/main.go) | Hierarchy via `ParentID`; uniqueness is on `(type, slug)`, so the same slug under another type is legal |
+| [`aliases`](examples/aliases/main.go) | Two routes for the same rows; re-pointing an alias; the cascade from a deactivated tag |
+| [`resolution`](examples/resolution/main.go) | Alias matches; an unmatched slug is a `400`, not a `404`; the type tie and how to break it |
+| [`assignments`](examples/assignments/main.go) | Assignment is idempotent; the alias form; bulk counters; bulk is all-or-nothing |
+| [`resources`](examples/resources/main.go) | `ReplaceTags` replaces rather than merges, and an empty request clears the resource |
+| [`audit-logs`](examples/audit-logs/main.go) | Newest-first rows, a caller-supplied request id coming back, `OperationID` as one act |
+| [`health`](examples/health/main.go) | Credential-free probes, and unreachable versus answered-but-not-ready |
+| [`namespaces`](examples/namespaces/main.go) | Merchant scoping, what `include_global` widens, and the options the SDK refuses |
+| [`webhook`](examples/webhook/main.go) | A receiver: bound, read, verify, then parse — and why routing comes from the body |
+
+`make examples` compile-checks all of them and runs inside `make release-check`.
 
 ## Authentication and tenant scope
 
@@ -609,10 +640,12 @@ only defeats pooling if it also builds a *new transport* each time; one that sha
 ## Common commands
 
 ```bash
-make test    # go test -race -cover ./...
-make check   # gofmt check + go vet + build
-make lint    # golangci-lint (if installed)
-make help    # list all targets
+make test        # go test -race -cover ./...
+make check       # gofmt check + go vet + build
+make lint        # golangci-lint (if installed)
+make dev-server  # boot a real Octonomy and print the examples' env
+make examples    # compile-check every runnable example
+make help        # list all targets
 ```
 
 ## Documentation
