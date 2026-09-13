@@ -63,8 +63,11 @@ jobs:
           cache: true
       - name: Build
         run: go build ./...
+      # `make examples`, not `go build ./examples/...`: the target compiles each
+      # example separately to /dev/null and fails when it finds none, which the
+      # bare command cannot do -- see the Makefile.
       - name: Build examples
-        run: go build ./examples/...
+        run: make examples
       - name: Test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
 

@@ -184,8 +184,22 @@ func TestTags_Resolve_NoMatchIsValidationNotNotFound(t *testing.T) {
 	}
 }
 
-// The two ambiguity axes arrive under DIFFERENT codes, which is the trap: a
-// caller handling only IsAmbiguousResolution misses the type-axis tie entirely.
+// Whichever code the envelope carries is the code the caller sees, and these two
+// reach DIFFERENT helpers. Only one of them is a code this route produces.
+//
+// The type row is the reachable one: two canonical tags sharing a slug under
+// different types really do produce a plain validation_error carrying
+// Details["type"], verified against a live server.
+//
+// The application row is a CODE-PRESERVATION case, not a route behaviour. The
+// server has an ambiguous_resolution error and this SDK has a helper for it, but
+// nothing on GET /tag-resolution raises it -- resolution naming no application
+// searches application-shared rows alone, so no same-rung application tie
+// survives to be reported (see IsAmbiguousResolution). This case exists because
+// a code that ARRIVES in an envelope must be surfaced verbatim whatever raised
+// it, and the fixture is the only way to ask that question of a route that will
+// not produce one. An earlier revision of this comment read it as evidence that
+// the route emits it; it is not.
 func TestTags_Resolve_AmbiguityAxes(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -195,13 +209,13 @@ func TestTags_Resolve_AmbiguityAxes(t *testing.T) {
 		wantValidationToo bool
 	}{
 		{
-			name:          "across applications is ambiguous_resolution",
+			name:          "an ambiguous_resolution envelope reaches IsAmbiguousResolution",
 			code:          CodeAmbiguousResolution,
 			detailKey:     "application_id",
 			wantAmbiguous: true,
 		},
 		{
-			name:              "across types is a plain validation_error",
+			name:              "a type tie is a plain validation_error",
 			code:              CodeValidation,
 			detailKey:         "type",
 			wantValidationToo: true,

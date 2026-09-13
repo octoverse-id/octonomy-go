@@ -608,7 +608,7 @@ about them looks wrong when they arrive blank — see the reason given [above](#
 the deployment has `NAMESPACE_WRITE_ENABLED` or `NAMESPACE_V2_API_ENABLED` off. Retrying or changing
 the payload will not help.
 
-### Resolution does not use 404, and splits its ambiguity across two codes
+### Resolution does not use 404, and its only reachable tie is the type tie
 
 `Tags.Resolve` answers an **unmatched slug with a `400 validation_error`**, not a `404`. The branch
 that means "nothing is called that" is `IsValidation`, and `IsNotFound` reports false. A
@@ -617,16 +617,22 @@ same error, indistinguishable on purpose: distinguishing them would disclose the
 the caller may not read.
 
 Two matches of equal specificity are refused rather than broken arbitrarily, and the axis that
-disambiguates them arrives in `Details` — under **two different codes**, so a caller handling only
-one misses half the cases:
+disambiguates them arrives in `Details`:
 
 | Tie | Code | Helper | `Details` key | Fix |
 | --- | ---- | ------ | ------------- | --- |
-| Rows in different applications | `ambiguous_resolution` | `IsAmbiguousResolution` | `application_id` | set `TagResolveParams.ApplicationID` |
 | Canonical tags of different types | `validation_error` | `IsValidation` | `type` | set `TagResolveParams.Type` |
 
-Both were verified against a running 3.1.0 server rather than read off the spec, which describes
-neither.
+Verified against a running 3.1.0 server rather than read off the spec, which describes neither.
+
+**`ambiguous_resolution` (`IsAmbiguousResolution`) is not reachable through this route**, and an
+earlier revision of this table listed it here as the application tie. It is not one: resolution that
+names no application searches application-shared rows alone, one that names an application ranks that
+application's rows above the shared ones, and a namespaced request must name an application at all —
+three rules that leave no same-rung tie for the server to report. A slug that exists only inside an
+application therefore resolves to the ordinary "no match" `400`, not to a tie. The server's guard is
+defence-in-depth for its own internal callers and its own test suite says so; the helper stays, since
+a code that arrives in an envelope is preserved verbatim whatever raises it.
 
 ### Responses with no error envelope
 

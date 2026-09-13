@@ -164,8 +164,16 @@ func (r TagResolution) identityFields() []identityField {
 // with server defaults.
 //
 // ApplicationID both filters and ORDERS: with it set, a tag or alias in that
-// application outranks a tenant-shared one carrying the same slug. Without it,
-// two rows in different applications are a tie the server refuses to break.
+// application outranks a tenant-shared one carrying the same slug, so local
+// vocabulary overrides a tenant-wide default.
+//
+// WITHOUT IT, APPLICATION-SCOPED ROWS ARE NOT CANDIDATES AT ALL. A resolution
+// naming no application searches application-shared rows alone
+// (filter_no_application_resolution), so a slug that exists only inside an
+// application resolves to nothing -- the same 400 an unknown slug gets, not a
+// tie. Verified against 3.1.0; an earlier revision of this comment claimed the
+// tie, which is the server's internal guard and not something this route can
+// reach (see IsAmbiguousResolution).
 type TagResolveParams struct {
 	ApplicationID *string
 	Type          *string
@@ -205,14 +213,16 @@ func (p *TagResolveParams) query(slug string) url.Values {
 // the existence of rows the caller may not read.
 //
 // Two matches of equal specificity are refused rather than broken arbitrarily,
-// and the axis that disambiguates them arrives in Details -- but under two
-// different codes, so a caller handling only one of them misses half the cases:
+// and the axis that disambiguates them arrives in Details. Over this route that
+// is the TYPE axis: canonical tags sharing a slug under different types are a
+// plain validation_error (IsValidation) carrying Details {"type": [...]}, and
+// TagResolveParams.Type is the fix.
 //
-//   - Rows differing by APPLICATION are an ambiguous_resolution
-//     (IsAmbiguousResolution), with Details {"application_id": [...]}. Set
-//     TagResolveParams.ApplicationID.
-//   - Canonical tags differing by TYPE are a plain validation_error
-//     (IsValidation), with Details {"type": [...]}. Set TagResolveParams.Type.
+// The APPLICATION axis is NOT a second case here, though the server has a code
+// for it. Resolution ranks application rows above shared ones and searches
+// shared rows alone when no application is named, so no same-rung application
+// tie survives to be reported -- see IsAmbiguousResolution, which keeps the
+// helper and says why nothing on this route raises it.
 func (s *TagService) Resolve(ctx context.Context, slug string, params *TagResolveParams, opts ...RequestOption) (*TagResolution, error) {
 	return doData[TagResolution](ctx, s.client, http.MethodGet, "/tag-resolution", params.query(slug), nil, opts...)
 }

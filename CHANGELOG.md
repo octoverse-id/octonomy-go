@@ -231,6 +231,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The CI composite action now masks every exported `*_TOKEN` rather than the one variable that
   existed when it was written.
 
+- **A runnable example per resource group, and `make dev-server` now hands you the credentials**
+  ([#19](https://github.com/octoverse-id/octonomy-go/issues/19)). Ten new programs under
+  `examples/` — `vocabularies`, `tags`, `aliases`, `resolution`, `assignments`, `resources`,
+  `audit-logs`, `health`, `namespaces`, `webhook` — beside the quickstart that was the only one
+  before. The ten that call the API run against `make dev-server` with no file edits; `webhook` is a
+  receiver and needs no server at all, which the bullet below says more about.
+  - **They demonstrate the semantics that are easy to get wrong, not the happy call.** Assignment
+    being idempotent rather than a conflict; `ReplaceTags` replacing rather than merging, and an
+    empty request clearing the resource outright; `Delete` being deactivation, which is why an
+    absent `IsActive` lists active rows only; deactivating a canonical tag cascading to its aliases;
+    tag uniqueness being on the pair `(type, slug)`, so the same slug under another type is an
+    ordinary create; an unmatched resolution being a `400` and not a `404`; `include_global`
+    widening a namespaced read but never a write. A caller who reads only the happy path is the one
+    who gets these wrong.
+  - **`make dev-server` ends by printing an export block**, and `make dev-server-env` reprints it
+    without rebooting the container. The harness writes `OCTONOMY_TEST_*` because the integration
+    suites gate on those names — an empty `OCTONOMY_TEST_BASE_URL` is what makes them skip instead
+    of fail — while an example is a program a reader copies into their own service, where the
+    variables are `OCTONOMY_*`. The target is the bridge, so neither set has to give up its
+    property, and a freshly minted token is copied rather than retyped.
+  - **`make examples` compiles each example separately and fails when it finds none.** It was
+    `go build ./examples/...`, which means two different things depending on how many examples
+    exist: several main packages are discarded, but exactly one is WRITTEN into the working
+    directory. CI now calls the target instead of the bare command, so there is one definition. The
+    emptiness guard is the same vacuous-green rule the `smoke` and `test-integration` targets carry
+    — `find` matching nothing would otherwise report success having compiled nothing.
+  - **`make cover` now excludes the examples, and the reason is arithmetic.** They are main packages
+    with no tests, so every statement in them lands in the profile uncovered: the ten new examples
+    moved the reported total from 96.7% to 54.0% without one line of the library becoming less
+    tested. That figure is what "keep new code covered" is read off, and a number that says
+    "coverage collapsed" when nothing collapsed is worse than no number. `make test` still runs
+    every package and `make examples` is what proves the examples build.
+  - **The webhook example is a receiver, not a handler the SDK ships.** `webhook.Handler` was
+    deferred with the rest of the typed-event surface (#22) because no deployment emits webhooks
+    yet, so the example is the shape a consumer has to write: bound the body, read it, verify, and
+    only then parse and route — from the verified body, never from an `X-Octonomy-*` header. It
+    signs its own sample delivery so it is exercisable with no emitter, and says plainly that the
+    server is what does that.
+
+### Fixed
+- **Resolution's application "tie" does not exist, and three places said it did**
+  ([#19](https://github.com/octoverse-id/octonomy-go/issues/19)). `TagResolveParams`,
+  `TagService.Resolve`, and `docs/api.md` all documented two ambiguity cases — a `type` tie reported
+  as `validation_error`, and an application tie reported as `ambiguous_resolution` — and told a
+  caller to handle both. Only the first is reachable through the REST surface.
+  - **What the server actually does**, probed against the same 3.1.0 container the suites run
+    against: a resolution naming no application searches application-shared rows **alone**
+    (`filter_no_application_resolution`), one naming an application ranks that application's rows
+    above the shared ones, and a namespaced request must name an application at all. Three rules
+    that leave no same-rung tie behind. A slug that exists only inside an application therefore
+    resolves to the ordinary no-match `400`, not to a tie — which is the practical half of this: a
+    caller following the old comment would have written an `IsAmbiguousResolution` branch that never
+    runs, and been surprised by the `IsValidation` one that does.
+  - `IsAmbiguousResolution` stays, with its unreachability recorded on it. The code exists in the
+    server as defence-in-depth for its own internal callers — its test suite says so in as many
+    words — and a code that arrives in an envelope is preserved verbatim whatever raised it.
+  - **An example is what found this.** The first draft of `examples/resolution` demonstrated the
+    application tie, and it would not reproduce.
+  - `TestTags_Resolve_AmbiguityAxes` keeps both rows and now says what each one proves: the type row
+    is a route behaviour, the application row is a code-preservation case asking whether a code that
+    ARRIVES in an envelope is surfaced verbatim whatever raised it. Its earlier comment read that
+    fixture as evidence the route emits one.
+  - The same claim stands in the `2.0.0-alpha.1` entry below and is **left alone**. A released
+    changelog entry records what was believed when it shipped; this entry is the correction that
+    supersedes it, and rewriting history would remove the only trace that the SDK ever said
+    otherwise.
+- **`AuditLog.RequestID` no longer claims the SDK cannot send one.** Its doc comment still said
+  "this SDK does not send one yet (#5)", which stopped being true when `WithRequestID` shipped —
+  and the smoke test has been asserting the caller-supplied id lands in `audit.request_id` ever
+  since. `examples/audit-logs` demonstrates the correlation the comment denied.
+
 ### Changed
 - **The vendored contracts now track server `3.2.0`**
   ([#57](https://github.com/octoverse-id/octonomy-go/issues/57)). A bookkeeping refresh and nothing

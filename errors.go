@@ -209,6 +209,18 @@ func IsNamespaceAPIDisabled(err error) bool { return hasCode(err, CodeNamespaceA
 // two or more equally specific tags or aliases matched at the same resolution
 // scope, so the server cannot deterministically pick one. Narrow the call with
 // application_id, type, or an explicit scope.
+//
+// KEEP THE BRANCH, BUT DO NOT EXPECT IT from Tags.Resolve on the servers this
+// SDK has been run against: over the REST surface the resolution ladder is a
+// strict total order, so this code has no reachable path through that route.
+// Probed against 3.1.0, which is the version the statement is about -- a later
+// server is free to expose the path, which is one reason the helper stays. A resolution naming no application searches
+// application-shared rows alone (filter_no_application_resolution), one naming
+// an application ranks that application's rows above the shared ones, and a
+// namespaced request must name an application at all -- three rules that leave
+// no same-rung tie behind. The server's guard is defence-in-depth for its own
+// internal callers, and its own tests say so. A tie the SDK CAN reach is the
+// type tie, which is a plain validation_error; see TagService.Resolve.
 func IsAmbiguousResolution(err error) bool { return hasCode(err, CodeAmbiguousResolution) }
 
 // IsNotReady reports whether err is a health probe the server ANSWERED with a

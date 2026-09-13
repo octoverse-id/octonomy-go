@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check require-tools \
-	version-check dev-server dev-server-down dev-server-logs smoke test-integration \
+	version-check dev-server dev-server-env dev-server-down dev-server-logs smoke test-integration \
 	contract-check contract-drift contract-test
 
 help: ## List available targets
@@ -112,8 +112,36 @@ test-integration: ## Run the full integration suite against a booted harness (se
 		echo "test-integration: suite. Were the tests renamed, or is the build tag missing?"; \
 		exit 1; }
 
-cover: ## Run tests and print total coverage
-	go test -race -coverprofile=coverage.out ./...
+# Examples are excluded, and the reason is arithmetic rather than taste. They are
+# main packages with no tests, so every statement in them lands in the profile
+# uncovered: adding the ten examples on #19 moved this number from 96.7% to 54.0%
+# without one line of the library becoming less tested. A figure that reads
+# "coverage collapsed" when nothing collapsed is worse than no figure, and this
+# is the number AGENTS.md's "keep new code covered" is read off.
+#
+# Nothing is lost by the exclusion. `make test` still compiles and runs every
+# package, `make examples` is what proves the examples build, and no claim
+# anywhere says an example is covered by a test.
+# The package list is built and CHECKED before anything is tested, rather than
+# inlined as `go test $$(go list ./... | grep -v ...)`. That form hides two
+# failures behind a green run: /bin/sh has no `pipefail`, so the substitution
+# takes grep's status and a broken `go list` disappears, and an EMPTY
+# substitution leaves `go test` testing the current directory alone -- which
+# still passes, and still prints a total. A figure that measures a fraction of
+# the library while claiming to measure the library is the same vacuous green the
+# smoke target's header is about. `|| :` on the grep is there so the emptiness
+# guard below is what reports it, with a sentence, rather than `set -e` killing
+# the recipe on grep's no-match status.
+cover: ## Run tests and print total library coverage (examples excluded)
+	@set -e; \
+	all=$$(go list ./...); \
+	pkgs=$$(printf '%s\n' "$$all" | grep -v '/examples/' || :); \
+	[ -n "$$pkgs" ] || { \
+		echo "cover: package discovery produced no packages to test."; \
+		echo "cover: the total below would have measured the current directory alone while"; \
+		echo "cover: reporting it as the library's. Is this a module root?"; \
+		exit 1; }; \
+	go test -race -coverprofile=coverage.out $$pkgs; \
 	go tool cover -func=coverage.out | tail -1
 
 # Both modules. The SDK module has no dependencies, so its scan covers the
@@ -140,15 +168,99 @@ vuln: ## Run govulncheck on the SDK and on the contract gate's module
 		echo "govulncheck not installed; skipping. Install: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest"; \
 	fi
 
+# One `go build` per directory with -o /dev/null, rather than the single
+# `go build ./examples/...` this used to be documented as. That form means two
+# different things depending on how many examples exist: with several main
+# packages the go command discards the results, but with exactly ONE it writes
+# that binary into the working directory. A compile check must not leave an
+# artifact behind on the day someone deletes the second-to-last example.
+#
+# The emptiness guard is the vacuous-green rule the smoke target states at
+# length, in its third shape: `find` matching nothing makes this target exit 0
+# having compiled nothing, and a renamed or moved examples/ directory looks
+# exactly like that. The count is echoed so a run that quietly stopped covering
+# half the tree is visible rather than merely non-zero.
 examples: ## Compile-check the runnable examples (no binaries emitted)
-	@find examples -name main.go -exec dirname {} \; | sort -u | while read -r dir; do \
-		echo "build ./$$dir"; go build -o /dev/null "./$$dir" || exit 1; \
-	done
+	@set -e; \
+	dirs=$$(find examples -name main.go -exec dirname {} \; | sort -u); \
+	[ -n "$$dirs" ] || { \
+		echo "examples: no main.go found under examples/."; \
+		echo "examples: this target would otherwise report success having compiled nothing."; \
+		exit 1; }; \
+	count=0; \
+	for dir in $$dirs; do \
+		echo "build ./$$dir"; go build -o /dev/null "./$$dir"; \
+		count=$$((count + 1)); \
+	done; \
+	echo "examples: $$count compiled"
 
 check: fmt-check vet build ## Fast pre-push gate (format, vet, build)
 
-dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and write .octonomy-harness.env
+dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and print the examples' env
 	@scripts/octonomy-harness.sh up
+	@$(MAKE) --no-print-directory dev-server-env
+
+# The bridge between the harness and the examples, and the reason it exists is
+# that the two use different variable names on purpose. The harness writes
+# OCTONOMY_TEST_* because the integration suites GATE on those names -- an empty
+# OCTONOMY_TEST_BASE_URL is what makes them skip instead of fail -- while an
+# example is a program a reader copies, and a consumer's program reads
+# OCTONOMY_*. Renaming either set to match the other would break one of those
+# two properties.
+#
+# It is a target rather than a paragraph in the README because the value that
+# matters is a freshly minted token: something to copy, never to retype. It is
+# also separate from `dev-server` so the block can be reprinted into a second
+# terminal without rebooting the container.
+#
+# IT PRINTS A SECRET, deliberately and to a developer's own terminal. Nothing in
+# CI calls it -- the workflows drive scripts/octonomy-harness.sh directly and the
+# composite action masks every token it exports -- and nothing should: a job log
+# is not a terminal, and this target does no masking of its own.
+#
+# Values are single-quoted so a copied line survives a space, and the env file is
+# sourced through an explicit ./ prefix when it is relative -- POSIX `.` searches
+# PATH for a bare name, which would source something else entirely.
+#
+# Every value is checked for emptiness before anything is printed, which is the
+# vacuous-green rule the smoke target states at length, in this target's shape: a
+# file that exists proves nothing, and an interrupted boot leaves a stale or
+# partial one behind. Printing OCTONOMY_TOKEN='' and exiting 0 would say the
+# examples can run while handing over credentials that cannot authenticate, and
+# the failure would surface three commands later as a blanket 401.
+dev-server-env: ## Print the export block the API examples read (needs a booted dev-server)
+	@set -e; \
+	env_file=$$(scripts/octonomy-harness.sh env); \
+	case "$$env_file" in /*) ;; *) env_file="./$$env_file" ;; esac; \
+	[ -f "$$env_file" ] || { \
+		echo "dev-server-env: $$env_file does not exist -- run \`make dev-server\` first."; \
+		exit 1; }; \
+	set -a; . "$$env_file"; set +a; \
+	missing=""; \
+	for var in OCTONOMY_TEST_BASE_URL OCTONOMY_TEST_TOKEN OCTONOMY_TEST_TENANT_ID \
+		OCTONOMY_TEST_APPLICATION_ID OCTONOMY_TEST_NAMESPACE_TYPE OCTONOMY_TEST_NAMESPACE_ID; do \
+		eval "value=\$$$$var"; \
+		[ -n "$$value" ] || missing="$$missing $$var"; \
+	done; \
+	[ -z "$$missing" ] || { \
+		echo "dev-server-env: $$env_file is missing a value for:$$missing"; \
+		echo "dev-server-env: printing the block anyway would hand you blank credentials and a"; \
+		echo "dev-server-env: green exit -- the examples would then fail somewhere else. The file"; \
+		echo "dev-server-env: is written whole at the end of a successful boot, so a partial one"; \
+		echo "dev-server-env: means an interrupted or stale run: \`make dev-server\` again."; \
+		exit 1; }; \
+	echo; \
+	echo "Run any example against this server:"; \
+	echo; \
+	echo "  export OCTONOMY_BASE_URL='$$OCTONOMY_TEST_BASE_URL'"; \
+	echo "  export OCTONOMY_TOKEN='$$OCTONOMY_TEST_TOKEN'"; \
+	echo "  export OCTONOMY_TENANT_ID='$$OCTONOMY_TEST_TENANT_ID'"; \
+	echo "  export OCTONOMY_APPLICATION_ID='$$OCTONOMY_TEST_APPLICATION_ID'"; \
+	echo "  export OCTONOMY_NAMESPACE_TYPE='$$OCTONOMY_TEST_NAMESPACE_TYPE'"; \
+	echo "  export OCTONOMY_NAMESPACE_ID='$$OCTONOMY_TEST_NAMESPACE_ID'"; \
+	echo; \
+	echo "  go run ./examples/quickstart"; \
+	echo
 
 dev-server-down: ## Tear down the Octonomy container harness
 	@scripts/octonomy-harness.sh down

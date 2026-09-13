@@ -68,9 +68,10 @@ type AuditLog struct {
 	// RequestID correlates this row with the single HTTP request that produced
 	// it, and appears on APIError for a failed one. The server takes it from an
 	// inbound X-Request-ID header and generates a "req_..." value when there is
-	// none -- and this SDK does not send one yet (#5), so today it is
-	// server-generated and correlates rows to each other rather than to a
-	// caller's own log line.
+	// none. WithRequestID is how a caller supplies its own, which is what makes
+	// this field correlate the row with the caller's OWN log line rather than
+	// only with the other rows of the same request; without it the value is
+	// server-generated and does the latter alone.
 	RequestID *string `json:"request_id"`
 
 	// OperationID groups every row one logical operation emitted, which is the
