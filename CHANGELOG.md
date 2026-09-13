@@ -61,9 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Each` uses. A `Walk` that dereferenced a nil callback would panic only on a tree with at least
     one node — the shape that passes a test suite and fails in production — and `BuildTagTree`
     returns `(nil, err)` on a refusal, so the natural call site reaches these methods with a nil
-    tree. The copy of each `Tag` is SHALLOW and the doc comment says so rather than cloning six
-    `*string` fields per node: a `Tag` decoded from a response owns pointers no caller holds, so
-    the sharing is reachable only for a hand-built slice, and both halves are pinned by tests.
+    tree. The copy of each `Tag` is SHALLOW and the doc comment says so rather than cloning: the
+    `*string` fields and the `Metadata` map still point where the input pointed, *including* when
+    the input is the slice a `Tags.List` response decoded into, so writing through one of them can
+    leave `Tag.ParentID` disagreeing with the `Parent` link assembled from it. Cloning six pointers
+    per node plus a faithful clone of an arbitrarily nested `map[string]any` is a much larger
+    contract than this helper should take on; the rule is to build again rather than mutate what
+    you assembled, and tests pin both halves.
   - **Order is INPUT order**, for `Roots`, `Orphans` and every `Children` slice, and nothing is
     sorted. `GET /tags` has no `ORDER BY` at all, so there is no server order to preserve and none
     to invent; `Walk` visits a node before its children, so sorting `Children` inside the callback

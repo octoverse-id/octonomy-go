@@ -449,24 +449,34 @@ func TestBuildTagTree_CopySemantics(t *testing.T) {
 	})
 
 	// The other half, pinned because the doc comment states it rather than
-	// defending against it: the copy is SHALLOW, so a pointer the caller still
-	// holds reaches into the node. Cloning six *string fields per node to
-	// prevent this would be an allocation per node per field, and a Tag decoded
-	// from a response owns pointers no caller holds -- so this is reachable
-	// only for a hand-built slice, and it is documented rather than fixed.
-	t.Run("a pointer the caller still holds is shared, and is documented so", func(t *testing.T) {
+	// defending against it: the copy is SHALLOW, so the pointer and map fields
+	// stay shared with the input. This is NOT a hand-built-input curiosity --
+	// a caller holds the slice a list response decoded into, and can write
+	// through page.Data[i].ParentID or page.Data[i].Metadata just as this test
+	// does. Cloning six pointers per node, plus a faithful clone of an
+	// arbitrarily nested map[string]any, is a larger contract than the helper
+	// should take on, so the behaviour is documented and pinned instead.
+	t.Run("pointer and map fields stay shared with the input", func(t *testing.T) {
 		parentID := "parent"
 		description := "a description"
 		tags := []Tag{
 			{ID: "parent", Slug: "parent"},
-			{ID: "child", Slug: "child", ParentID: &parentID, Description: &description},
+			{
+				ID: "child", Slug: "child",
+				ParentID:    &parentID,
+				Description: &description,
+				Metadata:    Metadata{"label": "original"},
+			},
 		}
 		tree, err := BuildTagTree(tags)
 		if err != nil {
 			t.Fatalf("BuildTagTree: %v", err)
 		}
-		parentID = "somewhere else"
+		// Written the way a caller holding a decoded page would write them:
+		// through the pointer, and into the map.
+		*tags[1].ParentID = "somewhere else"
 		description = "rewritten"
+		tags[1].Metadata["label"] = "changed"
 
 		child := tree.Node("child")
 		if got := *child.Tag.ParentID; got != "somewhere else" {
@@ -474,6 +484,9 @@ func TestBuildTagTree_CopySemantics(t *testing.T) {
 		}
 		if got := *child.Tag.Description; got != "rewritten" {
 			t.Errorf("Tag.Description = %q: the pointer was cloned after all", got)
+		}
+		if got := child.Tag.Metadata["label"]; got != "changed" {
+			t.Errorf("Tag.Metadata[\"label\"] = %v: the map was cloned after all", got)
 		}
 		// The ASSEMBLED shape was computed at build time and does not move with
 		// the pointer, which is the part that would otherwise be a silent lie.

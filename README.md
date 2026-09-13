@@ -380,10 +380,12 @@ if err != nil {
 
 // Walk, not a loop over Roots: a root's Depth is always 0, and its children
 // are not in that slice.
-err = tree.Walk(func(n *octonomy.TagNode) error {
+if err := tree.Walk(func(n *octonomy.TagNode) error {
 	fmt.Println(strings.Repeat("  ", n.Depth) + n.Tag.Name)
 	return nil
-})
+}); err != nil {
+	return err // whatever your callback returned, unchanged
+}
 ```
 
 **Check that second error.** `BuildTagTree` returns `(nil, err)` on a refusal, and every method here
@@ -415,6 +417,12 @@ for _, node := range tree.Orphans {
 	...
 }
 ```
+
+The tree is a **snapshot**, and `Tag` is copied **shallowly**: its `*string` fields and its
+`Metadata` map still point at what the input pointed at, including when the input is the slice a
+`Tags.List` response decoded into. Writing through one of those (`*page.Data[1].ParentID = ...`)
+changes what a node reports and can leave `Tag.ParentID` disagreeing with the `Parent` link built
+from it, so edit the slice and build again rather than mutating tags you have already assembled.
 
 `TagNode.Path()` is the breadcrumb — root first, the node last — and `tree.Node(id)` is where it
 starts. `Roots`, `Orphans` and every `Children` slice are in **input order**; nothing is sorted,

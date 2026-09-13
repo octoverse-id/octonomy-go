@@ -31,13 +31,22 @@ var ErrDuplicateTagID = errors.New("octonomy: duplicate tag id")
 // TagNode is one tag's position in an assembled tree.
 //
 // Tag is a SHALLOW copy of the input value: the struct is copied, so replacing
-// an element of the slice you passed does not reach the tree, but its POINTER
+// an ELEMENT of the slice you passed does not reach the tree, but its POINTER
 // and MAP fields still point where they did. Tag carries six *string fields and
-// a Metadata map, so a caller who kept a pointer it stored in one can still
-// change what a node reports through it. That is only reachable for a
-// hand-built slice -- a Tag decoded from a response owns pointers nothing else
-// holds -- and cloning them here would be an allocation per node per field to
-// defend against it. Build the tree from tags you are not still editing.
+// a Metadata map, and this is not a hand-built-input curiosity -- the caller
+// still holds the slice a list response decoded into, so
+//
+//	*page.Data[1].ParentID = "somewhere else"
+//	page.Data[1].Metadata["label"] = "changed"
+//
+// are both visible through the tree, and the first leaves Tag.ParentID
+// disagreeing with the Parent link that was assembled from it.
+//
+// Cloning is not the fix: six pointers per node is an allocation per field,
+// and a faithful clone of Metadata -- map[string]any, arbitrarily nested -- is
+// a far larger contract than this helper should take on. DO NOT MUTATE THE
+// TAGS AFTER ASSEMBLING THEM. Edit the slice and build again instead; the tree
+// is a snapshot of the moment it was built.
 //
 // Parent, Children and Depth are a SNAPSHOT computed by BuildTagTree, exported
 // to be read and walked rather than rewired. Rewiring them is not defended
@@ -107,10 +116,12 @@ type TagTree struct {
 //	}
 //	// Walk, not a loop over Roots: a root's Depth is always 0, and its
 //	// children are not in that slice.
-//	err = tree.Walk(func(node *octonomy.TagNode) error {
+//	if err := tree.Walk(func(node *octonomy.TagNode) error {
 //		fmt.Println(strings.Repeat("  ", node.Depth) + node.Tag.Name)
 //		return nil
-//	})
+//	}); err != nil {
+//		return err
+//	}
 //
 // # NO TAG IS EVER DROPPED
 //
