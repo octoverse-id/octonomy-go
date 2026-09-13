@@ -28,15 +28,16 @@
 // (go1.13.15, August 2020, was its last release), so pinning there is an informed
 // trade rather than a safe harbour. See docs/versioning.md and SECURITY.md.
 //
-// This tree is v2.0.0-alpha.1, the modern line's first release and a prerelease
-// on purpose. Once the tag is published, go get on the /v2 path resolves it
-// without anyone naming a version, because the go command prefers a prerelease
-// when no stable release of that major exists; until then it resolves a
-// pseudo-version off the default branch. The -alpha.N suffix comes off at API
-// FREEZE, not at some endpoint count: no further breaking changes intended,
-// real-server integration green, docs current, one release candidate validated.
-// Before that, a necessary break may ride an alpha bump, documented in the
-// CHANGELOG. The compat line is released separately at v1.0.0.
+// This tree is v2.0.0-alpha.2, the modern line's current release and a
+// prerelease on purpose; v2.0.0-alpha.1 was the first. go get on the /v2 path
+// resolves the highest prerelease without anyone naming a version, because the
+// go command prefers a prerelease when no stable release of that major exists.
+// The -alpha.N suffix comes off at API FREEZE, not at some endpoint count: no
+// further breaking changes intended, real-server integration green, docs
+// current, one release candidate validated. Before that, a necessary break may
+// ride an alpha bump, documented in the CHANGELOG -- v2.0.0-alpha.2 carries one,
+// the three *Update structs' field types (#64). The compat line is released
+// separately at v1.0.0.
 //
 // No v0.x of either line was ever published. The Version constant read "0.1.0"
 // until this release -- a placeholder from before anything was released, which

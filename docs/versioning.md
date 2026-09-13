@@ -80,10 +80,12 @@ prerelease suffix is **not** resource coverage — counting endpoints says nothi
 has stopped moving. It is: no further breaking changes intended, real-server integration green, docs
 current, and one release candidate validated.
 
-**`v2.0.0-alpha.1` is the first `v2` version**, cut in
-[#29](https://github.com/octoverse-id/octonomy-go/issues/29). Once its tag is pushed,
-`go get github.com/octoverse-id/octonomy-go/v2` resolves the highest prerelease rather than a
-pseudo-version off the default branch, and adoption works normally without anyone naming a version:
+**`v2.0.0-alpha.1` was the first `v2` version**, cut in
+[#29](https://github.com/octoverse-id/octonomy-go/issues/29); `v2.0.0-alpha.2`
+([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) is the current one. With a tag
+published, `go get github.com/octoverse-id/octonomy-go/v2` resolves the highest prerelease rather
+than a pseudo-version off the default branch, and adoption works normally without anyone naming a
+version:
 `go get` prefers a prerelease when no stable release of that major exists. That stops being automatic
 the moment a stable `v2.0.0` ships: from then on a fresh `go get` resolves the stable release, and
 reaching a prerelease means naming it. One exception worth knowing — a module *already* required at a
@@ -98,7 +100,7 @@ proxy query below is.
 | Line | Latest tag | State |
 | ---- | ---------- | ----- |
 | **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` (2026-08-26) | Released. Frozen — security fixes only, sunset 2027-08-31 |
-| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.1` | First release ([#29](https://github.com/octoverse-id/octonomy-go/issues/29)); prerelease until API freeze. Its tag follows the release PR — the proxy check below says whether it is live yet |
+| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.2` | Active. Prerelease until API freeze, and a breaking change may still ride an alpha bump — `v2.0.0-alpha.2` ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) carries one. Each tag follows its release PR, so the proxy check below is what says a version is live |
 
 **There is no published `v0.x`, and never was.** The `## [0.1.0]` heading `CHANGELOG.md` used to
 carry described an early state of the tree, not a release; its contents are now filed under
@@ -112,8 +114,9 @@ $ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octo
 v1.0.0                                      # the compat line, and no v0.x above or below it
 [HTTP 200]
 $ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octoverse-id/octonomy-go/v2/@v/list
-v2.0.0-alpha.1                              # listed once the tag is pushed -- until then this comes
-[HTTP 200]                                  # back with no rows, and the proxy fetches on first ask
+v2.0.0-alpha.1                              # one row per pushed tag, and a tag that has never been
+v2.0.0-alpha.2                              # pushed is simply absent -- the proxy fetches on first ask
+[HTTP 200]
 ```
 
 Read that for what it is: the proxy's **current** view of **tagged** versions. `@v/list` deliberately
@@ -123,9 +126,9 @@ genuinely empty list produces, which is how this kind of evidence turns into a f
 authoritative check for a release you just cut is step 8 of [release.md](release.md),
 `go list -m MODULE@TAG`, which fails loudly on a tag placed on the wrong branch.
 
-> **What `version.go` says, and what it does not.** The `Version` constant reads `2.0.0-alpha.1` —
+> **What `version.go` says, and what it does not.** The `Version` constant reads `2.0.0-alpha.2` —
 > the version this tree was cut as, and the one its tag carries once [release.md](release.md) step 7
-> pushes it — so the default User-Agent is `octonomy-go/2.0.0-alpha.1`. It moves **only** in a release
+> pushes it — so the default User-Agent is `octonomy-go/2.0.0-alpha.2`. It moves **only** in a release
 > PR (see [Where this shows up](#where-this-shows-up)), which is what keeps it meaningful, and it
 > names this line's latest release from the moment that tag is live until the next release PR moves
 > it again. What it is **not** is evidence that the version is fetchable: the bump lands one step
