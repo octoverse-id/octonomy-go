@@ -103,13 +103,25 @@ func main() {
 	// partially applied and nothing is "skipped" (the Skipped counter is
 	// vestigial and always 0). A caller cannot treat a bulk error as "some of
 	// them worked".
+	//
+	// The error code alone would not show that. It says the call was refused,
+	// not that the good tag was rolled back -- so the resource is read
+	// afterwards, and it is the empty tag set that is the evidence.
+	atomicOrderID := unique("order-atomic")
 	_, err = client.Assignments.BulkAssign(ctx, octonomy.BulkAssign{
 		ApplicationID: appID,
 		ResourceType:  "order",
-		ResourceID:    unique("order-atomic"),
+		ResourceID:    atomicOrderID,
 		TagIDs:        []string{featured.ID, "00000000-0000-0000-0000-000000000000"},
 	})
 	fmt.Printf("bulk with one bad id: IsValidation=%v\n", octonomy.IsValidation(err))
+
+	afterFailed, err := client.Resources.ListTags(ctx, "order", atomicOrderID,
+		&octonomy.ResourceListTagsParams{ApplicationID: octonomy.String(appID)})
+	if err != nil {
+		log.Fatalf("read the resource after the failed bulk: %v", err)
+	}
+	fmt.Printf("  the good tag in that call landed nowhere: %d tag(s) on the resource\n", len(afterFailed.Data))
 
 	// Bulk remove reports a count, and ids that named no assignment are not an
 	// error -- so Removed is routinely smaller than the number of ids sent.
