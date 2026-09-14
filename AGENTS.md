@@ -84,7 +84,7 @@ stays a faithful, ergonomic client.
 - Response models for the seven v2 schemas that carry namespace identity get `NamespaceType` /
   `NamespaceID` as `*string`, **decode-only**. The server sets them from the `X-Namespace-*` headers
   and never from a request body, so they must not appear on `*Create` / `*Update` — see
-  `docs/roadmap.md` for the list and which issue owns each.
+  `docs/roadmap.md` for the list and the file each is declared in.
 - **On this line** list methods return `*List[T]` and decode the `{data, pagination}` envelope; embed
   `ListOptions` in each resource's `*ListParams`. That shape is line-specific: `support/go1.13` has no
   type parameters, so it declares a two-field `*TagList` / `*VocabularyList` per resource instead.
@@ -290,6 +290,21 @@ it. It imports neither today, and adding a root import to it is a decision, not 
 
 - Run `make check` before pushing and `make release-check` before a release.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
+- **Documentation states what happened; for what is true now it names whatever keeps it true.** A
+  sentence about a closed issue, a shipped release, or a decision already taken cannot rot. A
+  sentence restating state this repository does not hold — which issues are open, which milestone is
+  outstanding, what another branch implements — rots on someone else's schedule, and **nothing here
+  can contradict it**: `make contract-check` compares the client to the contract, never the docs to
+  the tracker. #51, #52 and #68 are three instances of that one defect. Two shapes are not in the
+  family and both are already used here: a claim a gate CHECKS (*no published operation is missing
+  without a written reason* is held true by `docs/contract-coverage.yaml` and the drift gate, not by
+  the sentence asserting it — such a claim can still age, but only in the pull request already
+  accounting for the operation that aged it), and a claim written next to the file that enforces it
+  (the CI comments about which job fails a PR sit in `ci.yml`). For everything else, point at the
+  issue, the milestone, or the setting that carries the state live — and where it has to be written
+  out anyway, say when: `docs/development.md` writes "currently" in front of main's required
+  contexts for this reason, and `docs/roadmap.md`'s gaps table carries the day its snapshot was
+  taken.
 - **An example is RUN, not written.** Every program under `examples/` is exercised before it is
   committed, and it must demonstrate a semantic a caller can get wrong rather than only a create
   call — a comment in an example is documentation a reader will copy, and one the server contradicts
@@ -319,7 +334,7 @@ it. It imports neither today, and adding a root import to it is a decision, not 
   field the decoded model drops, a property whose type the model can no longer decode, and a row whose
   method now requests a different route. "Refresh the spec and implement it later" is not a state this
   repository can be left in. The cross-repository half,
-  `make contract-drift`, is scheduled-only and never gates a PR. See
+  `make contract-drift`, runs weekly and on manual dispatch, never on a pull request. See
   `docs/development.md#contract-drift`.
 
 ## Development Pipeline

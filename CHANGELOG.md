@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Documentation
+- **`docs/roadmap.md` stops reporting issue status, and the rule that replaces it is written down**
+  ([#68](https://github.com/octoverse-id/octonomy-go/issues/68)). The *What is planned that is not a
+  resource* paragraph called [#19](https://github.com/octoverse-id/octonomy-go/issues/19) "Still
+  open" and pointed at a milestone that had closed 4 of 4 with `v2.0.0-alpha.2`. Every issue that
+  paragraph named was closed, so the passage described an empty queue as a live one.
+  - **The decision, which is what #68 asked for instead of an edit: the hand-maintained *Landed /
+    Still open* split is gone rather than corrected.** Correcting it buys one true day — the split
+    was false within hours of #19 closing, and this is the third issue of exactly this shape (#51,
+    #52, #68). The rule that replaces it, stated at the end of that page and in `AGENTS.md`: prose
+    states what happened, and for what is true now it names whatever keeps it true — a link where
+    the tracker holds the state, the gate where one exists (`docs/contract-coverage.yaml` is why
+    *the resource queue is empty* may stay prose), and a date where a status has to be written out
+    anyway. The known-gaps table carries the day its snapshot was taken (2026-09-14).
+  - **Two sections were in the wrong place, which is the same defect structurally.** `BuildTagTree`
+    (#20) sat under *Known gaps* describing itself as "no longer deferred" after it had shipped; it
+    is now its own section next to Health, which is the other implemented thing this page explains
+    rather than lists. `octonomy/webhook` (#16) sat under *What is planned*; that section is now
+    *Work alongside the client rather than inside it* and names the release that closed each issue.
 
 ## [2.0.0-alpha.2] - 2026-09-13
 
