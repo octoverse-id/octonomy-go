@@ -115,21 +115,30 @@ const (
 
 // readProbes covers every authenticated read method this SDK exposes.
 //
-// The complete list, and why the one exclusion is not a gap:
+// THAT COMPLETENESS IS A CHECK RATHER THAN A CLAIM, since #73. It used to be a
+// hand-maintained list in this comment, which is a reader and not a gate: the
+// suite iterates whatever this table holds, so a read method that arrived
+// without a probe left the cross-merchant isolation assertion covering less than
+// it did, with every job green and nothing to notice.
+// TestEveryReadMethodHasANamespaceProbe (readprobes_test.go) now reads the
+// source of both halves and fails on the gap. It also holds the one exclusion --
+// the unauthenticated health probes -- in readProbeExclusions, with the reason.
 //
-//	Vocabularies  Get, List
-//	Tags          Get, List, Resolve, ListAliases, ListResources, ListAuditLogs
-//	Aliases       Get, List
-//	Resources     ListTags, ListAuditLogs
-//	AuditLogs     List
-//	Health        Live, Ready  -- EXCLUDED: unauthenticated, unversioned, and
-//	                              outside the namespace axis entirely. They send
-//	                              no X-Namespace-* headers and read no rows, so
-//	                              "can merchant A see merchant B" is not a
-//	                              question they can be asked.
+// Neither the list nor that reason is repeated here. A second copy of either is
+// how the first one came to be wrong.
 //
-// A new read method is expected to arrive here alongside its resource file. A
-// read endpoint nobody probed is the one a cross-merchant leak lives in.
+// TWO CONSTRAINTS THE GUARD PUTS ON THIS TABLE, worth knowing before editing it.
+// It reads the []readProbe literal this function RETURNS -- build the slice with
+// a helper or append to it in a loop and the guard finds nothing and fails,
+// which is the safe direction but is a shape constraint all the same. And a
+// probe's name must match the client method its find closure actually calls,
+// since the name is what the guard counts as coverage: an entry named for one
+// endpoint that exercises another reports a method as probed while a different
+// one is.
+//
+// A new read method is still expected to arrive here alongside its resource
+// file. A read endpoint nobody probed is the one a cross-merchant leak lives in;
+// what changed is that something says so now.
 //
 // PAGINATION IS NOT AN EXHAUSTIVENESS ARGUMENT. Every list probe below narrows
 // to the fixture with an exact server-side filter; a route whose params struct

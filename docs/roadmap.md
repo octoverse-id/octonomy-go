@@ -25,6 +25,21 @@ than edit if you suspect it has aged again.
 
 ## How to add a resource (the recipe)
 
+**Every step is named here**, which was not true before
+[#73](https://github.com/octoverse-id/octonomy-go/issues/73): this page carried six steps and left
+out five requirements, while [`architecture.md`](architecture.md#extending-the-client) certified it
+as carrying the recipe in full. That page and [`CONTRIBUTING.md`](../CONTRIBUTING.md#adding-a-resource)
+now link this section instead of keeping shorter copies, and [`AGENTS.md`](../AGENTS.md) carries the
+argument behind each rule rather than a second copy of the list. Where the two differ on *why* a rule
+holds, `AGENTS.md` is the longer account and wins — see
+[the decision](#why-this-page-carries-the-recipe) at the end of this section.
+
+**Nothing checks that this list stays complete**, and saying so is the point. Individual steps have
+gates — the contract gate stands behind step 7, a test behind step 9 — but nothing compares this page
+against the set of requirements the repository actually has, and the day the server publishes a group
+nobody implements, `make contract-check` fails without a word about this page. The table below covers
+the five requirements #73 found missing here, which is where the difference matters most.
+
 Copy `tags.go` and `tags_test.go` as the template — or `aliases.go` and `aliases_test.go`, which
 were written against the v2-aware transport and cover a nested list route (`Tags.ListAliases`) as
 well as the collection — then:
@@ -32,26 +47,145 @@ well as the collection — then:
 1. Read the matching schema(s) in [`openapi-v2.yaml`](openapi-v2.yaml). Read the **v2** spec, not
    [`openapi.yaml`](openapi.yaml): both are vendored at server 3.2.0, but v1 has no namespace axis,
    so its schemas omit the `namespace_type` / `namespace_id` fields every new resource needs.
-2. Create `<resource>.go` with: the model struct, a `*Create` write struct (pointer + `omitempty`), a
-   `*Update` write struct (**`Optional[T]` + `omitzero` on every field**, so a PATCH can send a null
-   as well as omit a key — see [`api.md`](api.md#update-bodies)), `*ListParams` with a `query()`
-   method, and a `*Service` whose methods take
+2. Create `<resource>.go` with the model struct and **only the write shapes the contract actually
+   publishes** — a read-only group such as audit logs has no `*Create` and no `*Update`, and adding
+   them would advertise routes the server does not serve. Where they exist: a `*Create` whose
+   **required fields are plain values and whose optional fields are omittable** — a pointer for a
+   scalar, or a nil-able type like `Metadata` — each tagged `omitempty`, so a create sends exactly
+   what the contract requires plus whatever the caller set; a `*Update` with
+   **`Optional[T]` + `omitzero` on every field**, so a PATCH can send a null as well as omit a key
+   (see [`api.md`](api.md#update-bodies)); `*ListParams` with a `query()` method for a list route;
+   and a `*Service` whose methods take
    `context.Context` first and `...RequestOption` last and delegate to the transport helper matching
    each method's **response shape**: `doData[T]` for a single resource (including a composite
    payload), `doList[T]` for a paginated list, `client.do` for a 204 with no body. See the routing
-   diagram at the top of `transport.go`.
-3. Put `NamespaceType` / `NamespaceID` (`*string`, decode-only) on every response model listed under
+   diagram at the top of `transport.go`. A list method returns `*List[T]` and its `*ListParams`
+   embeds `ListOptions`. **Every exported symbol gets a doc comment.**
+3. **Give every new model in resource position an `identityFields()` method** (`transport.go`),
+   naming the field that identifies its **row** — `id` for most, `assignment_id` on `ResourceTag`,
+   `resource_id` on `TagResource` — and only that, never every field the schema documents. Three
+   cases, and they are not the same:
+   - **A resource** implements it. A **nested** resource counts only where the contract marks it
+     `required` *and* the route exists to deliver it — `ResourceTag.Tag` and `TagResolution.Tag`
+     both qualify. Read the schema's `required:` list rather than assuming; that is where the first
+     draft of this rule got `ResourceTag` wrong.
+   - **A composite** (a bulk result, a replace result) has no row identity of its own and requires
+     its **keys in `UnmarshalJSON`** instead. `TagResolution` does both, since the tag it exists to
+     deliver is a resource.
+   - Omitting it does not corrupt a valid payload; it removes the check that catches an invalid one.
+     `requireIdentity` type-asserts, so a model that does not implement the interface is skipped
+     silently, and `{"data": {"id": null}}` or a renamed id then decodes to a zero-valued resource
+     behind a `nil` error — [#40](https://github.com/octoverse-id/octonomy-go/issues/40), the same
+     silent-zero family as #32.
+4. Put `NamespaceType` / `NamespaceID` (`*string`, decode-only) on every response model listed under
    *Namespace fields* below. They are server-set from the `X-Namespace-*` headers and never accepted
    in a write body, so they belong on the model and **not** on `*Create` / `*Update`.
-4. Wire the service onto `Client` in `New()` (`octonomy.go`).
-5. Add table-driven `httptest` tests (assert method/path/headers/query/body server-side; assert
-   decoded values client-side; cover the error envelope).
-6. Add a `## [Unreleased]` CHANGELOG entry and add every new method to the inventory table in
-   [`api.md`](api.md#implemented) — the one place the complete list is kept.
+5. Wire the service onto `Client` in `New()` (`octonomy.go`).
+6. Add table-driven `httptest` tests: assert method, path, auth headers, query and body
+   server-side (`t.Errorf` inside handlers — they run on another goroutine) and decoded values
+   client-side; cover **every response envelope the resource actually returns** — a list-only group such as
+   audit logs has just the one — and error decoding (404 → `IsNotFound`,
+   409 → `IsConflict`, 400 → `IsValidation`). Single-resource fixtures go through `writeData`, which
+   wraps the body in `{"data": {…}}`; `writeJSON` is for bodies meant to go out verbatim — list and
+   error envelopes. Add an `Is<Code>` helper for any error code the resource introduces.
+7. **Declare each new operation to the contract gate**: a row in
+   [`contract-coverage.yaml`](contract-coverage.yaml) and a driver in
+   `tools/contractdrift/drivers.go` that calls the method with every documented parameter, property
+   and header populated. A row with no driver is an operation nobody exercises; a driver with no row
+   is a call nobody declared. See
+   [`development.md`](development.md#adding-a-resource-or-adding-to-the-gate) for what the gate does
+   with them.
+8. **Assert every new response shape in `integration_test.go`** (`make smoke`). A unit suite asserts
+   the client against fixtures this repository wrote, so it cannot see a fixture-versus-server
+   divergence — which is [#32](https://github.com/octoverse-id/octonomy-go/issues/32), where every
+   single-resource read decoded to an empty struct and a complete unit suite stayed green.
+9. **Add a probe to `readProbes` for every new read method** (`integration_suite_test.go`). That
+   table is what makes *a merchant-A client never sees a merchant-B row* a statement about the whole
+   read surface rather than about whichever endpoints someone remembered. Each probe also declares
+   how its endpoint declines an out-of-scope row — 200 with the row absent, 404 `not_found`, or
+   resolution's 400 `validation_error` — because "it errored" is not evidence of isolation. The two
+   integration files answer different questions: a new response **shape** goes in step 8's
+   `integration_test.go`, and a new claim about **authorization or persistence** goes here.
+10. **Add a runnable example under `examples/`** for a new resource group, or extend the existing
+    one for a new method on a group that has one. `make examples` compile-checks every program, and
+    an example that calls the API is **run against a real server** through `make dev-server` before
+    it lands — a comment in an example is documentation a reader will copy, and one the server
+    contradicts is worse than no example at all. Each example repeats its own configuration block
+    rather than sharing one.
+11. Add a `## [Unreleased]` CHANGELOG entry and add every new method to the inventory table in
+    [`api.md`](api.md#implemented) — the one place the complete list is kept.
 
 Scoping is already handled by the transport and needs no per-resource work: `WithNamespace`,
-`WithApplication`, and `WithIncludeGlobal` apply to any method, and the guards in
-`checkScopeCoherence` cover every resource at the chokepoint.
+`WithGlobalNamespace`, `WithApplication`, and `WithIncludeGlobal` apply to any method, and the guards
+in `checkScopeCoherence` cover every resource at the chokepoint.
+
+### Which of these steps anything catches
+
+Steps 3 and 7–9 carry the five requirements this recipe omitted until
+[#73](https://github.com/octoverse-id/octonomy-go/issues/73). They are not interchangeable with the
+rest: **each exists because of a defect this repository already shipped**, and three of the five were
+invisible to every job. The other steps are not listed here — they are enforced by the compiler, by
+review, or by nothing, like most of any contributing guide.
+
+| Step | What catches an omission | What you get if you skip it |
+| --- | --- | --- |
+| 7 — coverage row | `checkInventory`, `tools/contractdrift/checks.go` | **Red CI**: "`<op>` is in the contract and not in `docs/contract-coverage.yaml`" |
+| 7 — driver | `checkImplementation`, same file | **Red CI** |
+| 3 — `identityFields()` | *nothing* — `requireIdentity` type-asserts and returns `nil` for a model that does not implement the interface (`transport.go`) | **Green CI**, and #40 is re-opened for that resource |
+| 8 — smoke assertion | *nothing* — the walk visits what it was told to visit | **Green CI**, and #32's class is unguarded for that resource |
+| 9 — `readProbes` probe | `TestEveryReadMethodHasANamespaceProbe` (`readprobes_test.go`), added by #73 | **Red `make test`**, naming the method and the table — and equally for a probe that names one endpoint and calls another |
+
+Step 9 was the third silent one until #73 gave it a guard. The test resolves each exported service
+method's HTTP verb from the source — following a call into a helper, since `Health.Live` names no
+verb of its own — and checks it against the `readProbes` entries the table actually returns. It fails
+on a read with no probe, a probe naming a method that no longer exists, a probe whose `find` closure
+calls a *different* endpoint than its name claims, a duplicate name, and an exclusion that is stale
+or has no reason written. **A method whose verb it cannot resolve, and which is neither probed nor
+excluded, fails too** rather than passing as "not a read": defaulting the unknown case to silence is
+the defect the guard exists to prevent, reproduced inside the guard. A probed one is accepted —
+whatever the classifier made of it, a probe bound to the endpoint it calls means the isolation
+matrix does exercise it. It runs in `make test` and carries no `integration` build tag,
+because a check that ran only when the container did would be absent from exactly the pull request
+that adds a read method. `TestUpdateBodiesTagEveryOptionalOmitzero` and
+`TestVerifyComparesDigestsInConstantTime` are the precedents for reading this repository's own source
+to enforce a rule about it.
+
+**What that guard does not do**, since a check nobody knows the edge of is worse than none: it is
+syntactic. It follows calls only within this package, and it reads the `[]readProbe` literal that
+`readProbes` returns — restructure the table so the returned value is built by a helper or appended
+in a loop and the guard finds nothing and fails, which is the safe direction, but it is a shape
+constraint rather than a free-standing proof. It checks that a probe *calls* the endpoint it is named
+for; it does not check that the probe asserts anything useful about the result, nor that the call is
+reachable rather than parked under a dead branch. A read reached by a shape it does not recognize —
+a function variable, a method expression, a closure invoked in place — classifies as unknown and
+fails, except where the same method also issues a recognized write, which classifies it. The full
+list of edges is in `readprobes_test.go`, next to the code that has them.
+
+**Steps 3 and 8 remain unguarded, and that is the honest state of this recipe.** Both are candidates
+for the same treatment — an `identityFields()` guard is the more tractable of the two, since the set
+of response models is derivable from the source the way the set of read methods was — and neither
+has been attempted. Until one is, a reviewer is what stands behind them.
+
+### Why this page carries the recipe
+
+The recipe existed in four places at four levels of completeness — here, a shorter five-step copy in
+`architecture.md`, the full set of rules scattered through `AGENTS.md`, and a subset in
+`CONTRIBUTING.md` — which is precisely how it came to be **wrong in one of them**: this page
+certified as complete by `architecture.md` while omitting five requirements, three of them silent.
+#73 consolidated rather than patched, and the two rejected options are worth recording:
+
+- **Adding the five here and keeping all four copies** would have fixed the symptom and left the
+  drift surface exactly as wide. The defect was never that someone wrote the list carelessly; it was
+  that four lists can disagree and nothing compares them.
+- **Deleting the recipe here and pointing at `AGENTS.md` + `development.md`** is the smallest diff,
+  but it removes this page's stated first purpose and sends a human contributor to the agent
+  instruction file to find out how to add a resource.
+
+`AGENTS.md` deliberately keeps its own statement of every rule. It is not a fourth copy of the list
+but the argument behind each item — why `identityFields` exists, why scope belongs to the transport,
+which harness token makes an isolation test mean anything — and an agent reading it needs the
+reasoning at the point of use, not a link. What it no longer has to be is *the only complete place*,
+which is what it was when this page was missing five steps.
 
 The queue this section fed is empty; what follows is reference for the next resource the server adds
 — the namespace-field register, the one group the recipe does not cover, the one helper that needed

@@ -41,6 +41,13 @@ stays a faithful, ergonomic client.
 
 ## API Client Rules
 
+**Adding a whole resource is an ordered sequence, and it lives in one place:**
+[`docs/roadmap.md`](docs/roadmap.md#how-to-add-a-resource-the-recipe). The rules in this file are
+what each step has to satisfy and why it exists; the recipe is what the steps are and in what order.
+Of the five safeguards that recipe was missing before #73, two are still enforced by nothing at all
+— read the table there, which covers those five rather than all eleven steps, before taking a green
+run as proof that a resource is complete.
+
 - One file per resource (`tags.go`, `vocabularies.go`, …). Each defines a `*Service` reached from a
   field on `Client`.
 - **A new endpoint needs three things, and the gate fails until it has all three:** the method, a row
@@ -165,7 +172,9 @@ stays a faithful, ergonomic client.
   `/api/v2` satisfy `IsNotFound`, so a caller's not-found branch read a missing route as an empty
   taxonomy with no error (#7). A code that arrives *in* an envelope is preserved verbatim, including
   one this SDK has no constant for.
-- Server read-only fields are decode-only. `*Create` structs use pointer fields with `omitempty`.
+- Server read-only fields are decode-only. A `*Create` carries the contract's **required** fields
+  as plain values and its optional fields as something omittable — a pointer for a scalar, a
+  nil-able type like `Metadata` — each tagged `omitempty`.
 - **Every field of a `*Update` struct is an `Optional[T]` tagged `omitzero`, with no exceptions.** A
   PATCH has to express three things — leave it alone, set it, clear it — and a pointer carries two,
   so the nullable fields could not be cleared at all (#64). `omitempty` is wrong here and silently
@@ -278,6 +287,16 @@ it. It imports neither today, and adding a root import to it is a decision, not 
 - **A new read method needs a probe in `readProbes`.** That table is what makes "a merchant-A client
   never sees a merchant-B row" a statement about the whole read surface rather than about whichever
   endpoints someone remembered. A read endpoint nobody probed is where a cross-merchant leak lives.
+  **`TestEveryReadMethodHasANamespaceProbe` (`readprobes_test.go`) enforces this**, so the rule is a
+  check rather than something to remember. It resolves each exported service method's verb from the
+  source — following a call into a helper, since `Health.Live` names no verb of its own — and fails
+  on a read with no probe, a probe naming a method that no longer exists, **a probe whose `find`
+  closure calls a different endpoint than its name claims**, a duplicate name, and a stale or
+  unargued exclusion. A method whose verb it cannot resolve fails too — unless it is probed or
+  excluded — rather than passing as "not a read": treating the unknown case as silence is the defect
+  the guard exists to prevent. A read that
+  genuinely cannot leak across namespaces goes in `readProbeExclusions` with its reason, never in
+  silence.
 - **Which harness token a test uses IS the test.** The wildcard grant matches every partition,
   global included, so under it authorization never refuses anything — it can only demonstrate the
   server's namespace FILTER. The per-merchant exact grants

@@ -7,7 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`readProbes` exhaustiveness is a check rather than a doc comment**
+  ([#73](https://github.com/octoverse-id/octonomy-go/issues/73)).
+  `TestEveryReadMethodHasANamespaceProbe` (`readprobes_test.go`) resolves each exported service
+  method's HTTP verb from the source — following a call into a helper, since `Health.Live` names no
+  verb of its own — and checks it against the entries `readProbes` returns. It fails on a read with
+  no probe, a probe naming a method that no longer exists, a probe whose `find` closure calls a
+  different endpoint than its name claims, a duplicate name, and an exclusion that is stale or has
+  no reason written. The one deliberate exclusion, the unauthenticated health probes, moves out of
+  prose and into `readProbeExclusions`.
+  - **A method whose verb the guard cannot resolve fails — unless it is probed or excluded —
+    rather than passing as "not a read".**
+    The first draft defaulted the unknown case to silence, which reproduced #73's own defect inside
+    the check written to prevent it: a read the classifier could not see needed no probe and said
+    nothing.
+  - **The guard has its own tests**, because on a correct tree it would pass whether or not it
+    worked. `TestClassifyTakesTheVerbFromTheCallThatSendsIt` (15 cases),
+    `TestParseProbesReadsOnlyTheTableThatRuns` (7 cases) and
+    `TestClientServiceFieldsSeesAParenthesizedField` drive it over synthetic source, one case per
+    way it was wrong across six rounds of review: a verb reached two calls away; a method that
+    writes directly and then reads through a helper; a path segment spelled `DELETE` and a header
+    value spelled `GET`, which matching verbs anywhere in a body classified backwards in both
+    directions; a verb in an argument that is not the method position; an unrelated method that
+    merely shares the name `do`; a transport call inside a closure nobody invokes;
+    `s.cache.lookup()` resolved as a `Client` method; a method that rebinds its own receiver; a
+    probe crediting a call made on something other than its client, or on a client that was
+    shadowed or reassigned first; and every place a parenthesis could hide one of those shapes — a
+    parenthesized rebinding, receiver, callee, transport call or service field, each of which is a
+    legal Go spelling that silently defeated the check rather than failing closed; a call inside an uninvoked closure; and a second, unreachable
+    `[]readProbe` table registering as coverage.
+  - **Why this table and not the other two unguarded requirements.** `readProbes` is what makes "a
+    merchant-A client never sees a merchant-B row" a statement about the whole read surface rather
+    than about whichever endpoints someone remembered. The suite iterates whatever the table holds,
+    so a read method that arrived without a probe quietly shrank that assertion with every job
+    green, and the table's "complete list" was a hand-maintained doc comment — a reader, not a gate.
+  - **It carries no `integration` build tag, deliberately.** The table lives behind that tag but is
+    parsed rather than linked, so the guard runs in `make test` with no container. A check that ran
+    only when the container did would be absent from exactly the pull request that adds a read
+    method. `TestUpdateBodiesTagEveryOptionalOmitzero` and `TestVerifyComparesDigestsInConstantTime`
+    are the precedents for reading this repository's own source to enforce a rule about it.
+  - `identityFields()` and the smoke assertion are still enforced by nothing, and the recipe now
+    says so in the table rather than leaving it to be discovered.
+
 ### Documentation
+- **The resource recipe is complete, and has one home instead of four**
+  ([#73](https://github.com/octoverse-id/octonomy-go/issues/73)). `docs/roadmap.md` omitted five
+  requirements this repository states elsewhere and depends on — the `docs/contract-coverage.yaml`
+  row, the `tools/contractdrift/drivers.go` driver, `identityFields()`, the `integration_test.go`
+  assertion, and the `readProbes` probe — while `docs/architecture.md` certified it as carrying "the
+  recipe in full". Two of the five fail CI loudly. **Three passed every check**, so a resource added
+  by following the page verbatim compiled, went green, and arrived with three of this repository's
+  own safeguards not applied to it — each of which exists because of a defect already shipped here
+  (#40, #32, and the cross-merchant isolation assertion).
+  - **The decision, recorded because #68 established that this page states reasoning and not only
+    results: consolidate rather than patch.** `docs/roadmap.md` holds the recipe;
+    `docs/architecture.md` and `CONTRIBUTING.md` link it instead of keeping shorter copies. *Adding
+    the five and keeping all four copies* was refused: it fixes the symptom and leaves the drift
+    surface exactly as wide, and the defect was never that someone wrote the list carelessly but
+    that four lists can disagree while nothing compares them. *Deleting the recipe and pointing at
+    `AGENTS.md`* was refused for removing the page's stated first purpose and sending a human
+    contributor into the agent instruction file to learn how to add a resource.
+  - **`AGENTS.md` keeps its own statement of every rule, on purpose.** It is not a fourth copy of
+    the list but the argument behind each item — why `identityFields` exists, which harness token
+    makes an isolation test mean anything — and an agent needs that at the point of use rather than
+    behind a link. What it no longer has to be is the only complete place.
+  - `CONTRIBUTING.md` gains an *Adding a resource* section, since a human contributor reads it and
+    not `AGENTS.md`. It links the recipe and warns that a green CI run does not mean a resource is
+    complete, but does **not** restate which steps are enforced — that status is the part most
+    likely to move, and a second copy of it is how this defect started.
+  - **Review of the consolidated recipe found three more things it had wrong**, all now fixed: it
+    required a `*Create` and `*Update` of every resource, though a read-only group such as audit
+    logs has neither, and described `*Create` fields as pointers when the required ones are values;
+    it omitted the runnable example entirely, which `AGENTS.md` requires to be **run** against a
+    real server rather than written; and its scoping note listed three request options where four
+    exist, having never named `WithGlobalNamespace`.
 - **`docs/roadmap.md` stops reporting issue status, and the rule that replaces it is written down**
   ([#68](https://github.com/octoverse-id/octonomy-go/issues/68)). The *What is planned that is not a
   resource* paragraph called [#19](https://github.com/octoverse-id/octonomy-go/issues/19) "Still
