@@ -16,7 +16,7 @@ make test
 `github.com/octoverse-id/octonomy-go`, `v1.x`). It takes **security fixes only** — no features, no
 new resources, no `/api/v2` — and has a published sunset date; see [SECURITY.md](SECURITY.md) and
 [docs/versioning.md](docs/versioning.md). Anything else belongs on `main`, which is the `/v2` module
-at Go 1.24+.
+on a far newer Go than this line's — see [`main`'s README](https://github.com/octoverse-id/octonomy-go/blob/main/README.md) for its floor.
 
 Requires Go **1.13**. Note what that means in practice: a modern toolchain enforces the language
 version from `go.mod` but **not** the stdlib version, so `go build` passing tells you nothing here.

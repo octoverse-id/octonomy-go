@@ -146,9 +146,9 @@ func (c *Client) doData(ctx context.Context, method, path string, query url.Valu
 // indistinguishable-empty-page failure, one field over.
 //
 // A present-but-null data ("data": null) is accepted and decodes to a nil slice.
-// The server sends [] for an empty page, and nil-versus-empty slice semantics are
-// a deliberate open question on the modern line rather than something this frozen
-// line should decide.
+// The server sends [] for an empty page. Both spellings mean "no rows", so treat
+// nil and empty as the same thing; this line does not normalize between them,
+// and that behavior is frozen along with the rest of it.
 func (c *Client) doList(ctx context.Context, method, path string, query url.Values, out interface{}, opts ...RequestOption) error {
 	respBody, err := c.doRaw(ctx, method, path, query, nil, opts...)
 	if err != nil {

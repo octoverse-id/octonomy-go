@@ -7,7 +7,8 @@ dependency-free client for the stable REST **v1** API (`/api/v1`).
 ## READ FIRST — this branch is the frozen Go 1.13 line
 
 You are on `support/go1.13`: module `github.com/octoverse-id/octonomy-go`, versions `v1.x`, Go
-**1.13**. `main` is a different module (`/v2`, Go 1.24+) and is where active development happens.
+**1.13**. `main` is a different module (`/v2`, on a modern Go floor) and is where active development
+happens.
 
 - **Security fixes only.** No features, no new resources, no `/api/v2`, no namespaces, no webhooks —
   ever. If a task asks for any of those on this branch, stop and say it belongs on `main`.

@@ -104,8 +104,8 @@ func (p *TagListParams) query() url.Values {
 }
 
 // TagList is the envelope GET /tags returns: {"data": [...], "pagination": {...}}.
-// It is the Tag instantiation of what the modern line expresses as List[Tag]; see
-// pagination.go for why this line spells it out per resource.
+// It is the Tag instantiation of a shape that would otherwise be one generic
+// type; see pagination.go for why this line spells it out per resource.
 type TagList struct {
 	Data       []Tag      `json:"data"`
 	Pagination Pagination `json:"pagination"`

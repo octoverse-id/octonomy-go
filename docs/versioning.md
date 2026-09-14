@@ -4,8 +4,10 @@
 source of truth for how a change maps to a version bump.
 
 > **You are reading the copy on `support/go1.13`.** This branch *is* the compat line, so the policy
-> below is written for it and its support terms are binding here. `main` carries the canonical copy
-> for the `/v2` line; where the two disagree about the modern line, `main` wins. The compat line's
+> below is written for it and its support terms are binding here. `main` carries
+> [the canonical copy](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md)
+> for the `/v2` line; where the two disagree about the modern line, `main` wins — which is why what
+> follows *links* to it rather than repeating it. The compat line's
 > own terms — security fixes only, the sunset date, no features ever — are settled and are repeated in
 > [`../SECURITY.md`](../SECURITY.md).
 
@@ -29,7 +31,7 @@ a client that keeps growing, the other is pinned to Go 1.13 and needs one that n
 | Line | Module path | Branch | Versions | Go | Scope |
 | ---- | ----------- | ------ | -------- | -- | ----- |
 | **Compat** | `github.com/octoverse-id/octonomy-go` | `support/go1.13` | `v1.x` | 1.13 | Vocabularies + Tags, `/api/v1` only. **Frozen.** |
-| **Modern** | `github.com/octoverse-id/octonomy-go/v2` | `main` | `v2.x` | 1.24+ | Active development. `/api/v1` today; `/api/v2`, namespaces, and the remaining resources are the roadmap. |
+| **Modern** | `github.com/octoverse-id/octonomy-go/v2` | `main` | `v2.x` | [see `main`](https://github.com/octoverse-id/octonomy-go/blob/main/README.md) | Active development. Both its Go floor and its surface move, so read them from `main` rather than from this table. |
 
 **Go enforces the separation.** The two paths are different modules, so minimal version selection,
 `go get -u`, and dependency bots cannot move a consumer from one line to the other. A tag whose
@@ -59,18 +61,33 @@ not a ceiling, and Go before 1.16 auto-resolves `@latest` on a first build.
   patch. See [release.md](release.md).
 - **`retract` does not help this audience.** The directive shipped in Go 1.16, so a Go 1.13 toolchain
   ignores it. A published `v1.x` cannot be recalled for the people it exists to serve, which is why
-  its releases are kept deliberately small and its CI runs a real `go1.13` job — intended as a
-  required check, and pending branch protection on this branch before it actually blocks a merge.
+  its releases are kept deliberately small and its CI runs a real `go1.13` job: the only gate on this
+  line's stdlib floor, since a modern toolchain enforces the `go` directive's *language* version and
+  not its *stdlib* version. Which checks block a merge is branch-protection state, which no file in
+  this repository can observe — read it from the branch's settings.
 
-### Modern line pre-stability
+### Adopting the modern line
 
-The modern line is versioned `v2.0.0-alpha.N` until the API is frozen. The gate for dropping the
-prerelease suffix is **not** resource coverage — counting endpoints says nothing about whether the API
-has stopped moving. It is: no further breaking changes intended, real-server integration green, docs
-current, and one release candidate validated.
+Where that line stands in its own stabilization — whether it is still on prereleases, and what its
+API freeze requires — is `main`'s to state, and it states it in
+[its versioning policy](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md). (No section anchor: the heading that carries this
+today is named for a phase that ends.)
 
-Because no stable `v2` exists yet, `go get github.com/octoverse-id/octonomy-go/v2` resolves the highest
-prerelease, so adoption works normally.
+What is worth stating here is the rule that carries a reader across, because the rule does not decay.
+For a module **not already required**, `go get github.com/octoverse-id/octonomy-go/v2` takes Go's
+`@latest` selection: the highest eligible **stable** release; failing that, the highest eligible
+**prerelease**; failing that, a pseudo-version for the newest commit on the repository's default
+branch. So adoption works without anyone naming a version, whichever of those three that line is
+currently in. (For a module already required, a bare `go get` is an *upgrade* rather than a fresh
+selection, and can leave a newer required version in place.)
+
+Which one it actually picks is a question for the toolchain, never a claim a file on this branch can
+hold — this page held one and it aged. Note that the proxy's `@v/list` cannot answer it either: that
+endpoint omits pseudo-versions, so it reports what is *tagged*, not what a fetch would select.
+
+```console
+$ go list -m github.com/octoverse-id/octonomy-go/v2@latest
+```
 
 ### What "frozen" costs, concretely
 
@@ -80,7 +97,7 @@ The frozen scope is a real trade, not a formality. On this line:
 | ------- | --- | ---------- |
 | `List[T]` | Type parameters need Go 1.18 | `TagList`, `VocabularyList` — same fields |
 | `CodeScopeImmutable` + `Is*` helper | Server 3.1.0 added `409 scope_immutable` on tag/vocabulary/alias PATCH after this line was scoped | `apiErr.Code == "scope_immutable"` — `parseError` preserves any code the server sends |
-| Six resource groups, `/api/v2`, namespaces, webhooks | Frozen scope | Upgrade to Go 1.24+ and the `/v2` module |
+| Every other resource group, `/api/v2`, namespaces, webhooks | Frozen scope | Upgrade the toolchain and move to the `/v2` module |
 | `t.Cleanup` in tests | Needs Go 1.14 | `newTestClient` returns a cleanup func the caller defers |
 
 ## Release state
@@ -93,7 +110,7 @@ left implying an installable version that never existed.
 | Line | First release | State |
 | ---- | ------------- | ----- |
 | **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` | Released. Frozen — security fixes only, sunset 2027-08-31 |
-| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.1` | Not yet cut; tracked in the release issue |
+| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.1` | Released, and moving on its own schedule. [`main`'s release state](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md#release-state) is the record; the `go list -m` query under [Adopting the modern line](#adopting-the-modern-line) is what settles what a fresh `go get` would pick |
 
 Nothing about `v1.0.0` can be withdrawn: `retract` shipped in Go 1.16, so a Go 1.13 consumer's
 toolchain ignores it, and `GOPROXY` caches tags permanently. That is why this line's CI runs a real
@@ -112,9 +129,10 @@ Backward-compatible **bug fixes**. No change to the exported Go API.
 Backward-compatible **additions** to the exported API.
 - Examples: a new resource service, a new method, a new optional field on a `*Params`/`*Create` struct,
   a new `Is*` helper.
-- Existing callers keep compiling and working unchanged. While the modern line is still on
-  `v2.0.0-alpha.N` prereleases a necessary breaking change may ride an alpha bump, documented in the
-  CHANGELOG; once `v2.0.0` proper ships, that stops being true.
+- Existing callers keep compiling and working unchanged. A prerelease does not carry that guarantee:
+  while a line is on prereleases, a necessary breaking change may ride a prerelease bump with a
+  CHANGELOG entry, and that stops the moment a stable release of that major ships. Whether the modern
+  line is still in that state is [its versioning policy](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md) to say.
 
 ### MAJOR — `vN.0.0`
 Backward-**incompatible** changes to the exported Go API once a line has shipped a stable release.
@@ -137,11 +155,14 @@ exactly what the modern line is. Adding `/api/v2` support is why this repository
 compatibility, not the server's REST version. A future server `/api/v3` would not automatically force
 an SDK `/v3` — only a break in the SDK's own exported Go API would.
 
-> **Current state, to be exact:** *both* lines speak `/api/v1` only. `apiPrefix` is a hardcoded
-> constant (`octonomy.go:14`) and `Config` has no API-version selector yet. Adding `/api/v2` support —
-> the selector, the namespace axis, and the six remaining resource groups — is what the modern line is
-> *for*, and it is why this repository took the `/v2` module path now rather than after the fact. But
-> it has not landed. Do not adopt the `/v2` module expecting to reach REST v2 endpoints today.
+> **Where *this* line stands, to be exact:** it speaks `/api/v1` and nothing else, permanently.
+> `apiPrefix` is a hardcoded constant (`octonomy.go:14`) and `Config` has no API-version selector,
+> and neither will change — that is the frozen scope, not a gap waiting to be filled. `/api/v2`
+> support is what the modern line is *for*, and it is why this repository took the `/v2` module path
+> when it did. What that line reaches is stated on `main` — in
+> [its README](https://github.com/octoverse-id/octonomy-go/blob/main/README.md) and
+> [its versioning policy](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md)
+> — and not here.
 
 ## Where this shows up
 

@@ -67,7 +67,8 @@ Server 3.1.0 also returns `scope_immutable` (409) on tag, vocabulary, and alias 
 ships **no** constant or helper for it — a frozen-scope decision, not an oversight — but the code
 string survives decoding, so `apiErr.Code == "scope_immutable"` works today.
 
-## Not yet implemented
+## Never implemented on this line
 
-Tag aliases, tag resolution, tag assignments (incl. bulk), resource tags, audit logs, and health — see
-[roadmap.md](roadmap.md).
+Tag aliases, tag resolution, tag assignments (incl. bulk), resource tags, audit logs, and health. They
+are the other side of the frozen scope rather than a backlog; [roadmap.md](roadmap.md) says what they
+are and where they do exist.

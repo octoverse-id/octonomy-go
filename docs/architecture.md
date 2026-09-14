@@ -80,4 +80,4 @@ To add a resource, follow `tags.go`:
 3. Wire the service onto `Client` in `New()`.
 4. Add table-driven `httptest` tests and a CHANGELOG entry.
 
-See [roadmap.md](roadmap.md) for the queued resources.
+See [roadmap.md](roadmap.md) for the resource groups this line does not have.

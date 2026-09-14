@@ -23,6 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   go1.25.13, and CI resolves `"1.25"` to a later patch. Same one-line fix applied to the install
   hints in `docs/development.md` and the `Makefile`, which reproduce the identical error on a go1.25
   toolchain. Ports [#45](https://github.com/octoverse-id/octonomy-go/pull/45) to this line (#70).
+- **Documentation only; no code change, and no version bump or tag is planned for it.** This branch
+  carried its own copies of `main`'s documentation, written when `main` was a `/api/v1`-only client
+  with two resource groups, and they had aged into false statements about it — most harmfully a line
+  in `docs/versioning.md` telling a reader **not** to adopt the `/v2` module if they wanted REST v2
+  endpoints, which is now backwards. Descriptions of the modern line are replaced by links to `main`'s
+  own files, so the same drift has nothing left to attach to (#51). Note the reach: pkg.go.dev
+  renders the README of the *released* version, so `v1.0.0`'s rendered page keeps the old text until
+  some other fix cuts a `v1.0.1`. This corrects what a reader sees on GitHub, which is where the two
+  lines get compared.
+- **CI comments no longer paraphrase branch protection.** Two comments in `.github/workflows/ci.yml`,
+  and the matching prose in `docs/development.md` and in this file's `1.0.0` entry, described the
+  `go1.13` and smoke jobs as required by intent but unenforced. The contexts had since been added,
+  and an automated reviewer on PR #50 read one of those comments and filed a finding against
+  documentation that was correct. The reasoning each comment exists for is kept; the claim about
+  mutable repository settings is gone, since no file in the repository can observe them (#52).
 
 ## [1.0.0] - 2026-08-26
 
@@ -76,8 +91,8 @@ ignores it, and `GOPROXY` caches tags permanently.
   requires **both** envelope keys before decoding: a missing or null `pagination` block zeroes `Count`
   and `Limit`, which a caller paging on `Count` reads as "one page, nothing after it". A real empty
   page (`"data": []` with a pagination block) is still a success, and `"data": null` is still accepted
-  as a nil slice, since nil-versus-empty semantics are an open question on the modern line rather than
-  something this frozen line should settle.
+  as a nil slice — this line preserves the wire form rather than normalizing it, and that behavior is
+  frozen with the rest.
 - **A 2xx with an empty body where a resource was expected is now an error.** `do` previously
   returned nil in that case, so a truncated or misrouted 2xx produced a zero-valued struct. `Delete`
   is unaffected: 204-with-no-body is its documented shape and stays lenient.
@@ -95,12 +110,13 @@ ignores it, and `GOPROXY` caches tags permanently.
   rather than a skip — a skip is a green job, and this is the only real-server check the line has.
 - **CI for this line, which previously had none.** `ci.yml` fired only on `main`, so pushes to
   `support/go1.13` ran nothing and no tag triggered anything. Added: the branch to both trigger lists,
-  a `v*` tag trigger, a **required** real `go1.13.15` job running `go test -race` (not merely
+  a `v*` tag trigger, a real `go1.13.15` job running `go test -race` (not merely
   `go build`, since four of five `ioutil` sites and all 18 test-file `interface{}` sites live in
   `_test.go`), and a `smoke` job that boots the pinned container and runs the smoke test on the
-  go1.13 toolchain. Both are **intended as required checks and are not yet enforced as such**:
-  branch protection for `support/go1.13` does not exist, so until the maintainer adds these contexts
-  (the `gh api` call is in the PR description) "required" describes the intent, not the enforcement. The go1.13 jobs set `cache: false` — `actions/setup-go` derives its cache
+  go1.13 toolchain. Both are meant to block a merge — the `go1.13` job is this line's only gate on the
+  stdlib floor, and the smoke job its only check against a real server — while what is *enforced* is
+  branch-protection state that lives in the branch's settings, not in a file here. The go1.13 jobs set
+  `cache: false` — `actions/setup-go` derives its cache
   path from `go env GOMODCACHE`, which does not exist before Go 1.15.
 - **Release-line guard** (`scripts/compat-guard.sh`, `make compat-guard`, CI job) with three tiers,
   chosen by how recoverable the mistake is at that moment:
@@ -161,8 +177,8 @@ ignores it, and `GOPROXY` caches tags permanently.
 - Reusable Octonomy container harness (`scripts/octonomy-harness.sh`, `make dev-server`) that boots
   Postgres plus the pinned `ghcr.io/octoverse-id/octonomy:3.1.0` image, applies migrations, mints a
   namespace-capable service token, and writes `OCTONOMY_TEST_*` credentials to
-  `.octonomy-harness.env`. Both SDK version lines invoke it, so neither carries a bootstrap of its
-  own. Exposed to CI as the `.github/actions/octonomy-harness` composite action.
+  `.octonomy-harness.env`. It is this line's only bootstrap — nothing else here boots a server.
+  Exposed to CI as the `.github/actions/octonomy-harness` composite action.
 
 ### Added (the original client, carried in from the never-released tree)
 

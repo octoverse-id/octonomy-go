@@ -3,8 +3,8 @@
 #
 # Boots a real Octonomy server (Postgres + the published GHCR image), applies
 # migrations, mints a service token, and asserts the environment is genuinely
-# usable -- then writes the resulting credentials to an env file that both SDK
-# version lines source.
+# usable -- then writes the resulting credentials to an env file the test steps
+# source.
 #
 # `docker run` alone is not enough. Every step below exists because omitting it
 # produces an environment that looks healthy and silently fails, or worse,
@@ -16,8 +16,9 @@
 #   scripts/octonomy-harness.sh logs    # dump container logs
 #   scripts/octonomy-harness.sh env     # print the env file path
 #
-# POSIX sh on purpose: the Go 1.13 compat line and the modern /v2 line both
-# invoke this, and neither may grow a bootstrap of its own.
+# POSIX sh on purpose: nothing in this line's tooling should need a shell newer
+# than the era the line itself targets. This file is this branch's only
+# bootstrap, and nothing here may grow a second one.
 
 set -eu
 

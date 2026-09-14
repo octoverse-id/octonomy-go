@@ -4,10 +4,10 @@ description: >-
   migrations, mint a namespace-capable service token, and export the resulting
   OCTONOMY_TEST_* credentials to the job environment.
 
-# Both SDK version lines call this action so neither grows a bootstrap of its
-# own. All the logic lives in scripts/octonomy-harness.sh -- this file is only
-# the CI adapter, so a developer running `make dev-server` locally and CI are
-# provably booting the same environment.
+# All the logic lives in scripts/octonomy-harness.sh -- this file is only the CI
+# adapter, so a developer running `make dev-server` locally and this line's CI
+# are provably booting the same environment. That equivalence is between local
+# and CI *on this branch*; the other line keeps its own copy of both files.
 #
 # Composite actions cannot register a `post:` step, so teardown and failure-time
 # log capture belong to the CALLING job:

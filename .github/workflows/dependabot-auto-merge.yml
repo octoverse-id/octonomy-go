@@ -1,9 +1,10 @@
 name: Dependabot auto-merge
 
-# Auto-enables merge for Dependabot minor and patch updates once required
-# status checks pass. Major updates are intentionally left for manual review.
-# Requires repo settings: "Allow auto-merge" enabled, and branch protection on
-# the default branch requiring the CI checks (so auto-merge waits for green).
+# Requests auto-merge for Dependabot minor and patch updates; major updates are
+# intentionally left for manual review. Whether the request takes effect, and
+# which checks it then waits on, are repository settings -- "Allow auto-merge"
+# and the branch's required contexts. This file cannot observe either, so it
+# does not assert them; inspect the settings.
 
 on: pull_request
 

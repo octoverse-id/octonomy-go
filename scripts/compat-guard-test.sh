@@ -109,7 +109,7 @@ check "BLOCK: go directive drifted off 1.13" 1 "must declare \`go 1.13\`" \
 fixture "$MODERN" 1.24 2.0.0-alpha.1 2.0.0-alpha.1
 # Asserts the parsed context rather than only rc=0: a clean exit here also
 # happens when the guard misreads go.mod and checks nothing.
-check "PR into main, correct modern tree" 0 "module=$MODERN go=1.24" \
+check "PR into main, a /v2 tree the guard accepts" 0 "module=$MODERN go=1.24" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=main GITHUB_HEAD_REF=feature/x
 
 fixture "$COMPAT" 1.13 0.1.0 0.1.0
