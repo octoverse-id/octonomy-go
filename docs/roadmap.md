@@ -9,8 +9,7 @@ implemented resources, registered below.
 
 This page is therefore three things: the **recipe** for adding the next resource the server ships,
 the **register of known gaps**, and the **reasoning** behind decisions the issue tracker records but
-cannot explain. None of the three is the complete inventory — [`api.md`](api.md#implemented) is —
-and none of them is a status board; see
+cannot explain. None of them is a status board; see
 [the rule](#work-alongside-the-client-rather-than-inside-it) at the end of this page.
 
 **Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.2.0), not from memory.** Every endpoint
@@ -144,10 +143,10 @@ status.
 | **The tags-ordering caveats want revisiting** once the server adds an `ORDER BY` to the annotated tags list (upstream `octonomy#162`). | [#49](https://github.com/octoverse-id/octonomy-go/issues/49) |
 
 Deferred by design, not a gap: the webhook typed-event surface and `http.Handler`
-([#22](https://github.com/octoverse-id/octonomy-go/issues/22) — no deployment emits webhooks, since
-`OUTBOX_TRANSPORT` defaults to `logging`, so those would be built for a consumer who does not exist,
-on payload shapes that may still move). The *verification* half of webhooks did not wait on an
-emitter and has shipped — see below.
+([#22](https://github.com/octoverse-id/octonomy-go/issues/22) — when that was decided, no deployment
+emitted webhooks at all, `OUTBOX_TRANSPORT` defaulting to `logging`, so those would have been built
+for a consumer who did not exist, on payload shapes that could still move). The *verification* half
+of webhooks did not wait on an emitter and has shipped — see below.
 
 ## Work alongside the client rather than inside it
 
@@ -169,16 +168,15 @@ Until [#68](https://github.com/octoverse-id/octonomy-go/issues/68) this paragrap
 hand-maintained *Landed / Still open* split, and the open half was false within hours of #19
 closing; `make contract-check` compares the client to the contract, never the docs to the tracker,
 so a reader was the only gate that sentence ever had. **The rule that replaced it: prose states what
-happened, and for what is true now it names whatever keeps it true.** That has three cases and this
-page uses all three. A sentence about a closed issue, a shipped release, or a decision already taken
-cannot rot, which is why the paragraph above still names five issues and the two releases they
-belong to. A sentence about what is open rots on someone else's schedule, so it is a link. Between
-them sits a claim about this repository that something here does check — *the resource queue is
-empty*, near the top of this page, which the drift gate fails on the moment the server publishes an
-operation with neither a Go method nor a written reason in
-[`contract-coverage.yaml`](contract-coverage.yaml) — and that one stays prose, because a reader is
-not what is holding it true. Where none of the three fits, the status is dated: the gaps table above
-carries the day its snapshot was taken.
+happened, and for what is true now it names whatever keeps it true.** Three cases, and this page
+uses all three. What is already past — a closed issue, a shipped release, a decision taken — stays
+prose, which is why the paragraph above names five issues and the two releases they belong to. What
+the tracker holds is a link, because it moves with no edit here. What a gate holds may stay prose:
+*the resource queue is empty*, near the top, cannot go **quietly** stale, since a newly published
+operation fails `make contract-check` until it has either a Go method or a written reason in
+[`contract-coverage.yaml`](contract-coverage.yaml). That sentence can still age — a written reason
+is a gap — but only inside the pull request already being made to account for the operation that
+aged it, which is where someone is looking. Anything left over is dated, as the gaps table above is.
 
 ### `octonomy/webhook` — why the verifier shipped without the typed events
 

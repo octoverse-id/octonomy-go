@@ -296,9 +296,10 @@ it. It imports neither today, and adding a root import to it is a decision, not 
   outstanding, what another branch implements — rots on someone else's schedule, and **nothing here
   can contradict it**: `make contract-check` compares the client to the contract, never the docs to
   the tracker. #51, #52 and #68 are three instances of that one defect. Two shapes are not in the
-  family and both are already used here: a claim something in this repository CHECKS (*every
-  published operation is implemented* is held true by `docs/contract-coverage.yaml` and the drift
-  gate, not by the sentence asserting it), and a claim written next to the file that enforces it
+  family and both are already used here: a claim a gate CHECKS (*no published operation is missing
+  without a written reason* is held true by `docs/contract-coverage.yaml` and the drift gate, not by
+  the sentence asserting it — such a claim can still age, but only in the pull request already
+  accounting for the operation that aged it), and a claim written next to the file that enforces it
   (the CI comments about which job fails a PR sit in `ci.yml`). For everything else, point at the
   issue, the milestone, or the setting that carries the state live — and where it has to be written
   out anyway, say when: `docs/development.md` writes "currently" in front of main's required
@@ -333,7 +334,7 @@ it. It imports neither today, and adding a root import to it is a decision, not 
   field the decoded model drops, a property whose type the model can no longer decode, and a row whose
   method now requests a different route. "Refresh the spec and implement it later" is not a state this
   repository can be left in. The cross-repository half,
-  `make contract-drift`, is scheduled-only and never gates a PR. See
+  `make contract-drift`, runs weekly and on manual dispatch, never on a pull request. See
   `docs/development.md#contract-drift`.
 
 ## Development Pipeline
