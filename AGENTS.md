@@ -290,14 +290,20 @@ it. It imports neither today, and adding a root import to it is a decision, not 
 
 - Run `make check` before pushing and `make release-check` before a release.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
-- **Documentation states what happened; it links to what is true now.** A sentence about a closed
-  issue, a shipped release, or a decision already taken cannot rot. A sentence restating mutable
-  state — which issues are open, which milestone is outstanding, what a branch's protection requires
-  — rots on someone else's schedule, and **no gate in this repository can see it**: `make
-  contract-check` compares the client to the contract, not the docs to the tracker. #51, #52 and #68
-  are three instances of that one defect. Point at the issue, the milestone, or the setting that
-  carries the state live; where a status has to be written out anyway, date it so a reader can tell
-  how old it is.
+- **Documentation states what happened; for what is true now it names whatever keeps it true.** A
+  sentence about a closed issue, a shipped release, or a decision already taken cannot rot. A
+  sentence restating state this repository does not hold — which issues are open, which milestone is
+  outstanding, what another branch implements — rots on someone else's schedule, and **nothing here
+  can contradict it**: `make contract-check` compares the client to the contract, never the docs to
+  the tracker. #51, #52 and #68 are three instances of that one defect. Two shapes are not in the
+  family and both are already used here: a claim something in this repository CHECKS (*every
+  published operation is implemented* is held true by `docs/contract-coverage.yaml` and the drift
+  gate, not by the sentence asserting it), and a claim written next to the file that enforces it
+  (the CI comments about which job fails a PR sit in `ci.yml`). For everything else, point at the
+  issue, the milestone, or the setting that carries the state live — and where it has to be written
+  out anyway, say when: `docs/development.md` writes "currently" in front of main's required
+  contexts for this reason, and `docs/roadmap.md`'s gaps table carries the day its snapshot was
+  taken.
 - **An example is RUN, not written.** Every program under `examples/` is exercised before it is
   committed, and it must demonstrate a semantic a caller can get wrong rather than only a create
   call — a comment in an example is documentation a reader will copy, and one the server contradicts

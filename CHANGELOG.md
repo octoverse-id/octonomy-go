@@ -13,27 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resource* paragraph called [#19](https://github.com/octoverse-id/octonomy-go/issues/19) "Still
   open" and pointed at a milestone that had closed 4 of 4 with `v2.0.0-alpha.2`. Every issue that
   paragraph named was closed, so the passage described an empty queue as a live one.
-  - **The decision, which is the part worth recording: the hand-maintained *Landed / Still open*
-    split is gone rather than corrected.** Correcting it buys one true day — the split was false
-    within hours of #19 closing, and this is the third issue of exactly this shape (#51, #52, #68).
-    The rule now stated at the end of that page and in `AGENTS.md` is **prose states what happened,
-    links state what is true now**: a sentence about a closed issue, a shipped release or a decision
-    already taken cannot rot, so the paragraph still names all five issues in the past tense, while
-    *what is open* is delegated to the tracker's own live views. `make contract-check` compares the
-    client to the contract and can see nothing about an issue's state, so a reader is the only gate
-    this class of drift ever had.
-  - **The known-gaps table is the one place a status still has to be written out, so it is dated.**
-    It carries the date the snapshot was taken (2026-09-14) and each row links the issue that holds
-    the live state.
+  - **The decision, which is what #68 asked for instead of an edit: the hand-maintained *Landed /
+    Still open* split is gone rather than corrected.** Correcting it buys one true day — the split
+    was false within hours of #19 closing, and this is the third issue of exactly this shape (#51,
+    #52, #68). The rule that replaces it, stated at the end of that page and in `AGENTS.md`: prose
+    states what happened, and for what is true now it names whatever keeps it true — a link where
+    the tracker holds the state, the gate where one exists (`docs/contract-coverage.yaml` is why
+    *the resource queue is empty* may stay prose), and a date where a status has to be written out
+    anyway. The known-gaps table carries the day its snapshot was taken (2026-09-14).
   - **Two sections were in the wrong place, which is the same defect structurally.** `BuildTagTree`
     (#20) sat under *Known gaps* describing itself as "no longer deferred" after it had shipped; it
     is now its own section next to Health, which is the other implemented thing this page explains
     rather than lists. `octonomy/webhook` (#16) sat under *What is planned*; that section is now
-    *Work alongside the client rather than inside it* and says which release closed it.
-  - Smaller corrections in the same pass: the intro's "`#8–#13` delegate to this file" is now past
-    tense, the typed-event half "waits for an emitter" became "was deferred to #22" (the issue, not
-    the sentence, holds its state), and `AGENTS.md` pointed at `docs/roadmap.md` for "which issue
-    owns" each namespace field when that table names the file it is declared in.
+    *Work alongside the client rather than inside it* and names the release that closed each issue.
 
 ## [2.0.0-alpha.2] - 2026-09-13
 

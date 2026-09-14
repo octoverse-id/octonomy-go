@@ -767,8 +767,9 @@ make help        # list all targets
 - [Development](docs/development.md) — setup, quality gates, testing.
 - [Versioning](docs/versioning.md) — SemVer policy and which server contract this SDK targets.
 - [Release](docs/release.md) — the release runbook.
-- [Roadmap](docs/roadmap.md) — known gaps inside implemented resources, and the reasoning behind
-  decisions the issue tracker records but cannot explain.
+- [Roadmap](docs/roadmap.md) — the recipe for adding the next resource the server ships, known gaps
+  inside implemented resources, and the reasoning behind decisions the issue tracker records but
+  cannot explain.
 - [Contract coverage](docs/contract-coverage.yaml) — the machine-checked operation inventory, and the
   spec-versus-server divergences it records. Enforced by the
   [drift gate](docs/development.md#contract-drift).

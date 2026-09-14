@@ -9,7 +9,8 @@ implemented resources, registered below.
 
 This page is therefore three things: the **recipe** for adding the next resource the server ships,
 the **register of known gaps**, and the **reasoning** behind decisions the issue tracker records but
-cannot explain. None of the three is a list of what exists, and none of them is a status board — see
+cannot explain. None of the three is the complete inventory — [`api.md`](api.md#implemented) is —
+and none of them is a status board; see
 [the rule](#work-alongside-the-client-rather-than-inside-it) at the end of this page.
 
 **Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.2.0), not from memory.** Every endpoint
@@ -151,8 +152,7 @@ emitter and has shipped — see below.
 ## Work alongside the client rather than inside it
 
 An empty resource queue is not an empty backlog. Four pieces of this repository grew next to the
-client instead of in it, and all four are in: the OpenAPI contract drift gate that would have caught
-this page's own drift automatically
+client instead of in it, and all four landed in `v2.0.0-alpha.2`: the OpenAPI contract drift gate
 ([#18](https://github.com/octoverse-id/octonomy-go/issues/18)), the full integration suite against
 the published container ([#17](https://github.com/octoverse-id/octonomy-go/issues/17)),
 `octonomy/webhook` ([#16](https://github.com/octoverse-id/octonomy-go/issues/16)), and a runnable
@@ -167,14 +167,18 @@ with that release on 2026-09-13. Cutting `v2.0.0-alpha.1` before it was
 [open milestones](https://github.com/octoverse-id/octonomy-go/milestones?state=open) answer it live.
 Until [#68](https://github.com/octoverse-id/octonomy-go/issues/68) this paragraph kept a
 hand-maintained *Landed / Still open* split, and the open half was false within hours of #19
-closing; `make contract-check` compares the client to the contract and can see nothing about an
-issue's state, so nothing but a reader ever catches that. **The rule that replaced it: prose states
-what happened, links state what is true now.** A sentence about a closed issue, a shipped release,
-or a decision already taken cannot rot — which is why the paragraph
-above still names all five issues, in the past tense, and why the reasoning below is worth more than
-a status line ever was. A sentence about what remains open rots on someone else's schedule. Where a
-status has to be written out anyway, it is dated: the gaps table above carries the date it was
-taken.
+closing; `make contract-check` compares the client to the contract, never the docs to the tracker,
+so a reader was the only gate that sentence ever had. **The rule that replaced it: prose states what
+happened, and for what is true now it names whatever keeps it true.** That has three cases and this
+page uses all three. A sentence about a closed issue, a shipped release, or a decision already taken
+cannot rot, which is why the paragraph above still names five issues and the two releases they
+belong to. A sentence about what is open rots on someone else's schedule, so it is a link. Between
+them sits a claim about this repository that something here does check — *the resource queue is
+empty*, near the top of this page, which the drift gate fails on the moment the server publishes an
+operation with neither a Go method nor a written reason in
+[`contract-coverage.yaml`](contract-coverage.yaml) — and that one stays prose, because a reader is
+not what is holding it true. Where none of the three fits, the status is dated: the gaps table above
+carries the day its snapshot was taken.
 
 ### `octonomy/webhook` — why the verifier shipped without the typed events
 
