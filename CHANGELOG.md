@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The `vuln` CI job stopped running govulncheck at all, and took every merge with it.**
+  `golang/govulncheck-action` installs `golang.org/x/vuln/cmd/govulncheck@latest` and offers no
+  version input, while `actions/setup-go` exports `GOTOOLCHAIN=local` so the pinned Go really is the
+  Go used. When x/vuln v1.8.0 (2026-09-08) raised its own minimum to go 1.26, the install began
+  failing on `requires go >= 1.26.0 (running go 1.25.x; GOTOOLCHAIN=local)` and the scan never ran.
+  It broke on this line silently — the previous CI run here was 2026-08-26, cutting `v1.0.0` — and
+  because `vuln` is a required context on `support/go1.13`, a dark scanner was also blocking the
+  security fixes this line exists to receive. The job now installs with `GOTOOLCHAIN=auto` (which
+  applies to *building* the tool; the scan still uses the pinned Go, so standard-library advisories
+  stay reported against the version under test) and invokes `govulncheck` directly, so a failed
+  install is a failed step rather than a skipped scan. No advisories against this module: the 18
+  findings seen while reproducing were artifacts of a local go1.25.4, all fixed at or below
+  go1.25.13, and CI resolves `"1.25"` to a later patch. Same one-line fix applied to the install
+  hints in `docs/development.md` and the `Makefile`, which reproduce the identical error on a go1.25
+  toolchain. Ports [#45](https://github.com/octoverse-id/octonomy-go/pull/45) to this line (#70).
+
 ## [1.0.0] - 2026-08-26
 
 **The first published release of this SDK**, and the whole of the frozen Go 1.13 compatibility line
