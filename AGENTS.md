@@ -84,7 +84,7 @@ stays a faithful, ergonomic client.
 - Response models for the seven v2 schemas that carry namespace identity get `NamespaceType` /
   `NamespaceID` as `*string`, **decode-only**. The server sets them from the `X-Namespace-*` headers
   and never from a request body, so they must not appear on `*Create` / `*Update` — see
-  `docs/roadmap.md` for the list and which issue owns each.
+  `docs/roadmap.md` for the list and the file each is declared in.
 - **On this line** list methods return `*List[T]` and decode the `{data, pagination}` envelope; embed
   `ListOptions` in each resource's `*ListParams`. That shape is line-specific: `support/go1.13` has no
   type parameters, so it declares a two-field `*TagList` / `*VocabularyList` per resource instead.
@@ -290,6 +290,14 @@ it. It imports neither today, and adding a root import to it is a decision, not 
 
 - Run `make check` before pushing and `make release-check` before a release.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
+- **Documentation states what happened; it links to what is true now.** A sentence about a closed
+  issue, a shipped release, or a decision already taken cannot rot. A sentence restating mutable
+  state — which issues are open, which milestone is outstanding, what a branch's protection requires
+  — rots on someone else's schedule, and **no gate in this repository can see it**: `make
+  contract-check` compares the client to the contract, not the docs to the tracker. #51, #52 and #68
+  are three instances of that one defect. Point at the issue, the milestone, or the setting that
+  carries the state live; where a status has to be written out anyway, date it so a reader can tell
+  how old it is.
 - **An example is RUN, not written.** Every program under `examples/` is exercised before it is
   committed, and it must demonstrate a semantic a caller can get wrong rather than only a create
   call — a comment in an example is documentation a reader will copy, and one the server contradicts

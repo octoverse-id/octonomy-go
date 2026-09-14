@@ -5,10 +5,12 @@ every endpoint group the vendored contracts publish are implemented.
 **[`api.md`](api.md#implemented) holds the only complete inventory** — every SDK method, verb, and
 path — and is the one place to update when a method is added. This page names a route only where it
 is making some other point (the health section below does). What is left are the gaps *within*
-implemented resources, at the bottom of this page.
+implemented resources, registered below.
 
-This page is therefore two things: the **recipe** for adding the next resource the server ships, and
-the **register of known gaps**. Neither is a list of what exists.
+This page is therefore three things: the **recipe** for adding the next resource the server ships,
+the **register of known gaps**, and the **reasoning** behind decisions the issue tracker records but
+cannot explain. None of the three is a list of what exists, and none of them is a status board — see
+[the rule](#work-alongside-the-client-rather-than-inside-it) at the end of this page.
 
 **Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.2.0), not from memory.** Every endpoint
 and parameter below was enumerated from the vendored v2 spec. **Response shapes are a different
@@ -17,8 +19,8 @@ the two bulk composites and the resource-tag replace wrongly or not at all, and 
 the health probes, which are outside the API surface entirely. Where spec and server disagree, the
 server wins — see [`api.md`](api.md). The previous revision
 of this file was written against server 1.0.0 and had drifted — most visibly, it documented
-`Tags.Resolve` as taking `slug` + `application_id` when the endpoint takes four parameters. Since
-#8–#13 delegate to this file, that drift would have been copied into six resources. Re-derive rather
+`Tags.Resolve` as taking `slug` + `application_id` when the endpoint takes four parameters. #8–#13
+delegated to this file, so that drift would have been copied into six resources. Re-derive rather
 than edit if you suspect it has aged again.
 
 ## How to add a resource (the recipe)
@@ -52,7 +54,8 @@ Scoping is already handled by the transport and needs no per-resource work: `Wit
 `checkScopeCoherence` cover every resource at the chokepoint.
 
 The queue this section fed is empty; what follows is reference for the next resource the server adds
-— the namespace-field register, the one group the recipe does not cover, and the known gaps.
+— the namespace-field register, the one group the recipe does not cover, the one helper that needed
+answers before it needed code, and the known gaps.
 
 ## Namespace fields
 
@@ -100,27 +103,16 @@ What landed, and the constraints that shaped it — all four still bind anyone e
   `errors.Is(err, ErrUnreachable)` and produces no `*APIError` at all. Collapsing them loses the
   distinction an operator most needs.
 
-## Known gaps in implemented resources
+## `BuildTagTree` — implemented, and the four questions it had to answer first
 
-Each has an issue; none is a missing endpoint group.
-
-| Gap | Issue |
-| --- | ----- |
-| **The tags-ordering caveats want revisiting** once the server adds an `ORDER BY` to the annotated tags list (upstream `octonomy#162`). | [#49](https://github.com/octoverse-id/octonomy-go/issues/49) |
-
-Deferred by design, not a gap: the webhook typed-event surface and `http.Handler`
-([#22](https://github.com/octoverse-id/octonomy-go/issues/22) — no deployment emits webhooks, since
-`OUTBOX_TRANSPORT` defaults to `logging`, so those would be built for a consumer who does not exist,
-on payload shapes that may still move). The *verification* half of webhooks did not wait on an
-emitter and has shipped — see below.
-
-**The client-side tag-tree helper ([#20](https://github.com/octoverse-id/octonomy-go/issues/20)) is
-no longer deferred: `BuildTagTree` shipped in `tagtree.go`.** It was held back for wanting
+The client-side tag-tree helper ([#20](https://github.com/octoverse-id/octonomy-go/issues/20))
+shipped in `tagtree.go` with `v2.0.0-alpha.2`. It keeps a section here, rather than only a row in
+[`api.md`](api.md#implemented), because what it lacked was answers and not code: it wanted
 consumer-defined semantics — four questions (an absent parent, inactive rows, a cycle, a depth
 limit) with no answer that suits everybody — and it was the one expansion candidate with *no
 grounding in a server contract*. What unblocked it was finding that grounding: the server answers
 three of the four, and the fourth is a filter the caller already applies when fetching. Both load-
-bearing answers are now pinned by the integration suite rather than asserted —
+bearing answers are pinned by the integration suite rather than asserted —
 `TestIntegration_DeactivatedParentOrphansItsLiveChildren` and
 `TestIntegration_ParentCycleIsReachableAndRefused` — because each is a property of the server's
 persistence that no fixture can settle:
@@ -140,30 +132,63 @@ persistence that no fixture can settle:
   tree silently missing rows.
 - **Depth is reported, not limited** — a rendering decision that stays with the caller.
 
-## What is planned that is not a resource
+## Known gaps in implemented resources
 
-An empty resource queue is not an empty backlog. The
-[v2.0.0-alpha.2 milestone](https://github.com/octoverse-id/octonomy-go/milestone/3) is additive work
-alongside the client rather than inside it. Landed: the OpenAPI contract drift gate that would have
-caught this documentation's own drift automatically
+Each has an issue; none is a missing endpoint group. **The rows are a snapshot, taken 2026-09-14**
+— each links the issue that holds its live state, and what a row adds is the reasoning, not the
+status.
+
+| Gap | Issue |
+| --- | ----- |
+| **The tags-ordering caveats want revisiting** once the server adds an `ORDER BY` to the annotated tags list (upstream `octonomy#162`). | [#49](https://github.com/octoverse-id/octonomy-go/issues/49) |
+
+Deferred by design, not a gap: the webhook typed-event surface and `http.Handler`
+([#22](https://github.com/octoverse-id/octonomy-go/issues/22) — no deployment emits webhooks, since
+`OUTBOX_TRANSPORT` defaults to `logging`, so those would be built for a consumer who does not exist,
+on payload shapes that may still move). The *verification* half of webhooks did not wait on an
+emitter and has shipped — see below.
+
+## Work alongside the client rather than inside it
+
+An empty resource queue is not an empty backlog. Four pieces of this repository grew next to the
+client instead of in it, and all four are in: the OpenAPI contract drift gate that would have caught
+this page's own drift automatically
 ([#18](https://github.com/octoverse-id/octonomy-go/issues/18)), the full integration suite against
-the published container ([#17](https://github.com/octoverse-id/octonomy-go/issues/17)), and
-`octonomy/webhook` ([#16](https://github.com/octoverse-id/octonomy-go/issues/16)). Still open: a
-runnable example per resource group ([#19](https://github.com/octoverse-id/octonomy-go/issues/19)).
-Cutting `v2.0.0-alpha.1` itself was [#29](https://github.com/octoverse-id/octonomy-go/issues/29).
+the published container ([#17](https://github.com/octoverse-id/octonomy-go/issues/17)),
+`octonomy/webhook` ([#16](https://github.com/octoverse-id/octonomy-go/issues/16)), and a runnable
+example per resource group with `make dev-server` behind it
+([#19](https://github.com/octoverse-id/octonomy-go/issues/19)). They were the whole of the
+[v2.0.0-alpha.2 milestone](https://github.com/octoverse-id/octonomy-go/milestone/3), which closed
+with that release on 2026-09-13. Cutting `v2.0.0-alpha.1` before it was
+[#29](https://github.com/octoverse-id/octonomy-go/issues/29).
 
-### `octonomy/webhook` ([#16](https://github.com/octoverse-id/octonomy-go/issues/16))
+**What is open right now is a question for the tracker, and this page has stopped answering it** —
+[open issues](https://github.com/octoverse-id/octonomy-go/issues) and
+[open milestones](https://github.com/octoverse-id/octonomy-go/milestones?state=open) answer it live.
+Until [#68](https://github.com/octoverse-id/octonomy-go/issues/68) this paragraph kept a
+hand-maintained *Landed / Still open* split, and the open half was false within hours of #19
+closing; `make contract-check` compares the client to the contract and can see nothing about an
+issue's state, so nothing but a reader ever catches that. **The rule that replaced it: prose states
+what happened, links state what is true now.** A sentence about a closed issue, a shipped release,
+or a decision already taken cannot rot — which is why the paragraph
+above still names all five issues, in the past tense, and why the reasoning below is worth more than
+a status line ever was. A sentence about what remains open rots on someone else's schedule. Where a
+status has to be written out anyway, it is dated: the gaps table above carries the date it was
+taken.
 
-`Verify(secret, signatureHeader string, body []byte) error`, its distinct refusals, and portable
-signature vectors. One-way dependency: it may import the root package, and the root never imports it.
+### `octonomy/webhook` — why the verifier shipped without the typed events
+
+[#16](https://github.com/octoverse-id/octonomy-go/issues/16): `Verify(secret, signatureHeader
+string, body []byte) error`, its distinct refusals, and portable signature vectors. One-way
+dependency: it may import the root package, and the root never imports it.
 
 **It shipped ahead of the typed events it would normally come with, and the split is the design.**
 Verification is the half that is dangerous to get wrong — a `==` instead of `hmac.Equal` leaks
 timing, a body parsed before it is verified acts on unverified data, and **a broken check still
 returns 200**, so nothing ever reports it — and it is the half that stays correct no matter how
 payloads evolve, because it depends on the signature contract rather than on any event shape. The
-typed half is the opposite on both counts, which is why it waits for an emitter
-([#22](https://github.com/octoverse-id/octonomy-go/issues/22)).
+typed half is the opposite on both counts, which is why it was deferred to
+[#22](https://github.com/octoverse-id/octonomy-go/issues/22).
 
 **`Verify` takes `[]byte` and not an `*http.Request`, deliberately.** The HMAC is over the raw
 bytes, so a body any middleware, logger, or `json.NewDecoder(r.Body)` read first verifies as empty
