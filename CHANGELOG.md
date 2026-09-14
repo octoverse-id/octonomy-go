@@ -8,14 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The `vuln` CI job stopped running govulncheck at all, and took every merge with it.**
+  `golang/govulncheck-action` installs `golang.org/x/vuln/cmd/govulncheck@latest` and offers no
+  version input, while `actions/setup-go` exports `GOTOOLCHAIN=local` so the pinned Go really is the
+  Go used. When x/vuln v1.8.0 (2026-09-08) raised its own minimum to go 1.26, the install began
+  failing on `requires go >= 1.26.0 (running go 1.25.x; GOTOOLCHAIN=local)` and the scan never ran.
+  It broke on this line silently — the previous CI run here was 2026-08-26, cutting `v1.0.0` — and
+  because `vuln` is a required context on `support/go1.13`, a dark scanner was also blocking the
+  security fixes this line exists to receive. The job now installs with `GOTOOLCHAIN=auto` (which
+  applies to *building* the tool; the scan still uses the pinned Go, so standard-library advisories
+  stay reported against the version under test) and invokes `govulncheck` directly, so a failed
+  install is a failed step rather than a skipped scan. No advisories against this module: the 18
+  findings seen while reproducing were artifacts of a local go1.25.4, all fixed at or below
+  go1.25.13, and CI resolves `"1.25"` to a later patch. Same one-line fix applied to the install
+  hints in `docs/development.md` and the `Makefile`, which reproduce the identical error on a go1.25
+  toolchain. Ports [#45](https://github.com/octoverse-id/octonomy-go/pull/45) to this line (#70).
 - **Documentation only; no code change, and no version bump or tag is planned for it.** This branch
   carried its own copies of `main`'s documentation, written when `main` was a `/api/v1`-only client
   with two resource groups, and they had aged into false statements about it — most harmfully a line
   in `docs/versioning.md` telling a reader **not** to adopt the `/v2` module if they wanted REST v2
   endpoints, which is now backwards. Descriptions of the modern line are replaced by links to `main`'s
-  own files, so the same drift has nothing left to attach to (#51). Note the reach: pkg.go.dev renders the README of
-  the *released* version, so `v1.0.0`'s rendered page keeps the old text until some other fix cuts a
-  `v1.0.1`. This corrects what a reader sees on GitHub, which is where the two lines get compared.
+  own files, so the same drift has nothing left to attach to (#51). Note the reach: pkg.go.dev
+  renders the README of the *released* version, so `v1.0.0`'s rendered page keeps the old text until
+  some other fix cuts a `v1.0.1`. This corrects what a reader sees on GitHub, which is where the two
+  lines get compared.
 - **CI comments no longer paraphrase branch protection.** Two comments in `.github/workflows/ci.yml`,
   and the matching prose in `docs/development.md` and in this file's `1.0.0` entry, described the
   `go1.13` and smoke jobs as required by intent but unenforced. The contexts had since been added,
