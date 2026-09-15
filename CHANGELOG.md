@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-rc.1] - 2026-09-15
+
 ### Added
 - **`identityFields()` is a check rather than a convention**
   ([#76](https://github.com/octoverse-id/octonomy-go/issues/76)).
@@ -1287,7 +1289,8 @@ of all the default surface, which is now `/api/v2`.
 - `WithActor` per-request option, and `String`/`Bool`/`Int` pointer helpers for optional fields.
 - Runnable `examples/quickstart` program and a vendored `docs/openapi.yaml` contract reference.
 
-[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.2...main
+[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-rc.1...main
+[2.0.0-rc.1]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.2...v2.0.0-rc.1
 [2.0.0-alpha.2]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.1...v2.0.0-alpha.2
 [2.0.0-alpha.1]: https://github.com/octoverse-id/octonomy-go/releases/tag/v2.0.0-alpha.1
 
