@@ -76,11 +76,11 @@ var compositeTypes = map[string]bool{
 //     type alias for a response type, or an alias for []byte or error is
 //     rejected rather than resolved. That fails closed, no model uses those
 //     shapes, and resolving them properly means go/types.
-//   - It matches on BARE type names within this one package, which is sound only
-//     because Go makes package-level type names unique and forbids methods on
-//     types declared inside a function. A response type from another package
-//     would be neither resolved nor reported as unreadable, since the type
-//     argument is still a plain identifier after the import.
+//   - It matches on BARE type names within this one package. That is sound for
+//     package-level types, which Go makes unique, and type-parameter shadowing
+//     is resolved above. A type argument from ANOTHER package arrives as a
+//     qualified pkg.Type -- not a plain identifier -- so it is reported as
+//     unreadable rather than silently mismatched.
 func TestEveryResponseTypeCanRefuseAnEmptyDecode(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
@@ -291,14 +291,54 @@ func responseTypes(files map[string]*ast.File) (map[string]string, []string) {
 	return found, unresolved
 }
 
+// typeParamNames collects the type-parameter names in scope for one
+// declaration -- the function's own, AND the RECEIVER's.
+//
+// The receiver half is not a formality. Go lets a generic method's receiver
+// declare its own type-parameter names, and they shadow package-level types:
+//
+//	func (s loader[Tag]) Get(ctx context.Context) (*Tag, error) {
+//		return doData[Tag](ctx, s.client, http.MethodGet, "/tags/1", nil, nil)
+//	}
+//
+// That `Tag` is a type parameter, not the package's Tag. Reading only
+// fn.Type.TypeParams recorded it as the concrete type, found the real
+// Tag.identityFields, and passed -- while loader[string].Get actually decodes a
+// string, which requireIdentity skips in silence. It is the one collision in
+// this guard that fails OPEN, which is why it is resolved rather than noted.
 func typeParamNames(fn *ast.FuncDecl) map[string]bool {
 	out := map[string]bool{}
-	if fn.Type == nil || fn.Type.TypeParams == nil {
-		return out
+	if fn.Type != nil && fn.Type.TypeParams != nil {
+		for _, param := range fn.Type.TypeParams.List {
+			for _, name := range param.Names {
+				out[name.Name] = true
+			}
+		}
 	}
-	for _, param := range fn.Type.TypeParams.List {
-		for _, name := range param.Names {
-			out[name.Name] = true
+	if fn.Recv != nil && len(fn.Recv.List) > 0 {
+		for _, name := range receiverTypeParams(fn.Recv.List[0].Type) {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// receiverTypeParams reads the names a generic receiver declares, through a
+// pointer and through parentheses.
+func receiverTypeParams(expr ast.Expr) []string {
+	var out []string
+	switch recv := ast.Unparen(expr).(type) {
+	case *ast.StarExpr:
+		return receiverTypeParams(recv.X)
+	case *ast.IndexExpr:
+		if ident, ok := ast.Unparen(recv.Index).(*ast.Ident); ok {
+			out = append(out, ident.Name)
+		}
+	case *ast.IndexListExpr:
+		for _, index := range recv.Indices {
+			if ident, ok := ast.Unparen(index).(*ast.Ident); ok {
+				out = append(out, ident.Name)
+			}
 		}
 	}
 	return out
@@ -432,6 +472,27 @@ func TestResponseTypesCollectsWhatTheTransportDecodes(t *testing.T) {
 			name: "a transport helper bound at package level",
 			src:  `var decodeWidget = doData[Widget]`,
 			want: []string{"Widget"},
+		},
+		{
+			// A generic method's RECEIVER may declare type-parameter names, and
+			// they shadow package-level types. Reading only the function's own
+			// type parameters recorded this `Tag` as the concrete package type,
+			// found the real Tag.identityFields and passed -- while
+			// loader[string].Get decodes a string that requireIdentity skips.
+			// The one collision in this guard that failed OPEN.
+			name:       "a receiver type parameter shadowing a real type",
+			src:        `func (s loader[Tag]) Get(ctx context.Context) (*Tag, error) { return doData[Tag](ctx, s.client, http.MethodGet, "/t", nil, nil) }`,
+			unresolved: 1,
+		},
+		{
+			name:       "the same through a pointer receiver",
+			src:        `func (s *loader[Tag]) Get(ctx context.Context) (*Tag, error) { return doData[Tag](ctx, s.client, http.MethodGet, "/t", nil, nil) }`,
+			unresolved: 1,
+		},
+		{
+			name:       "and with several receiver type parameters",
+			src:        `func (s loader[K, Tag]) List(ctx context.Context) (*Tag, error) { return doList[Tag](ctx, s.client, http.MethodGet, "/t", nil) }`,
+			unresolved: 1,
 		},
 		{
 			name: "parentheses do not hide the call",
