@@ -51,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     says so in the table rather than leaving it to be discovered.
 
 ### Documentation
+- **The `/api/v2`-by-default decision is now a gate item for `v2.0.0`, not an epic's footnote**
+  ([#21](https://github.com/octoverse-id/octonomy-go/issues/21)). Defaulting to `/api/v2` is a
+  wire-level change against a pre-2.0 deployment, and it was accepted for the prerelease line on two
+  conditions: that the resulting failure be made loud, and that the default itself be revisited
+  before the line goes stable. The first shipped with `v2.0.0-alpha.1` — an envelope-less non-2xx no
+  longer becomes a semantic code, so `IsNotFound` stopped reporting true for a bare 404. The second
+  was held only by the epic's risk table, and an epic closes. It is now the fifth criterion in
+  [`docs/versioning.md`](docs/versioning.md)'s alpha-exit gate, where the person dropping the
+  prerelease suffix will read it.
 - **The resource recipe is complete, and has one home instead of four**
   ([#73](https://github.com/octoverse-id/octonomy-go/issues/73)). `docs/roadmap.md` omitted five
   requirements this repository states elsewhere and depends on — the `docs/contract-coverage.yaml`
