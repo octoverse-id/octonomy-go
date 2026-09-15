@@ -115,10 +115,10 @@ proxy query below is.
 
 ## Release state
 
-| Line | Latest tag | State |
+| Line | Stamped version | State |
 | ---- | ---------- | ----- |
-| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` (2026-08-26) | Released. Frozen — security fixes only, sunset 2027-08-31 |
-| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-rc.1` | Active. Prerelease until API freeze — the five criteria are [above](#modern-line-pre-stability), and the `/api/v2`-by-default one is still open. **A candidate is where breaking changes stop:** during the alphas one could ride a version bump, and `v2.0.0-alpha.2` ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) carried one; a break now supersedes the candidate instead. Each tag follows its release PR, so the proxy check below is what says a version is live |
+| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` — tagged 2026-08-26 | Released. Frozen — security fixes only, sunset 2027-08-31 |
+| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-rc.1` — what `version.go` reads on this branch. **Whether its tag is pushed is the proxy query below**, never this row | Active. Prerelease until API freeze — the five criteria are [above](#modern-line-pre-stability), and the `/api/v2`-by-default one is still open. **A candidate is where breaking changes stop:** during the alphas one could ride a version bump, and `v2.0.0-alpha.2` ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) carried one; a break now supersedes the candidate instead. Each tag follows its release PR, so the proxy check below is what says a version is live |
 
 **There is no published `v0.x`, and never was.** The `## [0.1.0]` heading `CHANGELOG.md` used to
 carry described an early state of the tree, not a release; its contents are now filed under
@@ -134,9 +134,14 @@ v1.0.0                                      # the compat line, and no v0.x above
 $ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octoverse-id/octonomy-go/v2/@v/list
 v2.0.0-alpha.1                              # one row per pushed tag, and a tag that has never been
 v2.0.0-alpha.2                              # pushed is simply absent -- the proxy fetches on first ask
-v2.0.0-rc.1
 [HTTP 200]
 ```
+
+**That output is an example, not a current listing, and it is deliberately one release behind.** A
+version this tree has been stamped for does not appear until step 8 of
+[release.md](release.md#cutting-a-release) pushes its tag, so pasting a freshly cut version in here
+would assert a release the repository has not made — which is the one thing the release procedure
+says prose on a release branch must not do. Run the command; do not read this block as the answer.
 
 Read that for what it is: the proxy's **current** view of **tagged** versions. `@v/list` deliberately
 omits pseudo-versions, so an empty list means "nothing is released", not "nothing resolves". Keep
@@ -147,6 +152,7 @@ authoritative check for a release you just cut is step 8 of [release.md](release
 
 > **What `version.go` says, and what it does not.** The `Version` constant reads `2.0.0-rc.1` —
 > the version this tree was cut as, and the one its tag carries once [release.md](release.md) step 8
+> pushes it, and which step 9 then verifies against the proxy
 > pushes it — so the default User-Agent is `octonomy-go/2.0.0-rc.1`. It moves **only** in a release
 > PR (see [Where this shows up](#where-this-shows-up)), which is what keeps it meaningful, and it
 > names this line's latest release from the moment that tag is live until the next release PR moves

@@ -21,10 +21,10 @@ See [versioning.md](versioning.md). `Version` in `version.go` is canonical and m
 make release-check
 ```
 
-This runs `require-tools`, `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`, `examples`, and
-`version-check`.
+This runs `require-tools`, then `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`,
+`examples`, `version-check`, and `contract-check`.
 
-**A green `release-check` means all seven ran.** `require-tools` goes first and fails the gate when
+**A green `release-check` means all eight ran** — the count the target prints on success. `require-tools` goes first and fails the gate when
 `golangci-lint` or `govulncheck` is missing, naming each absent binary and its install command, so
 the exit status can be trusted without reading the output. Standalone `make lint` and `make vuln`
 still skip with a notice when their tool is absent — the strictness belongs to the release gate, not
@@ -201,7 +201,10 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
    head -1 go.mod                       # last chance: must match MODULE
    git tag -a TAG -m TAG
    git push origin TAG
-   gh release create TAG --title TAG --notes-from-tag        # --prerelease if TAG has a suffix
+   # Drop --prerelease ONLY for a stable TAG. Text after # is a comment, so a
+   # flag parked there is not passed -- which is how a prerelease gets published
+   # as an ordinary release.
+   gh release create TAG --title TAG --notes-from-tag --prerelease
    ```
    Go modules require the `v` prefix on the tag, which is why `TAG` and `VERSION` are separate here.
 

@@ -167,14 +167,18 @@ every type handed to `doData` or `doList` must either implement `identityFields(
 naming its row identity — or declare `UnmarshalJSON` — a composite, requiring its keys instead. Both
 halves are decidable from the source, which is what made it possible.
 
-**Step 8 is deliberately not getting the same treatment yet**
-([#77](https://github.com/octoverse-id/octonomy-go/issues/77)), and the reason is the rule this page
-already states. What would have to be true is that the walk *meaningfully asserts* a new shape
-against a real server, and the nearest syntactic proxy — the type name appearing somewhere in
-`integration_test.go` — is satisfied by a comment or an unused reference. A check reporting "covered"
-on that basis would make the step look enforced while leaving #32's class reachable, and would take
-the reviewer's attention away at the same time. A reviewer stands behind step 8, the table above says
-so, and #77 records what would change it.
+**Step 8 is not getting the same treatment yet**
+([#77](https://github.com/octoverse-id/octonomy-go/issues/77)), and the honest reason is cost rather
+than impossibility. The nearest *cheap* proxy — the type name appearing somewhere in
+`integration_test.go` — is satisfied by a comment or an unused reference, and a check reporting
+"covered" on that basis would make the step look enforced while leaving #32's class reachable. But a
+real one does exist, and #77 records it: give the smoke walk an executable registry keyed by response
+type, require each entry's closure to call the matching client method, and compare the registry's
+keys against the source-derived set of response types — the shape `readProbes` already has. That
+would not prove an assertion is meaningful, but it would make a silent omission impossible, which is
+the failure that actually happens. It is a restructuring of the smoke walk, which is why it is an
+issue and not this pull request. Until then a reviewer stands behind step 8 and the table above says
+so.
 
 ### Why this page carries the recipe
 

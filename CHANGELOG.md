@@ -39,9 +39,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     a sound. `{"data": {"id": null}}` or a renamed id then decodes to a zero-valued resource behind a
     `nil` error, which is [#40](https://github.com/octoverse-id/octonomy-go/issues/40), the same
     family as #32.
-  - **What it does not do**, stated next to the code: it proves a mechanism exists, never that the
-    field named is the right one, and it does not reach nested resources the contract marks
-    `required` — that is a fact about `openapi-v2.yaml` rather than about Go source.
+  - **Receiver kind is part of the rule**, and getting that wrong was the guard's own first defect.
+    `doData`/`doList` call `requireIdentity(out, …)` with a **value**, so a pointer-receiver
+    `identityFields` is not in the method set consulted — such a model compiles, reads correctly,
+    and is skipped at runtime exactly as if the method were absent. `json.Unmarshal` is handed
+    `&out`, so `UnmarshalJSON` is the mirror image and must be on the pointer. The first draft
+    credited either receiver for either method, certifying a shape the runtime ignores; the guard
+    now checks receiver kind and full signature, and the fixtures assert both failures.
+  - **Composites are declared, not inferred.** The first draft let *any* `UnmarshalJSON` excuse a
+    type from `identityFields`, so a resource that grew a custom decoder for an unrelated reason
+    would have been excused from the check that matters. `compositeTypes` is a written list,
+    verified against the source in both directions.
+  - **A generic wrapper fails rather than hiding a type.** A transport helper handed its caller's
+    type parameter is reported, because the concrete instantiation reaches it from call sites this
+    guard does not follow. Type parameters are tracked per declaration, so an unrelated
+    `helper[Widget any]` cannot mask a real `doData[Widget]` in the same file.
+  - **What it does not do**, stated next to the code: it proves a mechanism exists with the right
+    shape, never that it is *right* — a model naming the wrong field satisfies it. It does not reach
+    nested resources the contract marks `required`, which is a fact about `openapi-v2.yaml` rather
+    than about Go source. And nothing proves a type listed in `compositeTypes` is genuinely a
+    composite rather than a resource someone wanted to excuse.
   - This is the second of the three requirements #73 found unguarded. The third, the smoke assertion,
     is deliberately staying with a reviewer ([#77](https://github.com/octoverse-id/octonomy-go/issues/77)):
     what would have to be checked is that the walk *meaningfully asserts* a shape, and the nearest
@@ -86,8 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     only when the container did would be absent from exactly the pull request that adds a read
     method. `TestUpdateBodiesTagEveryOptionalOmitzero` and `TestVerifyComparesDigestsInConstantTime`
     are the precedents for reading this repository's own source to enforce a rule about it.
-  - `identityFields()` and the smoke assertion are still enforced by nothing, and the recipe now
-    says so in the table rather than leaving it to be discovered.
+  - **As #73 landed**, `identityFields()` and the smoke assertion were both still enforced by
+    nothing, and the recipe said so in a table rather than leaving it to be discovered.
+    `identityFields()` got its guard later in this same release (#76, above); the smoke assertion
+    is deliberately still a reviewer's job ([#77](https://github.com/octoverse-id/octonomy-go/issues/77)).
 
 ### Documentation
 - **The `/api/v2`-by-default decision is now a gate item for `v2.0.0`, not an epic's footnote**
