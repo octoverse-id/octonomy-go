@@ -28,19 +28,18 @@
 // (go1.13.15, August 2020, was its last release), so pinning there is an informed
 // trade rather than a safe harbour. See docs/versioning.md and SECURITY.md.
 //
-// This tree is v2.0.0-rc.1, the modern line's current release and a prerelease
-// on purpose; v2.0.0-alpha.1 was the first, and the alphas ran to alpha.2. go
-// get on the /v2 path resolves the highest prerelease without anyone naming a
-// version, because the go command prefers a prerelease when no stable release of
-// that major exists. The prerelease suffix comes off at API FREEZE, not at some
-// endpoint count: no further breaking changes intended, real-server integration
-// green, docs current, one release candidate validated, and the /api/v2-by-
-// default decision revisited (docs/versioning.md). A CANDIDATE is the point at
-// which no further break is intended -- during the alphas one could ride a
-// version bump, and v2.0.0-alpha.2 carried one, the three *Update structs' field
-// types (#64). A break that proves necessary now supersedes this candidate with
-// another rather than riding it. The compat line is released separately at
-// v1.0.0.
+// This tree is v2.0.0-alpha.3, the modern line's current release and a
+// prerelease on purpose; v2.0.0-alpha.1 was the first. go get on the /v2 path
+// resolves the highest prerelease without anyone naming a version, because the
+// go command prefers a prerelease when no stable release of that major exists.
+// The -alpha.N suffix comes off at API FREEZE, not at some endpoint count: no
+// further breaking changes intended, real-server integration green, docs
+// current, the /api/v2-by-default decision revisited (settled 2026-09-15 --
+// docs/versioning.md), and one release candidate validated. That last one is
+// what remains. Until a candidate, a necessary break may ride an alpha bump,
+// documented in the CHANGELOG -- v2.0.0-alpha.2 carried one, the three *Update
+// structs' field types (#64); a CANDIDATE is where that stops. The compat line
+// is released separately at v1.0.0.
 //
 // No v0.x of either line was ever published. The Version constant read "0.1.0"
 // until this release -- a placeholder from before anything was released, which

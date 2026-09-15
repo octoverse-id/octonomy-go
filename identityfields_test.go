@@ -69,7 +69,13 @@ var compositeTypes = map[string]bool{
 //     source, and the place the first draft of this rule got ResourceTag wrong.
 //   - compositeTypes is a declared list. It is verified against the source in
 //     both directions, but nothing proves a type listed there is genuinely a
-//     composite rather than a resource someone wanted to excuse.
+//     composite rather than a resource someone wanted to excuse. It is an escape
+//     hatch; it is just one that takes a reviewed edit rather than happening by
+//     itself.
+//   - It reads DIRECT methods and CANONICAL type spellings. A promoted method, a
+//     type alias for a response type, or an alias for []byte or error is
+//     rejected rather than resolved. That fails closed, no model uses those
+//     shapes, and resolving them properly means go/types.
 func TestEveryResponseTypeCanRefuseAnEmptyDecode(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
@@ -221,28 +227,34 @@ func responseTypes(files map[string]*ast.File) (map[string]string, []string) {
 
 	for path, file := range files {
 		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
+			// A declaration's own type parameters, if it has any. A GenDecl --
+			// `var decodeWidget = doData[Widget]` at package level -- has none,
+			// and is walked for the same reason: it instantiates the helper.
+			var scope ast.Node = decl
+			params := map[string]bool{}
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				params = typeParamNames(fn)
 			}
-			params := typeParamNames(fn)
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
+			ast.Inspect(scope, func(n ast.Node) bool {
+				// Every INSTANTIATION of a transport helper, wherever it appears
+				// -- not only one sitting in callee position. `decode :=
+				// doData[Widget]` and a package-level `var d = doList[Widget]`
+				// instantiate it just as much as calling it does, and matching
+				// only `doData[Widget](…)` lost the type entirely: not collected,
+				// not reported, and the floor cannot see a twelfth type that
+				// never arrived.
 				var args []ast.Expr
-				switch fun := ast.Unparen(call.Fun).(type) {
+				switch node := n.(type) {
 				case *ast.IndexExpr:
-					if !isTransportGeneric(fun.X) {
+					if !isTransportGeneric(node.X) {
 						return true
 					}
-					args = []ast.Expr{fun.Index}
+					args = []ast.Expr{node.Index}
 				case *ast.IndexListExpr:
-					if !isTransportGeneric(fun.X) {
+					if !isTransportGeneric(node.X) {
 						return true
 					}
-					args = fun.Indices
+					args = node.Indices
 				default:
 					return true
 				}
@@ -259,7 +271,7 @@ func responseTypes(files map[string]*ast.File) (map[string]string, []string) {
 					// earlier revision skipped it, and a wrapper was then enough
 					// to drop a response type out of the guard entirely.
 					if params[ident.Name] {
-						unresolved = append(unresolved, path+" ("+fn.Name.Name+" is generic over "+ident.Name+")")
+						unresolved = append(unresolved, path+" (a wrapper generic over "+ident.Name+")")
 						continue
 					}
 					if _, seen := found[ident.Name]; !seen {
@@ -403,6 +415,19 @@ func TestResponseTypesCollectsWhatTheTransportDecodes(t *testing.T) {
 			want: []string{"Widget"},
 		},
 		{
+			// An instantiation that is never in callee position. Matching only
+			// `doData[Widget](…)` lost this one silently, and the floor cannot
+			// notice a twelfth type that never arrived.
+			name: "a transport helper bound to a local variable",
+			src:  `func (s *S) Get(ctx context.Context) error { decode := doData[Widget]; return decode(ctx) }`,
+			want: []string{"Widget"},
+		},
+		{
+			name: "a transport helper bound at package level",
+			src:  `var decodeWidget = doData[Widget]`,
+			want: []string{"Widget"},
+		},
+		{
 			name: "parentheses do not hide the call",
 			src:  `func (s *S) Get(ctx context.Context) error { return (doData[Vocabulary])(ctx, s.client, http.MethodGet, "/v", nil, nil) }`,
 			want: []string{"Vocabulary"},
@@ -478,7 +503,10 @@ func TestIdentityMechanismsMatchWhatTheRuntimeCalls(t *testing.T) {
 			wantDecoderOK: true,
 		},
 		{
-			name: "a value-receiver decoder is never called", typ: "BulkAssignResult",
+			// *T's method set DOES include T's value methods, so json.Unmarshal
+			// calls this one -- on a copy. It cannot populate the value being
+			// decoded, which is the same silent nothing as not having it.
+			name: "a value-receiver decoder cannot populate the value", typ: "BulkAssignResult",
 			src:           `func (r BulkAssignResult) UnmarshalJSON(data []byte) error { return nil }`,
 			wantDecoderOK: false,
 		},

@@ -9,8 +9,8 @@ multi-application tag management and taxonomy service. This SDK is a hand-writte
 (standard library only) client for the REST **v2** API, with `/api/v1` available as a configuration
 option.
 
-> **This tree is `v2.0.0-rc.1`**, the modern line's current release and a prerelease on purpose
-> (`v2.0.0-alpha.1` was the first; the alphas ran to `alpha.2`). Every resource group the vendored contracts publish is
+> **This tree is `v2.0.0-alpha.3`**, the modern line's current release and a prerelease on purpose
+> (`v2.0.0-alpha.1` was the first). Every resource group the vendored contracts publish is
 > implemented — see [Implemented resources](#implemented-resources). `go get` on the `/v2` path
 > resolves the highest prerelease without anyone naming a version, since Go prefers a prerelease when
 > no stable release of that major exists. **The git tag is what publishes a Go module** — the GitHub
@@ -19,13 +19,12 @@ option.
 > [versioning.md](docs/versioning.md#release-state) is what settles which versions are fetchable; a
 > version bump lands with the release PR and the tag follows it.
 >
-> The prerelease suffix comes off at **API freeze**, not at an endpoint count — the five criteria are
-> in [versioning.md](docs/versioning.md#modern-line-pre-stability), and one of them, the
-> `/api/v2`-by-default decision, is still open. **A release candidate is the point at which no
-> further break is intended.** During the alphas one could ride a version bump, and `v2.0.0-alpha.2`
-> carried one, changing the field types on the three `*Update` structs
-> ([#64](https://github.com/octoverse-id/octonomy-go/issues/64)); a break that proves necessary now
-> supersedes this candidate with another rather than riding it. The **compat** line is released separately:
+> The `-alpha.N` suffix comes off at **API freeze**, not at an endpoint count — the five criteria are
+> in [versioning.md](docs/versioning.md#modern-line-pre-stability), and four are met: what remains is
+> a validated release candidate. Until then a necessary breaking change may ride an alpha bump, as
+> `v2.0.0-alpha.2` did, changing the field types on the three `*Update` structs
+> ([#64](https://github.com/octoverse-id/octonomy-go/issues/64)). **A release candidate is where that
+> stops**, so `v2.0.0-rc.1` will mean the surface is frozen. The **compat** line is released separately:
 > `v1.0.0`, tagged 2026-08-26 on `support/go1.13`. There has never been a `v0.x` of either line. See
 > [versioning.md](docs/versioning.md) for both lines and their support policies.
 

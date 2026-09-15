@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.0.0-rc.1] - 2026-09-15
+## [2.0.0-alpha.3] - 2026-09-15
 
 ### Changed
 - **The release runbook names every site that carries the version, and there are five**
@@ -109,6 +109,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     is deliberately still a reviewer's job ([#77](https://github.com/octoverse-id/octonomy-go/issues/77)).
 
 ### Documentation
+- **The `/api/v2` default was revisited, and kept** — the fifth alpha-exit criterion is now
+  answered, and four of the five are met. `Config.APIVersion` continues to default to `/api/v2`:
+  server 3.2.0 makes it the primary advertised surface and the only one carrying the namespace axis,
+  so defaulting to `v1` would ship an SDK whose out-of-the-box behaviour ignored the dimension the
+  server added. `/api/v1` stays fully supported behind one field. **Flipping the default was
+  refused** — it breaks the current alpha line, points new consumers at the surface the server no
+  longer advertises, and trades a loud one-line fix for a quiet wrong-surface default nothing would
+  report. The reasoning is in [`docs/versioning.md`](docs/versioning.md#the-apiv2-default-revisited-and-kept).
+  What remains before `v2.0.0` is a validated release candidate.
 - **The `/api/v2`-by-default decision is now a gate item for `v2.0.0`, not an epic's footnote**
   ([#21](https://github.com/octoverse-id/octonomy-go/issues/21)). Defaulting to `/api/v2` is a
   wire-level change against a pre-2.0 deployment, and it was accepted for the prerelease line on two
@@ -1324,8 +1333,8 @@ of all the default surface, which is now `/api/v2`.
 - `WithActor` per-request option, and `String`/`Bool`/`Int` pointer helpers for optional fields.
 - Runnable `examples/quickstart` program and a vendored `docs/openapi.yaml` contract reference.
 
-[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-rc.1...main
-[2.0.0-rc.1]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.2...v2.0.0-rc.1
+[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.3...main
+[2.0.0-alpha.3]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.2...v2.0.0-alpha.3
 [2.0.0-alpha.2]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.1...v2.0.0-alpha.2
 [2.0.0-alpha.1]: https://github.com/octoverse-id/octonomy-go/releases/tag/v2.0.0-alpha.1
 
