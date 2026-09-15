@@ -78,7 +78,23 @@ older plan document, this paragraph supersedes them.
 The modern line is versioned `v2.0.0-alpha.N` until the API is frozen. The gate for dropping the
 prerelease suffix is **not** resource coverage — counting endpoints says nothing about whether the API
 has stopped moving. It is: no further breaking changes intended, real-server integration green, docs
-current, and one release candidate validated.
+current, one release candidate validated, and **the `/api/v2`-by-default decision revisited**.
+
+**That last item is a commitment this line made and has not yet kept.** `Config.APIVersion` defaults
+to `/api/v2`, which is a wire-level change against a deployment that does not route it: a pre-2.0
+server answers an unrouted 404, and the SDK has no version handshake to detect one with. The default
+was accepted for the prerelease line on two conditions, recorded in
+[#21](https://github.com/octoverse-id/octonomy-go/issues/21)'s risk table. The first has been met —
+an envelope-less non-2xx no longer becomes a semantic code, so a bare 404 is `CodeUnexpectedStatus`
+and `IsNotFound` no longer reports true for one (`errors.go`, and the note in
+[README](../README.md#errors)), which is what made the misconfiguration loud instead of silent. **The
+second was to revisit the default itself before the line goes stable, and that is this gate.**
+
+It is here rather than in the tracker because the epic that accepted the risk is the only thing that
+ever held it, and an epic closes. Whatever is decided, write the decision down: `go get` resolves a
+stable `v2.0.0` in preference to any prerelease, so the first person to adopt this line without
+naming a version is the one who finds out what the default is. Keeping the v2 default is a choice
+with a reason, not the absence of one.
 
 **`v2.0.0-alpha.1` was the first `v2` version**, cut in
 [#29](https://github.com/octoverse-id/octonomy-go/issues/29); `v2.0.0-alpha.2`
