@@ -76,7 +76,7 @@ levels of completeness is how the recipe came to be missing five of its own step
 step must look like; the recipe says what the steps are, and in what order.
 
 **A green CI run does not mean the resource is complete.** Of the five safeguards that recipe was
-missing before [#73](https://github.com/octoverse-id/octonomy-go/issues/73), two are still enforced
+missing before [#73](https://github.com/octoverse-id/octonomy-go/issues/73), one is still enforced
 by nothing at all, and each exists because of a defect this repository already shipped. Which is
 which is in the recipe's [enforcement table](docs/roadmap.md#which-of-these-steps-anything-catches)
 — kept there rather than repeated here, so the two cannot come apart. That table covers those five,

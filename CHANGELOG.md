@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`identityFields()` is a check rather than a convention**
+  ([#76](https://github.com/octoverse-id/octonomy-go/issues/76)).
+  `TestEveryResponseTypeCanRefuseAnEmptyDecode` (`identityfields_test.go`) collects every type handed
+  to `doData` or `doList` and requires each to carry one of the two mechanisms the rule allows: a
+  **resource** implements `identityFields()`, naming the field that identifies its row; a
+  **composite** has no row identity and requires its keys in `UnmarshalJSON` instead. `TagResolution`
+  is both. Eleven response types today, eleven satisfy it, and a type the guard cannot classify fails
+  rather than passing.
+  - **Why it was silent.** `requireIdentity` type-asserts and returns `nil` for a model that does not
+    implement the interface, so skipping the method did not weaken the check — it removed it, without
+    a sound. `{"data": {"id": null}}` or a renamed id then decodes to a zero-valued resource behind a
+    `nil` error, which is [#40](https://github.com/octoverse-id/octonomy-go/issues/40), the same
+    family as #32.
+  - **What it does not do**, stated next to the code: it proves a mechanism exists, never that the
+    field named is the right one, and it does not reach nested resources the contract marks
+    `required` — that is a fact about `openapi-v2.yaml` rather than about Go source.
+  - This is the second of the three requirements #73 found unguarded. The third, the smoke assertion,
+    is deliberately staying with a reviewer ([#77](https://github.com/octoverse-id/octonomy-go/issues/77)):
+    what would have to be checked is that the walk *meaningfully asserts* a shape, and the nearest
+    syntactic proxy is satisfied by a comment. A check reporting "covered" on that basis would make
+    the step look enforced while leaving #32's class reachable.
 - **`readProbes` exhaustiveness is a check rather than a doc comment**
   ([#73](https://github.com/octoverse-id/octonomy-go/issues/73)).
   `TestEveryReadMethodHasANamespaceProbe` (`readprobes_test.go`) resolves each exported service
