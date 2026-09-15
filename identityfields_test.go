@@ -78,9 +78,12 @@ var compositeTypes = map[string]bool{
 //     shapes, and resolving them properly means go/types.
 //   - It matches on BARE type names within this one package. That is sound for
 //     package-level types, which Go makes unique, and type-parameter shadowing
-//     is resolved above. A type argument from ANOTHER package arrives as a
-//     qualified pkg.Type -- not a plain identifier -- so it is reported as
-//     unreadable rather than silently mismatched.
+//     is resolved above. A type argument from ANOTHER package normally arrives
+//     qualified as pkg.Type -- not a plain identifier -- so it is reported as
+//     unreadable. The exception is a DOT IMPORT, which would put another
+//     package's Tag into scope under the bare name and let it be credited
+//     against this package's. Rather than rely on staticcheck's ST1001 to keep
+//     that out, a file with a dot import is refused outright below.
 func TestEveryResponseTypeCanRefuseAnEmptyDecode(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
@@ -232,6 +235,16 @@ func responseTypes(files map[string]*ast.File) (map[string]string, []string) {
 	var unresolved []string
 
 	for path, file := range files {
+		// A DOT IMPORT puts another package's exported names into this file's
+		// scope under their bare names, which is exactly what this guard resolves
+		// by. `. "debug/dwarf"` would make a doData[Tag] here credit the SDK's
+		// own Tag.identityFields while the runtime decodes dwarf.Tag. staticcheck
+		// (ST1001) already rejects dot imports in this repository; the guard does
+		// not depend on that holding.
+		if dotImported(file) {
+			unresolved = append(unresolved, path+" (dot import: bare type names are ambiguous here)")
+			continue
+		}
 		for _, decl := range file.Decls {
 			// A declaration's own type parameters, if it has any. A GenDecl --
 			// `var decodeWidget = doData[Widget]` at package level -- has none,
@@ -342,6 +355,16 @@ func receiverTypeParams(expr ast.Expr) []string {
 		}
 	}
 	return out
+}
+
+// dotImported reports whether a file dot-imports another package.
+func dotImported(file *ast.File) bool {
+	for _, imp := range file.Imports {
+		if imp.Name != nil && imp.Name.Name == "." {
+			return true
+		}
+	}
+	return false
 }
 
 func isTransportGeneric(fun ast.Expr) bool {
@@ -502,6 +525,15 @@ func TestResponseTypesCollectsWhatTheTransportDecodes(t *testing.T) {
 		{
 			name:       "a type argument that is not a plain name",
 			src:        `func (s *S) Get(ctx context.Context) error { return doData[List[Tag]](ctx, s.client, http.MethodGet, "/x", nil, nil) }`,
+			unresolved: 1,
+		},
+		{
+			// A dot import puts another package's exported names into scope under
+			// their bare names -- `. "debug/dwarf"` brings a Tag -- which is
+			// exactly what this guard resolves by. The file is refused rather
+			// than guessed at.
+			name:       "a dot-imported file is refused",
+			src:        `import . "debug/dwarf"` + "\n" + `func (s *S) Get(ctx context.Context) error { return doData[Tag](ctx, s.client, http.MethodGet, "/t", nil, nil) }`,
 			unresolved: 1,
 		},
 		{

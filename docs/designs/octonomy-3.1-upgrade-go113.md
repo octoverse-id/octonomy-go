@@ -476,7 +476,7 @@ and `Each[T]` offset drift (the server has no cursor).
 ```
   CURRENT                        THIS PLAN                        12-MONTH IDEAL
   v1 @ server 1.0.0        -->  compat: v1 frozen           -->  contract-locked client
-                                 main: v1 + v2 primary            v2 default at 1.0.0
+                                 main: v1 + v2 primary            v2 default (settled 2026-09-15)
   2 of 8 resource groups   -->  8 of 8 on main              -->  drift gate keeps it true
   no namespace concept     -->  per-request namespace       -->  namespaces routine
   Go 1.24 floor            -->  two lines, stated sunset    -->  one line, modern only
@@ -798,7 +798,7 @@ Rev 5 supersedes the rev-1..4 staging numbers: **v1.0.0** (compat), **v2.0.0-alp
 | 7A | Coverage floor at 82.6%, ratcheting, `examples/` excluded, **separate baseline per branch** | Adopted |
 | 8A | Cap response reads in `do()` with a named error | Adopted, **both lines** |
 | T1 | Compat line version number | **User chose `v1.0.0`** over my and Codex's recommendation of `v0.2.x`. Defensible: for a genuinely frozen line, `v1.x` is honest under SemVer — a stable API is what frozen means. The unusual part is refusing bug fixes, which is a support-policy choice, not a versioning violation |
-| T2 | `/v2` REST-version scope | **Keep both REST versions.** Codex argued for REST-v2-only (deleting `APIVersion`, the v1 guard, and dual tests). Rejected because it conflates two independent axes and would strand modern-Go services on pre-3.0 servers |
+| T2 | `/v2` REST-version scope | **Keep both REST versions.** Codex argued for REST-v2-only (deleting `APIVersion`, the v1 guard, and dual tests). Rejected because it conflates two independent axes and would strand modern-Go services on pre-2.0 servers (**corrected from "pre-3.0": Correction 36 establishes the `/api/v2` cutoff as server 2.0, and this table was written before it**) |
 
 ## Mandated regression test (IRON RULE — not optional)
 
