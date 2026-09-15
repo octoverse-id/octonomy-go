@@ -83,7 +83,10 @@ var compositeTypes = map[string]bool{
 //     unreadable. The exception is a DOT IMPORT, which would put another
 //     package's Tag into scope under the bare name and let it be credited
 //     against this package's. Rather than rely on staticcheck's ST1001 to keep
-//     that out, a file with a dot import is refused outright below.
+//     that out, a file with a dot import is refused outright below. A local
+//     alias -- `type Tag = dwarf.Tag` inside a function -- would shadow the same
+//     way and is NOT detected; no production code here uses one, and catching it
+//     properly means go/types rather than another special case.
 func TestEveryResponseTypeCanRefuseAnEmptyDecode(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {

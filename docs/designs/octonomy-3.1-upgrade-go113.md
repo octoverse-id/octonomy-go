@@ -550,7 +550,9 @@ Also: all four jobs use `actions/setup-go@v7` with `cache: true`, and setup-go's
 **`ResourceTag`**. Rev 2 omitted the last two — exactly the ones owned by the audit-logs and
 resource-tags issues.
 
-**Correction 17 — the v2 default fails INTO `IsNotFound`, and rev 2 understated it.** A pre-3.0 server
+**Correction 17 — the v2 default fails INTO `IsNotFound`, and rev 2 understated it.** *(Read with
+Correction 36 below: the cutoff is server **2.0**, not 3.0. The text is left as written, since it is
+what this correction said at the time.)* A pre-3.0 server
 has no `/api/v2` route, so it returns an unrouted 404 with **no error envelope**. `parseError` finds no
 `code`, falls back to `codeFromStatus(404)` → `CodeNotFound` (`errors.go:81-82`), and
 **`IsNotFound(err)` returns true on every call.** A caller with the ordinary
