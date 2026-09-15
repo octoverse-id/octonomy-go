@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     it. `README.md`, `doc.go` and `docs/versioning.md` all stated the alpha rule and now state this
     one.
   - `doc.go` also enumerated the alpha-exit gate as four criteria. It is five as of
-    [#75](https://github.com/octoverse-id/octonomy-go/issues/75), and the fifth — the
-    `/api/v2`-by-default decision — is the one still open.
+    [#75](https://github.com/octoverse-id/octonomy-go/issues/75) — and the fifth, the
+    `/api/v2`-by-default decision, is **answered in this same release** (above). What remains before
+    `v2.0.0` is a validated release candidate.
 
 ### Added
 - **`identityFields()` is a check rather than a convention**

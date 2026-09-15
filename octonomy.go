@@ -42,10 +42,15 @@ const (
 // told every 2.x operator to turn off a namespace surface their server has.
 //
 // The default is deliberately set here rather than left to the zero value, and
-// it is due a review at v2.0.0: a major version is where a wire-level default
-// flip is legible to a reader of the CHANGELOG, and by then real-server
-// integration coverage (#17) will say whether v2 is the right default for every
-// deployment or only for current ones.
+// the review it was due has happened: on 2026-09-15 the default was revisited
+// and KEPT. Server 3.2.0 makes /api/v2 the primary advertised surface and the
+// only one carrying the namespace axis, so defaulting to v1 would ignore the
+// dimension the server added; /api/v1 remains fully supported behind this one
+// field. Flipping it was refused -- it breaks the current line, points new
+// consumers at the surface the server no longer advertises, and trades a loud
+// one-line fix for a quiet wrong-surface default nothing would report. The
+// reasoning, and what a pre-2.0 deployment sees instead, is in
+// docs/versioning.md.
 const DefaultAPIVersion = APIV2
 
 const defaultTimeout = 30 * time.Second

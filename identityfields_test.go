@@ -168,8 +168,9 @@ func hasUnmarshalJSON(name string, methods methodSet) string {
 		return "has no UnmarshalJSON method"
 	}
 	if !fn.pointer {
-		return "declares UnmarshalJSON on the VALUE receiver, which json.Unmarshal never calls -- " +
-			"it is handed &out"
+		return "declares UnmarshalJSON on the VALUE receiver. json.Unmarshal is handed &out, and " +
+			"*T's method set does include T's value methods -- so this IS called, on a copy, and " +
+			"cannot populate the value being decoded"
 	}
 	if got := paramTypes(fn.decl.Type); len(got) != 1 || got[0] != "[]byte" {
 		return "declares UnmarshalJSON taking " + strings.Join(got, ", ") + ", not []byte"

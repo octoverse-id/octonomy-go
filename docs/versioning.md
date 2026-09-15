@@ -115,7 +115,7 @@ version is the one who finds out what the default is.
 **`v2.0.0-alpha.1` was the first `v2` version**, cut in
 [#29](https://github.com/octoverse-id/octonomy-go/issues/29); the alphas ran to `v2.0.0-alpha.2`
 ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)), and `v2.0.0-alpha.3`
-([#79](https://github.com/octoverse-id/octonomy-go/issues/79)) is the current one. With a tag
+([#80](https://github.com/octoverse-id/octonomy-go/issues/80)) is the current one. With a tag
 published, `go get github.com/octoverse-id/octonomy-go/v2` resolves the highest prerelease rather
 than a pseudo-version off the default branch, and adoption works normally without anyone naming a
 version:
