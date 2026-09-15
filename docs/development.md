@@ -176,11 +176,13 @@ reading its own namespace exercises the filter no matter what the permission lay
 only the filter runs stays green through a permission regression on any individual route; one with
 only the authorization run stays green through a lost namespace filter.
 
-**A new read method needs a probe.** `readProbes` in `integration_suite_test.go` lists every
-authenticated read in the SDK and carries the reasoning for the one deliberate exclusion (the health
-probes, which are unauthenticated and outside the namespace axis). A read endpoint nobody probed is
-where a cross-merchant leak lives. Two tests share that table through `runProbeMatrix`, so one entry
-buys coverage in both.
+**A new read method needs a probe.** `readProbes` in `integration_suite_test.go` holds the
+authenticated reads. The one deliberate exclusion — the health probes, which are unauthenticated and
+outside the namespace axis — and its reasoning live in `readProbeExclusions`
+(`readprobes_test.go`), alongside `TestEveryReadMethodHasANamespaceProbe`, which is what makes the
+table's completeness a check rather than a claim ([#73](https://github.com/octoverse-id/octonomy-go/issues/73)).
+A read endpoint nobody probed is where a cross-merchant leak lives. Two tests share that table
+through `runProbeMatrix`, so one entry buys coverage in both.
 
 Each probe also declares **how its endpoint declines a row that is out of scope** — a 200 with the row
 absent, a 404 `not_found`, or resolution's 400 `validation_error` — and the negatives assert that

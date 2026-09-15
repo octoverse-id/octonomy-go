@@ -56,7 +56,9 @@ These mirror [AGENTS.md](AGENTS.md):
   specific to this line; `support/go1.13` has no type parameters and declares a `*TagList` /
   `*VocabularyList` per resource instead.
 - Non-2xx responses become `*APIError`; add `Is<Code>` helpers for common codes.
-- `*Create` structs use pointer fields with `omitempty` so a create sends only what is set.
+- `*Create` structs carry the contract's **required** fields as plain values and its optional
+  fields as something omittable — a pointer for a scalar, a nil-able type like `Metadata` — each
+  tagged `omitempty`, so a create sends what the contract requires plus whatever the caller set.
   **`*Update` structs use `Optional[T]` with `omitzero`** — three states, because a PATCH has to be
   able to say null as well as "leave it alone" (#64). Server read-only fields are decode-only.
 - The library never panics, exits, or logs — it returns wrapped errors (`octonomy:` prefix, `%w`).
@@ -65,11 +67,29 @@ These mirror [AGENTS.md](AGENTS.md):
   adding a resource. Document any deliberate divergence.
 - Every exported symbol has a doc comment.
 
+## Adding a resource
+
+**Follow [the recipe in `docs/roadmap.md`](docs/roadmap.md#how-to-add-a-resource-the-recipe).** Every
+step is named there, and this file links it rather than keeping a shorter copy — four copies at four
+levels of completeness is how the recipe came to be missing five of its own steps
+([#73](https://github.com/octoverse-id/octonomy-go/issues/73)). The conventions above say what each
+step must look like; the recipe says what the steps are, and in what order.
+
+**A green CI run does not mean the resource is complete.** Of the five safeguards that recipe was
+missing before [#73](https://github.com/octoverse-id/octonomy-go/issues/73), two are still enforced
+by nothing at all, and each exists because of a defect this repository already shipped. Which is
+which is in the recipe's [enforcement table](docs/roadmap.md#which-of-these-steps-anything-catches)
+— kept there rather than repeated here, so the two cannot come apart. That table covers those five,
+not all eleven steps; the rest lean on review like most of any contributing guide. Read it before you open the pull request: the
+unenforced steps are the ones a reviewer has to catch.
+
 ## Testing expectations
 
 - Table-driven tests with `net/http/httptest`. Assert request method/path/headers/query/body on the
   server side (`t.Errorf` in handlers) and decoded values on the client side.
 - Cover success, the list envelope, and error decoding (`IsNotFound`/`IsConflict`/`IsValidation`).
+- **A new resource needs more than unit tests.** A new response shape needs a smoke assertion, and a
+  new read method needs a `readProbes` entry — see [Adding a resource](#adding-a-resource).
 - Run with `-race`. Keep new code covered.
 
 ## Branches, commits, and PRs

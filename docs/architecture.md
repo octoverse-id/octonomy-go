@@ -16,7 +16,7 @@ existing resource file and changing the types and paths.
 | `types.go` | Shared `Metadata` alias, `DecodeMetadata[T]`, and the `String`/`Bool`/`Int` pointer helpers. |
 | `health.go` | `HealthClient`, `NewHealthClient`, `HealthOption`, and `decodeHealthStatus` — the one group outside the API surface. |
 | `version.go` | `Version` constant (single source of truth) and the default User-Agent. |
-| `<resource>.go` | One file per resource: the model, `*Create`/`*Update` write structs, `*ListParams`, and the `*Service` with its methods. [`api.md`](api.md#implemented) is the canonical list of which files exist and what each exposes. |
+| `<resource>.go` | One file per resource: the model, whichever write structs the contract publishes for it — `*Create`/`*Update` for a CRUD group, specialized shapes such as `AssignmentRemove`, `BulkAssign` and `ResourceReplace` elsewhere, and none at all for a read-only group like audit logs, `*ListParams` where a list route exists, and the `*Service` with its methods. [`api.md`](api.md#implemented) is the canonical list of which files exist and what each exposes. |
 
 ## Request lifecycle
 
@@ -66,8 +66,11 @@ turns each of those into an error ([#32](https://github.com/octoverse-id/octonom
   `make smoke`, with `make test-integration` alongside it for the semantics a payload check cannot
   reach (namespace isolation, fail-closed `include_global`, idempotence, atomicity).
 - **Optionality has two shapes, and the difference is a state count.** Nullable server fields decode
-  into `*string`, and `*Create` / `*ListParams` structs use pointers + `omitempty` — two states are
-  all a create or a filter needs. A **PATCH needs three** (leave it alone, set it, clear it), so
+  into `*string`; a `*Create` carries the contract's **required** fields as plain values and its
+  optional ones as something omittable — a pointer for a scalar, a nil-able type like `Metadata` —
+  each tagged `omitempty`; and a `*ListParams` uses pointers with no JSON tags at all, since it is
+  turned into a query string by its own `query()` method rather than marshalled. Two states are all
+  a create or a filter needs. A **PATCH needs three** (leave it alone, set it, clear it), so
   every field of a `*Update` struct is an `Optional[T]` tagged `omitzero`: a pointer spends its one
   spare state on absent-versus-set, which left the nullable fields unclearable
   ([#64](https://github.com/octoverse-id/octonomy-go/issues/64)).
@@ -90,18 +93,18 @@ an `application_id`. The SDK passes these through faithfully — the server enfo
 
 ## Extending the client
 
-To add a resource, follow `tags.go`:
+**The recipe is in [roadmap.md](roadmap.md#how-to-add-a-resource-the-recipe)**, and that is the only
+complete copy of it. This page carried a five-step version until
+[#73](https://github.com/octoverse-id/octonomy-go/issues/73), which is how the two came to disagree:
+the short copy named neither the contract gate nor the three requirements that no job checks, while
+this section certified the other page as carrying the recipe in full when it did not.
 
-1. Define the model, `*Create`/`*Update`, and `*ListParams` (with a `query()` method) from the
-   matching `docs/openapi-v2.yaml` schema.
-2. Add a `*Service` with `context.Context`-first, `...RequestOption`-last methods, each delegating
-   to the transport helper matching its **response shape**: `doData[T]` for a single resource,
-   `doList[T]` for a paginated list, `client.do` for a 204 with no body. Picking by convenience
-   rather than by shape is what produced
-   [#32](https://github.com/octoverse-id/octonomy-go/issues/32).
-3. Wire the service onto `Client` in `New()`.
-4. Add table-driven `httptest` tests and a CHANGELOG entry.
-5. Add the new methods to the inventory in [`api.md`](api.md#implemented) — the one place it is kept.
+What stays here is the architectural constraint those steps rest on, because it is a property of the
+transport rather than a step in a sequence: **a service method picks its transport helper by
+RESPONSE SHAPE, not by convenience** — `doData[T]` for a single resource, `doList[T]` for a
+paginated list, `client.do` for a 204 with no body. Picking by convenience rather than by shape is
+what produced [#32](https://github.com/octoverse-id/octonomy-go/issues/32), where every
+single-resource read decoded to an empty struct behind a nil error.
 
-Every group the vendored contracts publish is already implemented; [roadmap.md](roadmap.md) carries
-the recipe in full and tracks the gaps that remain *within* those resources.
+Every group the vendored contracts publish is already implemented; `roadmap.md` also tracks the gaps
+that remain *within* those resources.
