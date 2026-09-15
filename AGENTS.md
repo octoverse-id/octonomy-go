@@ -44,7 +44,7 @@ stays a faithful, ergonomic client.
 **Adding a whole resource is an ordered sequence, and it lives in one place:**
 [`docs/roadmap.md`](docs/roadmap.md#how-to-add-a-resource-the-recipe). The rules in this file are
 what each step has to satisfy and why it exists; the recipe is what the steps are and in what order.
-Of the five safeguards that recipe was missing before #73, two are still enforced by nothing at all
+Of the five safeguards that recipe was missing before #73, one is still enforced by nothing at all
 — read the table there, which covers those five rather than all eleven steps, before taking a green
 run as proof that a resource is complete.
 
@@ -157,7 +157,11 @@ run as proof that a resource is complete.
   schema's `required:` list rather than assuming**, which is where the first draft of this rule got
   `ResourceTag` wrong. A composite carries no identity of its own and requires its keys in
   `UnmarshalJSON` instead; `TagResolution` does both, since the tag it exists to deliver is a
-  resource.
+  resource. **`TestEveryResponseTypeCanRefuseAnEmptyDecode` (`identityfields_test.go`) enforces the
+  choice between those two** — every type handed to `doData` or `doList` must carry one mechanism or
+  the other, and a type it cannot classify fails rather than passing. It does not check that the
+  field you named is the right one, nor that a nested resource the contract marks `required` was
+  covered; both stay with the reader (#76).
 - Non-2xx responses become `*APIError` carrying the `{error:{code,message,details,request_id}}`
   envelope. Add `Is<Code>` helpers for common error codes.
 - **Every non-2xx becomes an `*APIError`, including one whose body could not be read.** An

@@ -131,8 +131,8 @@ review, or by nothing, like most of any contributing guide.
 | --- | --- | --- |
 | 7 — coverage row | `checkInventory`, `tools/contractdrift/checks.go` | **Red CI**: "`<op>` is in the contract and not in `docs/contract-coverage.yaml`" |
 | 7 — driver | `checkImplementation`, same file | **Red CI** |
-| 3 — `identityFields()` | *nothing* — `requireIdentity` type-asserts and returns `nil` for a model that does not implement the interface (`transport.go`) | **Green CI**, and #40 is re-opened for that resource |
-| 8 — smoke assertion | *nothing* — the walk visits what it was told to visit | **Green CI**, and #32's class is unguarded for that resource |
+| 3 — `identityFields()` | `TestEveryResponseTypeCanRefuseAnEmptyDecode` (`identityfields_test.go`), added by [#76](https://github.com/octoverse-id/octonomy-go/issues/76) | **Red `make test`**, naming the type and both mechanisms it could carry |
+| 8 — smoke assertion | *nothing* — the walk visits what it was told to visit ([#77](https://github.com/octoverse-id/octonomy-go/issues/77)) | **Green CI**, and #32's class is unguarded for that resource |
 | 9 — `readProbes` probe | `TestEveryReadMethodHasANamespaceProbe` (`readprobes_test.go`), added by #73 | **Red `make test`**, naming the method and the table — and equally for a probe that names one endpoint and calls another |
 
 Step 9 was the third silent one until #73 gave it a guard. The test resolves each exported service
@@ -161,10 +161,20 @@ a function variable, a method expression, a closure invoked in place — classif
 fails, except where the same method also issues a recognized write, which classifies it. The full
 list of edges is in `readprobes_test.go`, next to the code that has them.
 
-**Steps 3 and 8 remain unguarded, and that is the honest state of this recipe.** Both are candidates
-for the same treatment — an `identityFields()` guard is the more tractable of the two, since the set
-of response models is derivable from the source the way the set of read methods was — and neither
-has been attempted. Until one is, a reviewer is what stands behind them.
+**Step 8 is the one that remains, and that is the honest state of this recipe.** Step 3 was the
+tractable half and now has a guard ([#76](https://github.com/octoverse-id/octonomy-go/issues/76)):
+every type handed to `doData` or `doList` must either implement `identityFields()` — a resource,
+naming its row identity — or declare `UnmarshalJSON` — a composite, requiring its keys instead. Both
+halves are decidable from the source, which is what made it possible.
+
+**Step 8 is deliberately not getting the same treatment yet**
+([#77](https://github.com/octoverse-id/octonomy-go/issues/77)), and the reason is the rule this page
+already states. What would have to be true is that the walk *meaningfully asserts* a new shape
+against a real server, and the nearest syntactic proxy — the type name appearing somewhere in
+`integration_test.go` — is satisfied by a comment or an unused reference. A check reporting "covered"
+on that basis would make the step look enforced while leaving #32's class reachable, and would take
+the reviewer's attention away at the same time. A reviewer stands behind step 8, the table above says
+so, and #77 records what would change it.
 
 ### Why this page carries the recipe
 
@@ -275,6 +285,7 @@ status.
 | Gap | Issue |
 | --- | ----- |
 | **The tags-ordering caveats want revisiting** once the server adds an `ORDER BY` to the annotated tags list (upstream `octonomy#162`). | [#49](https://github.com/octoverse-id/octonomy-go/issues/49) |
+| **The smoke assertion (recipe step 8) is enforced by nothing**, and a resource added without one leaves #32's class unguarded for itself. Left to a reviewer on purpose — the reasoning is above. | [#77](https://github.com/octoverse-id/octonomy-go/issues/77) |
 
 Deferred by design, not a gap: the webhook typed-event surface and `http.Handler`
 ([#22](https://github.com/octoverse-id/octonomy-go/issues/22) — when that was decided, no deployment
