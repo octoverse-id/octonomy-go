@@ -90,7 +90,7 @@ the **base branch, the PR target, the commit you tag, and the verify command**. 
 > ```
 >
 > Tags cannot be recalled, and `retract` is inert for a Go 1.13 consumer's toolchain — so the compat
-> line has no second chance. **Check `go.mod`'s module line before you tag** (steps 1 and 7).
+> line has no second chance. **Check `go.mod`'s module line before you tag** (steps 1 and 8).
 
 ### Three branch roles, and they are not interchangeable
 
@@ -166,17 +166,36 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
 4. **Update the CHANGELOG:** move `[Unreleased]` items under a new `## [VERSION] - <date>` heading —
    also unprefixed, because `make version-check` compares it against `version.go` verbatim — and
    refresh the link definitions at the bottom.
-5. **Run the gate:** `make release-check`.
-6. **Open the release PR targeting `BASE`** — *not* necessarily `main`. Get it reviewed and merged.
+5. **Stamp the other four sites. `make version-check` does not see any of them** — it compares
+   `version.go` against the CHANGELOG heading and nothing else, so every row below is held by a
+   reader. This list exists because a release PR once moved the first two and left the rest naming
+   the previous version:
+
+   | Site | What carries the version |
+   | ---- | ------------------------ |
+   | `README.md` | the "This tree is `TAG`" note, and the prerelease-policy paragraph under it |
+   | `doc.go` | the same two, in package prose — it is what `go doc` and pkg.go.dev show |
+   | `docs/versioning.md` | the *Modern line pre-stability* paragraph, the **Release state** table, the proxy-output example, and the `version.go` note under it |
+   | `CHANGELOG.md` | the link definitions (step 4) |
+
+   `grep -rn "<previous VERSION>" --include=*.md --include=*.go .` should return only history after
+   this step: past CHANGELOG entries, and prose that names an older release as a past event.
+
+   **A prerelease changes wording, not just digits.** The alphas allowed a necessary break to ride a
+   version bump; a **candidate** is the point at which no further break is intended, and one that
+   proves necessary supersedes the candidate rather than riding it. Any passage stating the older
+   rule has to change meaning, and the grep above will not catch it.
+6. **Run the gate:** `make release-check`.
+7. **Open the release PR targeting `BASE`** — *not* necessarily `main`. Get it reviewed and merged.
 
    **Push the tag as soon as it merges.** The merged tree already names the release in `version.go`
-   and carries a dated CHANGELOG heading, so between the merge and step 7 the branch describes a
+   and carries a dated CHANGELOG heading, so between the merge and step 8 the branch describes a
    version that cannot yet be fetched. Keep the window to minutes, and keep the prose honest about
    what creates a release: **pushing the tag is the release**, so status text on the branch should
    point at the tag or the proxy query rather than asserting a tag it cannot see. Not at the
-   releases page: step 7 pushes the tag *before* `gh release create`, so a module can be fetchable
-   while that page still shows nothing. If step 7 is going to be delayed, say so on the PR.
-7. **Tag the merge commit on `BASE`:**
+   releases page: step 8 pushes the tag *before* `gh release create`, so a module can be fetchable
+   while that page still shows nothing. If step 8 is going to be delayed, say so on the PR.
+8. **Tag the merge commit on `BASE`:**
    ```bash
    git switch BASE && git pull
    head -1 go.mod                       # last chance: must match MODULE
@@ -196,13 +215,13 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
    above has already settled that, and the proxy query in [versioning.md](versioning.md#release-state)
    is what reports it. `v1.0.0` needed none of this, so this is the first release the flag applies
    to.
-8. **Verify** the module is resolvable at the path for this line:
+9. **Verify** the module is resolvable at the path for this line:
    ```bash
    GOPROXY=proxy.golang.org go list -m MODULE@TAG
    ```
    A path-mismatch error here means the tag landed on the wrong branch. It cannot be fixed by
    retagging — publish a corrected version instead.
-9. Close the milestone/issue and delete the release branch.
+10. Close the milestone/issue and delete the release branch.
 
 **A third major (`/v3`)** would append `/v3` to the module path in `go.mod` and to all import
 statements. Do that only for a deliberate breaking release — see [versioning.md](versioning.md).

@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0-rc.1] - 2026-09-15
 
+### Changed
+- **The release runbook names every site that carries the version, and there are five**
+  ([`docs/release.md`](docs/release.md)). It listed `version.go` and the CHANGELOG, and
+  `make version-check` compares exactly those two against each other — so `README.md`, `doc.go` and
+  the four passages in `docs/versioning.md` were held by a reader and nothing else. This release
+  found that the hard way: the first draft of it stamped the two the runbook named and left the rest
+  reading `v2.0.0-alpha.2`. The step now carries the table, and the grep that proves it was done.
+  - **A prerelease changes wording and not only digits**, which the grep cannot catch. The alphas
+    allowed a necessary break to ride a version bump; **a candidate is the point at which no further
+    break is intended**, and one that proves necessary supersedes the candidate rather than riding
+    it. `README.md`, `doc.go` and `docs/versioning.md` all stated the alpha rule and now state this
+    one.
+  - `doc.go` also enumerated the alpha-exit gate as four criteria. It is five as of
+    [#75](https://github.com/octoverse-id/octonomy-go/issues/75), and the fifth — the
+    `/api/v2`-by-default decision — is the one still open.
+
 ### Added
 - **`identityFields()` is a check rather than a convention**
   ([#76](https://github.com/octoverse-id/octonomy-go/issues/76)).

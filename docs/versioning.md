@@ -75,7 +75,8 @@ older plan document, this paragraph supersedes them.
 
 ### Modern line pre-stability
 
-The modern line is versioned `v2.0.0-alpha.N` until the API is frozen. The gate for dropping the
+The modern line carries a prerelease suffix until the API is frozen — `v2.0.0-alpha.N` through
+the alphas, `v2.0.0-rc.N` now. The gate for dropping the
 prerelease suffix is **not** resource coverage — counting endpoints says nothing about whether the API
 has stopped moving. It is: no further breaking changes intended, real-server integration green, docs
 current, one release candidate validated, and **the `/api/v2`-by-default decision revisited**.
@@ -97,8 +98,9 @@ naming a version is the one who finds out what the default is. Keeping the v2 de
 with a reason, not the absence of one.
 
 **`v2.0.0-alpha.1` was the first `v2` version**, cut in
-[#29](https://github.com/octoverse-id/octonomy-go/issues/29); `v2.0.0-alpha.2`
-([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) is the current one. With a tag
+[#29](https://github.com/octoverse-id/octonomy-go/issues/29); the alphas ran to `v2.0.0-alpha.2`
+([#66](https://github.com/octoverse-id/octonomy-go/issues/66)), and `v2.0.0-rc.1`
+([#79](https://github.com/octoverse-id/octonomy-go/issues/79)) is the current one. With a tag
 published, `go get github.com/octoverse-id/octonomy-go/v2` resolves the highest prerelease rather
 than a pseudo-version off the default branch, and adoption works normally without anyone naming a
 version:
@@ -107,8 +109,8 @@ the moment a stable `v2.0.0` ships: from then on a fresh `go get` resolves the s
 reaching a prerelease means naming it. One exception worth knowing — a module *already* required at a
 prerelease can be moved to a newer prerelease by a plain `go get -u`, without anyone naming it.
 
-The version bump lands with the release PR and the tag follows it ([release.md](release.md) steps 6
-and 7), so `version.go` naming a version is not on its own proof that the version is fetchable. The
+The version bump lands with the release PR and the tag follows it ([release.md](release.md) steps 7
+and 8), so `version.go` naming a version is not on its own proof that the version is fetchable. The
 proxy query below is.
 
 ## Release state
@@ -116,7 +118,7 @@ proxy query below is.
 | Line | Latest tag | State |
 | ---- | ---------- | ----- |
 | **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` (2026-08-26) | Released. Frozen — security fixes only, sunset 2027-08-31 |
-| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.2` | Active. Prerelease until API freeze, and a breaking change may still ride an alpha bump — `v2.0.0-alpha.2` ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) carries one. Each tag follows its release PR, so the proxy check below is what says a version is live |
+| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-rc.1` | Active. Prerelease until API freeze — the five criteria are [above](#modern-line-pre-stability), and the `/api/v2`-by-default one is still open. **A candidate is where breaking changes stop:** during the alphas one could ride a version bump, and `v2.0.0-alpha.2` ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) carried one; a break now supersedes the candidate instead. Each tag follows its release PR, so the proxy check below is what says a version is live |
 
 **There is no published `v0.x`, and never was.** The `## [0.1.0]` heading `CHANGELOG.md` used to
 carry described an early state of the tree, not a release; its contents are now filed under
@@ -132,6 +134,7 @@ v1.0.0                                      # the compat line, and no v0.x above
 $ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octoverse-id/octonomy-go/v2/@v/list
 v2.0.0-alpha.1                              # one row per pushed tag, and a tag that has never been
 v2.0.0-alpha.2                              # pushed is simply absent -- the proxy fetches on first ask
+v2.0.0-rc.1
 [HTTP 200]
 ```
 
@@ -142,9 +145,9 @@ genuinely empty list produces, which is how this kind of evidence turns into a f
 authoritative check for a release you just cut is step 8 of [release.md](release.md),
 `go list -m MODULE@TAG`, which fails loudly on a tag placed on the wrong branch.
 
-> **What `version.go` says, and what it does not.** The `Version` constant reads `2.0.0-alpha.2` —
-> the version this tree was cut as, and the one its tag carries once [release.md](release.md) step 7
-> pushes it — so the default User-Agent is `octonomy-go/2.0.0-alpha.2`. It moves **only** in a release
+> **What `version.go` says, and what it does not.** The `Version` constant reads `2.0.0-rc.1` —
+> the version this tree was cut as, and the one its tag carries once [release.md](release.md) step 8
+> pushes it — so the default User-Agent is `octonomy-go/2.0.0-rc.1`. It moves **only** in a release
 > PR (see [Where this shows up](#where-this-shows-up)), which is what keeps it meaningful, and it
 > names this line's latest release from the moment that tag is live until the next release PR moves
 > it again. What it is **not** is evidence that the version is fetchable: the bump lands one step
@@ -185,8 +188,10 @@ Backward-compatible **additions** to the exported API.
   control, that is the exposure. Unkeyed literals are rare, verbose, and `go vet`'s
   `composites` check flags them for imported types, so the practical risk is low — it is simply not
   zero, which is what "backward-compatible" would otherwise imply.
-- While the modern line is still on `v2.0.0-alpha.N` prereleases a necessary breaking change may ride
-  an alpha bump, documented in the CHANGELOG; once `v2.0.0` proper ships, that stops being true.
+- During the modern line's **alpha** prereleases a necessary breaking change could ride a version
+  bump, documented in the CHANGELOG. **A release candidate is where that stops:** `v2.0.0-rc.N`
+  means no further break is intended, and one that proves necessary supersedes the candidate with
+  another rather than riding it. Once `v2.0.0` proper ships, a break needs a major.
 
 ### MAJOR — `vN.0.0`
 Backward-**incompatible** changes to the exported Go API once a line has shipped a stable release.
