@@ -76,6 +76,11 @@ var compositeTypes = map[string]bool{
 //     type alias for a response type, or an alias for []byte or error is
 //     rejected rather than resolved. That fails closed, no model uses those
 //     shapes, and resolving them properly means go/types.
+//   - It matches on BARE type names within this one package, which is sound only
+//     because Go makes package-level type names unique and forbids methods on
+//     types declared inside a function. A response type from another package
+//     would be neither resolved nor reported as unreadable, since the type
+//     argument is still a plain identifier after the import.
 func TestEveryResponseTypeCanRefuseAnEmptyDecode(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
