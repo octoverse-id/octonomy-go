@@ -75,30 +75,47 @@ older plan document, this paragraph supersedes them.
 
 ### Modern line pre-stability
 
-The modern line is versioned `v2.0.0-alpha.N` until the API is frozen. The gate for dropping the
+The modern line carries a prerelease suffix until the API is frozen — `v2.0.0-alpha.N` now,
+`v2.0.0-rc.N` once the surface is frozen. The gate for dropping the
 prerelease suffix is **not** resource coverage — counting endpoints says nothing about whether the API
 has stopped moving. It is: no further breaking changes intended, real-server integration green, docs
 current, one release candidate validated, and **the `/api/v2`-by-default decision revisited**.
+**Four of the five are met**; a validated release candidate is what remains. The fifth was settled on
+2026-09-15 and is recorded below.
 
-**That last item is a commitment this line made and has not yet kept.** `Config.APIVersion` defaults
-to `/api/v2`, which is a wire-level change against a deployment that does not route it: a pre-2.0
-server answers an unrouted 404, and the SDK has no version handshake to detect one with. The default
-was accepted for the prerelease line on two conditions, recorded in
-[#21](https://github.com/octoverse-id/octonomy-go/issues/21)'s risk table. The first has been met —
-an envelope-less non-2xx no longer becomes a semantic code, so a bare 404 is `CodeUnexpectedStatus`
-and `IsNotFound` no longer reports true for one (`errors.go`, and the note in
-[README](../README.md#errors)), which is what made the misconfiguration loud instead of silent. **The
-second was to revisit the default itself before the line goes stable, and that is this gate.**
+### The `/api/v2` default: revisited and kept
 
-It is here rather than in the tracker because the epic that accepted the risk is the only thing that
-ever held it, and an epic closes. Whatever is decided, write the decision down: `go get` resolves a
-stable `v2.0.0` in preference to any prerelease, so the first person to adopt this line without
-naming a version is the one who finds out what the default is. Keeping the v2 default is a choice
-with a reason, not the absence of one.
+**Decision: `Config.APIVersion` continues to default to `/api/v2`.**
+
+The default is a wire-level change against a deployment that does not route it: a pre-2.0 server
+answers an unrouted 404, and the SDK has no version handshake to detect one with. That was accepted
+for the prerelease line on two conditions, recorded in
+[#21](https://github.com/octoverse-id/octonomy-go/issues/21)'s risk table — make the resulting
+failure loud, and revisit the default itself before the line goes stable. Both are now discharged.
+
+- **Loud.** An envelope-less non-2xx no longer becomes a semantic code, so a bare 404 is
+  `CodeUnexpectedStatus` and `IsNotFound` no longer reports true for one (`errors.go`, and the note
+  in [README](../README.md#errors)). A caller pointed at a pre-2.0 server gets an error that names
+  the problem instead of an empty taxonomy.
+- **Kept, and why.** Server 3.2.0 makes `/api/v2` the **primary advertised surface**, and it is the
+  only one with the namespace axis — defaulting to `v1` would mean the SDK's out-of-the-box
+  behaviour ignored the dimension the server added. `/api/v1` remains fully supported and one field
+  selects it (`Config.APIVersion = octonomy.APIV1`), so the cost to a consumer on an older
+  deployment is one line, paid once, against an error that says what is wrong.
+
+**What was refused:** flipping the default to `/api/v1` for safety. It would be a breaking change to
+the current alpha line, it would point new consumers at the surface the server no longer advertises,
+and it trades a loud one-line fix for a quiet wrong-surface default that nothing would ever report.
+
+This lives here rather than in the tracker because the epic that accepted the risk was the only
+thing that ever held it, and an epic closes. It is written down because `go get` resolves a stable
+`v2.0.0` in preference to any prerelease: the first person to adopt this line without naming a
+version is the one who finds out what the default is.
 
 **`v2.0.0-alpha.1` was the first `v2` version**, cut in
-[#29](https://github.com/octoverse-id/octonomy-go/issues/29); `v2.0.0-alpha.2`
-([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) is the current one. With a tag
+[#29](https://github.com/octoverse-id/octonomy-go/issues/29); the alphas ran to `v2.0.0-alpha.2`
+([#66](https://github.com/octoverse-id/octonomy-go/issues/66)), and `v2.0.0-alpha.3`
+([#80](https://github.com/octoverse-id/octonomy-go/issues/80)) is the current one. With a tag
 published, `go get github.com/octoverse-id/octonomy-go/v2` resolves the highest prerelease rather
 than a pseudo-version off the default branch, and adoption works normally without anyone naming a
 version:
@@ -107,16 +124,16 @@ the moment a stable `v2.0.0` ships: from then on a fresh `go get` resolves the s
 reaching a prerelease means naming it. One exception worth knowing — a module *already* required at a
 prerelease can be moved to a newer prerelease by a plain `go get -u`, without anyone naming it.
 
-The version bump lands with the release PR and the tag follows it ([release.md](release.md) steps 6
-and 7), so `version.go` naming a version is not on its own proof that the version is fetchable. The
+The version bump lands with the release PR and the tag follows it ([release.md](release.md) steps 7
+and 8), so `version.go` naming a version is not on its own proof that the version is fetchable. The
 proxy query below is.
 
 ## Release state
 
-| Line | Latest tag | State |
+| Line | Stamped version | State |
 | ---- | ---------- | ----- |
-| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` (2026-08-26) | Released. Frozen — security fixes only, sunset 2027-08-31 |
-| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.2` | Active. Prerelease until API freeze, and a breaking change may still ride an alpha bump — `v2.0.0-alpha.2` ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) carries one. Each tag follows its release PR, so the proxy check below is what says a version is live |
+| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` — tagged 2026-08-26 | Released. Frozen — security fixes only, sunset 2027-08-31 |
+| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.3` — what `version.go` reads on this branch. **Whether its tag is pushed is the proxy query below**, never this row | Active. Prerelease until API freeze — of the five criteria [above](#modern-line-pre-stability), four are met and a validated release candidate is what remains. A necessary break may still ride an alpha bump, as `v2.0.0-alpha.2` ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) did; **a candidate is where that stops** |
 
 **There is no published `v0.x`, and never was.** The `## [0.1.0]` heading `CHANGELOG.md` used to
 carry described an early state of the tree, not a release; its contents are now filed under
@@ -135,6 +152,12 @@ v2.0.0-alpha.2                              # pushed is simply absent -- the pro
 [HTTP 200]
 ```
 
+**That output is an example, not a current listing, and it is deliberately one release behind.** A
+version this tree has been stamped for does not appear until step 8 of
+[release.md](release.md#cutting-a-release) pushes its tag, so pasting a freshly cut version in here
+would assert a release the repository has not made — which is the one thing the release procedure
+says prose on a release branch must not do. Run the command; do not read this block as the answer.
+
 Read that for what it is: the proxy's **current** view of **tagged** versions. `@v/list` deliberately
 omits pseudo-versions, so an empty list means "nothing is released", not "nothing resolves". Keep
 `-w` on the command, too: a bare `curl -s` renders a network failure as the same blank output a
@@ -142,9 +165,10 @@ genuinely empty list produces, which is how this kind of evidence turns into a f
 authoritative check for a release you just cut is step 8 of [release.md](release.md),
 `go list -m MODULE@TAG`, which fails loudly on a tag placed on the wrong branch.
 
-> **What `version.go` says, and what it does not.** The `Version` constant reads `2.0.0-alpha.2` —
-> the version this tree was cut as, and the one its tag carries once [release.md](release.md) step 7
-> pushes it — so the default User-Agent is `octonomy-go/2.0.0-alpha.2`. It moves **only** in a release
+> **What `version.go` says, and what it does not.** The `Version` constant reads `2.0.0-alpha.3` —
+> the version this tree was cut as, and the one its tag carries once [release.md](release.md) step 8
+> pushes it and step 9 verifies against the proxy — so the default User-Agent is
+> `octonomy-go/2.0.0-alpha.3`. It moves **only** in a release
 > PR (see [Where this shows up](#where-this-shows-up)), which is what keeps it meaningful, and it
 > names this line's latest release from the moment that tag is live until the next release PR moves
 > it again. What it is **not** is evidence that the version is fetchable: the bump lands one step
@@ -185,8 +209,11 @@ Backward-compatible **additions** to the exported API.
   control, that is the exposure. Unkeyed literals are rare, verbose, and `go vet`'s
   `composites` check flags them for imported types, so the practical risk is low — it is simply not
   zero, which is what "backward-compatible" would otherwise imply.
-- While the modern line is still on `v2.0.0-alpha.N` prereleases a necessary breaking change may ride
-  an alpha bump, documented in the CHANGELOG; once `v2.0.0` proper ships, that stops being true.
+- During the modern line's **alpha** prereleases a necessary breaking change may ride a version
+  bump, documented in the CHANGELOG — the line is on `v2.0.0-alpha.3`, so this is still true today.
+  **A release candidate is where that stops:** `v2.0.0-rc.N` means no further break is intended, and
+  one that proves necessary supersedes the candidate rather than riding it. Once `v2.0.0` proper
+  ships, a break needs a major.
 
 ### MAJOR — `vN.0.0`
 Backward-**incompatible** changes to the exported Go API once a line has shipped a stable release.

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-alpha.3] - 2026-09-15
+
+### Changed
+- **The release runbook names every site that carries the version, and there are five**
+  ([`docs/release.md`](docs/release.md)). It listed `version.go` and the CHANGELOG, and
+  `make version-check` compares exactly those two against each other — so `README.md`, `doc.go` and
+  the four passages in `docs/versioning.md` were held by a reader and nothing else. This release
+  found that the hard way: the first draft of it stamped the two the runbook named and left the rest
+  reading `v2.0.0-alpha.2`. The step now carries the table, and the grep that proves it was done.
+  - **A prerelease changes wording and not only digits**, which the grep cannot catch. The alphas
+    allowed a necessary break to ride a version bump; **a candidate is the point at which no further
+    break is intended**, and one that proves necessary supersedes the candidate rather than riding
+    it. `README.md`, `doc.go` and `docs/versioning.md` all stated the alpha rule and now state this
+    one.
+  - `doc.go` also enumerated the alpha-exit gate as four criteria. It is five as of
+    [#75](https://github.com/octoverse-id/octonomy-go/issues/75) — and the fifth, the
+    `/api/v2`-by-default decision, is **answered in this same release** — see the Documentation
+    entry below. What remains before `v2.0.0` is a validated release candidate.
+
 ### Added
 - **`identityFields()` is a check rather than a convention**
   ([#76](https://github.com/octoverse-id/octonomy-go/issues/76)).
@@ -21,9 +40,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     a sound. `{"data": {"id": null}}` or a renamed id then decodes to a zero-valued resource behind a
     `nil` error, which is [#40](https://github.com/octoverse-id/octonomy-go/issues/40), the same
     family as #32.
-  - **What it does not do**, stated next to the code: it proves a mechanism exists, never that the
-    field named is the right one, and it does not reach nested resources the contract marks
-    `required` — that is a fact about `openapi-v2.yaml` rather than about Go source.
+  - **Receiver kind is part of the rule**, and getting that wrong was the guard's own first defect.
+    `doData`/`doList` call `requireIdentity(out, …)` with a **value**, so a pointer-receiver
+    `identityFields` is not in the method set consulted — such a model compiles, reads correctly,
+    and is skipped at runtime exactly as if the method were absent. `json.Unmarshal` is handed
+    `&out`, so `UnmarshalJSON` is the mirror image and must be on the pointer. The first draft
+    credited either receiver for either method, certifying a shape the runtime ignores; the guard
+    now checks receiver kind and full signature, and the fixtures assert both failures.
+  - **Composites are declared, not inferred.** The first draft let *any* `UnmarshalJSON` excuse a
+    type from `identityFields`, so a resource that grew a custom decoder for an unrelated reason
+    would have been excused from the check that matters. `compositeTypes` is a written list,
+    verified against the source in both directions.
+  - **A generic wrapper fails rather than hiding a type.** A transport helper handed its caller's
+    type parameter is reported, because the concrete instantiation reaches it from call sites this
+    guard does not follow. Type parameters are tracked per declaration, so an unrelated
+    `helper[Widget any]` cannot mask a real `doData[Widget]` in the same file.
+  - **What it does not do**, stated next to the code: it proves a mechanism exists with the right
+    shape, never that it is *right* — a model naming the wrong field satisfies it. It does not reach
+    nested resources the contract marks `required`, which is a fact about `openapi-v2.yaml` rather
+    than about Go source. And nothing proves a type listed in `compositeTypes` is genuinely a
+    composite rather than a resource someone wanted to excuse.
   - This is the second of the three requirements #73 found unguarded. The third, the smoke assertion,
     is deliberately staying with a reviewer ([#77](https://github.com/octoverse-id/octonomy-go/issues/77)):
     what would have to be checked is that the walk *meaningfully asserts* a shape, and the nearest
@@ -68,10 +104,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     only when the container did would be absent from exactly the pull request that adds a read
     method. `TestUpdateBodiesTagEveryOptionalOmitzero` and `TestVerifyComparesDigestsInConstantTime`
     are the precedents for reading this repository's own source to enforce a rule about it.
-  - `identityFields()` and the smoke assertion are still enforced by nothing, and the recipe now
-    says so in the table rather than leaving it to be discovered.
+  - **As #73 landed**, `identityFields()` and the smoke assertion were both still enforced by
+    nothing, and the recipe said so in a table rather than leaving it to be discovered.
+    `identityFields()` got its guard later in this same release (#76, above); the smoke assertion
+    is deliberately still a reviewer's job ([#77](https://github.com/octoverse-id/octonomy-go/issues/77)).
 
 ### Documentation
+- **The `/api/v2` default was revisited, and kept** — the fifth alpha-exit criterion is now
+  answered, and four of the five are met. `Config.APIVersion` continues to default to `/api/v2`:
+  server 3.2.0 makes it the primary advertised surface and the only one carrying the namespace axis,
+  so defaulting to `v1` would ship an SDK whose out-of-the-box behaviour ignored the dimension the
+  server added. `/api/v1` stays fully supported behind one field. **Flipping the default was
+  refused** — it breaks the current alpha line, points new consumers at the surface the server no
+  longer advertises, and trades a loud one-line fix for a quiet wrong-surface default nothing would
+  report. The reasoning is in [`docs/versioning.md`](docs/versioning.md#the-apiv2-default-revisited-and-kept).
+  What remains before `v2.0.0` is a validated release candidate.
 - **The `/api/v2`-by-default decision is now a gate item for `v2.0.0`, not an epic's footnote**
   ([#21](https://github.com/octoverse-id/octonomy-go/issues/21)). Defaulting to `/api/v2` is a
   wire-level change against a pre-2.0 deployment, and it was accepted for the prerelease line on two
@@ -1287,7 +1334,8 @@ of all the default surface, which is now `/api/v2`.
 - `WithActor` per-request option, and `String`/`Bool`/`Int` pointer helpers for optional fields.
 - Runnable `examples/quickstart` program and a vendored `docs/openapi.yaml` contract reference.
 
-[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.2...main
+[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.3...main
+[2.0.0-alpha.3]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.2...v2.0.0-alpha.3
 [2.0.0-alpha.2]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.1...v2.0.0-alpha.2
 [2.0.0-alpha.1]: https://github.com/octoverse-id/octonomy-go/releases/tag/v2.0.0-alpha.1
 

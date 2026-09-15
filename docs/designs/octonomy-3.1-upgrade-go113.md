@@ -446,7 +446,7 @@ reviewer.
 | R6 | E4's scheduled drift job becomes a nag people ignore | Report, don't block on PRs. Fail loudly only on a genuine schema/param delta. |
 | R7 | Examples must compile — but on which line? | Examples live on `main` only, at the modern floor. The compat line ships no new examples. |
 | R8 | **Mistagging** — a `v2.x` tag off the compat line, or a `v1.x` tag off `main`. **Note: Go now catches the module-path half itself** (verified), so the residual risk is a `v1.x` tag cut from the compat line after its `go` directive drifted — which has no toolchain backstop | **The guard must run on the release PR, not only on the tag** (Correction 32). A `push: tags:` job fires *after* the tag exists and is already proxy-resolvable, and `retract` is inert for the compat audience — so a tag-time check detects a mistag it cannot undo. Gate the release PR on `go.mod`'s directive vs the target branch and version; keep a tag-time job as belt-and-braces advisory. |
-| **R9** | **v2 default is a wire-level break, and the failure is SWALLOWED.** A consumer on a pre-v2 server who adopts `/v2` silently targets `/api/v2`; an unrouted 404 carries no envelope, so `codeFromStatus(404)` returns `CodeNotFound` and `IsNotFound(err)` is **true on every call** — the caller's ordinary not-found branch reads the taxonomy as empty with no error. Compiles clean; no build-time warning | Accepted **conditional on the fix**: an envelope-less non-2xx must not map to a semantic code (#7), plus an actionable hint naming a likely `APIVersion` mismatch. Also a CHANGELOG **BREAKING** entry ("set `Config.APIVersion = APIV1` if your server predates 3.0") and the README upgrade section. The default is revisited at `v2.0.0` proper. **Note: with nothing ever published, the affected population is anyone adopting fresh, not an existing 0.1.x user base.** |
+| **R9** | **v2 default is a wire-level break, and the failure is SWALLOWED.** A consumer on a pre-v2 server who adopts `/v2` silently targets `/api/v2`; an unrouted 404 carries no envelope, so `codeFromStatus(404)` returns `CodeNotFound` and `IsNotFound(err)` is **true on every call** — the caller's ordinary not-found branch reads the taxonomy as empty with no error. Compiles clean; no build-time warning | Accepted **conditional on the fix**: an envelope-less non-2xx must not map to a semantic code (#7), plus an actionable hint naming a likely `APIVersion` mismatch. Also a CHANGELOG **BREAKING** entry ("set `Config.APIVersion = APIV1` if your server predates 3.0") and the README upgrade section. The default is revisited at `v2.0.0` proper. **Note: with nothing ever published, the affected population is anyone adopting fresh, not an existing 0.1.x user base.** **DISCHARGED 2026-09-15 — the review happened and the default was KEPT; reasoning and the refused alternative are in [`docs/versioning.md`](../versioning.md). This row is the commitment as it was made; the decision is not here.** |
 | R10 | Two branches drift; a security fix lands on one only | Compat line is security-fixes-only with a published sunset, which caps the surface. Document the backport step in `docs/release.md`. |
 | R11 | E1 is a bet — no deployment emits webhooks today | Accepted knowingly. Re-justified on "the contract is written and stable", not on a named consumer. |
 
@@ -476,7 +476,7 @@ and `Each[T]` offset drift (the server has no cursor).
 ```
   CURRENT                        THIS PLAN                        12-MONTH IDEAL
   v1 @ server 1.0.0        -->  compat: v1 frozen           -->  contract-locked client
-                                 main: v1 + v2 primary            v2 default at 1.0.0
+                                 main: v1 + v2 primary            v2 default (settled 2026-09-15)
   2 of 8 resource groups   -->  8 of 8 on main              -->  drift gate keeps it true
   no namespace concept     -->  per-request namespace       -->  namespaces routine
   Go 1.24 floor            -->  two lines, stated sunset    -->  one line, modern only
@@ -550,7 +550,9 @@ Also: all four jobs use `actions/setup-go@v7` with `cache: true`, and setup-go's
 **`ResourceTag`**. Rev 2 omitted the last two — exactly the ones owned by the audit-logs and
 resource-tags issues.
 
-**Correction 17 — the v2 default fails INTO `IsNotFound`, and rev 2 understated it.** A pre-3.0 server
+**Correction 17 — the v2 default fails INTO `IsNotFound`, and rev 2 understated it.** *(Read with
+Correction 36 below: the cutoff is server **2.0**, not 3.0. The text is left as written, since it is
+what this correction said at the time.)* A pre-3.0 server
 has no `/api/v2` route, so it returns an unrouted 404 with **no error envelope**. `parseError` finds no
 `code`, falls back to `codeFromStatus(404)` → `CodeNotFound` (`errors.go:81-82`), and
 **`IsNotFound(err)` returns true on every call.** A caller with the ordinary
@@ -798,7 +800,7 @@ Rev 5 supersedes the rev-1..4 staging numbers: **v1.0.0** (compat), **v2.0.0-alp
 | 7A | Coverage floor at 82.6%, ratcheting, `examples/` excluded, **separate baseline per branch** | Adopted |
 | 8A | Cap response reads in `do()` with a named error | Adopted, **both lines** |
 | T1 | Compat line version number | **User chose `v1.0.0`** over my and Codex's recommendation of `v0.2.x`. Defensible: for a genuinely frozen line, `v1.x` is honest under SemVer — a stable API is what frozen means. The unusual part is refusing bug fixes, which is a support-policy choice, not a versioning violation |
-| T2 | `/v2` REST-version scope | **Keep both REST versions.** Codex argued for REST-v2-only (deleting `APIVersion`, the v1 guard, and dual tests). Rejected because it conflates two independent axes and would strand modern-Go services on pre-3.0 servers |
+| T2 | `/v2` REST-version scope | **Keep both REST versions.** Codex argued for REST-v2-only (deleting `APIVersion`, the v1 guard, and dual tests). Rejected because it conflates two independent axes and would strand modern-Go services on pre-2.0 servers (**corrected from "pre-3.0": Correction 36 establishes the `/api/v2` cutoff as server 2.0, and this table was written before it**) |
 
 ## Mandated regression test (IRON RULE — not optional)
 
