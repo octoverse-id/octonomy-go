@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The tags-ordering caveats are now qualified by server version rather than stated flatly**
+  ([#49](https://github.com/octoverse-id/octonomy-go/issues/49)). Server 3.2.1 fixed
+  [octonomy#162](https://github.com/octoverse-id/octonomy/issues/162): `GET /tags` now orders by
+  `(name, slug, id)` on both `/api/v1` and `/api/v2`. Every passage claiming the list has **no**
+  `ORDER BY` was true when written and became false the moment that release shipped, which is what
+  this issue existed to catch — the claims are prose, and the SDK has no mechanism that would have
+  flagged them.
+  - **The decision was to version-qualify, not to delete**, and it is recorded in the `Each` doc
+    comment rather than only here. The SDK performs **no server-version handshake**, so it cannot
+    tell a fixed server from an unfixed one at runtime; a consumer pointed at 3.2.0 or older still
+    has the entire hazard, and deleting the warning would have been correct about the newest server
+    and silently wrong about every other. Each passage now reads: best-effort against **≤ 3.2.0**,
+    and against **≥ 3.2.1** exactly as safe as vocabularies and aliases and **no safer** — an
+    `ORDER BY` makes a *fixed* result set page deterministically, it does not hand you a snapshot,
+    so ordinary offset drift is untouched.
+  - **Nine files carried the claim, not the five the issue inventoried.** `tagtree.go`,
+    `tagtree_test.go`, `pagination_test.go`, `examples/tags/main.go` and `docs/roadmap.md` also
+    asserted it, the first three as the stated *reason* for a behaviour rather than as a caveat. The
+    tree's "no ORDER BY to preserve" rationale for input order is gone; input order is still what
+    `BuildTagTree` preserves, and the reason assembly cannot assume "parents first" is now the true
+    and durable one — no server ordering *guarantees* parents before children, since `(name, slug, id)`
+    sorts on the name and says nothing about the parent chain, so it may happen to and is never
+    obliged to.
+  - **The two released CHANGELOG entries were left alone**, deliberately. The passages in
+    `2.0.0-alpha.1` and `2.0.0-alpha.2` are a record of what was true at those releases, not a draft;
+    correcting them in place would rewrite history to describe a server that did not exist yet. This
+    entry is the correction.
+- **The harness pin moved to `ghcr.io/octoverse-id/octonomy:3.2.1`** from `3.1.0`, in all three
+  places that named it: `scripts/octonomy-harness.sh`, the `.github/actions/octonomy-harness`
+  composite action (which carried its own copy of the default and would otherwise have left CI on
+  3.1.0 while local runs moved), and the harness walkthrough in `docs/development.md`.
+  - 3.2.1 is a **floor**, not a refresh: below it the new test is expected to fail rather than pass
+    vacuously, and the comment at the pin says so.
+  - **The vendored contracts are untouched.** `openapi.yaml` and `openapi-v2.yaml` are byte-identical
+    between 3.2.0 and 3.2.1 apart from the `info.version` string, because the fix is behavioural and
+    invisible to the schema — so `docs/versioning.md` still records 3.2.0 as the targeted contract,
+    and `make contract-check` still reports no drift. The harness pin and the recorded contract
+    version are independent, and were already two releases apart before this change.
+
+### Added
+- **`TestIntegration_TagsListPagesInATotalOrder`** (`integration_suite_test.go`) — the tags-ordering
+  wording is now evidence-backed by a test rather than by prose alone. It walks an eight-tag fixture
+  **one row per page**, so every page boundary is a separate query, and asserts the sequence equals
+  `(name, slug, id)` computed locally from what the server echoed on create.
+  - **It pins the expected order, not a self-consistent one**, and that is the entire design. A walk
+    compared only against itself — or against a single-page read taken moments later — **can pass
+    against the broken selector**, because one PostgreSQL backend generally keeps the same aggregate
+    plan for the life of a process. Confirmed the hard way: run against a 3.1.0 harness the walk
+    returned every row exactly once, none repeated and none missed, and simply in the wrong order. A
+    self-comparison would have been green.
+  - The fixture makes name order, slug order and insertion order **mutually disagree**, so the two
+    trivial agreements a broken server could produce are both denied it. That is a much weaker claim
+    than "cannot be a coincidence", and the weaker claim is the true one: an unordered query is
+    *undefined*, not adversarial, so no fixture can force a pre-3.2.1 server to fail on every run.
+  - **All three sort keys are exercised.** Two pairs share a name, so the **slug** tiebreaker decides
+    them rather than just "sorted by name". One pair shares name *and* slug and differs only in
+    **type** — permitted, because the uniqueness constraint is `(type, slug)` and not `slug` alone —
+    so nothing but the **id** tiebreaker can order it. An earlier draft of this entry claimed that
+    tie was unreachable through the API; it is not, and the test now covers it. What it proves is
+    bounded and the test says so: with the id tiebreaker dropped those two rows have no defined
+    order, so the case catches its absence only when the planner disagrees, not every run.
+  - Verified in both directions against real containers: **passes on 3.2.1, fails on 3.1.0**, where
+    the verifying run placed every one of the eight rows wrong. How badly a pre-3.2.1 server fails is
+    a property of its plan rather than of the fixture, so that count is evidence, not a guarantee.
+
+
 ## [2.0.0-alpha.3] - 2026-09-15
 
 ### Changed

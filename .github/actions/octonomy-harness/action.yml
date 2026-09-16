@@ -22,9 +22,13 @@ description: >-
 
 inputs:
   image:
-    description: Octonomy image to boot. Must be an exact version or a digest, never a moving tag.
+    description: >-
+      Octonomy image to boot. Must be an exact version or a digest, never a moving tag.
+      3.2.1 is a floor: it is the first release whose GET /tags carries an ORDER BY
+      (upstream octonomy#162), which TestIntegration_TagsListPagesInATotalOrder asserts.
+      Keep this in step with the default in scripts/octonomy-harness.sh.
     required: false
-    default: "ghcr.io/octoverse-id/octonomy:3.1.0"
+    default: "ghcr.io/octoverse-id/octonomy:3.2.1"
   port:
     description: Host port to publish the server on.
     required: false

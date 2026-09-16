@@ -598,12 +598,46 @@ detect a short walk — one-way, and only for a complete walk from offset 0, sin
 of the whole collection rather than of the part still ahead. All four are asserted against a real
 server in `integration_test.go`.
 
-**Ordering is per endpoint, and `GET /tags` has none.** Vocabularies and tag aliases order by
-`(name, slug, id)`; audit logs by `(created_at DESC, id)`; assignments and resource tags by
-`(assigned_at DESC, id)`. The tags list annotates `usage_count`, which makes the query a `GROUP BY`,
-and Django drops `Meta.ordering` from aggregate queries — the emitted SQL ends at `GROUP BY` and
-Django's own `queryset.ordered` reports false. `LIMIT`/`OFFSET` over an unordered query is undefined,
-so paging the tags list can repeat or miss rows even with no concurrent writes.
+**Ordering is per endpoint.** Vocabularies and tag aliases order by `(name, slug, id)`; tags by the
+same chain **from server 3.2.1**, and by nothing at all before it (below); audit logs by
+`(created_at DESC, id)`; assignments and resource tags by `(assigned_at DESC, id)`.
+
+**`GET /tags` had no ordering at all before server 3.2.1**, and the caveat is *version-qualified
+rather than removed* ([#49](https://github.com/octoverse-id/octonomy-go/issues/49)) — the same shape
+as the `Scope`-on-`/api/v1` note above, and for the same reason: the SDK does no version handshake,
+so it cannot tell which server a caller is pointed at. The list annotates `usage_count`, which makes
+the query a `GROUP BY`, and Django drops `Meta.ordering` from aggregate queries, so `Tag.Meta.ordering`
+was silently dropped — the emitted SQL ended at `GROUP BY` and Django's own `queryset.ordered`
+reported false. `LIMIT`/`OFFSET` over an unordered query is undefined, so paging it could repeat or
+miss rows even with no concurrent writes; upstream reproduced 23 duplicated and 23 missed out of 100.
+
+[Server 3.2.1](https://github.com/octoverse-id/octonomy/issues/162) adds the explicit
+`order_by("name", "slug", "id")` after the annotation, on the one view both `/api/v1` and `/api/v2`
+route to, and re-arms Django's `UnorderedObjectListWarning` on DRF's slicing path so a future
+unordered list fails the server's CI instead of shipping. Re-verified here against a running 3.2.1
+container: `queryset.ordered` is `true`, the statement ends at
+`ORDER BY "tags"."name" ASC, "tags"."slug" ASC, "tags"."id" ASC`, and a one-row-per-page walk of a
+fixture whose name, slug and insertion order all disagree returns the same sequence as a single-page
+read, with nothing repeated and nothing missed.
+
+| Server | Walking `GET /tags` |
+| ------ | ------------------- |
+| **≤ 3.2.0** | Best-effort. Rows can repeat or vanish with **no concurrent writes**. Safe only if the filtered set fits one page |
+| **≥ 3.2.1** | Same as vocabularies and aliases: a **fixed** result set pages deterministically, and ordinary offset drift still applies to a changing one |
+
+The `≥ 3.2.1` row is the whole guarantee: an `ORDER BY` makes a fixed set deterministic, it does not
+give a snapshot. A row inserted, renamed or deactivated mid-walk still shifts every later offset, and
+since `name` and `slug` are both mutable a cursor would not settle it either. There is no cursor
+parameter on any list, and the filters narrow a set rather than resume from a position, so one cannot
+be assembled client-side.
+
+**Quiescing writes is the only way to *guarantee* a complete walk.** A walk under concurrent writes
+may happen to be complete; nothing tells you whether it was. Re-walking and unioning by id *reduces*
+the risk without removing it — a row created and then deactivated between the two walks is absent
+from both, and so is one deactivated ahead of the first walk's cursor and never reactivated. A
+`count` that matches proves nothing either, since one create and one delete cancel out in the total.
+A `count` **mismatch** is the one-directional signal that the list drifted under you; treat it as
+proof you must re-walk, and never treat its absence as proof you need not.
 
 A 2xx whose **envelope** does not match the shape above is an error, never a zero value. Decoding a
 wrapped body straight into a `*Tag` yields an empty struct with a nil error, and an unexpected list

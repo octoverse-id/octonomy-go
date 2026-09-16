@@ -282,14 +282,19 @@ persistence that no fixture can settle:
 
 ## Known gaps in implemented resources
 
-Each has an issue; none is a missing endpoint group. **The rows are a snapshot, taken 2026-09-14**
+Each has an issue; none is a missing endpoint group. **The rows are a snapshot, taken 2026-09-16**
 — each links the issue that holds its live state, and what a row adds is the reasoning, not the
 status.
 
 | Gap | Issue |
 | --- | ----- |
-| **The tags-ordering caveats want revisiting** once the server adds an `ORDER BY` to the annotated tags list (upstream `octonomy#162`). | [#49](https://github.com/octoverse-id/octonomy-go/issues/49) |
 | **The smoke assertion (recipe step 8) is enforced by nothing**, and a resource added without one leaves #32's class unguarded for itself. Left to a reviewer on purpose — the reasoning is above. | [#77](https://github.com/octoverse-id/octonomy-go/issues/77) |
+
+Closed since the last snapshot: **the tags-ordering caveats**
+([#49](https://github.com/octoverse-id/octonomy-go/issues/49)). Server 3.2.1 added the `ORDER BY`
+that the annotated tags list never had (upstream `octonomy#162`), the caveats are now qualified by
+server version rather than stated flatly, and `TestIntegration_TagsListPagesInATotalOrder` holds the
+claim against the pinned harness.
 
 Deferred by design, not a gap: the webhook typed-event surface and `http.Handler`
 ([#22](https://github.com/octoverse-id/octonomy-go/issues/22) — when that was decided, no deployment

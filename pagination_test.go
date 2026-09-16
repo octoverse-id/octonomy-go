@@ -262,9 +262,10 @@ func TestEach_FailureOffsetIsTheFirstUnprocessedItem(t *testing.T) {
 // The fixture is a stable, totally ordered collection with nothing writing to
 // it, which is the ONLY condition under which redelivery is guaranteed -- an
 // offset is a position, not an identity, so against a collection that moved
-// (or against the unordered tags list) the same offset may address a different
-// row. The doc comment states it conditionally for that reason, and this test
-// establishes the condition rather than the general claim.
+// (or against a tags list on a server older than 3.2.1, which carried no
+// ORDER BY at all) the same offset may address a different row. The doc comment
+// states it conditionally for that reason, and this test establishes the
+// condition rather than the general claim.
 func TestEach_ReturnedOffsetActuallyResumes(t *testing.T) {
 	c := newTestClient(t, pagedTags(t, 10, nil))
 

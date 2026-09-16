@@ -139,8 +139,11 @@ func main() {
 
 	// The tags this run created, in ONE request. The vocabulary filter is what
 	// makes that possible: it narrows the list to a set small enough for a
-	// single page, which is also the only fully safe size to walk -- GET /tags
-	// has no ORDER BY at all, so paging it can repeat or miss rows.
+	// single page, which is the only size that cannot drift at all, since one
+	// request cannot shift under itself. Paging it is fine against a 3.2.1+
+	// server, where GET /tags orders by (name, slug, id); older servers left
+	// that list unordered, so a walk there could repeat or miss rows with no
+	// concurrent writes. See the Each doc comment.
 	fetch := func(what string) []octonomy.Tag {
 		page, err := client.Tags.List(ctx, &octonomy.TagListParams{
 			VocabularyID: octonomy.String(vocab.ID),
