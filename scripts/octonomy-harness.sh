@@ -28,8 +28,20 @@ set -eu
 # Pinned to an exact release, never a moving tag. `:latest` and `:edge` both
 # exist in this registry and both would make a green run unreproducible.
 # For a fully immutable pin, set this to the digest:
-#   ghcr.io/octoverse-id/octonomy@sha256:58cd50931e5014320d3aef716ddb8dc79cc1a1101159c97d19a16b00b010bac2
-HARNESS_IMAGE="${OCTONOMY_HARNESS_IMAGE:-ghcr.io/octoverse-id/octonomy:3.1.0}"
+#   ghcr.io/octoverse-id/octonomy@sha256:776dca5f1a5a71e7eee4b389ade7b6c53e4db46bc5f9713384463853a281f137
+#
+# 3.2.1 is a FLOOR, not just a refresh. It is the first release in which
+# GET /tags carries an ORDER BY (upstream octonomy#162): before it, the list
+# annotates usage_count, which makes the query a GROUP BY, and Django drops
+# Meta.ordering from aggregate queries -- so LIMIT/OFFSET over it was undefined
+# and a tags walk could repeat or miss rows with no concurrent writes at all.
+# TestIntegration_TagsListPagesInATotalOrder asserts the fix, and is built so a
+# pre-3.2.1 server is expected to fail it rather than pass vacuously (an
+# unordered query is undefined, not adversarial, so no fixture can force that on
+# every run -- 3.1.0 was verified to fail it). The
+# .github/actions/octonomy-harness composite action carries the same default and
+# must move with it.
+HARNESS_IMAGE="${OCTONOMY_HARNESS_IMAGE:-ghcr.io/octoverse-id/octonomy:3.2.1}"
 POSTGRES_IMAGE="${OCTONOMY_HARNESS_POSTGRES_IMAGE:-postgres:16}"
 
 PREFIX="${OCTONOMY_HARNESS_PREFIX:-octonomy-harness}"

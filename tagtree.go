@@ -207,10 +207,13 @@ type TagTree struct {
 // # Order
 //
 // Roots, Orphans and every Children slice are in INPUT ORDER, and no sort is
-// applied. GET /tags has no ORDER BY at all (its usage_count annotation makes
-// the query a GROUP BY, and Django drops Meta.ordering from aggregate queries),
-// so the order you get is the order the server happened to answer with. Sort
-// the input, or sort Children yourself, if you need a stable rendering:
+// applied -- the order you get is the order you passed in. From server 3.2.1 a
+// tags list page arrives in (name, slug, id) order, so that is what a tree
+// built straight from one preserves; before 3.2.1 GET /tags had no ORDER BY at
+// all and the input order was whatever the planner happened to produce (see
+// Each). Either way this is not something BuildTagTree relies on: the input can
+// equally be a concatenated walk or a hand-built slice. Sort the input, or sort
+// Children yourself, if you need a particular rendering:
 //
 //	tree.Walk(func(n *octonomy.TagNode) error {
 //		slices.SortFunc(n.Children, func(a, b *octonomy.TagNode) int {
@@ -226,8 +229,11 @@ func BuildTagTree(tags []Tag) (*TagTree, error) {
 	nodes := make([]*TagNode, 0, len(tags))
 
 	// Pass one indexes every tag. It is separate from the linking pass because
-	// a parent may appear AFTER its child in the input -- the list has no order
-	// at all, so "parents first" is not a shape this can assume.
+	// a parent may appear AFTER its child in the input. No server ordering
+	// GUARANTEES parents first -- (name, slug, id) sorts on the name, which
+	// says nothing about the parent chain, so it may happen to put a parent
+	// first and is never obliged to; before 3.2.1 the tags list had no order at
+	// all. So "parents first" is not a shape this can ever assume.
 	for i := range tags {
 		if tags[i].ID == "" {
 			return nil, fmt.Errorf("octonomy: BuildTagTree: tags[%d] has a blank id; a tag decoded by this SDK always carries one, so this slice was not built from a list response", i)

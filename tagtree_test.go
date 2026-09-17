@@ -90,8 +90,10 @@ func TestBuildTagTree_Shape(t *testing.T) {
 		},
 		{
 			name: "a child BEFORE its parent in the input still links",
-			// GET /tags has no ORDER BY at all, so "parents first" is a shape
-			// the assembly must never assume.
+			// No server ordering GUARANTEES parents before children -- (name,
+			// slug, id) sorts on the name, not the parent chain, so it may
+			// happen to and is never obliged to. "Parents first" is a shape the
+			// assembly must never assume.
 			tags:    []Tag{tag("kid", "root"), tag("root", "")},
 			roots:   []string{"root"},
 			walk:    []string{"root", "kid"},

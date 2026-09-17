@@ -369,20 +369,30 @@ processed — so a failure is resumable: pass it back as `ListOptions{Offset: of
 picks up where it stopped. A walk that dies on page 40 of 100 keeps 39 pages of progress.
 
 An offset is a **position, not an identity**. Over a stable, unchanged collection a resume
-re-delivers the item that failed; where rows moved — or on the tags list, where they need not have —
-that offset may address a different row, so a resume *may* retry the failed item and may equally skip
-it. It is also not a polling cursor: a row created since that sorts *after* the old tail turns up,
-one sorting before it never does.
+re-delivers the item that failed; where rows moved — or on a pre-3.2.1 tags list, where they need not
+have — that offset may address a different row, so a resume *may* retry the failed item and may
+equally skip it. It is also not a polling cursor: a row created since that sorts *after* the old tail
+turns up, one sorting before it never does.
 
 **Offset drift is real and no client can fix it.** The server pages by limit/offset with no cursor,
 so a concurrent create or delete shifts the window and an item can be delivered twice or missed. The
-sort order is per endpoint — vocabularies and aliases by `(name, slug, id)`, audit logs and
-assignments by their timestamp descending.
+sort order is per endpoint — vocabularies and aliases by `(name, slug, id)`, and tags too *from
+server 3.2.1* (see below), audit logs and assignments by their timestamp descending.
 
-**`GET /tags` is worse: it has no `ORDER BY` at all.** Its `usage_count` annotation makes the query a
-`GROUP BY`, and Django drops `Meta.ordering` from aggregate queries. `LIMIT`/`OFFSET` without
-`ORDER BY` is undefined, so a tags walk may repeat or miss rows *with no concurrent writes*. Treat it
-as best-effort unless the filtered set fits in one page.
+**`GET /tags` was worse before server 3.2.1: it had no `ORDER BY` at all.** Its `usage_count`
+annotation makes the query a `GROUP BY`, and Django drops `Meta.ordering` from aggregate queries, so
+`Tag.Meta.ordering` was silently dropped. `LIMIT`/`OFFSET` without `ORDER BY` is undefined, so a tags
+walk could repeat or miss rows *with no concurrent writes at all*. [Server
+3.2.1](https://github.com/octoverse-id/octonomy/issues/162) orders the list by `(name, slug, id)` on
+both API surfaces and the hazard is gone with it.
+
+**The caveat is qualified by server version rather than deleted**, deliberately
+([#49](https://github.com/octoverse-id/octonomy-go/issues/49)): the SDK does no version handshake, so
+it cannot tell a fixed server from an unfixed one, and a caller pointed at 3.2.0 or older still has
+the whole problem. Against **3.2.0 and older**, treat a tags walk as best-effort unless the filtered
+set fits in one page. Against **3.2.1 and newer**, the tags list is as safe to walk as vocabularies
+and aliases and no safer — ordering makes a *fixed* result set page deterministically, it does not
+give you a snapshot, so ordinary offset drift still applies.
 
 De-duplicate on ID to remove double delivery. To *detect* the missed half, compare the first page's
 `Pagination.Count` against the number of distinct IDs walked — but read it in one direction only, and
@@ -458,8 +468,12 @@ changes what a node reports and can leave `Tag.ParentID` disagreeing with the `P
 from it, so edit the slice and build again rather than mutating tags you have already assembled.
 
 `TagNode.Path()` is the breadcrumb — root first, the node last — and `tree.Node(id)` is where it
-starts. `Roots`, `Orphans` and every `Children` slice are in **input order**; nothing is sorted,
-because `GET /tags` has no `ORDER BY` to preserve in the first place.
+starts. `Roots`, `Orphans` and every `Children` slice are in **input order**; nothing is sorted. When
+the input is a list page from a 3.2.1-or-newer server that is the server's `(name, slug, id)` order,
+but `BuildTagTree` neither requires nor imposes it — the input can equally be a concatenated walk or
+a hand-built slice. Sort the input, or sort `Children` in a `Walk`, if you need a particular
+rendering. Note that no server ordering *guarantees* parents before children — `(name, slug, id)`
+sorts on the name, so it may happen to and is never obliged to — and assembly never assumes it.
 
 A repeated id is refused with `ErrDuplicateTagID` rather than resolved: the copies may disagree about
 `ParentID`, and choosing between them is the one place assembly could silently build a *different*

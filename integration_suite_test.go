@@ -36,6 +36,11 @@
 //	                            accept a null for, and the 400 or 409 it answers
 //	                            for the rest: the table TagUpdate publishes
 //	slug uniqueness          -- scoped per namespace, not per tenant
+//	tags list ordering       -- GET /tags pages in a TOTAL (name, slug, id)
+//	                            order, which it did not do before server 3.2.1
+//	                            (octonomy#162): the caveats on Each, in README.md
+//	                            and in docs/api.md are qualified by that version,
+//	                            and this is what holds them to it
 //	error envelopes          -- every Is* helper this SDK exports, against the
 //	                            error the server really sends
 //
@@ -52,7 +57,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -2124,4 +2131,193 @@ func TestIntegration_NullClearsOnlyTheNullableFields(t *testing.T) {
 			}
 		})
 	})
+}
+
+// TestIntegration_TagsListPagesInATotalOrder is the evidence behind the
+// tags-ordering wording on Each, in README.md and in docs/api.md
+// (octonomy-go#49). Server 3.2.1 added the ORDER BY that GET /tags never had
+// (upstream octonomy#162); before it, the list annotated usage_count, which
+// makes the query a GROUP BY, and Django drops Meta.ordering from aggregate
+// queries -- so LIMIT/OFFSET ran over an undefined order and a walk could
+// repeat or miss rows with NO concurrent writes at all.
+//
+// It pins the EXPECTED SEQUENCE, not merely a self-consistent one, and that
+// distinction is the whole point of the test. A walk compared only against
+// itself -- or against a single-page read taken moments later -- CAN PASS
+// against the broken selector, because one PostgreSQL backend generally keeps
+// the same aggregate plan for the life of a process. Comparing against the
+// order the contract names is what tells the two apart. The fixture makes name
+// order, slug order and insertion order mutually disagree, which rules out the
+// two trivial ways a broken server could land on the expected sequence; an
+// undefined order can still coincide with it, and no fixture can prevent that.
+//
+// All three tiebreakers are exercised. Two tag pairs share a NAME, so the slug
+// tiebreaker decides them rather than just "sorted by name". One pair shares
+// name AND slug, which the server permits because its uniqueness constraint is
+// on (type, slug) rather than on slug alone -- so the two rows differ only in
+// type, and nothing but the ID tiebreaker can order them.
+//
+// Be precise about what that last pair proves. If the server dropped the id
+// tiebreaker, those two rows would have NO defined relative order, and the
+// planner would be free to return them in id order anyway -- so this case
+// catches a missing tiebreaker only when the planner disagrees with it, not
+// every run. It is still worth having: it is the only route to a (name, slug)
+// tie through the public API, and the server pins the id tiebreaker directly.
+//
+// This test is also why scripts/octonomy-harness.sh pins 3.2.1 as a floor.
+// Against an older image it is expected to fail rather than pass vacuously --
+// verified against 3.1.0, which placed every row wrong on the run that checked
+// it. An unordered query is undefined rather than adversarial, so
+// no fixture can force a pre-3.2.1 server to fail on every run; what this one
+// does is deny it the trivial agreements, since neither insertion order nor
+// slug order produces the expected sequence.
+func TestIntegration_TagsListPagesInATotalOrder(t *testing.T) {
+	client := newSmokeClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// One prefix per run, carried in BOTH name and slug so the q filter selects
+	// exactly this fixture. Because every row shares it, it contributes nothing
+	// to the relative order -- the suffixes below decide that entirely.
+	prefix := uniqueSlug("ordwalk")
+
+	// name suffix / slug suffix / type. Insertion order (top to bottom)
+	// disagrees with name order and with slug order, and those two disagree
+	// with each other, so neither can be mistaken for the expected sequence:
+	//
+	//	insertion: zulu mike/zzz alpha/mmm mike/bbb bravo alpha/nnn same same
+	//	by slug:   zulu mike/bbb alpha/mmm alpha/nnn same same bravo mike/zzz
+	//	by name:   alpha/mmm alpha/nnn bravo mike/bbb mike/zzz same same zulu
+	//
+	// The last two rows agree on name AND slug and differ only in type, which
+	// the (type, slug) uniqueness constraint permits. Only the id tiebreaker
+	// orders them, so `want` below decides their position, not this table.
+	fixture := []struct{ name, slug, typ string }{
+		{"zulu", "aaa", "label"},
+		{"mike", "zzz", "label"},
+		{"alpha", "mmm", "label"},
+		{"mike", "bbb", "label"},
+		{"bravo", "yyy", "label"},
+		{"alpha", "nnn", "label"},
+		{"same", "same", "label"},
+		{"same", "same", "category"},
+	}
+
+	type row struct{ id, name, slug string }
+	created := make([]row, 0, len(fixture))
+	for _, f := range fixture {
+		tag, err := client.Tags.Create(ctx, octonomy.TagCreate{
+			Name: fmt.Sprintf("%s %s", prefix, f.name),
+			Slug: fmt.Sprintf("%s-%s", prefix, f.slug),
+			Type: f.typ,
+		})
+		if err != nil {
+			t.Fatalf("Tags.Create(%s/%s/%s): %v", f.name, f.slug, f.typ, err)
+		}
+		created = append(created, row{id: tag.ID, name: tag.Name, slug: tag.Slug})
+		id := tag.ID
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cleanupCancel()
+			if err := client.Tags.Delete(cleanupCtx, id); err != nil {
+				t.Errorf("Tags.Delete(%s): %v", id, err)
+			}
+		})
+	}
+
+	// The contract's own order, computed locally: (name, slug, id) ascending.
+	// This is the assertion's reference, and it is built from what the server
+	// echoed back on create rather than from what this test sent, so a server
+	// that normalises either field is compared against the values it actually
+	// stored.
+	//
+	// Comparing ids as STRINGS is correct against PostgreSQL's uuid ordering,
+	// which is by the 16-byte value: in the canonical lowercase form the dashes
+	// sit at fixed positions so they never discriminate, and '0'-'9' < 'a'-'f'
+	// in ASCII matches 0 < 10 numerically, so the two orders coincide.
+	want := make([]row, len(created))
+	copy(want, created)
+	sort.Slice(want, func(i, j int) bool {
+		if want[i].name != want[j].name {
+			return want[i].name < want[j].name
+		}
+		if want[i].slug != want[j].slug {
+			return want[i].slug < want[j].slug
+		}
+		return want[i].id < want[j].id
+	})
+
+	// The (name, slug) tie is what reaches the id tiebreaker at all, so assert
+	// it exists rather than assuming it. If the server ever scoped slugs
+	// differently, or normalised one of the pair, this fixture would quietly
+	// stop covering the third sort key and the test would still pass.
+	ties := 0
+	for i := 1; i < len(want); i++ {
+		if want[i].name == want[i-1].name && want[i].slug == want[i-1].slug {
+			ties++
+		}
+	}
+	if ties != 1 {
+		t.Fatalf("fixture has %d (name, slug) ties, want exactly 1: the id tiebreaker is not being exercised", ties)
+	}
+
+	// ONE ROW PER PAGE, so every boundary in the fixture is a separate query
+	// and a plan that changed between two of them would show up. A single page
+	// holding the whole set would prove nothing about pagination at all.
+	var walked []row
+	var firstCount int
+	seen := map[string]bool{}
+	pages := 0
+	_, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 1},
+		func(ctx context.Context, opts octonomy.ListOptions) (*octonomy.List[octonomy.Tag], error) {
+			page, err := client.Tags.List(ctx, &octonomy.TagListParams{
+				Query:       octonomy.String(prefix),
+				ListOptions: opts,
+			})
+			if err == nil {
+				pages++
+				if pages == 1 {
+					firstCount = page.Pagination.Count
+				}
+			}
+			return page, err
+		},
+		func(tag octonomy.Tag) error {
+			if seen[tag.ID] {
+				return fmt.Errorf("tag %s (%s) was delivered twice", tag.ID, tag.Slug)
+			}
+			seen[tag.ID] = true
+			walked = append(walked, row{id: tag.ID, name: tag.Name, slug: tag.Slug})
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("Each over the tags list: %v", err)
+	}
+
+	if pages < len(fixture) {
+		t.Errorf("walked the fixture in %d requests at Limit=1; want at least %d, so the assertion below really crosses page boundaries",
+			pages, len(fixture))
+	}
+
+	// Count is the whole collection's size, and the q filter narrows it to this
+	// fixture, so here -- and only because the walk is complete and started at
+	// offset 0 -- it is directly comparable. Fewer distinct ids than Count is
+	// the one-directional short-walk signal documented on Each.
+	if firstCount != len(fixture) {
+		t.Errorf("first page reported Pagination.Count = %d, want %d", firstCount, len(fixture))
+	}
+	if len(walked) != len(want) {
+		t.Fatalf("walked %d rows, want %d: %v", len(walked), len(want), walked)
+	}
+
+	for i := range want {
+		if walked[i].id != want[i].id {
+			t.Errorf("row %d of the paged walk is %s (%s / %s), want %s (%s / %s)",
+				i, walked[i].id, walked[i].name, walked[i].slug,
+				want[i].id, want[i].name, want[i].slug)
+		}
+	}
+	if t.Failed() {
+		t.Logf("GET /tags did not page in (name, slug, id) order. On a server older than 3.2.1 that is expected and the harness pin in scripts/octonomy-harness.sh is too old; on 3.2.1 or newer it is a regression of upstream octonomy#162.")
+	}
 }

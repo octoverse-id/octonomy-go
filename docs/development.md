@@ -224,7 +224,7 @@ make dev-server-logs   # dump container logs
 make dev-server-down   # tear everything down
 ```
 
-It starts Postgres 16 and the pinned `ghcr.io/octoverse-id/octonomy:3.1.0` image on a private Docker
+It starts Postgres 16 and the pinned `ghcr.io/octoverse-id/octonomy:3.2.1` image on a private Docker
 network, applies migrations, mints three service tokens, waits for `/health/ready`, and then **proves
 the environment actually works** before reporting success. Credentials land in
 `.octonomy-harness.env` (git-ignored, mode 600):

@@ -388,15 +388,23 @@ func TestSmoke_RealServer(t *testing.T) {
 	// pinned here against a real server rather than against a fixture that
 	// merely agrees with the walker.
 	//
-	// It walks ALIASES, not tags, and via the nested route. Two reasons. The
-	// nested route is the closure shape Each's doc comment advertises for
-	// positional ids, and nothing else here covers it. More importantly the
-	// aliases list is totally ordered by (name, slug, id), while GET /tags
-	// carries no ORDER BY at all -- its usage_count annotation makes the query a
-	// GROUP BY and Django drops Meta.ordering from those. A tags walk is
-	// therefore allowed to repeat or miss rows between pages with no writes at
-	// all, which is documented on Each and is not something to build a
-	// deterministic assertion on.
+	// It walks ALIASES, not tags, and via the nested route. The nested route is
+	// the closure shape Each's doc comment advertises for positional ids, and
+	// nothing else here covers it.
+	//
+	// It STAYS on aliases now that server 3.2.1 has ordered the tags list
+	// (octonomy#162, octonomy-go#49). Moving it would have traded the only
+	// coverage of that nested shape for coverage of a list that is now walked
+	// separately -- TestIntegration_TagsListPagesInATotalOrder, in
+	// integration_suite_test.go, was ADDED rather than swapped in for exactly
+	// that reason. It lives there rather than here because tags ordering is a
+	// SEMANTIC property of the server, which is that file's remit, while this
+	// one covers response SHAPES.
+	//
+	// The second reason this walk was on aliases is gone, though: both lists are
+	// totally ordered by (name, slug, id) against the pinned harness, so it is
+	// no longer the case that only one of them can carry a deterministic
+	// assertion.
 	//
 	// The aliases hang off a tag of their own rather than off the one from step
 	// 3, which step 8 asserts holds exactly one alias. Sharing it would have

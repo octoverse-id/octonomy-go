@@ -90,9 +90,10 @@ type List[T any] struct {
 // AN OFFSET IS A POSITION, NOT AN IDENTITY, so what a resume does with it is
 // conditional on the drift below. Where the collection is totally ordered and
 // unchanged, resuming re-delivers the item that failed rather than stepping
-// over it. Where it is not -- anything written since, and the tags list even
-// with nothing written -- that offset may address a different row, so a resume
-// MAY retry the failed item and may just as well skip it.
+// over it. Where it is not -- anything written since, and on a server older
+// than 3.2.1 the tags list even with nothing written -- that offset may address
+// a different row, so a resume MAY retry the failed item and may just as well
+// skip it.
 //
 // Neither at-least-once nor at-most-once is on offer, and a stable ORDER BY
 // would not buy them either: a row inserted or removed BEFORE the offset shifts
@@ -101,13 +102,16 @@ type List[T any] struct {
 //
 // A keyset cursor -- naming the last row seen instead of counting past it --
 // removes the positional shift, but it is only ever as stable as the key it
-// seeks on, and that varies by endpoint here. Vocabularies and aliases sort on
-// name and slug, both of which a caller can edit mid-walk: rename a row you
-// already passed to something later and it comes round again; rename one ahead
-// of you to something earlier and you never see it. Audit logs and assignments
-// sort on a timestamp that is set once at insert and never updated, so a cursor
-// over those really would be stable. The tags list has no order at all, so
-// there is nothing to seek on.
+// seeks on, and that varies by endpoint here. Vocabularies, aliases and (from
+// server 3.2.1) tags sort on name and slug, both of which a caller can edit
+// mid-walk: rename a row you already passed to something later and it comes
+// round again; rename one ahead of you to something earlier and you never see
+// it. Audit logs and assignments sort on a timestamp that is set once at insert
+// and never updated, so a cursor over those really would be stable.
+//
+// Moot in any case, and not only because the server exposes no cursor (below):
+// the list filters all narrow a set rather than resume from a position, so a
+// caller cannot assemble a keyset walk on top of them either.
 //
 // Even on an immutable key a cursor gives continuity, not a consistent view of
 // a moving collection. Only a SNAPSHOT gives that, and it is the server's to
@@ -132,25 +136,49 @@ type List[T any] struct {
 // -- so the row leaves the walked set either way.
 //
 // The sort order is PER ENDPOINT, not one rule. Vocabularies and tag aliases
-// order by (name, slug, id); audit logs by (created_at DESC, id); assignments
-// and resource tags by (assigned_at DESC, id).
+// order by (name, slug, id), and so do tags FROM SERVER 3.2.1 (before that they
+// had no order at all -- see below); audit logs by (created_at DESC, id);
+// assignments and resource tags by (assigned_at DESC, id).
 //
-// # The tags list has no ORDER BY at all, which is worse than drift
+// # The tags list was unordered before server 3.2.1, which was worse than drift
 //
-// GET /tags is the exception and it is the endpoint most likely to be walked.
-// Its view annotates usage_count, which makes the query a GROUP BY, and Django
-// drops a model's Meta.ordering from aggregate queries -- so the SQL carries no
-// ORDER BY (verified against a running 3.1.0 server: the generated statement
-// ends at GROUP BY, and Django's own queryset.ordered reports false).
+// THIS CAVEAT IS QUALIFIED BY SERVER VERSION RATHER THAN DELETED, and that is a
+// decision rather than an oversight (octonomy-go#49). The SDK performs no
+// version handshake -- nothing here can tell a fixed server from an unfixed one
+// at runtime -- so a caller pointed at an older deployment still has the whole
+// hazard, with no warning available except this one. Deleting the passage on
+// the day the fix shipped would have been correct about the newest server and
+// silently wrong about every other.
+//
+// Before server 3.2.1, GET /tags carried no ORDER BY. Its view annotates
+// usage_count, which makes the query a GROUP BY, and Django drops a model's
+// Meta.ordering from aggregate queries -- so Tag.Meta.ordering was dropped and
+// the SQL ended at GROUP BY (verified against a running 3.1.0 server, where
+// Django's own queryset.ordered reported false).
 //
 // LIMIT/OFFSET WITHOUT ORDER BY IS UNDEFINED. Each page is a separate query and
 // the database is free to answer two of them in different orders, so a walk of
-// the tags list can repeat or miss rows WITH NO CONCURRENT WRITES AT ALL. In
-// practice the order observed is stable while the rows are unchanged, because
-// it falls out of one hash-aggregate plan; nothing promises that, and a
-// different plan or a changed row count is enough to alter it. Treat a tags
-// walk as best-effort unless the filtered set fits in one page, where the
-// question does not arise.
+// such a tags list can repeat or miss rows WITH NO CONCURRENT WRITES AT ALL --
+// reproduced upstream at 23 duplicated and 23 missed out of 100 rows. The order
+// observed was usually stable while the rows were unchanged, because it fell
+// out of one hash-aggregate plan; nothing promised that, and an ANALYZE, growth
+// past work_mem or a planner version change was enough to alter it.
+//
+// Server 3.2.1 fixed it (upstream octonomy#162): the list now orders by
+// (name, slug, id), and the id tiebreaker is what makes the chain total, since
+// name and slug are both non-unique. Verified against a running 3.2.1 server by
+// the same method that established the original claim -- queryset.ordered now
+// reports true, the emitted SQL ends at ORDER BY "tags"."name" ASC,
+// "tags"."slug" ASC, "tags"."id" ASC, and both /api/v1 and /api/v2 answer from
+// the one fixed view. TestIntegration_TagsListPagesInATotalOrder walks it
+// one row per page against the pinned harness and pins the result.
+//
+// So AGAINST 3.2.1 AND NEWER the tags list is exactly as safe to walk as
+// vocabularies and aliases, and no safer: ordering makes a FIXED result set
+// page deterministically, it does not hand you a snapshot. Everything in
+// "Offset drift is real" above still applies to it. AGAINST 3.2.0 AND OLDER,
+// treat a tags walk as best-effort unless the filtered set fits in one page,
+// where the question does not arise.
 //
 // # What a caller can actually do
 //
@@ -160,7 +188,9 @@ type List[T any] struct {
 //
 //   - Narrow the walk with a filter that does not change while it runs
 //     (ApplicationID, VocabularyID, Type), so the set is small -- and small
-//     enough to fit one page is the only fully safe size on the tags list.
+//     enough to fit one page is the only fully safe size on any list, since a
+//     single request cannot drift against itself. On a pre-3.2.1 tags list that
+//     is not merely the safest size but the only sound one.
 //   - De-duplicate on ID. That is cheap and removes the double-delivery half.
 //   - DETECT the other half, which is the part that leaves no trace: keep the
 //     Pagination.Count from the first page and compare it with the number of
