@@ -194,16 +194,71 @@ run as proof that a resource is complete.
 
 ## Webhook Rules
 
-`webhook/` (`github.com/octoverse-id/octonomy-go/v2/webhook`) verifies the HMAC signature on an
-inbound delivery. It is **one-way**: it may import the root package, and the root must never import
-it. It imports neither today, and adding a root import to it is a decision, not a convenience.
+`webhook/` (`github.com/octoverse-id/octonomy-go/v2/webhook`) receives an inbound delivery: it
+verifies the HMAC signature, decodes the event, and dispatches it. It is **one-way**: it may import
+the root package, and the root must never import it. It imports it for exactly two types —
+`octonomy.Metadata` and `octonomy.Optional`, which the payloads are made of (#22) — and adding a
+third is a decision, not a convenience.
 
 - **`Verify` takes `[]byte`. Do not add an `*http.Request` overload, and do not "helpfully" read the
   body for the caller.** The HMAC is over the raw bytes, so a body that middleware, a logger, or
   `json.NewDecoder(r.Body)` read first verifies as empty or partial — a check that appears to run,
   always fails, and gets deleted by whoever is asked to fix it. Bytes cannot be handed an unread
-  stream. The same reasoning is why no `http.Handler` ships here (#22): with no handler, bounding
-  the body is visibly the caller's job, and the package says so rather than doing it invisibly.
+  stream. The same holds for `ParseEvent`, which takes the bytes `Verify` accepted.
+- **`Handler` owns the ORDER, and that is the only reason it is allowed to exist.** Bound the body,
+  read it to bytes, verify, then parse — it does all four so the body-consumption hazard is
+  impossible by construction, and it must keep reading the body itself. Do not add a constructor
+  that accepts an already-read body, an `http.HandlerFunc` wrapper that runs before it, or a
+  "skip verification" switch for tests. It returns `(http.Handler, error)` on the same reasoning
+  `octonomy.New` does: an empty secret, a nil `EventHandler`, and a non-positive ceiling are
+  deployment mistakes knowable at wiring time, and the alternative is an endpoint that answers 500
+  forever with the reason reachable only through an optional hook. **Its guarantees hold only while
+  it is FIRST on the request**, and the doc comment says so: body-reading middleware in front of it
+  fails safe (`ErrEmptyBody`, 401), but response-writing middleware commits a status the handler
+  cannot take back, so a committed 200 acknowledges an event the `EventHandler` refused. That one is
+  unfixable from inside a handler — do not add a guard that pretends otherwise; keep it stated, and
+  keep `TestHandlerIsOnlyCorrectWhenItIsFirstOnTheRequest` pinning both halves.
+- **An unknown `event_type` is acknowledged, never refused.** Delivery is at-least-once with backoff
+  and dead-lettering, so an SDK that errored on a type it did not recognise would make every
+  deployed consumer start dead-lettering the day the server adds a twelfth one. `ParseEvent` leaves
+  every typed payload nil, `Event.Payload` keeps the undecoded bytes, `EventType.Known` reports
+  false, and no payload is decoded into a struct its event type did not name. Decoding is lenient
+  about unknown FIELDS for the same reason — never `DisallowUnknownFields`.
+- **What a KNOWN event type promises is its payload sides, and the decoder enforces them.** A
+  `*.created` carries `after`, a `*.updated` and a `*.deactivated` carry both, an
+  `assignment.removed` carries `before`; a delivery without one is `ErrIncompleteEvent`. Without
+  that check a signed `tag.created` with an empty payload decodes with a nil error into a
+  `TagPayload` whose `After` is nil, and the handler this package documents nil-panics on every
+  redelivery of it. An EXTRA side is not a refusal — that direction is forward compatibility again.
+  The same standard covers the namespace pair: both halves null (global), both set, or both absent
+  (a pre-namespace server) are accepted, and a **half-set or blank** pair is refused, because
+  reading one half alone reports a merchant's event as global and the consumer then acknowledges it.
+- **Snapshot types are not the REST models and must not be replaced by them.** A snapshot omits
+  `usage_count` and the namespace pair, and an `*.updated` payload carries only the fields that
+  changed. **Every snapshot field is an `octonomy.Optional[T]` tagged `json:",omitzero"`**, never a
+  pointer: a pointer collapses "not changed" into "cleared to null", and four fields on this API can
+  really be cleared, so a consumer applying a diff off a nil pointer leaves a tag nested under a
+  parent the server no longer has. `TestSnapshotFieldsTagEveryOptionalOmitzero` fails on a missing
+  tag; `Optional.MarshalJSON` refuses to encode an omitted value rather than falling back to null.
+- **The ceiling bounds SIZE, not TIME, and this package cannot bound the second one.** The read
+  deadline belongs to the consumer's `http.Server`, so `WithMaxBodyBytes`, the `Handler` doc, the
+  README and `examples/webhook` all say to set `ReadTimeout` — `ReadHeaderTimeout` has already
+  elapsed by the time a trickled body starts arriving. Do not "fix" this with a timeout inside the
+  handler: a handler that cancels its own request context cannot stop `net/http` reading, and the
+  deadline it would need is the server's.
+- **A snapshot re-encodes only the keys this package MODELS.** Say so wherever round-tripping is
+  mentioned: a field a later server adds is dropped by design (the same leniency that keeps an
+  additive change from dead-lettering), and `Metadata` has already been through `map[string]any`
+  before a snapshot exists. `Event.Payload` is the durable copy, and
+  `TestSnapshotRoundTripsTheModelledKeysAndOnlyThose` pins both halves.
+- **The `EventHandler`'s panic is recovered and answered with 500.** Left to escape, net/http
+  recovers it per connection and closes the connection with **no response written**, so the
+  consumer's own error path never sees it. `http.ErrAbortHandler` is re-panicked untouched — it is
+  net/http's documented way to abandon a connection deliberately.
+- **A new `Err*` sentinel anywhere in the package must be added to
+  `TestVerifyErrorsAreMutuallyDistinguishable`.** That test parses every non-test file in the
+  directory, so a sentinel added and forgotten fails the build rather than becoming a refusal
+  nothing proves is distinguishable from the others.
 - **`hmac.Equal`, over the decoded digest bytes. Never `==`, never `bytes.Equal`, never on the hex
   text.** `TestVerifyComparesDigestsInConstantTime` parses `verify.go` and fails on the wrong
   spelling, because the wrong comparison passes every functional test in the package — correct
@@ -336,9 +391,10 @@ it. It imports neither today, and adding a root import to it is a decision, not 
   - An example that CALLS the API is run against a real server through `make dev-server`, which
     prints the export block they all read.
   - `examples/webhook` is the exception and needs no server: it is a receiver, it makes no Octonomy
-    request, and no deployment emits webhooks by default (#22). It is exercised by starting it and
-    sending it the two deliveries it prints — the genuine one must answer 204 and the tampered one
-    401.
+    request, and no deployment emits webhooks by default. It is exercised by starting it and
+    sending it the three deliveries it prints — the genuine one must answer 200, the tampered one
+    401, and the one carrying an event type this SDK predates 200, because acknowledging that case
+    is the contract (#22).
 - **Examples repeat their configuration block rather than sharing one.** An example is copied whole,
   and a helper package would move the one part a reader has to adapt — how the client gets its
   credentials — out of the file they are reading. `make examples` compile-checks every one and fails

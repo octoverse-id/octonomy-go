@@ -580,74 +580,139 @@ and sends the same request: no `Authorization`, no `X-Tenant-ID`, no `/api` pref
 point. `ErrUnreachable` is not health-specific — every method in the package wraps it around a
 request that got no response. See [`docs/api.md`](docs/api.md#health-probes).
 
-## Verifying webhooks
+## Receiving webhooks
 
-`octonomy/webhook` is a separate package with one function in it. Octonomy signs each webhook
-delivery with HMAC-SHA256 over the **raw request body**, and `Verify` is the check:
+`octonomy/webhook` is a separate package that receives Octonomy webhook deliveries: it verifies the
+HMAC-SHA256 signature over the **raw request body**, decodes the event, and hands it to your code.
+`Handler` is the whole endpoint:
 
 ```go
 import "github.com/octoverse-id/octonomy-go/v2/webhook"
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	// The ceiling is yours: this SDK ships no handler, so nothing else bounds the read.
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "unreadable body", http.StatusBadRequest)
-		return
-	}
-
-	// Verify BEFORE parsing, and refuse on any error.
-	if err := webhook.Verify(secret, r.Header.Get(webhook.HeaderSignature), body); err != nil {
-		log.Printf("octonomy webhook rejected: %v", err)
-		http.Error(w, "invalid signature", http.StatusUnauthorized)
-		return
-	}
-
-	var event struct{ /* id, tenant_id, event_type, namespace_type, payload, ... */ }
-	if err := json.Unmarshal(body, &event); err != nil {
-		// A signed body that will not parse is not a delivery you can process,
-		// and ANY 2xx here acknowledges it: the sender marks the event published
-		// and never retries, so it is gone. Refuse, and let it be retried and
-		// eventually dead-lettered where someone will see it.
-		http.Error(w, "malformed event", http.StatusBadRequest)
-		return
-	}
-
-	// ... handle it idempotently, keyed on event.ID ...
-
-	// Explicit, because a handler that simply returns sends an implicit 200 --
-	// the same silent acknowledgement, reached by falling off the end.
-	w.WriteHeader(http.StatusNoContent)
+h, err := webhook.Handler(os.Getenv("OCTONOMY_WEBHOOK_SIGNING_SECRET"),
+	func(ctx context.Context, event *webhook.Event) error {
+		switch event.Type {
+		case webhook.EventTagCreated:
+			// A snapshot field says one of absent, null, or a value.
+			slug, _ := event.Tag.After.Slug.Get()
+			return index.Add(ctx, event.AggregateID, slug)
+		case webhook.EventTagDeactivated:
+			return index.Remove(ctx, event.AggregateID)
+		default:
+			return nil // acknowledge what this consumer does not handle
+		}
+	},
+	// The library never logs; this hook is where refusals become visible.
+	webhook.WithErrorHandler(func(r *http.Request, status int, err error) {
+		log.Printf("octonomy webhook %d: %v", status, err)
+	}),
+)
+if err != nil {
+	log.Fatalf("octonomy webhook: %v", err) // an unset secret lands here, at startup
 }
+mux.Handle("POST /webhooks/octonomy", h)
 ```
 
-**`Verify` takes `[]byte`, never an `*http.Request`, and that is the point.** The signature covers
-the exact bytes, so anything that reads the body first — a logging middleware, a tracer that copies
-it, `json.NewDecoder(r.Body)` — leaves the check hashing an empty or partial body: a check that
-appears to run, always fails, and gets "fixed" by deleting it. Taking bytes the caller has already
-read makes handing it an unread stream structurally impossible, and leaves the read, and its size
-limit, where you can see them. Zero bytes are refused as `ErrEmptyBody` rather than as a mismatch,
-precisely so that failure names itself.
+| Status | When |
+| ------ | ---- |
+| `200` | the event handler returned nil — the event is acknowledged and never resent |
+| `401` | the signature was missing, malformed, or wrong |
+| `405` | the request was not a `POST` |
+| `413` | the body exceeded the ceiling (`WithMaxBodyBytes`, 1 MiB by default) |
+| `400` | the body could not be read, or is not an event this SDK can decode |
+| `500` | the event handler returned an error or panicked |
+
+**The handler exists because the ORDER of the steps is what is easy to get wrong, and silent when it
+is.** Bound the body, read it to bytes, verify those bytes, and only then parse them — a body that
+`json.NewDecoder(r.Body)`, a logging middleware, or a tracer read first reaches `Verify` as empty, so
+the check appears to run, always fails, and gets "fixed" by deleting it. `Handler` owns that order,
+so nothing else is given a chance to touch the body first. `Verify` and `ParseEvent` stay exported
+for a consumer whose HTTP layer belongs to a framework, or who is replaying bodies out of a queue —
+they take `[]byte`, never an `*http.Request`, precisely so an unread stream cannot be handed to them
+by accident, and bounding the read with `http.MaxBytesReader` is then yours.
+
+**`Handler` returns an error, and `octonomy.New` is the precedent.** An empty signing secret, a nil
+event handler, and a non-positive ceiling are deployment mistakes knowable where the handler is
+wired; the alternative is an endpoint that answers 500 forever with the reason reachable only
+through an optional hook. An unset `OCTONOMY_WEBHOOK_SIGNING_SECRET` arriving as `""` returns
+`ErrNoSecret`, so `log.Fatal` at startup beats a silently unverified endpoint.
+
+**An unknown event type is acknowledged, not refused.** Delivery is at-least-once with backoff and
+dead-lettering, so an SDK that errored on an event type it did not recognize would make every
+deployed Go consumer start dead-lettering the day Octonomy adds a twelfth one — consumers who
+shipped no code and did nothing wrong. An unrecognized type parses, `event.Known()` reports false,
+the typed payloads are nil, and `event.Type` and `event.Payload` hold the raw type and the undecoded
+JSON. Your `default` branch returns nil.
+
+**Event snapshots are not the REST models, and `octonomy.Tag` must not be used in their place.** A
+snapshot omits `usage_count` and the namespace pair — the namespace is on the envelope, where
+routing reads it — and an `*.updated` payload carries **only the fields that actually changed**. So
+every snapshot field is an `octonomy.Optional`, which says which of three things arrived:
+
+```go
+after := event.Tag.After
+slug, ok := after.Slug.Get()   // ok == false unless this event carried a slug
+after.ParentID.IsNull()        // true when the tag was un-nested by this update
+after.ParentID.IsZero()        // true when this update did not touch the parent at all
+```
+
+A `*string` carries two of those states and would collapse "not changed" into "cleared to null" —
+and four fields on this API really can be cleared, so a consumer applying a diff off a nil pointer
+leaves a tag nested under a parent the server no longer has. That is the wall
+[#64](https://github.com/octoverse-id/octonomy-go/issues/64) hit from the encoding side, which is
+why `octonomy.Optional` exists at all.
+
+**The sides, though, are guaranteed.** A `tag.created` always carries `After`, a `tag.updated` both,
+an `assignment.removed` `Before` — a delivery without the side its own event type documents is
+refused as `ErrIncompleteEvent` rather than handed over with a nil field, so the dereference above is
+safe inside the case that matched it. A delivery with one half of the namespace pair set is refused
+for the same reason: reading either half alone would report a merchant's event as global, and a
+consumer that handled it would acknowledge it.
 
 **Every 2xx is an acknowledgement.** The dispatcher treats one as delivered and marks the event
 published, so it is never retried — which makes a handler that answers 200 on a path it did not
-actually process the way a delivery disappears for good. Refuse with a non-2xx and let the sender's
-retry and dead-letter machinery surface it.
+actually process the way a delivery disappears for good. The only path here that answers 2xx is the
+one where your event handler returned nil.
+
+**`WithMaxBodyBytes` bounds size, not time.** Nothing in this package bounds how long a sender may
+take to deliver its bytes, and nothing in it can — the deadline belongs to your `http.Server`. Set
+`ReadTimeout` on it, or anybody who finds the URL can trickle a body that never reaches the ceiling
+and hold a connection and a goroutine for as long as they like. `ReadHeaderTimeout` does not cover
+it: it has already elapsed by the time the body starts. [`examples/webhook`](examples/webhook/main.go)
+sets both.
+
+**Which means `Handler` has to be first on the request.** Middleware that reads the body first fails
+safe and says so — the signature check runs over zero bytes and is refused as `ErrEmptyBody` with a
+401. Middleware that *writes the response* first does not: net/http ignores the second `WriteHeader`,
+so a committed 200 stands even when your event handler refused the event, and the dispatcher
+acknowledges work that never happened. Nothing in this package can detect or repair that; mount the
+handler as the endpoint rather than behind response-writing middleware. `WithErrorHandler` still
+reports the status it intended, which is the only signal left in that case.
 
 Digests are compared with `hmac.Equal`, in constant time, over the decoded bytes — never `==` on the
 hex. Every refusal is a distinct error (`ErrMissingSignature`, `ErrUnsupportedAlgorithm`,
-`ErrMalformedSignature`, `ErrSignatureMismatch`, `ErrEmptyBody`, `ErrNoSecret`, `ErrUnusableSecret`),
+`ErrMalformedSignature`, `ErrSignatureMismatch`, `ErrEmptyBody`, `ErrNoSecret`, `ErrUnusableSecret`,
+plus `ErrMalformedEvent`, `ErrIncompleteEvent`, `ErrMalformedPayload` for the decode and
+`ErrMethodNotAllowed`, `ErrBodyTooLarge`, `ErrUnreadableBody`, `ErrHandlerPanic` for the handler),
 because a verifier whose failures are indistinguishable cannot tell you whether it is misconfigured
 or under attack. And it never panics — not even on a secret the runtime itself refuses, which
-`crypto/hmac.New` signals with a panic under `GODEBUG=fips140=only`.
+`crypto/hmac.New` signals with a panic under `GODEBUG=fips140=only`, and not when your event handler
+does: that is recovered, reported as `ErrHandlerPanic` with its stack, and answered with a 500,
+because a panic escaping into your `http.Server` is recovered per connection with **no response
+written at all**. The one panic that is deliberately let through is `http.ErrAbortHandler`, which is
+net/http's own way of abandoning a connection on purpose — swallowing it would disable a mechanism
+you reached for.
 
 **A valid signature is authenticity, not freshness.** The server sends no timestamp header, so there
 is no window to enforce and **replay cannot be prevented here**. Octonomy's outbox is at-least-once
-and redelivers on its own, so deduplicate on the envelope's stable `id` and make the handler
-idempotent. Route on the **verified body** — `(tenant_id, application_id, namespace_type,
-namespace_id)`, where a null `namespace_type` is the concrete global namespace and not a wildcard —
-and not on the unsigned `X-Octonomy-*` headers.
+and redelivers on its own, so deduplicate on `event.ID` — stable across redeliveries — and make the
+handler idempotent. Route on the **verified body** — `(TenantID, ApplicationID, NamespaceType,
+NamespaceID)`, where a null `namespace_type` is the concrete global namespace and not a wildcard, as
+`event.Namespace()` reports — and not on the unsigned `X-Octonomy-*` headers, none of which the
+signature covers.
+
+**Secret rotation is a window, not an instant.** Pass the incoming secret to `Handler` and the
+retiring one to `WithAdditionalSecrets`, and drop the old one once the server no longer sends it.
 
 [`webhook/testdata/signature_vectors.json`](webhook/testdata/signature_vectors.json) holds the
 known-good vectors, and the deliveries that must be rejected with the reason for each. They are
@@ -655,12 +720,6 @@ generated from the server's own signing code rather than from this package, conf
 against `openssl`, and carry nothing Go-specific or payload-specific: **an SDK in any language can
 drive its verifier from that one file**, and should. See
 [`webhook/testdata/README.md`](webhook/testdata/README.md).
-
-The typed event surface and an `http.Handler` adapter are deliberately not here
-([#22](https://github.com/octoverse-id/octonomy-go/issues/22)): no deployment emits webhooks yet
-(`OUTBOX_TRANSPORT` defaults to `logging`), so those would be built for a consumer who does not
-exist, on payload shapes that may still move. The signature contract is fixed, and getting it wrong
-is silent — which is why this half shipped first.
 
 ## Transport, observability, and connection reuse
 

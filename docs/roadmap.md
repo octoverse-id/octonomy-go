@@ -296,11 +296,11 @@ that the annotated tags list never had (upstream `octonomy#162`), the caveats ar
 server version rather than stated flatly, and `TestIntegration_TagsListPagesInATotalOrder` holds the
 claim against the pinned harness.
 
-Deferred by design, not a gap: the webhook typed-event surface and `http.Handler`
-([#22](https://github.com/octoverse-id/octonomy-go/issues/22) — when that was decided, no deployment
-emitted webhooks at all, `OUTBOX_TRANSPORT` defaulting to `logging`, so those would have been built
-for a consumer who did not exist, on payload shapes that could still move). The *verification* half
-of webhooks did not wait on an emitter and has shipped — see below.
+The webhook typed-event surface and `http.Handler`
+([#22](https://github.com/octoverse-id/octonomy-go/issues/22)) were deferred rather than skipped —
+when that was decided, no deployment emitted webhooks at all, `OUTBOX_TRANSPORT` defaulting to
+`logging`, so they would have been built for a consumer who did not exist, on payload shapes that
+could still move. They have since landed; the split, and what the wait bought, is below.
 
 ## Work alongside the client rather than inside it
 
@@ -346,11 +346,23 @@ payloads evolve, because it depends on the signature contract rather than on any
 typed half is the opposite on both counts, which is why it was deferred to
 [#22](https://github.com/octoverse-id/octonomy-go/issues/22).
 
+**What the wait bought.** [#22](https://github.com/octoverse-id/octonomy-go/issues/22) landed after
+it, and two of its design findings could only have been written by reading the emitter rather than
+by guessing at it. **Event snapshots are not the REST models** — they omit `usage_count` and the
+namespace pair, and an `*.updated` payload carries only the fields that changed, so `octonomy.Tag`
+would have decoded a zero value for every field the update did not touch, and a pointer field would
+still have collapsed "not changed" into "cleared to null". And **an unknown `event_type` must be
+acknowledged with a 200**, because delivery is at-least-once with dead-lettering: an SDK that
+errored on a type it did not recognise would make every deployed consumer start dead-lettering the
+day the server adds a twelfth one. Both are the kind of thing a typed surface built ahead of an
+emitter gets wrong and then cannot change without breaking its callers.
+
 **`Verify` takes `[]byte` and not an `*http.Request`, deliberately.** The HMAC is over the raw
 bytes, so a body any middleware, logger, or `json.NewDecoder(r.Body)` read first verifies as empty
 or partial — a check that appears to run, always fails, and gets "fixed" by deletion. Bytes cannot
-be handed an unread stream. Since no `http.Handler` ships, bounding the body with
-`http.MaxBytesReader` is the caller's job and the package says so.
+be handed an unread stream, and `ParseEvent` takes the bytes `Verify` accepted for the same reason.
+`Handler` is what removes the hazard rather than documenting it: it bounds the body, reads it,
+verifies, and only then parses, so no consumer code is given a chance to touch the body first.
 
 **Replay is not prevented and cannot be**: the server sends no timestamp header, so there is no
 window to enforce. Signature proves authenticity, not freshness; dedupe on the envelope's stable

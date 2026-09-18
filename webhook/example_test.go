@@ -1,10 +1,9 @@
 package webhook_test
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -24,11 +23,20 @@ const (
 
 	exampleSignature = "sha256=20b8b4239fcae9785de2ac6d6de1abf2c0824fa5f0442032d9c57cc808c96b04"
 	rotatedSignature = "sha256=47cc334e6fce09c9a8b161c39d2482029411781be73c68196281e9c7d94d14ff"
+
+	// The merchant-namespaced tag.updated vector, for the same reason: an
+	// *.updated payload is where the three states of a snapshot field are
+	// actually reachable, and a merchant event is where a namespace is.
+	updatedSignature = "sha256=dfcdefafeab32f2e8b591e0a01f8e0d73ddba3a7915c374f5234836fed2485f0"
 )
 
-// exampleEnvelope is an outbox event exactly as the server puts it on the wire:
-// compact separators, sorted keys, UTF-8. A null namespace_type is the concrete
-// global (tenant-shared) namespace and not a wildcard.
+// exampleEnvelope is an outbox event in the server's wire FORMAT -- compact
+// separators, sorted keys, UTF-8 -- with an abbreviated snapshot under "after".
+// A real tag.created carries the whole snapshot; the vectors deliberately do
+// not, because they exist to pin the signature format and must stay valid as
+// payloads evolve (see testdata/README.md). examples/webhook carries a complete
+// one. A null namespace_type is the concrete global (tenant-shared) namespace
+// and not a wildcard.
 const exampleEnvelope = `{"actor_id":"user_42","aggregate_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55",` +
 	`"aggregate_type":"tag","application_id":"storefront",` +
 	`"event_type":"tag.created","id":"0f1d7b24-2c1e-4f9a-9f3a-3a5f1c2d6e77",` +
@@ -36,6 +44,17 @@ const exampleEnvelope = `{"actor_id":"user_42","aggregate_id":"9c2b0f41-5d33-4a6
 	`"operation_id":"5f0a3d18-7b62-4c19-9e84-1d6b8f2a4c30",` +
 	`"payload":{"after":{"id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55","is_active":true,"name":"Summer Sale","slug":"summer-sale","vocabulary_id":"3b7e5a90-1c48-4d2b-a6f5-8e0d9c1b4a26"}},` +
 	`"request_id":null,"resource_id":null,"resource_type":null,` +
+	`"tag_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55","tenant_id":"acme"}`
+
+// updatedEnvelope is the merchant-namespaced tag.updated vector: a rename, in a
+// payload carrying ONLY the field that changed.
+const updatedEnvelope = `{"actor_id":"user_42","aggregate_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55",` +
+	`"aggregate_type":"tag","application_id":"storefront","event_type":"tag.updated",` +
+	`"id":"7a3c9e15-8b40-4d27-9f61-0c5e2a8d3b19","metadata":{"source":"api"},` +
+	`"namespace_id":"merchant-9931","namespace_type":"merchant",` +
+	`"operation_id":"5f0a3d18-7b62-4c19-9e84-1d6b8f2a4c30",` +
+	`"payload":{"after":{"name":"Summer Clearance"},"before":{"name":"Summer Sale"}},` +
+	`"request_id":"req_2f9c7b1a-6d38-4e05-b7a2-9c1e4f8d60a3","resource_id":null,"resource_type":null,` +
 	`"tag_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55","tenant_id":"acme"}`
 
 func ExampleVerify() {
@@ -63,69 +82,46 @@ func ExampleVerify() {
 	// drained body: octonomy: webhook body is empty
 }
 
-// Example_httpHandler is the whole shape of a webhook endpoint: bound, read,
-// verify, and only then parse.
-func Example_httpHandler() {
-	// The ceiling is the caller's job. This package is handed bytes that are
-	// already in memory, so it cannot impose one -- without the MaxBytesReader
-	// below, an unbounded POST is read into the process before anything gets a
-	// chance to refuse it. Size it to the largest payload your events carry.
-	const maxBodyBytes = 1 << 20 // 1 MiB
+// ExampleHandler is a whole webhook endpoint. The handler owns the order --
+// bound, read, verify, parse -- so what is left is the switch.
+func ExampleHandler() {
+	handler, err := webhook.Handler(exampleSecret,
+		func(_ context.Context, event *webhook.Event) error {
+			// Routing comes from the VERIFIED body, never from an X-Octonomy-*
+			// header: the signature covers the body and nothing else. A global
+			// event is tenant-shared, which is a namespace and not a missing one.
+			namespace := "the global namespace"
+			if namespaceType, namespaceID, namespaced := event.Namespace(); namespaced {
+				namespace = namespaceType + "/" + namespaceID
+			}
 
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+			switch event.Type {
+			case webhook.EventTagCreated:
+				// A snapshot field says one of absent, null, or a value. Get
+				// reports the third and never panics.
+				slug, _ := event.Tag.After.Slug.Get()
+				fmt.Printf("created tag %s (%s) in %s\n", event.AggregateID, slug, namespace)
+			default:
+				// ACKNOWLEDGE what this consumer does not handle. Returning an
+				// error here is how a consumer starts dead-lettering the day
+				// Octonomy adds an event type this binary predates.
+				fmt.Printf("acknowledged %s\n", event.Type)
+			}
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "unreadable body", http.StatusBadRequest)
-			return
-		}
-
-		// Verify BEFORE parsing. Until this returns nil the request is an
-		// anonymous POST claiming to be from Octonomy, and every header on it
-		// -- the tenant included -- claims whatever the sender wanted.
-		if err := webhook.Verify(exampleSecret, r.Header.Get(webhook.HeaderSignature), body); err != nil {
-			// Refuse. Answering 200 here is the failure that never surfaces:
-			// the sender records a successful delivery and stops retrying,
-			// while nothing was ever verified.
-			log.Printf("octonomy webhook rejected: %v", err)
-			http.Error(w, "invalid signature", http.StatusUnauthorized)
-			return
-		}
-
-		var event struct {
-			ID            string          `json:"id"`
-			TenantID      string          `json:"tenant_id"`
-			ApplicationID string          `json:"application_id"`
-			EventType     string          `json:"event_type"`
-			NamespaceType *string         `json:"namespace_type"`
-			NamespaceID   *string         `json:"namespace_id"`
-			Payload       json.RawMessage `json:"payload"`
-		}
-		if err := json.Unmarshal(body, &event); err != nil {
-			http.Error(w, "malformed event", http.StatusBadRequest)
-			return
-		}
-
-		// Routing comes from the VERIFIED body, never from the headers: the
-		// signature covers the body and nothing else. A null namespace_type is
-		// the global, tenant-shared namespace.
-		namespace := "global"
-		if event.NamespaceType != nil {
-			namespace = *event.NamespaceType + "/" + *event.NamespaceID
-		}
-
-		// Delivery is at-least-once and carries no timestamp to bound replay,
-		// so the handler dedupes on the envelope's stable id -- unchanged
-		// across redeliveries -- and does its work idempotently.
-		fmt.Printf("%s %s tenant=%s app=%s namespace=%s\n",
-			event.EventType, event.ID, event.TenantID, event.ApplicationID, namespace)
-
-		w.WriteHeader(http.StatusNoContent)
+			// nil acknowledges: the server marks the event published and never
+			// sends it again. An error refuses it, and it is retried.
+			return nil
+		},
+		// The library never logs, so this hook is the only place a refusal is
+		// visible as anything but a status code.
+		webhook.WithErrorHandler(func(_ *http.Request, status int, err error) {
+			fmt.Printf("refused with %d: %v\n", status, err)
+		}),
+	)
+	if err != nil {
+		// An unset OCTONOMY_WEBHOOK_SIGNING_SECRET lands here, at startup,
+		// rather than becoming an endpoint that verifies nothing.
+		log.Fatalf("octonomy webhook: %v", err)
 	}
 
 	// Driven with a recorder rather than a live listener: the handler is the
@@ -134,7 +130,7 @@ func Example_httpHandler() {
 		request := httptest.NewRequest(http.MethodPost, "/webhooks/octonomy", strings.NewReader(body))
 		request.Header.Set(webhook.HeaderSignature, signature)
 		recorder := httptest.NewRecorder()
-		handler(recorder, request)
+		handler.ServeHTTP(recorder, request)
 		return recorder.Code
 	}
 
@@ -146,9 +142,65 @@ func Example_httpHandler() {
 	fmt.Println("tampered delivery:", post(tampered, exampleSignature))
 
 	// Output:
-	// tag.created 0f1d7b24-2c1e-4f9a-9f3a-3a5f1c2d6e77 tenant=acme app=storefront namespace=global
-	// genuine delivery: 204
+	// created tag 9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55 (summer-sale) in the global namespace
+	// genuine delivery: 200
+	// refused with 401: octonomy: webhook signature does not match the body
 	// tampered delivery: 401
+}
+
+// ExampleParseEvent is the same decode without the handler, for a consumer
+// whose HTTP layer belongs to a framework. Verify FIRST -- until it returns
+// nil the bytes are an anonymous POST claiming to be from Octonomy.
+func ExampleParseEvent() {
+	parse := func(body, signature string) *webhook.Event {
+		if err := webhook.Verify(exampleSecret, signature, []byte(body)); err != nil {
+			log.Fatalf("refused: %v", err)
+		}
+		event, err := webhook.ParseEvent([]byte(body))
+		if err != nil {
+			log.Fatalf("malformed: %v", err)
+		}
+		return event
+	}
+
+	created := parse(exampleEnvelope, exampleSignature)
+	fmt.Println("type:", created.Type)
+	fmt.Println("aggregate:", created.AggregateID)
+	slug, _ := created.Tag.After.Slug.Get()
+	fmt.Println("slug:", slug)
+	_, _, namespaced := created.Namespace()
+	fmt.Println("namespaced:", namespaced)
+
+	// An *.updated payload carries only what changed, which is where the three
+	// states of a snapshot field are reachable: a value for the field that
+	// moved, and ABSENT for every field this update did not touch. A *string
+	// would report the second as nil -- the same thing it would report for a
+	// field that had been cleared to null.
+	updated := parse(updatedEnvelope, updatedSignature)
+	name, _ := updated.Tag.After.Name.Get()
+	fmt.Println("renamed to:", name)
+	fmt.Println("slug untouched:", updated.Tag.After.Slug.IsZero())
+	fmt.Println("slug cleared:", updated.Tag.After.Slug.IsNull())
+	namespaceType, namespaceID, namespaced := updated.Namespace()
+	fmt.Printf("namespace: %s/%s (namespaced %t)\n", namespaceType, namespaceID, namespaced)
+
+	// An event type this SDK predates is not an error. The raw type and the
+	// undecoded payload are both there; the typed payload is nil.
+	future := strings.Replace(exampleEnvelope, `"event_type":"tag.created"`, `"event_type":"tag.merged"`, 1)
+	unknown, err := webhook.ParseEvent([]byte(future))
+	fmt.Printf("future type %q: err=%v known=%t typed=%t\n",
+		unknown.Type, err, unknown.Known(), unknown.Tag != nil)
+
+	// Output:
+	// type: tag.created
+	// aggregate: 9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55
+	// slug: summer-sale
+	// namespaced: false
+	// renamed to: Summer Clearance
+	// slug untouched: true
+	// slug cleared: false
+	// namespace: merchant/merchant-9931 (namespaced true)
+	// future type "tag.merged": err=<nil> known=false typed=false
 }
 
 // Example_secretRotation accepts either the outgoing or the incoming secret for

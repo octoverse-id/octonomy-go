@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"bytes"
+	"context"
 	"crypto/fips140"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -14,6 +15,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io/fs"
 	"os"
 	"os/exec"
 	"slices"
@@ -363,14 +365,26 @@ func TestVerifyErrorsAreMutuallyDistinguishable(t *testing.T) {
 		"ErrMalformedSignature":   ErrMalformedSignature,
 		"ErrSignatureMismatch":    ErrSignatureMismatch,
 		"ErrEmptyBody":            ErrEmptyBody,
+		"ErrMalformedEvent":       ErrMalformedEvent,
+		"ErrIncompleteEvent":      ErrIncompleteEvent,
+		"ErrMalformedPayload":     ErrMalformedPayload,
+		"ErrMethodNotAllowed":     ErrMethodNotAllowed,
+		"ErrBodyTooLarge":         ErrBodyTooLarge,
+		"ErrUnreadableBody":       ErrUnreadableBody,
+		"ErrNoEventHandler":       ErrNoEventHandler,
+		"ErrHandlerPanic":         ErrHandlerPanic,
 	}
 
 	// The list is checked against the source rather than trusted. A sentinel
-	// added to verify.go and forgotten here would be a refusal nothing proves
-	// is distinguishable from the others -- which is the whole property.
+	// added anywhere in the package and forgotten here would be a refusal
+	// nothing proves is distinguishable from the others -- which is the whole
+	// property. It reads every file rather than verify.go alone, because the
+	// typed-event surface (#22) put sentinels in two more of them and a guard
+	// that only watches one file is a guard that stops working the moment
+	// someone adds a file.
 	for _, name := range exportedErrorNames(t) {
 		if _, covered := all[name]; !covered {
-			t.Errorf("verify.go declares %s but this test does not cover it", name)
+			t.Errorf("the package declares %s but this test does not cover it", name)
 		}
 	}
 
@@ -392,33 +406,40 @@ func TestVerifyErrorsAreMutuallyDistinguishable(t *testing.T) {
 	}
 }
 
-// exportedErrorNames reports the Err* sentinels verify.go declares.
+// exportedErrorNames reports the Err* sentinels this package declares, across
+// every non-test file in it.
 func exportedErrorNames(t *testing.T) []string {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), "verify.go", nil, 0)
+	packages, err := parser.ParseDir(token.NewFileSet(), ".", func(fi fs.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
 	if err != nil {
-		t.Fatalf("parse verify.go: %v", err)
+		t.Fatalf("parse package: %v", err)
 	}
 	var names []string
-	for _, declaration := range file.Decls {
-		general, ok := declaration.(*ast.GenDecl)
-		if !ok || general.Tok != token.VAR {
-			continue
-		}
-		for _, spec := range general.Specs {
-			value, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for _, name := range value.Names {
-				if strings.HasPrefix(name.Name, "Err") {
-					names = append(names, name.Name)
+	for _, pkg := range packages {
+		for _, file := range pkg.Files {
+			for _, declaration := range file.Decls {
+				general, ok := declaration.(*ast.GenDecl)
+				if !ok || general.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range general.Specs {
+					value, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for _, name := range value.Names {
+						if strings.HasPrefix(name.Name, "Err") {
+							names = append(names, name.Name)
+						}
+					}
 				}
 			}
 		}
 	}
 	if len(names) == 0 {
-		t.Fatal("verify.go declares no Err* sentinels; this helper is guarding nothing")
+		t.Fatal("the package declares no Err* sentinels; this helper is guarding nothing")
 	}
 	return names
 }
@@ -579,16 +600,20 @@ func FuzzVerify(f *testing.F) {
 	})
 }
 
-// TestVerifyReturnsRatherThanPanicsUnderFIPSOnly covers the one input the Go
-// runtime itself refuses. Under GODEBUG=fips140=only, crypto/hmac.New PANICS
-// for a key shorter than 112 bits, so a deployment with a short signing secret
-// would take a panic out of a library that promises never to raise one
+// TestShortSecretIsRefusedRatherThanPanickingUnderFIPSOnly covers the one input
+// the Go runtime itself refuses. Under GODEBUG=fips140=only, crypto/hmac.New
+// PANICS for a key shorter than 112 bits, so a deployment with a short signing
+// secret would take a panic out of a library that promises never to raise one
 // (AGENTS.md) -- inside an HTTP handler, where net/http turns it into a 500 and
 // a stack trace rather than a diagnosable error.
 //
+// Both entry points are covered, because they raise it at different times:
+// Verify on the delivery, and Handler at construction, where the deployment is
+// still being wired and the operator is still watching.
+//
 // It runs in a child process because fips140 is read once at startup: setting
 // the variable in this process would change nothing.
-func TestVerifyReturnsRatherThanPanicsUnderFIPSOnly(t *testing.T) {
+func TestShortSecretIsRefusedRatherThanPanickingUnderFIPSOnly(t *testing.T) {
 	const (
 		childEnv = "OCTONOMY_WEBHOOK_FIPS_CHILD"
 		// Nine bytes, under the 14 that 112 bits requires.
@@ -613,6 +638,12 @@ func TestVerifyReturnsRatherThanPanicsUnderFIPSOnly(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "112 bits") {
 			fmt.Printf("child: error %q does not carry the runtime's own reason\n", err)
+			return
+		}
+		// Handler hands the secret to the runtime at construction, so the same
+		// refusal arrives at startup instead of on every delivery.
+		if _, err := Handler(shortSecret, func(context.Context, *Event) error { return nil }); !errors.Is(err, ErrUnusableSecret) {
+			fmt.Printf("child: Handler() = %v, want ErrUnusableSecret\n", err)
 			return
 		}
 		fmt.Println(okMarker)

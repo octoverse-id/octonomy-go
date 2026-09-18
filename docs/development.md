@@ -84,8 +84,9 @@ on the server's *authorization or persistence* needs the full suite after it.
 
 ### Webhook signature vectors
 
-`webhook/` is the one package here that is not tested against `httptest`, because it has no wire
-contract to assert — it verifies bytes. Its suite is driven by
+`webhook/` has no REST contract to assert: `Verify` verifies bytes, `ParseEvent` decodes them, and
+`Handler` is driven with `httptest.NewRequest` against a recorder rather than against a server —
+there is no Octonomy endpoint on the other side of any of them. What stands in for a contract is
 [`webhook/testdata/signature_vectors.json`](../webhook/testdata/README.md): fixed secrets, fixed
 bodies, correct digests, and the deliveries that must be refused with a reason for each.
 
