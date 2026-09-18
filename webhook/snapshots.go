@@ -66,11 +66,21 @@ import (
 // # omitzero is required, not decorative
 //
 // Every field is tagged `json:",omitzero"` so a snapshot re-encodes to exactly
-// the keys it arrived with -- which is what makes round-tripping one into a log
-// or a queue lossless. An Optional that is asked to marshal while omitted
-// returns an error rather than guessing null, so a field that lost the tag
-// would fail loudly; TestSnapshotFieldsTagEveryOptionalOmitzero is the same
-// guard at test time.
+// the MODELLED keys it arrived with, and invents none it did not. An Optional
+// that is asked to marshal while omitted returns an error rather than guessing
+// null, so a field that lost the tag would fail loudly;
+// TestSnapshotFieldsTagEveryOptionalOmitzero is the same guard at test time.
+//
+// That is not a lossless round trip, and a durable copy must not be taken this
+// way. Two things do not survive it. A field a LATER SERVER adds is not
+// modelled here, so it is dropped rather than re-encoded -- which is the same
+// leniency that keeps an additive server change from dead-lettering, seen from
+// the other side. And Metadata decodes through map[string]any, where every JSON
+// number is a float64: an integer beyond +/-2^53 MAY already have been rounded
+// before this struct existed, and re-encoding cannot recover it (octonomy.
+// DecodeMetadata documents exactly which values survive and why "above 2^53" is
+// the wrong rule of thumb). Forward [Event.Payload] instead -- it is the bytes
+// as they arrived, and it is on every decoded event.
 
 // TagSnapshot is the tag state a tag.* event carries. The fields are the
 // server's tag snapshot exactly: no usage_count, no namespace. See the notes

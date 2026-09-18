@@ -674,6 +674,13 @@ published, so it is never retried — which makes a handler that answers 200 on 
 actually process the way a delivery disappears for good. The only path here that answers 2xx is the
 one where your event handler returned nil.
 
+**`WithMaxBodyBytes` bounds size, not time.** Nothing in this package bounds how long a sender may
+take to deliver its bytes, and nothing in it can — the deadline belongs to your `http.Server`. Set
+`ReadTimeout` on it, or anybody who finds the URL can trickle a body that never reaches the ceiling
+and hold a connection and a goroutine for as long as they like. `ReadHeaderTimeout` does not cover
+it: it has already elapsed by the time the body starts. [`examples/webhook`](examples/webhook/main.go)
+sets both.
+
 **Which means `Handler` has to be first on the request.** Middleware that reads the body first fails
 safe and says so — the signature check runs over zero bytes and is refused as `ErrEmptyBody` with a
 401. Middleware that *writes the response* first does not: net/http ignores the second `WriteHeader`,

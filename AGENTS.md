@@ -240,6 +240,17 @@ third is a decision, not a convenience.
   really be cleared, so a consumer applying a diff off a nil pointer leaves a tag nested under a
   parent the server no longer has. `TestSnapshotFieldsTagEveryOptionalOmitzero` fails on a missing
   tag; `Optional.MarshalJSON` refuses to encode an omitted value rather than falling back to null.
+- **The ceiling bounds SIZE, not TIME, and this package cannot bound the second one.** The read
+  deadline belongs to the consumer's `http.Server`, so `WithMaxBodyBytes`, the `Handler` doc, the
+  README and `examples/webhook` all say to set `ReadTimeout` — `ReadHeaderTimeout` has already
+  elapsed by the time a trickled body starts arriving. Do not "fix" this with a timeout inside the
+  handler: a handler that cancels its own request context cannot stop `net/http` reading, and the
+  deadline it would need is the server's.
+- **A snapshot re-encodes only the keys this package MODELS.** Say so wherever round-tripping is
+  mentioned: a field a later server adds is dropped by design (the same leniency that keeps an
+  additive change from dead-lettering), and `Metadata` has already been through `map[string]any`
+  before a snapshot exists. `Event.Payload` is the durable copy, and
+  `TestSnapshotRoundTripsTheModelledKeysAndOnlyThose` pins both halves.
 - **The `EventHandler`'s panic is recovered and answered with 500.** Left to escape, net/http
   recovers it per connection and closes the connection with **no response written**, so the
   consumer's own error path never sees it. `http.ErrAbortHandler` is re-panicked untouched — it is

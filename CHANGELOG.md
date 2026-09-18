@@ -136,6 +136,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **A panicked `error` is wrapped with `%w`**, so `errors.Is`/`errors.As` reach it through
     `ErrHandlerPanic`. `panic(err)` is the common spelling, and collapsing it to text left an error
     handler able to see *that* something panicked and never what.
+  - **`WithMaxBodyBytes` bounds size, not time**, and that is now said where the ceiling is
+    configured, in the README, and in `examples/webhook`, which sets `ReadTimeout` and `WriteTimeout`
+    rather than `ReadHeaderTimeout` alone. Nothing in this package can bound how long a sender takes
+    to deliver its bytes — the deadline belongs to the consumer's `http.Server` — so without one,
+    anybody who finds the URL can trickle a sub-ceiling body and hold a connection and a goroutine
+    indefinitely. `ReadHeaderTimeout` has already elapsed by the time the body starts.
+  - **The "lossless round trip" claim on the snapshot types was false and is gone.** Re-encoding a
+    snapshot preserves the keys this package MODELS and no others: a field a later server adds is
+    dropped by design, and `Metadata` has already been through `map[string]any` — where an integer
+    beyond ±2^53 may have been rounded before the struct existed. `Event.Payload` is the durable
+    copy, and `TestSnapshotRoundTripsTheModelledKeysAndOnlyThose` now asserts the limit as well as
+    the property.
   - **The handler's guarantees are stated with their precondition: it has to be FIRST on the
     request.** Body-reading middleware in front of it fails safe — the check runs over zero bytes
     and is refused as `ErrEmptyBody` with a 401, which is what that sentinel is for. Response-writing

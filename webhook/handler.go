@@ -101,6 +101,16 @@ type HandlerOption func(*handler)
 // n must be positive. Zero would refuse every delivery, and a negative value is
 // a caller's arithmetic that went wrong, so both are construction errors rather
 // than a handler that rejects everything it is sent.
+//
+// # It bounds SIZE, not TIME
+//
+// Nothing in this package bounds how long a sender may take to deliver those
+// bytes, and nothing in it can: the deadline belongs to the http.Server, which
+// is yours. Without one, anybody who finds the URL can trickle a body that
+// never reaches this ceiling and hold a connection and a goroutine for as long
+// as they like -- and ReadHeaderTimeout does not cover it, having already
+// elapsed by the time the body starts. Set http.Server.ReadTimeout (see
+// examples/webhook).
 func WithMaxBodyBytes(n int64) HandlerOption {
 	return func(h *handler) { h.maxBodyBytes = n }
 }

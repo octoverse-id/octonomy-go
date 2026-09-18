@@ -77,9 +77,20 @@ func main() {
 	mux.Handle("POST /webhooks/octonomy", handler)
 
 	server := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
+		Addr:    addr,
+		Handler: mux,
+
+		// ReadTimeout is the one that bounds the BODY, and it is not optional
+		// on a public endpoint. webhook.WithMaxBodyBytes caps how many bytes a
+		// delivery may be; nothing in this SDK caps how LONG the sender may
+		// take to send them, so without a deadline here an attacker who found
+		// the URL can trickle a sub-ceiling body indefinitely and hold one
+		// connection and one goroutine per request for as long as they like.
+		// ReadHeaderTimeout alone does not help: it has already elapsed by the
+		// time the body starts arriving.
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

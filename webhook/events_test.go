@@ -629,10 +629,11 @@ func TestSnapshotDistinguishesAbsentFromNullFromValue(t *testing.T) {
 	}
 }
 
-// TestSnapshotRoundTripsToTheKeysItArrivedWith is what the omitzero tags buy: a
-// snapshot re-encodes to exactly the keys it was sent with, so one can be
-// logged or forwarded without inventing fields the event never carried.
-func TestSnapshotRoundTripsToTheKeysItArrivedWith(t *testing.T) {
+// TestSnapshotRoundTripsTheModelledKeysAndOnlyThose is what the omitzero tags
+// buy, and what they do not. A snapshot re-encodes to exactly the keys it was
+// sent with and invents none -- but only the keys this package MODELS, which is
+// why a durable copy is Event.Payload and not this.
+func TestSnapshotRoundTripsTheModelledKeysAndOnlyThose(t *testing.T) {
 	const payload = `{"after":{"description":null,"parent_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55"},` +
 		`"before":{"description":"Seasonal","parent_id":null}}`
 	event := mustParse(t, envelope(EventTagUpdated, AggregateTag, payload))
@@ -651,6 +652,24 @@ func TestSnapshotRoundTripsToTheKeysItArrivedWith(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("round trip = %s, want %s", encoded, payload)
+	}
+
+	// The limit, asserted rather than only documented: a field a later server
+	// adds is not modelled here, so re-encoding DROPS it. That is the same
+	// leniency that keeps an additive server change from dead-lettering, and it
+	// is why a consumer forwarding an event to a queue must forward
+	// Event.Payload instead of a re-encoded snapshot.
+	withFutureField := mustParse(t, envelope(EventTagUpdated, AggregateTag,
+		`{"after":{"colour":"amber","description":null},"before":{"description":"Seasonal"}}`))
+	reencoded, err := json.Marshal(withFutureField.Tag)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(reencoded), "colour") {
+		t.Errorf("re-encoded = %s; this test exists because the unmodelled key does NOT survive", reencoded)
+	}
+	if !strings.Contains(string(withFutureField.Payload), `"colour":"amber"`) {
+		t.Errorf("Payload = %s; the raw bytes are where an unmodelled field survives", withFutureField.Payload)
 	}
 }
 
