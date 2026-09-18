@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`examples/webhook` is now the switch and nothing else**
+  ([#22](https://github.com/octoverse-id/octonomy-go/issues/22)). The bound-read-verify-parse
+  preamble a caller used to have to write is gone into `webhook.Handler`; what is left is the event
+  switch, an error hook, and the server-side signing that lets the example run with no emitter. It
+  prints a third delivery now — one carrying an event type this SDK predates — because *that* answers
+  200 is the contract, and an example that only showed 200 and 401 never showed it. Run: 200, 401,
+  200. `AGENTS.md` and `README.md` moved with it; the "no `http.Handler` ships here" rule, true since
+  #16, is replaced by the rule that the handler must keep owning the read.
 - **The tags-ordering caveats are now qualified by server version rather than stated flatly**
   ([#49](https://github.com/octoverse-id/octonomy-go/issues/49)). Server 3.2.1 fixed
   [octonomy#162](https://github.com/octoverse-id/octonomy/issues/162): `GET /tags` now orders by
@@ -48,6 +56,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     version are independent, and were already two releases apart before this change.
 
 ### Added
+- **The webhook typed-event surface and `webhook.Handler`**
+  ([#22](https://github.com/octoverse-id/octonomy-go/issues/22)). The other half of
+  [#16](https://github.com/octoverse-id/octonomy-go/issues/16): the verifier shipped alone because it
+  is correct regardless of payload shape, and this half waited for the shapes to settle.
+  - **`Handler(secret, fn, ...opts) (http.Handler, error)`** is a whole webhook endpoint. It owns the
+    order the steps have to happen in — bound the body with `http.MaxBytesReader`, read it to bytes,
+    verify those bytes, and only then parse — so the body-consumption hazard the package has warned
+    about since #16 is impossible by construction rather than documented. `WithMaxBodyBytes`,
+    `WithAdditionalSecrets` (a rotation window is not an instant), and `WithErrorHandler` configure
+    it; the statuses it answers are a table in its doc comment, and the only 2xx among them is the
+    one where the consumer's handler returned nil.
+  - **It returns an error, which the issue's sketch did not.** An empty signing secret, a nil
+    `EventHandler` and a non-positive ceiling are deployment mistakes knowable where the handler is
+    wired, and the alternative is an endpoint that answers 500 forever with the reason reachable only
+    through an optional hook — the check-that-appears-to-run failure this package exists to refuse.
+    `octonomy.New` refuses a blank `Token` on the same reasoning. An unset
+    `OCTONOMY_WEBHOOK_SIGNING_SECRET` arriving as `""` returns `ErrNoSecret` at startup, and a secret
+    the runtime itself rejects (`GODEBUG=fips140=only`, under 112 bits) returns `ErrUnusableSecret`
+    there too rather than on every delivery.
+  - **`ParseEvent`, `Event`, and the eleven `Event*` type constants** decode one verified delivery.
+    `Event` carries the whole envelope, `Event.Payload` the raw JSON always, and at most one of
+    `Tag` / `Vocabulary` / `TagAlias` / `Assignment` — the typed payload, chosen by event type.
+    `Event.Namespace()` reports the routing namespace *and whether there is one*, because a null
+    `namespace_type` is the concrete global namespace and not a wildcard.
+  - **An unknown `event_type` parses and is acknowledged with 200**, per the issue's second design
+    finding. Delivery is at-least-once with backoff and dead-lettering, so an SDK that errored on a
+    type it did not recognise would make every deployed Go consumer start dead-lettering the day
+    Octonomy adds a twelfth one — consumers who shipped no code and did nothing wrong. The raw type
+    and the undecoded payload are both exposed, and no payload is decoded into a struct its event
+    type did not name, so a future shape cannot become a permanent 5xx either.
+  - **`TagSnapshot`, `VocabularySnapshot`, `TagAliasSnapshot` and `AssignmentSnapshot` are distinct
+    from the REST models**, per the first design finding: they omit `usage_count` and the namespace
+    pair, and an `*.updated` payload carries only the fields that actually changed.
+  - **Every snapshot field is an `octonomy.Optional[T]`, not a pointer, and that is a deliberate
+    departure from the issue's wording.** A pointer carries two states and a snapshot field needs
+    three. `{"after":{"parent_id":null}}` — an ordinary un-nesting, one of four clears the server
+    accepts — is *present and null*, and against a `*string` it is indistinguishable from *absent*,
+    so a consumer applying the diff leaves the tag nested under a parent the server no longer has.
+    That is #64's wall from the decoding side, which is what `Optional` was built for; `Get`,
+    `IsNull` and `IsZero` separate the three, and `Get` cannot nil-panic the way a pointer field
+    invites. Fields are tagged `,omitzero`, so a snapshot re-encodes to exactly the keys it arrived
+    with, and `TestSnapshotFieldsTagEveryOptionalOmitzero` fails on a missing tag.
+  - **A panicking `EventHandler` is recovered and answered with 500** — the decision #22 asked for
+    rather than left undefined. Left to escape, net/http recovers it per connection, logs a stack,
+    and closes the connection with **no response written**, so the consumer's own error path never
+    sees it; `ErrHandlerPanic` carries the value and the stack to `WithErrorHandler` instead.
+    `http.ErrAbortHandler` is re-panicked untouched, since that is net/http's documented way to
+    abandon a connection on purpose.
+  - **Eight new sentinels** (`ErrMalformedEvent`, `ErrIncompleteEvent`, `ErrMalformedPayload`,
+    `ErrMethodNotAllowed`, `ErrBodyTooLarge`, `ErrUnreadableBody`, `ErrNoEventHandler`,
+    `ErrHandlerPanic`), none of which is about the *signature* contract, so none needs a vector in
+    `signature_vectors.json` — the vectors stay payload-agnostic and portable.
+    `TestVerifyErrorsAreMutuallyDistinguishable` now parses every non-test file in the package rather
+    than `verify.go` alone, so a sentinel added to a new file cannot be added and forgotten.
+  - **`webhook` now imports the root package**, for `octonomy.Metadata` and `octonomy.Optional` and
+    nothing else. The dependency stays one-way: the root never imports `webhook`.
+  - **A required envelope field that is blank is refused** (`ErrIncompleteEvent`), and
+    `Event.UnmarshalJSON` does it, so `json.Unmarshal` and `ParseEvent` cannot disagree. Without it a
+    delivery with no `id` would decode to a zero-valued `Event` with a nil error, and a consumer
+    deduplicating on `""` drops every event after the first — #32 and #40's family, on the event side.
 - **`TestIntegration_TagsListPagesInATotalOrder`** (`integration_suite_test.go`) — the tags-ordering
   wording is now evidence-backed by a test rather than by prose alone. It walks an eight-tag fixture
   **one row per page**, so every page boundary is a separate query, and asserts the sequence equals

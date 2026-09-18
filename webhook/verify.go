@@ -165,11 +165,15 @@ var (
 // structurally impossible, and leaves the read (and its size limit, which
 // Verify cannot impose from here) where the caller can see it.
 //
-// # Bounding the body is the caller's job
+// # Bounding the body is the caller's job HERE
 //
-// This SDK ships no http.Handler, so nothing bounds the read for you. Wrap the
-// body in [net/http.MaxBytesReader] before reading it; by the time Verify has
-// bytes, an unbounded body has already been allocated.
+// Verify is handed bytes that are already in memory, so it cannot impose a
+// ceiling of its own: by the time it has them, an unbounded body has already
+// been allocated. Wrap the body in [net/http.MaxBytesReader] before reading it.
+//
+// [Handler] is the way out of owning that: it does the bounding, the read, this
+// call, and the decode, in the one order that is correct. Verify stays exported
+// for a consumer whose HTTP layer belongs to someone else.
 //
 // # Comparison
 //
