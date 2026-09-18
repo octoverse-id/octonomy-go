@@ -616,3 +616,68 @@ func TestHandlerFailsClosedWithNoSecrets(t *testing.T) {
 		t.Fatalf("refusals = %v, want one ErrNoSecret", refusals)
 	}
 }
+
+// TestHandlerIsOnlyCorrectWhenItIsFirstOnTheRequest pins the two ways
+// middleware in front of this handler changes what it can promise. They are
+// pinned rather than fixed because one of them is unfixable from inside a
+// handler, and a guarantee with an unstated precondition is worse than one
+// written down.
+func TestHandlerIsOnlyCorrectWhenItIsFirstOnTheRequest(t *testing.T) {
+	body := tagCreatedBody()
+	signature := sign(handlerSecret, []byte(body))
+
+	t.Run("a drained body fails safe", func(t *testing.T) {
+		// Middleware that read the body first -- a logger, a tracer, a
+		// json.Decoder. The signature check then runs over zero bytes.
+		var seen []*Event
+		h, refusals := newHandler(t, accept(&seen))
+
+		request := httptest.NewRequest(http.MethodPost, "/webhooks/octonomy", strings.NewReader(body))
+		request.Header.Set(HeaderSignature, signature)
+		if _, err := io.ReadAll(request.Body); err != nil {
+			t.Fatalf("drain the body: %v", err)
+		}
+		recorder := httptest.NewRecorder()
+		h.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", recorder.Code)
+		}
+		if len(seen) != 0 {
+			t.Error("a delivery whose body was already read reached the event handler")
+		}
+		// Named as itself, not as a mismatch: that sentinel is the whole
+		// diagnosis of a drained stream.
+		if !errors.Is((*refusals)[0].err, ErrEmptyBody) {
+			t.Errorf("err = %v, want ErrEmptyBody", (*refusals)[0].err)
+		}
+	})
+
+	t.Run("a committed status cannot be taken back", func(t *testing.T) {
+		// Middleware that wrote the response before delegating. net/http
+		// ignores the second WriteHeader, so the 200 stands even though the
+		// event handler refused the event -- and the dispatcher acknowledges
+		// work that never happened. Nothing here can detect or repair it.
+		h, refusals := newHandler(t, func(context.Context, *Event) error {
+			return errors.New("the index is down")
+		})
+
+		request := httptest.NewRequest(http.MethodPost, "/webhooks/octonomy", strings.NewReader(body))
+		request.Header.Set(HeaderSignature, signature)
+		recorder := httptest.NewRecorder()
+		recorder.WriteHeader(http.StatusOK)
+		h.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d; this test exists because the committed 200 stands", recorder.Code)
+		}
+		// The error handler is the only signal left, and it still reports the
+		// status this handler INTENDED.
+		if len(*refusals) != 1 {
+			t.Fatalf("recorded %d refusals, want 1", len(*refusals))
+		}
+		if (*refusals)[0].status != http.StatusInternalServerError {
+			t.Errorf("reported status = %d, want the 500 it intended", (*refusals)[0].status)
+		}
+	})
+}

@@ -674,6 +674,14 @@ published, so it is never retried — which makes a handler that answers 200 on 
 actually process the way a delivery disappears for good. The only path here that answers 2xx is the
 one where your event handler returned nil.
 
+**Which means `Handler` has to be first on the request.** Middleware that reads the body first fails
+safe and says so — the signature check runs over zero bytes and is refused as `ErrEmptyBody` with a
+401. Middleware that *writes the response* first does not: net/http ignores the second `WriteHeader`,
+so a committed 200 stands even when your event handler refused the event, and the dispatcher
+acknowledges work that never happened. Nothing in this package can detect or repair that; mount the
+handler as the endpoint rather than behind response-writing middleware. `WithErrorHandler` still
+reports the status it intended, which is the only signal left in that case.
+
 Digests are compared with `hmac.Equal`, in constant time, over the decoded bytes — never `==` on the
 hex. Every refusal is a distinct error (`ErrMissingSignature`, `ErrUnsupportedAlgorithm`,
 `ErrMalformedSignature`, `ErrSignatureMismatch`, `ErrEmptyBody`, `ErrNoSecret`, `ErrUnusableSecret`,

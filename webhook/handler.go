@@ -209,6 +209,29 @@ type handler struct {
 // echoed to the sender -- it goes to [WithErrorHandler] -- because the sender is
 // not the operator and a message written for one is a leak to the other.
 //
+// # It has to be FIRST on the request
+//
+// Everything above holds only while this handler is the first thing to read the
+// body and the first thing to write the response. Two kinds of middleware break
+// it, and they break it differently:
+//
+//   - Middleware that READS THE BODY -- a logger, a tracer that copies it, a
+//     json.Decoder -- leaves nothing for the read here, and the signature check
+//     then runs over zero bytes. That one fails SAFE and says so: it is refused
+//     with [ErrEmptyBody] and a 401, and that sentinel exists precisely to name
+//     the drained-stream case instead of leaving it as a permanent mismatch.
+//   - Middleware that WRITES THE RESPONSE FIRST -- anything calling WriteHeader
+//     or Write before delegating -- commits a status this handler cannot take
+//     back. net/http ignores the second WriteHeader, so a committed 200 stands
+//     even when the [EventHandler] refuses the event, and the dispatcher
+//     acknowledges work that never happened. NOTHING here can detect or repair
+//     that; the status is already on the wire.
+//
+// So mount it as the endpoint's handler, not behind response-writing middleware,
+// and keep body-reading middleware off this route. [WithErrorHandler] still
+// fires with the status this handler INTENDED, which is the only signal left in
+// the second case.
+//
 // # Why it returns an error
 //
 // An empty signing secret, a nil [EventHandler], and a non-positive ceiling are

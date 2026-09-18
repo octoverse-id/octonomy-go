@@ -212,7 +212,12 @@ third is a decision, not a convenience.
   "skip verification" switch for tests. It returns `(http.Handler, error)` on the same reasoning
   `octonomy.New` does: an empty secret, a nil `EventHandler`, and a non-positive ceiling are
   deployment mistakes knowable at wiring time, and the alternative is an endpoint that answers 500
-  forever with the reason reachable only through an optional hook.
+  forever with the reason reachable only through an optional hook. **Its guarantees hold only while
+  it is FIRST on the request**, and the doc comment says so: body-reading middleware in front of it
+  fails safe (`ErrEmptyBody`, 401), but response-writing middleware commits a status the handler
+  cannot take back, so a committed 200 acknowledges an event the `EventHandler` refused. That one is
+  unfixable from inside a handler — do not add a guard that pretends otherwise; keep it stated, and
+  keep `TestHandlerIsOnlyCorrectWhenItIsFirstOnTheRequest` pinning both halves.
 - **An unknown `event_type` is acknowledged, never refused.** Delivery is at-least-once with backoff
   and dead-lettering, so an SDK that errored on a type it did not recognise would make every
   deployed consumer start dead-lettering the day the server adds a twelfth one. `ParseEvent` leaves

@@ -136,6 +136,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **A panicked `error` is wrapped with `%w`**, so `errors.Is`/`errors.As` reach it through
     `ErrHandlerPanic`. `panic(err)` is the common spelling, and collapsing it to text left an error
     handler able to see *that* something panicked and never what.
+  - **The handler's guarantees are stated with their precondition: it has to be FIRST on the
+    request.** Body-reading middleware in front of it fails safe — the check runs over zero bytes
+    and is refused as `ErrEmptyBody` with a 401, which is what that sentinel is for. Response-writing
+    middleware does not: net/http ignores the second `WriteHeader`, so a committed 200 stands even
+    when the `EventHandler` refused the event, and the dispatcher acknowledges work that never
+    happened. Nothing inside a handler can detect or repair that, so it is written down and pinned by
+    `TestHandlerIsOnlyCorrectWhenItIsFirstOnTheRequest` rather than guarded against.
 - **`TestIntegration_TagsListPagesInATotalOrder`** (`integration_suite_test.go`) — the tags-ordering
   wording is now evidence-backed by a test rather than by prose alone. It walks an eight-tag fixture
   **one row per page**, so every page boundary is a separate query, and asserts the sequence equals
