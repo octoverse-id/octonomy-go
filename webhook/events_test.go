@@ -861,13 +861,16 @@ func TestParseEventRequiresThePayloadSidesItsEventTypeDocuments(t *testing.T) {
 					}
 
 					// ParseEvent returns nil, but the plain decoder writes into
-					// a caller's Event, and the side check fires AFTER the
-					// payload has been decoded into it. A caller who ignored
-					// the error must not find the half of the payload that did
-					// arrive sitting in a typed field.
-					var decoded Event
+					// a caller's Event. A refusal must leave it ENTIRELY
+					// untouched -- not merely free of a typed payload -- so a
+					// caller who ignored the error cannot read an envelope that
+					// was never accepted.
+					decoded := Event{ID: "untouched"}
 					if err := json.Unmarshal([]byte(envelope(eventType, shape.aggregate, tc.payload)), &decoded); err == nil {
 						t.Fatal("json.Unmarshal accepted a payload ParseEvent refused")
+					}
+					if decoded.ID != "untouched" {
+						t.Errorf("a refused delivery overwrote the caller's Event: %+v", decoded)
 					}
 					if decoded.Tag != nil || decoded.Vocabulary != nil || decoded.TagAlias != nil || decoded.Assignment != nil {
 						t.Error("a refused payload left a typed field behind")

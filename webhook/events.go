@@ -368,14 +368,13 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("%w: payload", ErrIncompleteEvent)
 	}
 
-	*e = Event(decoded)
-
 	// An unknown event type stops here: Payload keeps the bytes, every typed
 	// field stays nil, and nothing about the delivery is refused. Decoding an
 	// unrecognized payload into whichever struct its aggregate suggested is
 	// exactly how a future event type would become a permanent 5xx.
-	shape, known := eventShapes[e.Type]
+	shape, known := eventShapes[decoded.Type]
 	if !known {
+		*e = Event(decoded)
 		return nil
 	}
 
@@ -394,38 +393,42 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 	switch shape.aggregate {
 	case AggregateTag:
 		payload := new(TagPayload)
-		if err = json.Unmarshal(e.Payload, payload); err == nil {
-			e.Tag = payload
-			err = shape.requireSides(e.Type, payload.Before != nil, payload.After != nil)
+		if err = json.Unmarshal(decoded.Payload, payload); err == nil {
+			decoded.Tag = payload
+			err = shape.requireSides(decoded.Type, payload.Before != nil, payload.After != nil)
 		}
 	case AggregateVocabulary:
 		payload := new(VocabularyPayload)
-		if err = json.Unmarshal(e.Payload, payload); err == nil {
-			e.Vocabulary = payload
-			err = shape.requireSides(e.Type, payload.Before != nil, payload.After != nil)
+		if err = json.Unmarshal(decoded.Payload, payload); err == nil {
+			decoded.Vocabulary = payload
+			err = shape.requireSides(decoded.Type, payload.Before != nil, payload.After != nil)
 		}
 	case AggregateTagAlias:
 		payload := new(TagAliasPayload)
-		if err = json.Unmarshal(e.Payload, payload); err == nil {
-			e.TagAlias = payload
-			err = shape.requireSides(e.Type, payload.Before != nil, payload.After != nil)
+		if err = json.Unmarshal(decoded.Payload, payload); err == nil {
+			decoded.TagAlias = payload
+			err = shape.requireSides(decoded.Type, payload.Before != nil, payload.After != nil)
 		}
 	case AggregateTagAssignment:
 		payload := new(AssignmentPayload)
-		if err = json.Unmarshal(e.Payload, payload); err == nil {
-			e.Assignment = payload
-			err = shape.requireSides(e.Type, payload.Before != nil, payload.After != nil)
+		if err = json.Unmarshal(decoded.Payload, payload); err == nil {
+			decoded.Assignment = payload
+			err = shape.requireSides(decoded.Type, payload.Before != nil, payload.After != nil)
 		}
 	}
 	if err != nil {
-		// Leave nothing half-decoded behind: a caller who ignored the error
-		// would otherwise find a payload struct with some fields set.
-		e.Tag, e.Vocabulary, e.TagAlias, e.Assignment = nil, nil, nil, nil
 		if errors.Is(err, ErrIncompleteEvent) {
 			return err
 		}
-		return fmt.Errorf("%w on %s: %w", ErrMalformedPayload, e.Type, err)
+		return fmt.Errorf("%w on %s: %w", ErrMalformedPayload, decoded.Type, err)
 	}
+
+	// Everything has checked out, so the caller's Event is written EXACTLY
+	// once, here. Nothing above this line touches it, which is what makes a
+	// refusal leave no half-decoded event behind for a caller who ignored the
+	// error -- including the payload sides, which are validated after the
+	// payload has been decoded into a local.
+	*e = Event(decoded)
 	return nil
 }
 
