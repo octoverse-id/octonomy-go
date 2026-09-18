@@ -433,6 +433,29 @@ func TestHandlerRecoversAPanickingEventHandler(t *testing.T) {
 	}
 }
 
+// TestHandlerWrapsAPanickedError keeps the diagnosis reachable. panic(err) is
+// the common spelling, and an error panicked with is still an error: collapsing
+// it to text would leave an error handler able to see THAT something panicked
+// and never what.
+func TestHandlerWrapsAPanickedError(t *testing.T) {
+	cause := errors.New("the index client was nil")
+	h, refusals := newHandler(t, func(context.Context, *Event) error {
+		panic(cause)
+	})
+
+	body := tagCreatedBody()
+	if code := deliver(h, http.MethodPost, body, sign(handlerSecret, []byte(body))).Code; code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", code)
+	}
+	err := (*refusals)[0].err
+	if !errors.Is(err, ErrHandlerPanic) {
+		t.Errorf("err = %v, want ErrHandlerPanic", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("err = %v does not wrap the panicked error", err)
+	}
+}
+
 // TestHandlerPropagatesErrAbortHandler keeps net/http's own escape hatch
 // working. ErrAbortHandler is the documented way to abandon a connection
 // deliberately, and swallowing it would silently disable something the consumer

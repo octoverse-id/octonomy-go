@@ -71,7 +71,9 @@ var (
 	ErrNoEventHandler = errors.New("octonomy: webhook event handler is nil")
 
 	// ErrHandlerPanic reports that the [EventHandler] panicked. The panic value
-	// and the stack it was raised on are wrapped in.
+	// and the stack it was raised on are wrapped in -- and when the panic value
+	// is itself an error, it is wrapped with %w, so errors.Is and errors.As
+	// still reach it through this sentinel.
 	//
 	// The handler RECOVERS and answers 500 rather than letting the panic reach
 	// the consumer's http.Server, and that choice is deliberate. net/http
@@ -369,7 +371,16 @@ func (h *handler) invoke(ctx context.Context, event *Event) (err error) {
 		if recovered == http.ErrAbortHandler {
 			panic(recovered)
 		}
-		err = fmt.Errorf("%w: %v\n%s", ErrHandlerPanic, recovered, strings.TrimRight(string(debug.Stack()), "\n"))
+		stack := strings.TrimRight(string(debug.Stack()), "\n")
+		// panic(err) is the common spelling, and an error panicked with is
+		// still an error: wrapping it keeps errors.Is and errors.As working
+		// through ErrHandlerPanic, so an error handler can tell a nil map from
+		// a context deadline. A non-error value has nothing to wrap.
+		if recoveredErr, ok := recovered.(error); ok {
+			err = fmt.Errorf("%w: %w\n%s", ErrHandlerPanic, recoveredErr, stack)
+			return
+		}
+		err = fmt.Errorf("%w: %v\n%s", ErrHandlerPanic, recovered, stack)
 	}()
 	return h.fn(ctx, event)
 }

@@ -416,11 +416,35 @@ func TestParseEventAcceptsAnUnknownEventType(t *testing.T) {
 		t.Errorf("an unknown event type must not be decoded into a typed payload: %v", err)
 	}
 
-	// And an unknown type with no payload at all is still not fatal: the
-	// payload requirement applies only where this SDK claims to understand it.
+	// The payload itself is still required, though, because it is an ENVELOPE
+	// field rather than an event-type-specific one: the serializer emits all
+	// sixteen keys whatever the event type, so a delivery without it is a
+	// malformed envelope and not a future event type. That is what keeps
+	// Event.Payload non-nil for the unknown case, which is the only place the
+	// case can be inspected at all.
 	missing := strings.Replace(envelope("tag.merged", AggregateTag, payload), `"payload":`+payload+`,`, "", 1)
-	if _, err := ParseEvent([]byte(missing)); err != nil {
-		t.Errorf("an unknown event type with no payload must parse: %v", err)
+	if _, err := ParseEvent([]byte(missing)); !errors.Is(err, ErrIncompleteEvent) {
+		t.Errorf("an unknown event type with no payload: err = %v, want ErrIncompleteEvent", err)
+	}
+}
+
+// TestEveryDecodedEventCarriesItsRawPayload is the property the check above
+// buys: Event.Payload is documented as never empty, and for an unknown event
+// type it is the ONLY way to see what arrived.
+func TestEveryDecodedEventCarriesItsRawPayload(t *testing.T) {
+	for _, eventType := range append(slices.Sorted(maps.Keys(eventShapes)), "tag.merged") {
+		shape := eventShapes[eventType] // zero value for the unknown type: no sides required
+		payload := `{"before":{"is_active":true},"after":{"is_active":false}}`
+		if shape.aggregate == AggregateTagAssignment {
+			payload = `{"before":` + assignmentSnapshotJSON + `,"after":` + assignmentSnapshotJSON + `}`
+		}
+		event := mustParse(t, envelope(eventType, AggregateTag, payload))
+		if len(event.Payload) == 0 {
+			t.Errorf("%s decoded with an empty Payload", eventType)
+		}
+		if !json.Valid(event.Payload) {
+			t.Errorf("%s decoded with an invalid Payload: %s", eventType, event.Payload)
+		}
 	}
 }
 

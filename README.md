@@ -684,7 +684,9 @@ or under attack. And it never panics — not even on a secret the runtime itself
 `crypto/hmac.New` signals with a panic under `GODEBUG=fips140=only`, and not when your event handler
 does: that is recovered, reported as `ErrHandlerPanic` with its stack, and answered with a 500,
 because a panic escaping into your `http.Server` is recovered per connection with **no response
-written at all**.
+written at all**. The one panic that is deliberately let through is `http.ErrAbortHandler`, which is
+net/http's own way of abandoning a connection on purpose — swallowing it would disable a mechanism
+you reached for.
 
 **A valid signature is authenticity, not freshness.** The server sends no timestamp header, so there
 is no window to enforce and **replay cannot be prevented here**. Octonomy's outbox is at-least-once

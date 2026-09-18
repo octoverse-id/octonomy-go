@@ -128,6 +128,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     consumer handles it and returns nil — acknowledges it for good. Both halves null (global), both
     set, and both **absent** are all accepted: a server older than the namespace axis emits no
     namespace keys at all, so requiring them would refuse every delivery from one.
+  - **`payload` is required on every event type, known or not**, because it is an ENVELOPE field:
+    `serialize_outbox_event` emits all sixteen keys whatever the `event_type`, so a delivery without
+    one is a malformed envelope rather than a future event type. That is what makes `Event.Payload`
+    non-empty on every decoded event — and for an unknown type it is the only way to see what
+    arrived, so a nil there would have hollowed out the forward-compatibility path it exists for.
+  - **A panicked `error` is wrapped with `%w`**, so `errors.Is`/`errors.As` reach it through
+    `ErrHandlerPanic`. `panic(err)` is the common spelling, and collapsing it to text left an error
+    handler able to see *that* something panicked and never what.
 - **`TestIntegration_TagsListPagesInATotalOrder`** (`integration_suite_test.go`) — the tags-ordering
   wording is now evidence-backed by a test rather than by prose alone. It walks an eight-tag fixture
   **one row per page**, so every page boundary is a separate query, and asserts the sequence equals

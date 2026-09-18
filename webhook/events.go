@@ -149,9 +149,10 @@ var (
 	//     both absent is a pre-namespace server, so neither of those is
 	//     refused; a half-set pair is neither, and reading one half alone would
 	//     report a merchant's event as global.
-	//   - A payload side its event type documents: payload itself, or the
-	//     before/after a known event type must carry. See [Event] on why a
-	//     missing side cannot be handed back as a nil field.
+	//   - The payload, or a side of it. payload is an envelope field and is
+	//     required on every event type, known or not; the before/after sides
+	//     are required on the eleven known ones. See [Event] on why a missing
+	//     side cannot be handed back as a nil field.
 	ErrIncompleteEvent = errors.New("octonomy: webhook event is missing a required field")
 
 	// ErrMalformedPayload reports a payload that does not fit the shape its own
@@ -259,9 +260,10 @@ type Event struct {
 	// Decode it into a struct of your own with octonomy.DecodeMetadata.
 	Metadata octonomy.Metadata `json:"metadata"`
 
-	// Payload is the raw, undecoded payload exactly as it arrived. It is always
-	// populated, including for an event type this package does not know, which
-	// is the only place that case can be inspected.
+	// Payload is the raw, undecoded payload exactly as it arrived. It is never
+	// empty on a decoded Event -- a delivery without a payload is refused, and
+	// that holds for an event type this package does not know, which is the
+	// only place that case can be inspected.
 	Payload json.RawMessage `json:"payload"`
 
 	// Tag, Vocabulary, TagAlias, and Assignment are the typed payload. AT MOST
@@ -355,6 +357,17 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		}
 	}
 
+	// payload is an ENVELOPE field, so it is required for every event type and
+	// not only the eleven known ones. serialize_outbox_event emits all sixteen
+	// keys unconditionally -- the envelope's shape does not vary by event_type
+	// -- so a delivery without one is a malformed envelope rather than a future
+	// event type, and refusing it is the same refusal as a blank id above.
+	// Checking it HERE, before the unknown-type return, is what makes
+	// [Event.Payload] non-nil for every Event this function hands back.
+	if len(decoded.Payload) == 0 || bytes.Equal(decoded.Payload, []byte("null")) {
+		return fmt.Errorf("%w: payload", ErrIncompleteEvent)
+	}
+
 	*e = Event(decoded)
 
 	// An unknown event type stops here: Payload keeps the bytes, every typed
@@ -364,9 +377,6 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 	shape, known := eventShapes[e.Type]
 	if !known {
 		return nil
-	}
-	if len(e.Payload) == 0 || bytes.Equal(e.Payload, []byte("null")) {
-		return fmt.Errorf("%w: payload", ErrIncompleteEvent)
 	}
 
 	// json.Unmarshal ignores keys the target does not name, which is the
