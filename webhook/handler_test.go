@@ -681,3 +681,39 @@ func TestHandlerIsOnlyCorrectWhenItIsFirstOnTheRequest(t *testing.T) {
 		}
 	})
 }
+
+// TestHandlerStopsAtASecretItCannotUse is the other half of the verify loop's
+// fail-closed design, and like TestHandlerFailsClosedWithNoSecrets it reaches a
+// state construction refuses -- which is why it builds the handler directly.
+//
+// Only a MISMATCH moves on to the next secret. An unusable secret does not: it
+// means the deployment is misconfigured, and a later secret in the list
+// verifying the body would paper that over and leave the broken entry live. The
+// refusal must be the misconfiguration, not the acceptance.
+func TestHandlerStopsAtASecretItCannotUse(t *testing.T) {
+	var refusals []refusal
+	var seen []*Event
+	h := &handler{
+		// The first entry is one construction rejects; the delivery below is
+		// signed with the second, so a loop that kept going would ACCEPT it.
+		secrets:      []string{"", handlerSecret},
+		fn:           accept(&seen),
+		maxBodyBytes: DefaultMaxBodyBytes,
+		onError: func(_ *http.Request, status int, err error) {
+			refusals = append(refusals, refusal{status: status, err: err})
+		},
+	}
+
+	body := tagCreatedBody()
+	recorder := deliver(h, http.MethodPost, body, sign(handlerSecret, []byte(body)))
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: an unusable secret is this deployment's fault", recorder.Code)
+	}
+	if len(seen) != 0 {
+		t.Error("a later secret verified a delivery an earlier misconfiguration should have refused")
+	}
+	if len(refusals) != 1 || !errors.Is(refusals[0].err, ErrNoSecret) {
+		t.Fatalf("refusals = %v, want one ErrNoSecret", refusals)
+	}
+}

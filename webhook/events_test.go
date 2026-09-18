@@ -859,6 +859,19 @@ func TestParseEventRequiresThePayloadSidesItsEventTypeDocuments(t *testing.T) {
 					if !strings.Contains(err.Error(), "payload.") {
 						t.Errorf("err = %q does not name the missing side", err)
 					}
+
+					// ParseEvent returns nil, but the plain decoder writes into
+					// a caller's Event, and the side check fires AFTER the
+					// payload has been decoded into it. A caller who ignored
+					// the error must not find the half of the payload that did
+					// arrive sitting in a typed field.
+					var decoded Event
+					if err := json.Unmarshal([]byte(envelope(eventType, shape.aggregate, tc.payload)), &decoded); err == nil {
+						t.Fatal("json.Unmarshal accepted a payload ParseEvent refused")
+					}
+					if decoded.Tag != nil || decoded.Vocabulary != nil || decoded.TagAlias != nil || decoded.Assignment != nil {
+						t.Error("a refused payload left a typed field behind")
+					}
 				})
 			}
 		})
