@@ -23,11 +23,20 @@ const (
 
 	exampleSignature = "sha256=20b8b4239fcae9785de2ac6d6de1abf2c0824fa5f0442032d9c57cc808c96b04"
 	rotatedSignature = "sha256=47cc334e6fce09c9a8b161c39d2482029411781be73c68196281e9c7d94d14ff"
+
+	// The merchant-namespaced tag.updated vector, for the same reason: an
+	// *.updated payload is where the three states of a snapshot field are
+	// actually reachable, and a merchant event is where a namespace is.
+	updatedSignature = "sha256=dfcdefafeab32f2e8b591e0a01f8e0d73ddba3a7915c374f5234836fed2485f0"
 )
 
-// exampleEnvelope is an outbox event exactly as the server puts it on the wire:
-// compact separators, sorted keys, UTF-8. A null namespace_type is the concrete
-// global (tenant-shared) namespace and not a wildcard.
+// exampleEnvelope is an outbox event in the server's wire FORMAT -- compact
+// separators, sorted keys, UTF-8 -- with an abbreviated snapshot under "after".
+// A real tag.created carries the whole snapshot; the vectors deliberately do
+// not, because they exist to pin the signature format and must stay valid as
+// payloads evolve (see testdata/README.md). examples/webhook carries a complete
+// one. A null namespace_type is the concrete global (tenant-shared) namespace
+// and not a wildcard.
 const exampleEnvelope = `{"actor_id":"user_42","aggregate_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55",` +
 	`"aggregate_type":"tag","application_id":"storefront",` +
 	`"event_type":"tag.created","id":"0f1d7b24-2c1e-4f9a-9f3a-3a5f1c2d6e77",` +
@@ -35,6 +44,17 @@ const exampleEnvelope = `{"actor_id":"user_42","aggregate_id":"9c2b0f41-5d33-4a6
 	`"operation_id":"5f0a3d18-7b62-4c19-9e84-1d6b8f2a4c30",` +
 	`"payload":{"after":{"id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55","is_active":true,"name":"Summer Sale","slug":"summer-sale","vocabulary_id":"3b7e5a90-1c48-4d2b-a6f5-8e0d9c1b4a26"}},` +
 	`"request_id":null,"resource_id":null,"resource_type":null,` +
+	`"tag_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55","tenant_id":"acme"}`
+
+// updatedEnvelope is the merchant-namespaced tag.updated vector: a rename, in a
+// payload carrying ONLY the field that changed.
+const updatedEnvelope = `{"actor_id":"user_42","aggregate_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55",` +
+	`"aggregate_type":"tag","application_id":"storefront","event_type":"tag.updated",` +
+	`"id":"7a3c9e15-8b40-4d27-9f61-0c5e2a8d3b19","metadata":{"source":"api"},` +
+	`"namespace_id":"merchant-9931","namespace_type":"merchant",` +
+	`"operation_id":"5f0a3d18-7b62-4c19-9e84-1d6b8f2a4c30",` +
+	`"payload":{"after":{"name":"Summer Clearance"},"before":{"name":"Summer Sale"}},` +
+	`"request_id":"req_2f9c7b1a-6d38-4e05-b7a2-9c1e4f8d60a3","resource_id":null,"resource_type":null,` +
 	`"tag_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55","tenant_id":"acme"}`
 
 func ExampleVerify() {
@@ -132,27 +152,37 @@ func ExampleHandler() {
 // whose HTTP layer belongs to a framework. Verify FIRST -- until it returns
 // nil the bytes are an anonymous POST claiming to be from Octonomy.
 func ExampleParseEvent() {
-	body := []byte(exampleEnvelope)
-	if err := webhook.Verify(exampleSecret, exampleSignature, body); err != nil {
-		fmt.Println("refused:", err)
-		return
+	parse := func(body, signature string) *webhook.Event {
+		if err := webhook.Verify(exampleSecret, signature, []byte(body)); err != nil {
+			log.Fatalf("refused: %v", err)
+		}
+		event, err := webhook.ParseEvent([]byte(body))
+		if err != nil {
+			log.Fatalf("malformed: %v", err)
+		}
+		return event
 	}
 
-	event, err := webhook.ParseEvent(body)
-	if err != nil {
-		fmt.Println("malformed:", err)
-		return
-	}
-
-	fmt.Println("type:", event.Type)
-	fmt.Println("aggregate:", event.AggregateID)
-	fmt.Println("known:", event.Known())
-
-	// A field the delivery carried, and one it did not. The difference is the
-	// reason these are octonomy.Optional and not pointers.
-	slug, _ := event.Tag.After.Slug.Get()
+	created := parse(exampleEnvelope, exampleSignature)
+	fmt.Println("type:", created.Type)
+	fmt.Println("aggregate:", created.AggregateID)
+	slug, _ := created.Tag.After.Slug.Get()
 	fmt.Println("slug:", slug)
-	fmt.Println("description absent:", event.Tag.After.Description.IsZero())
+	_, _, namespaced := created.Namespace()
+	fmt.Println("namespaced:", namespaced)
+
+	// An *.updated payload carries only what changed, which is where the three
+	// states of a snapshot field are reachable: a value for the field that
+	// moved, and ABSENT for every field this update did not touch. A *string
+	// would report the second as nil -- the same thing it would report for a
+	// field that had been cleared to null.
+	updated := parse(updatedEnvelope, updatedSignature)
+	name, _ := updated.Tag.After.Name.Get()
+	fmt.Println("renamed to:", name)
+	fmt.Println("slug untouched:", updated.Tag.After.Slug.IsZero())
+	fmt.Println("slug cleared:", updated.Tag.After.Slug.IsNull())
+	namespaceType, namespaceID, namespaced := updated.Namespace()
+	fmt.Printf("namespace: %s/%s (namespaced %t)\n", namespaceType, namespaceID, namespaced)
 
 	// An event type this SDK predates is not an error. The raw type and the
 	// undecoded payload are both there; the typed payload is nil.
@@ -164,9 +194,12 @@ func ExampleParseEvent() {
 	// Output:
 	// type: tag.created
 	// aggregate: 9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55
-	// known: true
 	// slug: summer-sale
-	// description absent: true
+	// namespaced: false
+	// renamed to: Summer Clearance
+	// slug untouched: true
+	// slug cleared: false
+	// namespace: merchant/merchant-9931 (namespaced true)
 	// future type "tag.merged": err=<nil> known=false typed=false
 }
 

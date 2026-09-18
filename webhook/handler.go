@@ -55,8 +55,10 @@ var (
 	// the signature covers were never all read.
 	//
 	// Raise the ceiling with [WithMaxBodyBytes] if genuine deliveries are
-	// hitting it -- the answer is 413 and the server will retry it forever
-	// otherwise, which is a real event lost to a configuration number.
+	// hitting it. A refusal here is permanent on the consumer's side but not on
+	// the sender's: the dispatcher retries it with backoff like any other
+	// failure and dead-letters it at the attempt limit, so the event is lost to
+	// a configuration number rather than to anything about the event.
 	ErrBodyTooLarge = errors.New("octonomy: webhook delivery body exceeds the handler's limit")
 
 	// ErrUnreadableBody reports a body that ended early or could not be read:
@@ -227,7 +229,13 @@ func Handler(secret string, fn EventHandler, opts ...HandlerOption) (http.Handle
 		fn:           fn,
 		maxBodyBytes: DefaultMaxBodyBytes,
 	}
-	for _, opt := range opts {
+	for i, opt := range opts {
+		// A nil option would panic on the call, and this library does not
+		// panic -- least of all at wiring time, where the caller has a typed
+		// nil in a slice and no idea which one.
+		if opt == nil {
+			return nil, fmt.Errorf("octonomy: webhook handler option %d of %d is nil", i+1, len(opts))
+		}
 		opt(h)
 	}
 
@@ -287,9 +295,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.verify(r.Header.Get(HeaderSignature), body); err != nil {
 		// Construction already refused an empty or runtime-rejected secret, so
 		// neither of these is reachable today. They are mapped anyway, and to
-		// 500 rather than 401: those two mean the verification never RAN, which
-		// is this deployment's fault and not the sender's, and a 401 would tell
-		// Octonomy to give up on a delivery that was probably genuine.
+		// 500 rather than 401, because the status is the only account of the
+		// failure that reaches the sender: those two mean the verification
+		// never RAN, which is this deployment's fault, and a 401 records a
+		// forged signature against a delivery that was probably genuine. The
+		// dispatcher treats every non-2xx alike -- backoff, then dead-letter at
+		// the attempt limit -- so nothing about the retry changes; what changes
+		// is what the dead-letter row says happened.
 		status := http.StatusUnauthorized
 		if errors.Is(err, ErrNoSecret) || errors.Is(err, ErrUnusableSecret) {
 			status = http.StatusInternalServerError

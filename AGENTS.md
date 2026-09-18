@@ -219,6 +219,15 @@ third is a decision, not a convenience.
   every typed payload nil, `Event.Payload` keeps the undecoded bytes, `EventType.Known` reports
   false, and no payload is decoded into a struct its event type did not name. Decoding is lenient
   about unknown FIELDS for the same reason — never `DisallowUnknownFields`.
+- **What a KNOWN event type promises is its payload sides, and the decoder enforces them.** A
+  `*.created` carries `after`, a `*.updated` and a `*.deactivated` carry both, an
+  `assignment.removed` carries `before`; a delivery without one is `ErrIncompleteEvent`. Without
+  that check a signed `tag.created` with an empty payload decodes with a nil error into a
+  `TagPayload` whose `After` is nil, and the handler this package documents nil-panics on every
+  redelivery of it. An EXTRA side is not a refusal — that direction is forward compatibility again.
+  The same standard covers the namespace pair: both halves null (global), both set, or both absent
+  (a pre-namespace server) are accepted, and a **half-set or blank** pair is refused, because
+  reading one half alone reports a merchant's event as global and the consumer then acknowledges it.
 - **Snapshot types are not the REST models and must not be replaced by them.** A snapshot omits
   `usage_count` and the namespace pair, and an `*.updated` payload carries only the fields that
   changed. **Every snapshot field is an `octonomy.Optional[T]` tagged `json:",omitzero"`**, never a

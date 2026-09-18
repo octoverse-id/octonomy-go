@@ -662,6 +662,13 @@ leaves a tag nested under a parent the server no longer has. That is the wall
 [#64](https://github.com/octoverse-id/octonomy-go/issues/64) hit from the encoding side, which is
 why `octonomy.Optional` exists at all.
 
+**The sides, though, are guaranteed.** A `tag.created` always carries `After`, a `tag.updated` both,
+an `assignment.removed` `Before` — a delivery without the side its own event type documents is
+refused as `ErrIncompleteEvent` rather than handed over with a nil field, so the dereference above is
+safe inside the case that matched it. A delivery with one half of the namespace pair set is refused
+for the same reason: reading either half alone would report a merchant's event as global, and a
+consumer that handled it would acknowledge it.
+
 **Every 2xx is an acknowledgement.** The dispatcher treats one as delivered and marks the event
 published, so it is never retried — which makes a handler that answers 200 on a path it did not
 actually process the way a delivery disappears for good. The only path here that answers 2xx is the

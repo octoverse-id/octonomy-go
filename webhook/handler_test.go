@@ -107,6 +107,19 @@ func TestHandlerRefusesToBeBuiltWithoutWhatItNeeds(t *testing.T) {
 		}
 	})
 
+	t.Run("nil option", func(t *testing.T) {
+		// A nil option would be called and panic, out of a library that
+		// promises never to. It is a construction error instead, and it says
+		// which one of the slice it was.
+		_, err := Handler(handlerSecret, noop, WithMaxBodyBytes(4096), nil)
+		if err == nil {
+			t.Fatal("a nil HandlerOption was accepted")
+		}
+		if !strings.Contains(err.Error(), "option 2 of 2") {
+			t.Errorf("err = %q does not say which option is nil", err)
+		}
+	})
+
 	t.Run("non-positive body limit", func(t *testing.T) {
 		for _, limit := range []int64{0, -1} {
 			if _, err := Handler(handlerSecret, noop, WithMaxBodyBytes(limit)); err == nil {

@@ -118,6 +118,14 @@
 // octonomy.Optional that says which of absent, null, and a value arrived. The
 // snapshot types' own documentation has the reasoning.
 //
+// What a known event type DOES promise is its sides: a tag.created always has
+// After, a tag.updated always has both, an assignment.removed always has
+// Before. A delivery without them is refused as [ErrIncompleteEvent] rather
+// than handed over, so event.Tag.After is safe to dereference inside the case
+// that matched it. The same holds for the namespace: a delivery with one half
+// of the pair set is refused, so [Event.Namespace] reporting false always means
+// the global namespace.
+//
 // # What a valid signature proves, and what it does not
 //
 // A nil error from [Verify] means these exact bytes were signed by a holder of

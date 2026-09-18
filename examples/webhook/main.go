@@ -35,14 +35,19 @@ import (
 )
 
 // One real tag.created envelope, exactly as the server puts it on the wire:
-// compact separators, sorted keys. A null namespace_type is the global
-// (tenant-shared) namespace, not a wildcard.
+// compact separators, sorted keys, all sixteen envelope fields, and a COMPLETE
+// tag snapshot under "after" -- which is what a created event carries, down to
+// the explicit null on a tag with no parent. A null namespace_type is the
+// global (tenant-shared) namespace, not a wildcard.
 const sampleEnvelope = `{"actor_id":"user_42","aggregate_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55",` +
 	`"aggregate_type":"tag","application_id":"storefront","event_type":"tag.created",` +
 	`"id":"0f1d7b24-2c1e-4f9a-9f3a-3a5f1c2d6e77","metadata":{},"namespace_id":null,"namespace_type":null,` +
 	`"operation_id":"5f0a3d18-7b62-4c19-9e84-1d6b8f2a4c30",` +
-	`"payload":{"after":{"id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55","is_active":true,` +
-	`"name":"Summer Sale","slug":"summer-sale","type":"campaign"}},` +
+	`"payload":{"after":{"application_id":"storefront","created_at":"2026-09-18T10:11:12.123456+00:00",` +
+	`"description":"Seasonal promotion","id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55","is_active":true,` +
+	`"metadata":{"team":"growth"},"name":"Summer Sale","parent_id":null,"slug":"summer-sale",` +
+	`"tenant_id":"acme","type":"campaign","updated_at":"2026-09-18T10:11:12.123456+00:00",` +
+	`"vocabulary_id":"3b7e5a90-1c48-4d2b-a6f5-8e0d9c1b4a26"}},` +
 	`"request_id":null,"resource_id":null,"resource_type":null,` +
 	`"tag_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55","tenant_id":"acme"}`
 
@@ -134,11 +139,15 @@ func handleEvent(_ context.Context, event *webhook.Event) error {
 		// A snapshot field says one of three things: absent (this event did not
 		// carry it), null (it was cleared), or a value. Get reports the third
 		// and never panics -- which a *string field would have invited.
+		//
+		// After is guaranteed non-nil here: a tag.created without it is refused
+		// as ErrIncompleteEvent before this function is reached, so the
+		// dereference cannot be the thing that panics.
 		slug, ok := event.Tag.After.Slug.Get()
 		if !ok {
 			// A tag.created always carries a slug, so this is the contract
-			// having moved. Refusing it is right: the delivery is retried and
-			// dead-lettered where someone will find it.
+			// having moved. Refusing it is right: the delivery is retried with
+			// backoff and dead-lettered where someone will find it.
 			return fmt.Errorf("tag.created %s carried no slug", event.AggregateID)
 		}
 		log.Printf("  index tag %s as %q", event.AggregateID, slug)

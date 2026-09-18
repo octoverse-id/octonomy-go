@@ -277,13 +277,13 @@ func TestParseEventDecodesEveryEventType(t *testing.T) {
 	}
 
 	// Every known event type must appear above. A twelfth type added to
-	// eventAggregates and not to this table would ship a payload nothing
-	// decodes in anger.
+	// eventShapes and not to this table would ship a payload nothing decodes
+	// in anger.
 	covered := make(map[EventType]bool, len(cases))
 	for _, tc := range cases {
 		covered[tc.eventType] = true
 	}
-	for _, eventType := range slices.Sorted(maps.Keys(eventAggregates)) {
+	for _, eventType := range slices.Sorted(maps.Keys(eventShapes)) {
 		if !covered[eventType] {
 			t.Errorf("%s is a known event type with no case in this table", eventType)
 		}
@@ -609,7 +609,8 @@ func TestSnapshotDistinguishesAbsentFromNullFromValue(t *testing.T) {
 // snapshot re-encodes to exactly the keys it was sent with, so one can be
 // logged or forwarded without inventing fields the event never carried.
 func TestSnapshotRoundTripsToTheKeysItArrivedWith(t *testing.T) {
-	const payload = `{"after":{"description":null,"parent_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55"}}`
+	const payload = `{"after":{"description":null,"parent_id":"9c2b0f41-5d33-4a6f-8b17-2e4c9a7d0b55"},` +
+		`"before":{"description":"Seasonal","parent_id":null}}`
 	event := mustParse(t, envelope(EventTagUpdated, AggregateTag, payload))
 
 	encoded, err := json.Marshal(event.Tag)
@@ -633,11 +634,20 @@ func TestSnapshotRoundTripsToTheKeysItArrivedWith(t *testing.T) {
 // compatibility. A field a later server adds to a snapshot must not turn every
 // delivery into a dead letter; the bytes stay readable in Payload.
 func TestParseEventIgnoresUnknownSnapshotFields(t *testing.T) {
-	const payload = `{"after":{"slug":"summer-sale","colour":"amber","usage_count":7}}`
-	event := mustParse(t, envelope(EventTagCreated, AggregateTag, payload))
+	// A COMPLETE tag snapshot with one field a later server added. Anything
+	// less would be asserting forward compatibility against a fixture that is
+	// already missing fields the server sends today.
+	future := strings.Replace(tagSnapshotJSON, `{"id":`, `{"colour":"amber","id":`, 1)
+	if future == tagSnapshotJSON {
+		t.Fatal("the additive field was not injected; this test is asserting nothing")
+	}
+	event := mustParse(t, envelope(EventTagCreated, AggregateTag, `{"after":`+future+`}`))
 
 	if got := value(t, event.Tag.After.Slug, "slug"); got != "summer-sale" {
 		t.Errorf("slug = %q", got)
+	}
+	if got := value(t, event.Tag.After.Name, "name"); got != "Summer Sale" {
+		t.Errorf("name = %q", got)
 	}
 	if !strings.Contains(string(event.Payload), `"colour":"amber"`) {
 		t.Errorf("Payload = %s; a field this SDK dropped must still be readable there", event.Payload)
@@ -677,21 +687,25 @@ func TestUnmarshalJSONAndParseEventAgree(t *testing.T) {
 // to eventAggregates without adding it to the server's contract -- or the other
 // way round -- is a decoder that claims to understand something it has not seen.
 func TestEventTypeKnownCoversExactlyTheDocumentedTypes(t *testing.T) {
-	want := map[EventType]AggregateType{
-		"tag.created":            AggregateTag,
-		"tag.updated":            AggregateTag,
-		"tag.deactivated":        AggregateTag,
-		"vocabulary.created":     AggregateVocabulary,
-		"vocabulary.updated":     AggregateVocabulary,
-		"vocabulary.deactivated": AggregateVocabulary,
-		"tag_alias.created":      AggregateTagAlias,
-		"tag_alias.updated":      AggregateTagAlias,
-		"tag_alias.deactivated":  AggregateTagAlias,
-		"assignment.created":     AggregateTagAssignment,
-		"assignment.removed":     AggregateTagAssignment,
+	// Spelled out rather than derived, so a change to the table is a change
+	// here too. The sides are the half a decoder gets wrong quietly: a created
+	// event carries only "after", a removed assignment only "before", and
+	// everything else carries both.
+	want := map[EventType]eventShape{
+		"tag.created":            {aggregate: AggregateTag, after: true},
+		"tag.updated":            {aggregate: AggregateTag, before: true, after: true},
+		"tag.deactivated":        {aggregate: AggregateTag, before: true, after: true},
+		"vocabulary.created":     {aggregate: AggregateVocabulary, after: true},
+		"vocabulary.updated":     {aggregate: AggregateVocabulary, before: true, after: true},
+		"vocabulary.deactivated": {aggregate: AggregateVocabulary, before: true, after: true},
+		"tag_alias.created":      {aggregate: AggregateTagAlias, after: true},
+		"tag_alias.updated":      {aggregate: AggregateTagAlias, before: true, after: true},
+		"tag_alias.deactivated":  {aggregate: AggregateTagAlias, before: true, after: true},
+		"assignment.created":     {aggregate: AggregateTagAssignment, after: true},
+		"assignment.removed":     {aggregate: AggregateTagAssignment, before: true},
 	}
-	if !maps.Equal(want, eventAggregates) {
-		t.Errorf("eventAggregates = %v, want %v", eventAggregates, want)
+	if !maps.Equal(want, eventShapes) {
+		t.Errorf("eventShapes = %v, want %v", eventShapes, want)
 	}
 
 	for eventType := range want {
@@ -763,4 +777,163 @@ func isOptionalType(expr ast.Expr) bool {
 	}
 	pkg, ok := selector.X.(*ast.Ident)
 	return ok && pkg.Name == "octonomy" && selector.Sel.Name == "Optional"
+}
+
+// TestParseEventRequiresThePayloadSidesItsEventTypeDocuments is what makes
+// event.Tag.After safe to dereference. Without it a signed tag.created with an
+// empty payload decodes with a nil error into a TagPayload whose After is nil,
+// and the handler this package documents panics on every redelivery of it.
+func TestParseEventRequiresThePayloadSidesItsEventTypeDocuments(t *testing.T) {
+	// One minimal snapshot per aggregate. The sides are the subject here, not
+	// their contents.
+	minimal := map[AggregateType]string{
+		AggregateTag:           `{"is_active":false}`,
+		AggregateVocabulary:    `{"is_active":false}`,
+		AggregateTagAlias:      `{"is_active":false}`,
+		AggregateTagAssignment: `{"resource_id":"ord_1001"}`,
+	}
+
+	for _, eventType := range slices.Sorted(maps.Keys(eventShapes)) {
+		shape := eventShapes[eventType]
+		snapshot, ok := minimal[shape.aggregate]
+		if !ok {
+			t.Fatalf("%s names aggregate %q, which this test has no snapshot for", eventType, shape.aggregate)
+		}
+
+		t.Run(string(eventType), func(t *testing.T) {
+			// Both sides always parse: an EXTRA side is not a refusal, because
+			// a server that started sending one would otherwise dead-letter.
+			mustParse(t, envelope(eventType, shape.aggregate,
+				fmt.Sprintf(`{"before":%s,"after":%s}`, snapshot, snapshot)))
+
+			for _, tc := range []struct {
+				name     string
+				payload  string
+				required bool
+			}{
+				{name: "no before", payload: fmt.Sprintf(`{"after":%s}`, snapshot), required: shape.before},
+				{name: "no after", payload: fmt.Sprintf(`{"before":%s}`, snapshot), required: shape.after},
+				{name: "no sides at all", payload: `{}`, required: true},
+				{name: "the side is null", payload: `{"before":null,"after":null}`, required: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					event, err := ParseEvent([]byte(envelope(eventType, shape.aggregate, tc.payload)))
+					if !tc.required {
+						// This event type does not document that side, so its
+						// absence is ordinary.
+						if err != nil {
+							t.Fatalf("err = %v, want nil: %s does not carry that side", err, eventType)
+						}
+						return
+					}
+					if !errors.Is(err, ErrIncompleteEvent) {
+						t.Fatalf("err = %v, want ErrIncompleteEvent", err)
+					}
+					if event != nil {
+						t.Errorf("event = %+v, want nil on a refusal", event)
+					}
+					if !strings.Contains(err.Error(), "payload.") {
+						t.Errorf("err = %q does not name the missing side", err)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestParseEventRefusesAnIncoherentNamespacePair covers the one decode that
+// would mis-ROUTE rather than merely mis-read. Reading either half alone
+// reports a half-set pair as global, which sends a merchant's event to the
+// tenant-shared partition -- and a consumer that handles it returns nil, so the
+// event is acknowledged and never comes back.
+func TestParseEventRefusesAnIncoherentNamespacePair(t *testing.T) {
+	full := envelope(EventTagCreated, AggregateTag, `{"after":`+tagSnapshotJSON+`}`)
+	const globalPair = `"namespace_id":null,"namespace_type":null`
+
+	t.Run("refused", func(t *testing.T) {
+		for name, pair := range map[string]string{
+			"type without id":  `"namespace_id":null,"namespace_type":"merchant"`,
+			"id without type":  `"namespace_id":"m_42","namespace_type":null`,
+			"blank type":       `"namespace_id":"m_42","namespace_type":""`,
+			"blank id":         `"namespace_id":"","namespace_type":"merchant"`,
+			"whitespace type":  `"namespace_id":"m_42","namespace_type":"  "`,
+			"type key missing": `"namespace_id":"m_42"`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				body := strings.Replace(full, globalPair, pair, 1)
+				if body == full {
+					t.Fatal("the fixture did not change the envelope")
+				}
+				event, err := ParseEvent([]byte(body))
+				if !errors.Is(err, ErrIncompleteEvent) {
+					t.Fatalf("err = %v, want ErrIncompleteEvent", err)
+				}
+				if event != nil {
+					t.Errorf("event = %+v, want nil on a refusal", event)
+				}
+				if !strings.Contains(err.Error(), "namespace") {
+					t.Errorf("err = %q does not name the namespace", err)
+				}
+			})
+		}
+	})
+
+	t.Run("accepted", func(t *testing.T) {
+		// Both null is the concrete global namespace, and both ABSENT is a
+		// server older than the namespace axis -- which emitted global-only
+		// events and no namespace keys at all. Requiring the keys would refuse
+		// every delivery from such a deployment; the two mean the same thing
+		// and neither is a refusal.
+		for name, body := range map[string]string{
+			"both null":   full,
+			"both absent": strings.Replace(full, globalPair+",", "", 1),
+			"both set":    strings.Replace(full, globalPair, `"namespace_id":"m_42","namespace_type":"merchant"`, 1),
+		} {
+			t.Run(name, func(t *testing.T) {
+				if body == "" {
+					t.Fatal("empty fixture")
+				}
+				event := mustParse(t, body)
+				_, _, namespaced := event.Namespace()
+				if want := name == "both set"; namespaced != want {
+					t.Errorf("namespaced = %t, want %t", namespaced, want)
+				}
+			})
+		}
+	})
+}
+
+// TestParseEventWrapsTheUnderlyingCause keeps the sentinel from swallowing the
+// diagnosis. The sentinel says which stage refused the delivery; the cause says
+// which field and why, and an operator reading a dead-letter row needs both.
+func TestParseEventWrapsTheUnderlyingCause(t *testing.T) {
+	t.Run("syntax", func(t *testing.T) {
+		_, err := ParseEvent([]byte(`{"id":`))
+		var syntax *json.SyntaxError
+		if !errors.Is(err, ErrMalformedEvent) || !errors.As(err, &syntax) {
+			t.Errorf("err = %v, want ErrMalformedEvent wrapping *json.SyntaxError", err)
+		}
+	})
+
+	t.Run("envelope field type", func(t *testing.T) {
+		body := strings.Replace(
+			envelope(EventTagCreated, AggregateTag, `{"after":`+tagSnapshotJSON+`}`),
+			`"id":"0f1d7b24-2c1e-4f9a-9f3a-3a5f1c2d6e77"`, `"id":42`, 1)
+		_, err := ParseEvent([]byte(body))
+		var mismatch *json.UnmarshalTypeError
+		if !errors.Is(err, ErrMalformedEvent) || !errors.As(err, &mismatch) {
+			t.Fatalf("err = %v, want ErrMalformedEvent wrapping *json.UnmarshalTypeError", err)
+		}
+		if mismatch.Field != "id" {
+			t.Errorf("the cause names field %q, want id", mismatch.Field)
+		}
+	})
+
+	t.Run("snapshot timestamp", func(t *testing.T) {
+		_, err := ParseEvent([]byte(envelope(EventTagCreated, AggregateTag, `{"after":{"created_at":"last tuesday"}}`)))
+		var parseErr *time.ParseError
+		if !errors.Is(err, ErrMalformedPayload) || !errors.As(err, &parseErr) {
+			t.Errorf("err = %v, want ErrMalformedPayload wrapping *time.ParseError", err)
+		}
+	})
 }

@@ -63,22 +63,38 @@ const (
 	AggregateTagAssignment AggregateType = "tag_assignment"
 )
 
-// eventAggregates maps each known event type to the aggregate whose snapshot
-// shape its payload carries. It is the single list of what this package knows:
-// [EventType.Known] reads it, and [Event.UnmarshalJSON] uses it to pick the
-// payload type to decode into.
-var eventAggregates = map[EventType]AggregateType{
-	EventTagCreated:            AggregateTag,
-	EventTagUpdated:            AggregateTag,
-	EventTagDeactivated:        AggregateTag,
-	EventVocabularyCreated:     AggregateVocabulary,
-	EventVocabularyUpdated:     AggregateVocabulary,
-	EventVocabularyDeactivated: AggregateVocabulary,
-	EventTagAliasCreated:       AggregateTagAlias,
-	EventTagAliasUpdated:       AggregateTagAlias,
-	EventTagAliasDeactivated:   AggregateTagAlias,
-	EventAssignmentCreated:     AggregateTagAssignment,
-	EventAssignmentRemoved:     AggregateTagAssignment,
+// eventShape is what this package knows about one event type: which aggregate's
+// snapshot its payload carries, and which sides that payload must have.
+type eventShape struct {
+	aggregate AggregateType
+	// before and after are the sides docs/events.md documents for this event
+	// type. They are REQUIRED, not optional: a tag.created whose payload has no
+	// "after" carries no tag, and handing that back as a TagPayload with a nil
+	// After is how a consumer's event.Tag.After.Slug becomes a nil dereference
+	// on a delivery that decoded without error.
+	before bool
+	after  bool
+}
+
+// eventShapes is the single list of what this package knows. [EventType.Known]
+// reads it, and [Event.UnmarshalJSON] uses it to pick the payload type to
+// decode into and the sides to insist on.
+//
+// A created event carries only "after" and a removed assignment only "before";
+// updated and deactivated carry both. There is no assignment.updated, which is
+// why the assignment rows are the only asymmetric pair.
+var eventShapes = map[EventType]eventShape{
+	EventTagCreated:            {aggregate: AggregateTag, after: true},
+	EventTagUpdated:            {aggregate: AggregateTag, before: true, after: true},
+	EventTagDeactivated:        {aggregate: AggregateTag, before: true, after: true},
+	EventVocabularyCreated:     {aggregate: AggregateVocabulary, after: true},
+	EventVocabularyUpdated:     {aggregate: AggregateVocabulary, before: true, after: true},
+	EventVocabularyDeactivated: {aggregate: AggregateVocabulary, before: true, after: true},
+	EventTagAliasCreated:       {aggregate: AggregateTagAlias, after: true},
+	EventTagAliasUpdated:       {aggregate: AggregateTagAlias, before: true, after: true},
+	EventTagAliasDeactivated:   {aggregate: AggregateTagAlias, before: true, after: true},
+	EventAssignmentCreated:     {aggregate: AggregateTagAssignment, after: true},
+	EventAssignmentRemoved:     {aggregate: AggregateTagAssignment, before: true},
 }
 
 // Known reports whether this package has a typed payload for t.
@@ -86,8 +102,19 @@ var eventAggregates = map[EventType]AggregateType{
 // It is false for an event type added to the server after this SDK was built,
 // and that is an ordinary condition rather than an error. See [Event].
 func (t EventType) Known() bool {
-	_, ok := eventAggregates[t]
+	_, ok := eventShapes[t]
 	return ok
+}
+
+// requireSides reports the side this event type documents but did not carry.
+func (s eventShape) requireSides(eventType EventType, hasBefore, hasAfter bool) error {
+	if s.before && !hasBefore {
+		return fmt.Errorf("%w: payload.before on %s", ErrIncompleteEvent, eventType)
+	}
+	if s.after && !hasAfter {
+		return fmt.Errorf("%w: payload.after on %s", ErrIncompleteEvent, eventType)
+	}
+	return nil
 }
 
 // String returns the raw wire value.
@@ -107,17 +134,24 @@ var (
 	// encoding/json error is wrapped in.
 	ErrMalformedEvent = errors.New("octonomy: webhook event is not a well-formed envelope")
 
-	// ErrIncompleteEvent reports an envelope missing a field the event cannot
-	// be processed without: id, tenant_id, event_type, aggregate_type,
-	// aggregate_id, or -- for a known event type -- payload. The error names
-	// the field.
+	// ErrIncompleteEvent reports a delivery missing something the event cannot
+	// be processed without. The error names it. Three groups:
 	//
-	// The server marks every one of them non-null, so a blank one is not a
-	// delivery with less information in it: it is a delivery this SDK would
-	// otherwise hand back as a zero-valued Event with a nil error, which is the
-	// silent-zero failure the root package refuses at #32 and #40. Deduplication
-	// in particular depends on a stable id, and a consumer that dedupes on ""
-	// drops every event after the first.
+	//   - An identity field: id, tenant_id, event_type, aggregate_type, or
+	//     aggregate_id. The server marks every one non-null, so a blank one is
+	//     not a delivery with less information in it -- it is one this SDK
+	//     would otherwise hand back as a zero-valued Event with a nil error,
+	//     which is the silent-zero failure the root package refuses at #32 and
+	//     #40. Deduplication depends on a stable id, and a consumer that
+	//     dedupes on "" drops every event after the first.
+	//   - An INCOHERENT namespace pair: one half set and the other null, or a
+	//     half present but blank. Both halves null is the global namespace and
+	//     both absent is a pre-namespace server, so neither of those is
+	//     refused; a half-set pair is neither, and reading one half alone would
+	//     report a merchant's event as global.
+	//   - A payload side its event type documents: payload itself, or the
+	//     before/after a known event type must carry. See [Event] on why a
+	//     missing side cannot be handed back as a nil field.
 	ErrIncompleteEvent = errors.New("octonomy: webhook event is missing a required field")
 
 	// ErrMalformedPayload reports a payload that does not fit the shape its own
@@ -183,6 +217,10 @@ type Event struct {
 	// axis. Both nil is the concrete GLOBAL namespace -- not a wildcard, and not
 	// "unknown". Values are opaque, caller-canonical strings: match them
 	// exactly, with no case folding or normalization.
+	//
+	// They are set together or not at all; a delivery with one half set is
+	// refused rather than decoded, so no value of this pair can be read as
+	// global when it is not. [Event.Namespace] is the read that says so.
 	NamespaceType *string `json:"namespace_type"`
 	NamespaceID   *string `json:"namespace_id"`
 
@@ -251,6 +289,9 @@ func (e *Event) Known() bool { return e.Type.Known() }
 // strings are empty and the event is visible to every merchant under the
 // application; it is true for a merchant event, which belongs to exactly one
 // namespace and must not be fanned out.
+//
+// There is no third case: a half-set pair is refused at decode time, so false
+// here always means the global namespace and never "half of one arrived".
 func (e *Event) Namespace() (namespaceType, namespaceID string, namespaced bool) {
 	if e.NamespaceType == nil || e.NamespaceID == nil {
 		return "", "", false
@@ -271,7 +312,7 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 	type envelope Event
 	var decoded envelope
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		return fmt.Errorf("%w: %v", ErrMalformedEvent, err)
+		return fmt.Errorf("%w: %w", ErrMalformedEvent, err)
 	}
 
 	// Ordered as the server serializes them, so a truncated or hand-built
@@ -291,13 +332,36 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		}
 	}
 
+	// The namespace pair is set TOGETHER or not at all. The server emits both
+	// null for a global row, both populated for a namespaced one, and a
+	// pre-namespace server emits neither -- so absent and null are the same
+	// fact and neither is refused here. A HALF-SET pair is none of the three,
+	// and reading either half alone would report it as global, which routes a
+	// merchant's event into the tenant-shared partition and acknowledges it.
+	if (decoded.NamespaceType == nil) != (decoded.NamespaceID == nil) {
+		return fmt.Errorf("%w: namespace_type and namespace_id are set together or not at all", ErrIncompleteEvent)
+	}
+	for _, field := range []struct {
+		name  string
+		value *string
+	}{
+		{"namespace_type", decoded.NamespaceType},
+		{"namespace_id", decoded.NamespaceID},
+	} {
+		// A blank one is the same hazard wearing a different spelling: it is
+		// neither the global namespace nor a namespace anything can match.
+		if field.value != nil && strings.TrimSpace(*field.value) == "" {
+			return fmt.Errorf("%w: %s is present but blank", ErrIncompleteEvent, field.name)
+		}
+	}
+
 	*e = Event(decoded)
 
 	// An unknown event type stops here: Payload keeps the bytes, every typed
 	// field stays nil, and nothing about the delivery is refused. Decoding an
 	// unrecognized payload into whichever struct its aggregate suggested is
 	// exactly how a future event type would become a permanent 5xx.
-	aggregate, known := eventAggregates[e.Type]
+	shape, known := eventShapes[e.Type]
 	if !known {
 		return nil
 	}
@@ -309,26 +373,48 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 	// forward-compatible direction: a snapshot field a later server adds is
 	// dropped here and still readable in Payload. DisallowUnknownFields would
 	// turn that addition into a dead-letter for every deployed consumer.
+	//
+	// The sides, though, are checked: this SDK claims to understand these
+	// eleven types, and a payload missing the side its type documents is not
+	// one of them. Without that check a tag.created with an empty payload
+	// decodes without error into a TagPayload whose After is nil, and the
+	// documented event.Tag.After.Slug is a nil dereference on a delivery
+	// nothing reported as wrong.
 	var err error
-	switch aggregate {
+	switch shape.aggregate {
 	case AggregateTag:
-		e.Tag = new(TagPayload)
-		err = json.Unmarshal(e.Payload, e.Tag)
+		payload := new(TagPayload)
+		if err = json.Unmarshal(e.Payload, payload); err == nil {
+			e.Tag = payload
+			err = shape.requireSides(e.Type, payload.Before != nil, payload.After != nil)
+		}
 	case AggregateVocabulary:
-		e.Vocabulary = new(VocabularyPayload)
-		err = json.Unmarshal(e.Payload, e.Vocabulary)
+		payload := new(VocabularyPayload)
+		if err = json.Unmarshal(e.Payload, payload); err == nil {
+			e.Vocabulary = payload
+			err = shape.requireSides(e.Type, payload.Before != nil, payload.After != nil)
+		}
 	case AggregateTagAlias:
-		e.TagAlias = new(TagAliasPayload)
-		err = json.Unmarshal(e.Payload, e.TagAlias)
+		payload := new(TagAliasPayload)
+		if err = json.Unmarshal(e.Payload, payload); err == nil {
+			e.TagAlias = payload
+			err = shape.requireSides(e.Type, payload.Before != nil, payload.After != nil)
+		}
 	case AggregateTagAssignment:
-		e.Assignment = new(AssignmentPayload)
-		err = json.Unmarshal(e.Payload, e.Assignment)
+		payload := new(AssignmentPayload)
+		if err = json.Unmarshal(e.Payload, payload); err == nil {
+			e.Assignment = payload
+			err = shape.requireSides(e.Type, payload.Before != nil, payload.After != nil)
+		}
 	}
 	if err != nil {
 		// Leave nothing half-decoded behind: a caller who ignored the error
 		// would otherwise find a payload struct with some fields set.
 		e.Tag, e.Vocabulary, e.TagAlias, e.Assignment = nil, nil, nil, nil
-		return fmt.Errorf("%w: %s: %v", ErrMalformedPayload, e.Type, err)
+		if errors.Is(err, ErrIncompleteEvent) {
+			return err
+		}
+		return fmt.Errorf("%w on %s: %w", ErrMalformedPayload, e.Type, err)
 	}
 	return nil
 }
@@ -355,19 +441,23 @@ func ParseEvent(body []byte) (*Event, error) {
 		if errors.Is(err, ErrMalformedEvent) || errors.Is(err, ErrIncompleteEvent) || errors.Is(err, ErrMalformedPayload) {
 			return nil, err
 		}
-		return nil, fmt.Errorf("%w: %v", ErrMalformedEvent, err)
+		return nil, fmt.Errorf("%w: %w", ErrMalformedEvent, err)
 	}
 	return &event, nil
 }
 
 // TagPayload is the payload of a tag.* event.
 //
-// Which sides are populated depends on the event type, and an absent side is
-// nil rather than an empty snapshot:
+// Which sides are populated depends on the event type, and the sides that
+// event type documents are GUARANTEED NON-NIL -- a delivery without them is
+// refused as [ErrIncompleteEvent] rather than handed over with a nil field, so
+// event.Tag.After is safe to dereference on a tag.created:
 //
 //   - tag.created -- After only, a full snapshot
 //   - tag.updated -- Before and After, carrying ONLY the fields that changed
 //   - tag.deactivated -- Before and After, carrying is_active alone
+//
+// A side the event type does not document is nil rather than an empty snapshot.
 type TagPayload struct {
 	// Before is the state that changed, and After is what it changed to. On an
 	// *.updated event each holds only the fields that actually changed; see
@@ -408,7 +498,8 @@ type TagAliasPayload struct {
 //
 // Both sides are FULL snapshots here, because an assignment is a link that is
 // created or removed rather than edited: assignment.created carries After and
-// assignment.removed carries Before. There is no assignment.updated.
+// assignment.removed carries Before -- each guaranteed non-nil for its event
+// type, as on [TagPayload]. There is no assignment.updated.
 type AssignmentPayload struct {
 	Before *AssignmentSnapshot `json:"before,omitempty"`
 	After  *AssignmentSnapshot `json:"after,omitempty"`

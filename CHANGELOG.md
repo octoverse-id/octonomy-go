@@ -116,6 +116,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Event.UnmarshalJSON` does it, so `json.Unmarshal` and `ParseEvent` cannot disagree. Without it a
     delivery with no `id` would decode to a zero-valued `Event` with a nil error, and a consumer
     deduplicating on `""` drops every event after the first — #32 and #40's family, on the event side.
+  - **A known event type's payload SIDES are required too.** A `tag.created` always carries `after`,
+    a `*.updated` and a `*.deactivated` both, an `assignment.removed` `before` — so
+    `event.Tag.After` is safe to dereference inside the case that matched it. Without the check a
+    signed `tag.created` with an empty payload decoded with a nil error into a `TagPayload` whose
+    `After` was nil, and the handler this package documents nil-panicked on every redelivery of it.
+    An *extra* side is still accepted; that direction is forward compatibility.
+  - **A half-set namespace pair is refused**, and it is the one decode that would MIS-ROUTE rather
+    than mis-read: `{"namespace_type":"merchant","namespace_id":null}` read by either half alone
+    reports a merchant's event as global, sends it to the tenant-shared partition, and — because the
+    consumer handles it and returns nil — acknowledges it for good. Both halves null (global), both
+    set, and both **absent** are all accepted: a server older than the namespace axis emits no
+    namespace keys at all, so requiring them would refuse every delivery from one.
 - **`TestIntegration_TagsListPagesInATotalOrder`** (`integration_suite_test.go`) — the tags-ordering
   wording is now evidence-backed by a test rather than by prose alone. It walks an eight-tag fixture
   **one row per page**, so every page boundary is a separate query, and asserts the sequence equals
