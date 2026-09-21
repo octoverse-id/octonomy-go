@@ -94,17 +94,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `2.0.0-alpha.1` and `2.0.0-alpha.2` are a record of what was true at those releases, not a draft;
     correcting them in place would rewrite history to describe a server that did not exist yet. This
     entry is the correction.
+- **The vendored contracts now track server `3.2.1`**
+  ([#84](https://github.com/octoverse-id/octonomy-go/issues/84)). A version-only refresh, and the
+  first one the scheduled gate drove rather than a person noticing: `info.version` in
+  `docs/openapi.yaml` and `docs/openapi-v2.yaml`, the `<!-- contract-version: -->` marker and the
+  *Targeted server contract* row in `docs/versioning.md`, the fixture in
+  `tools/contractdrift/drift_test.go` that exists to match that marker, and every statement of what
+  is vendored — `AGENTS.md`, `CONTRIBUTING.md`, `doc.go`, `docs/api.md`, `docs/architecture.md`,
+  `docs/development.md` and `docs/roadmap.md` (twice). No type, method, or inventory row moved
+  and `docs/contract-coverage.yaml` is untouched — 3.2.1 is a behavioural patch (the tags `ORDER BY`,
+  upstream `octonomy#162`) whose specs are byte-identical to 3.2.0's apart from the version string.
+  - **The upstream gate is what made it necessary, and the offline one never could have.**
+    `make contract-check` compares the vendored specs against this repository and never leaves it, so
+    it reported no drift throughout. `make contract-drift` fetches the server's own specs and
+    compares `info.version`, and it had been failing since 3.2.1 shipped on 2026-09-16.
+    `checkContractVersionDrift` (`tools/contractdrift/checks.go`) is a string comparison with no
+    mechanism for recording an accepted lag, so the tool's standing advice to "record the decision in
+    `docs/contract-coverage.yaml`" has nowhere to land for this particular finding — refreshing or
+    implementing are the only two resolutions it offers, and for a version-only delta the first is
+    the whole of the work.
+  - **Nothing reported it for five days**, which is the part worth keeping. The drift job runs
+    Mondays at 06:23 UTC, so its last run (2026-09-14) predated the server's release by two days and
+    the next Monday was the first that could have seen it. A scheduled gate is evidence only as often
+    as it runs, and the window between the server tagging a release and this repository hearing about
+    it is a week wide by construction — `workflow_dispatch` is on that workflow for the same reason.
+  - **The first pass moved eight and missed six.** Counting **non-CHANGELOG line occurrences**
+    rather than files, because `docs/api.md` and `docs/roadmap.md` carry two each: eight moved with
+    the first commit, six more were found in review, fourteen in all. The miss happened because *names a version* and
+    *names the vendored contract* are not the same predicate, and only the second one was being
+    matched against.
+  - **Five kinds of `3.2.0` mention are deliberately left alone.** The list covers every survivor
+    outside this bullet's own accounting prose, which cannot categorise itself:
+    - the dated record of the `/api/v2`-default review (`octonomy.go`, `docs/versioning.md`), which
+      describes a decision taken when the server was 3.2.0 and is a statement about that moment;
+    - the tags-ordering caveats in `README.md`, `pagination.go` and `docs/api.md`, where "3.2.0 and
+      older" names the servers that lack the fix rather than what is vendored;
+    - the verification notes in `docs/roadmap.md` and `integration_suite_test.go`, which record
+      behaviour observed against a running 3.2.0 — re-pointing them at a server nobody ran them
+      against would make them false;
+    - the schema comparisons, here and in the harness-pin entry below, which say 3.2.1's specs are
+      byte-identical to **3.2.0's**: the old version is the thing being compared against and cannot
+      be moved without destroying the sentence;
+    - and every released CHANGELOG entry, on the precedent #49 and #77 set in this same section.
+
+    Naming five rather than four is the second correction this bullet has taken. The first draft said
+    three and the list was the defect — an exhaustive claim that omits a category is the same failure
+    as a refresh that omits a site, one level up, which is why the count is written here rather than
+    left implicit.
 - **The harness pin moved to `ghcr.io/octoverse-id/octonomy:3.2.1`** from `3.1.0`, in all three
   places that named it: `scripts/octonomy-harness.sh`, the `.github/actions/octonomy-harness`
   composite action (which carried its own copy of the default and would otherwise have left CI on
   3.1.0 while local runs moved), and the harness walkthrough in `docs/development.md`.
   - 3.2.1 is a **floor**, not a refresh: below it the new test is expected to fail rather than pass
     vacuously, and the comment at the pin says so.
-  - **The vendored contracts are untouched.** `openapi.yaml` and `openapi-v2.yaml` are byte-identical
-    between 3.2.0 and 3.2.1 apart from the `info.version` string, because the fix is behavioural and
-    invisible to the schema — so `docs/versioning.md` still records 3.2.0 as the targeted contract,
-    and `make contract-check` still reports no drift. The harness pin and the recorded contract
-    version are independent, and were already two releases apart before this change.
+  - **The vendored contracts were left alone here and refreshed in
+    [#84](https://github.com/octoverse-id/octonomy-go/issues/84) instead**, above. The reasoning
+    recorded at the time — `openapi.yaml` and `openapi-v2.yaml` are byte-identical between 3.2.0 and
+    3.2.1 apart from the `info.version` string, because the fix is behavioural and invisible to the
+    schema — still holds, and is why that refresh carries no code change. What it missed is that
+    `make contract-check` is the **offline** gate: passing it says the vendored specs agree with this
+    repository, never that they agree with the server. The harness pin and the recorded contract
+    version remain independent of each other, which is what this bullet was about.
 
 ### Added
 - **The webhook typed-event surface and `webhook.Handler`**

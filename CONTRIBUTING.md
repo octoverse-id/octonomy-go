@@ -63,7 +63,7 @@ These mirror [AGENTS.md](AGENTS.md):
   able to say null as well as "leave it alone" (#64). Server read-only fields are decode-only.
 - The library never panics, exits, or logs — it returns wrapped errors (`octonomy:` prefix, `%w`).
 - Keep types faithful to the vendored contracts — `docs/openapi-v2.yaml` (`/api/v2`, the default
-  surface) and `docs/openapi.yaml` (`/api/v1`), both at server 3.2.0. Read the **v2** spec when
+  surface) and `docs/openapi.yaml` (`/api/v1`), both at server 3.2.1. Read the **v2** spec when
   adding a resource. Document any deliberate divergence.
 - Every exported symbol has a doc comment.
 
