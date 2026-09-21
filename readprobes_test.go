@@ -676,19 +676,27 @@ func probesIn(t *testing.T, file *ast.File, path string) []probe {
 // probeCalls collects the "Field.Method" of every call a probe's find closure
 // makes ON ITS OWN CLIENT PARAMETER -- what the probe actually exercises, as
 // opposed to what its name says it does.
-//
-// Binding to the parameter matters: matching any `x.y.z(...)` shape, as an
-// earlier revision did, let a call on some other value (a fake, a fixture field)
-// register as coverage and satisfy a probe whose real client call went
-// somewhere else.
 func probeCalls(entry *ast.CompositeLit) map[string]bool {
+	return closureClientCalls(entry, "find")
+}
+
+// closureClientCalls is probeCalls over any table whose entries hold a closure
+// under a named field -- readProbes' `find`, and smokeProbes' `assert`
+// (smokeprobes_test.go), which is checked the same way for the same reason.
+//
+// Binding to the closure's own client PARAMETER matters: matching any `x.y.z(...)`
+// shape, as an earlier revision did, let a call on some other value (a fake, a
+// fixture field) register as coverage and satisfy an entry whose real client call
+// went somewhere else. It is also why both tables pass the client in rather than
+// reading it off a shared struct.
+func closureClientCalls(entry *ast.CompositeLit, field string) map[string]bool {
 	out := map[string]bool{}
 	for _, elt := range entry.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
 			continue
 		}
-		if key, ok := ast.Unparen(kv.Key).(*ast.Ident); !ok || key.Name != "find" {
+		if key, ok := ast.Unparen(kv.Key).(*ast.Ident); !ok || key.Name != field {
 			continue
 		}
 		lit, ok := ast.Unparen(kv.Value).(*ast.FuncLit)

@@ -44,9 +44,10 @@ stays a faithful, ergonomic client.
 **Adding a whole resource is an ordered sequence, and it lives in one place:**
 [`docs/roadmap.md`](docs/roadmap.md#how-to-add-a-resource-the-recipe). The rules in this file are
 what each step has to satisfy and why it exists; the recipe is what the steps are and in what order.
-Of the five safeguards that recipe was missing before #73, one is still enforced by nothing at all
-— read the table there, which covers those five rather than all eleven steps, before taking a green
-run as proof that a resource is complete.
+All five of the safeguards that recipe was missing before #73 now fail a job when they are skipped,
+the last of them in #77 — read the table there, which covers those five rather than all eleven steps,
+and read what each guard says it *cannot* see before taking a green run as proof that a resource is
+complete.
 
 - One file per resource (`tags.go`, `vocabularies.go`, …). Each defines a `*Service` reached from a
   field on `Client`.

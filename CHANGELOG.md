@@ -8,6 +8,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The integration smoke walk is a registry, and recipe step 8 is enforced by something that fails**
+  ([#77](https://github.com/octoverse-id/octonomy-go/issues/77)). `TestSmoke_RealServer` was one
+  1,296-line function whose completeness was a claim in its own header; it is now `smokeProbes`, a
+  table keyed by response type whose entries run in order against one server and share the rows they
+  create through `smokeState`. This was the last of the five requirements
+  [#73](https://github.com/octoverse-id/octonomy-go/issues/73) found enforced by nothing — `#73` gave
+  step 9 a guard, [#76](https://github.com/octoverse-id/octonomy-go/issues/76) gave step 3 one, and
+  this closes the set.
+  - **`TestEveryResponseTypeHasASmokeProbe`** (`smokeprobes_test.go`) compares the table's keys
+    against the response types derived from this package's own source — the *same* derivation #76's
+    guard uses, `responseTypes()` — and binds each entry to a client method that really decodes its
+    key. It fails on a response type with no entry, an entry keyed for a type nothing decodes, a
+    duplicate key, an entry whose closure calls no client method the parser can see, and one keyed
+    for a shape it never exercises. It carries no `integration` build tag, so it runs in the pull
+    request that adds a resource rather than only where a container does.
+  - **The cheap proxy was refused, and that is why this took a third issue.** "The type name appears
+    somewhere in `integration_test.go`" is satisfied by a comment or an unused reference, and a check
+    reporting *covered* on that basis would have made the step look enforced while leaving #32's
+    class reachable. The registry is what made a real check possible; it cannot prove an assertion is
+    meaningful, and it says so next to the code — what it makes impossible is the silent omission,
+    which is the failure that actually happens.
+  - **No pre-existing assertion was dropped or weakened.** Every assertion message the old walk
+    carried is still in the new one, the eight per-resource cleanup reporters having become
+    `smokeState.deleteLater` calls under the same labels; the new file adds messages of its own, for
+    the row the cleared-resource case sets up and for a probe that failed or skipped. Every check the
+    old walk made is in an entry,
+    including the ones that were not about a response shape at all: the health probes are the walk's
+    prologue, because `HealthStatus` never reaches `doData`/`doList` and so is not a response type by
+    the definition the table is checked against. The empty replace now clears a resource of its own
+    rather than the one the two list entries read, which keeps the destructive case away from them,
+    adds a count assertion on the row it sets up, and still leaves the audit history exactly the two
+    operations it reconstructs.
+  - **Three behavioural consequences of the split are deliberate.** Each entry is a subtest, so a
+    failure names the shape. The walk stops at the first failed entry rather than reporting the
+    cascade of entries that depended on it. And an entry that *skips* stops it too — `t.Run` returns
+    true for a skipped subtest, so without that check an entry could skip itself and the walk would
+    carry on into rows it never created while the run reported PASS. That hazard did not exist in
+    the single function, where a step could not skip without skipping everything; a missing harness
+    still skips the whole test in `newSmokeClient` and nowhere else.
+  - **`docs/roadmap.md`'s enforcement table, its known-gaps table, `AGENTS.md`, `CONTRIBUTING.md` and
+    `docs/development.md`** all said step 8 was enforced by nothing, correctly, and now say what
+    enforces it and what that guard cannot see. `CONTRIBUTING.md` said it in two places and only one
+    of them was found on the first pass, which is the drift surface #73 consolidated the recipe to
+    close, reappearing at a smaller scale. The known-gaps table has no rows left; the section stays,
+    because a gap with no holder is what it exists to prevent.
+  - **The `2.0.0-alpha.3` entries were left alone**, on the precedent #49 set in this same section.
+    Both the #76 and the #73 entries there say the smoke assertion is deliberately a reviewer's job,
+    and both were true at that release; correcting them in place would rewrite history to describe a
+    guard that did not exist yet. This entry is the correction, and the reason recorded there — that
+    the nearest syntactic proxy is satisfied by a comment — is still why the cheap check was refused
+    rather than built.
 - **`examples/webhook` is now the switch and nothing else**
   ([#22](https://github.com/octoverse-id/octonomy-go/issues/22)). The bound-read-verify-parse
   preamble a caller used to have to write is gone into `webhook.Handler`; what is left is the event
