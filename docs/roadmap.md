@@ -95,10 +95,13 @@ well as the collection — then:
    is a call nobody declared. See
    [`development.md`](development.md#adding-a-resource-or-adding-to-the-gate) for what the gate does
    with them.
-8. **Assert every new response shape in `integration_test.go`** (`make smoke`). A unit suite asserts
+8. **Add an entry to `smokeProbes` for every new response shape** (`integration_test.go`,
+   `make smoke`), keyed by the type and calling a client method that decodes it. A unit suite asserts
    the client against fixtures this repository wrote, so it cannot see a fixture-versus-server
    divergence — which is [#32](https://github.com/octoverse-id/octonomy-go/issues/32), where every
-   single-resource read decoded to an empty struct and a complete unit suite stayed green.
+   single-resource read decoded to an empty struct and a complete unit suite stayed green. The table
+   is ordered and its entries share the rows they create, so a new one goes where its dependencies
+   are already in `smokeState` rather than at the end by default.
 9. **Add a probe to `readProbes` for every new read method** (`integration_suite_test.go`). That
    table is what makes *a merchant-A client never sees a merchant-B row* a statement about the whole
    read surface rather than about whichever endpoints someone remembered. Each probe also declares
@@ -132,7 +135,7 @@ review, or by nothing, like most of any contributing guide.
 | 7 — coverage row | `checkInventory`, `tools/contractdrift/checks.go` | **Red CI**: "`<op>` is in the contract and not in `docs/contract-coverage.yaml`" |
 | 7 — driver | `checkImplementation`, same file | **Red CI** |
 | 3 — `identityFields()` | `TestEveryResponseTypeCanRefuseAnEmptyDecode` (`identityfields_test.go`), added by [#76](https://github.com/octoverse-id/octonomy-go/issues/76) | **Red `make test`**, naming the type and both mechanisms it could carry |
-| 8 — smoke assertion | *nothing* — the walk visits what it was told to visit ([#77](https://github.com/octoverse-id/octonomy-go/issues/77)) | **Green CI**, and #32's class is unguarded for that resource |
+| 8 — smoke assertion | `TestEveryResponseTypeHasASmokeProbe` (`smokeprobes_test.go`), added by [#77](https://github.com/octoverse-id/octonomy-go/issues/77) | **Red `make test`**, naming the response type and the table — and equally for an entry keyed for one shape that calls another |
 | 9 — `readProbes` probe | `TestEveryReadMethodHasANamespaceProbe` (`readprobes_test.go`), added by #73 | **Red `make test`**, naming the method and the table — and equally for a probe that names one endpoint and calls another |
 
 Step 9 was the third silent one until #73 gave it a guard. The test resolves each exported service
@@ -161,24 +164,38 @@ a function variable, a method expression, a closure invoked in place — classif
 fails, except where the same method also issues a recognized write, which classifies it. The full
 list of edges is in `readprobes_test.go`, next to the code that has them.
 
-**Step 8 is the one that remains, and that is the honest state of this recipe.** Step 3 was the
-tractable half and now has a guard ([#76](https://github.com/octoverse-id/octonomy-go/issues/76)):
-every type handed to `doData` or `doList` must either implement `identityFields()` — a resource,
-naming its row identity — or declare `UnmarshalJSON` — a composite, requiring its keys instead. Both
-halves are decidable from the source, which is what made it possible.
+**Step 3 was the tractable half and got its guard first**
+([#76](https://github.com/octoverse-id/octonomy-go/issues/76)): every type handed to `doData` or
+`doList` must either implement `identityFields()` — a resource, naming its row identity — or declare
+`UnmarshalJSON` — a composite, requiring its keys instead. Both halves are decidable from the source,
+which is what made it possible.
 
-**Step 8 is not getting the same treatment yet**
-([#77](https://github.com/octoverse-id/octonomy-go/issues/77)), and the honest reason is cost rather
-than impossibility. The nearest *cheap* proxy — the type name appearing somewhere in
-`integration_test.go` — is satisfied by a comment or an unused reference, and a check reporting
-"covered" on that basis would make the step look enforced while leaving #32's class reachable. But a
-real one does exist, and #77 records it: give the smoke walk an executable registry keyed by response
-type, require each entry's closure to call the matching client method, and compare the registry's
-keys against the source-derived set of response types — the shape `readProbes` already has. That
-would not prove an assertion is meaningful, but it would make a silent omission impossible, which is
-the failure that actually happens. It is a restructuring of the smoke walk, which is why it is an
-issue and not this pull request. Until then a reviewer stands behind step 8 and the table above says
-so.
+**Step 8 was the last one enforced by nothing, and [#77](https://github.com/octoverse-id/octonomy-go/issues/77)
+closed it.** The reason it went last is worth keeping, because it is the reason the obvious check was
+refused: the nearest *cheap* proxy — the type name appearing somewhere in `integration_test.go` — is
+satisfied by a comment or an unused reference, and a check reporting "covered" on that basis would
+have made the step look enforced while leaving #32's class reachable. What replaced it is not that
+proxy. The smoke walk is now an executable registry, `smokeProbes`, keyed by response type: its keys
+are compared against the response types derived from this package's own source — the *same*
+derivation #76's guard uses — and each entry is bound to a client method that really decodes its key.
+A comment cannot satisfy that.
+
+**What that guard does not do**, since a check nobody knows the edge of is worse than none: it cannot
+prove an assertion is meaningful. An entry that calls its method and discards the result passes. What
+it makes impossible is the *silent omission* — a new response type with no entry, and an entry left
+behind by a model that no longer exists — which is the failure that actually happens; the assertions
+themselves are still a reviewer's job. It reads presence rather than reachability, and it binds an
+entry to *a* method that decodes its key rather than to every one. A response type is one handed to
+`doData` or `doList`, which is why the health probes are the walk's prologue rather than an entry:
+`HealthStatus` is decoded by `health.go`'s own helper and is not a response type by that definition.
+The full list of edges is in `smokeprobes_test.go`, next to the code that has them.
+
+**One thing nothing checks, and it is load-bearing**: the *order* of that table. Entries run in slice
+order against one server and share the rows they create through `smokeState` — the `Vocabulary` entry
+creates the vocabulary the `Tag` entry hangs its tag off, and the `AuditLog` entry reads the history
+every entry before it wrote. Reordering it is a behavioural change. The walk fails fast on the first
+failed entry rather than carrying on, which is what turns a bad order into one legible failure
+instead of a cascade of consequences.
 
 ### Why this page carries the recipe
 
@@ -282,19 +299,26 @@ persistence that no fixture can settle:
 
 ## Known gaps in implemented resources
 
-Each has an issue; none is a missing endpoint group. **The rows are a snapshot, taken 2026-09-16**
+Each has an issue; none is a missing endpoint group. **The rows are a snapshot, taken 2026-09-18**
 — each links the issue that holds its live state, and what a row adds is the reasoning, not the
 status.
 
-| Gap | Issue |
-| --- | ----- |
-| **The smoke assertion (recipe step 8) is enforced by nothing**, and a resource added without one leaves #32's class unguarded for itself. Left to a reviewer on purpose — the reasoning is above. | [#77](https://github.com/octoverse-id/octonomy-go/issues/77) |
+**There are no rows as of this snapshot**, which is a statement about the table and not about the
+code. The section stays because an empty table is the useful form of it: a gap with no holder is the
+thing this page exists to prevent, so the next one gets an issue and a row rather than a paragraph.
+What the two guards above still cannot see is written where they are — the nested-required-resource
+limit in `identityfields_test.go`, the syntactic edges in `smokeprobes_test.go` and
+`readprobes_test.go` — because an edge recorded away from the code that has it is the copy that goes
+stale first.
 
-Closed since the last snapshot: **the tags-ordering caveats**
-([#49](https://github.com/octoverse-id/octonomy-go/issues/49)). Server 3.2.1 added the `ORDER BY`
-that the annotated tags list never had (upstream `octonomy#162`), the caveats are now qualified by
-server version rather than stated flatly, and `TestIntegration_TagsListPagesInATotalOrder` holds the
-claim against the pinned harness.
+Closed since the last snapshot: **the smoke assertion (recipe step 8)**
+([#77](https://github.com/octoverse-id/octonomy-go/issues/77)) and **the tags-ordering caveats**
+([#49](https://github.com/octoverse-id/octonomy-go/issues/49)). #77 turned the smoke walk into the
+`smokeProbes` registry described above, so all five of the safeguards #73 found missing are now
+enforced by something that fails; server 3.2.1 added the `ORDER BY` that the annotated tags list
+never had (upstream `octonomy#162`), the caveats are now qualified by server version rather than
+stated flatly, and `TestIntegration_TagsListPagesInATotalOrder` holds the claim against the pinned
+harness.
 
 The webhook typed-event surface and `http.Handler`
 ([#22](https://github.com/octoverse-id/octonomy-go/issues/22)) were deferred rather than skipped —

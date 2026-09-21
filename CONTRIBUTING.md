@@ -75,21 +75,25 @@ levels of completeness is how the recipe came to be missing five of its own step
 ([#73](https://github.com/octoverse-id/octonomy-go/issues/73)). The conventions above say what each
 step must look like; the recipe says what the steps are, and in what order.
 
-**A green CI run does not mean the resource is complete.** Of the five safeguards that recipe was
-missing before [#73](https://github.com/octoverse-id/octonomy-go/issues/73), one is still enforced
-by nothing at all, and each exists because of a defect this repository already shipped. Which is
-which is in the recipe's [enforcement table](docs/roadmap.md#which-of-these-steps-anything-catches)
-— kept there rather than repeated here, so the two cannot come apart. That table covers those five,
-not all eleven steps; the rest lean on review like most of any contributing guide. Read it before you open the pull request: the
-unenforced steps are the ones a reviewer has to catch.
+**A green CI run does not mean the resource is complete.** All five of the safeguards that recipe was
+missing before [#73](https://github.com/octoverse-id/octonomy-go/issues/73) now fail a job when they
+are skipped, the last of them in
+[#77](https://github.com/octoverse-id/octonomy-go/issues/77) — but each exists because of a defect
+this repository already shipped, and each guard states in its own source what it *cannot* see. What
+catches what is in the recipe's
+[enforcement table](docs/roadmap.md#which-of-these-steps-anything-catches) — kept there rather than
+repeated here, so the two cannot come apart. That table covers those five, not all eleven steps; the
+rest lean on review like most of any contributing guide. Read it before you open the pull request:
+what a guard admits it does not check is what a reviewer has to catch.
 
 ## Testing expectations
 
 - Table-driven tests with `net/http/httptest`. Assert request method/path/headers/query/body on the
   server side (`t.Errorf` in handlers) and decoded values on the client side.
 - Cover success, the list envelope, and error decoding (`IsNotFound`/`IsConflict`/`IsValidation`).
-- **A new resource needs more than unit tests.** A new response shape needs a smoke assertion, and a
-  new read method needs a `readProbes` entry — see [Adding a resource](#adding-a-resource).
+- **A new resource needs more than unit tests.** A new response shape needs a `smokeProbes` entry,
+  and a new read method needs a `readProbes` entry. Both are checked by a test that runs in
+  `make test` and names what is missing — see [Adding a resource](#adding-a-resource).
 - Run with `-race`. Keep new code covered.
 
 ## Branches, commits, and PRs

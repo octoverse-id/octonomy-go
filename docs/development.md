@@ -108,13 +108,24 @@ proved only by a Go test is one no other language's SDK can adopt.
 ### Integration smoke test
 
 `integration_test.go` (build tag `integration`) is the shape check against a real server. It has
-grown with each resource into a single ordered walk — `TestSmoke_RealServer` — covering what a unit
-suite structurally cannot: both response envelopes on writes and reads, list pagination and an `Each`
-walk, `DecodeMetadata` against metadata the server itself stored, real error envelopes including
+grown with each resource into an ordered walk — `TestSmoke_RealServer` — covering what a unit suite
+structurally cannot: both response envelopes on writes and reads, list pagination and an `Each` walk,
+`DecodeMetadata` against metadata the server itself stored, real error envelopes including
 `409 scope_immutable`, the namespace axis on every model that carries it, aliases and resolution,
 assignments including both bulk composites, the resource-tag replace composite, audit rows written as
-a side effect of the mutations above, and request-id correlation. The steps share state deliberately,
-so read it top to bottom rather than treating any one as standalone.
+a side effect of the mutations above, and request-id correlation. The entries share state
+deliberately, so read it top to bottom rather than treating any one as standalone.
+
+**The walk is a registry, one entry per response type.** `smokeProbes` is keyed by the type each
+entry asserts, and `TestEveryResponseTypeHasASmokeProbe` (`smokeprobes_test.go`, no build tag, so it
+runs in `make test`) compares those keys against the response types derived from the package's own
+source and binds each entry to a client method that really decodes its key. That is what makes
+"every shape is covered" a check rather than a claim — before
+[#77](https://github.com/octoverse-id/octonomy-go/issues/77) a resource could arrive with no
+assertion here and every job stayed green. It cannot prove an assertion is *meaningful*; it makes a
+silent omission impossible, and `smokeprobes_test.go` lists the rest of its edges. Each entry runs as
+its own subtest, so a failure names the shape, and the walk stops at the first failed entry because
+everything after it reads rows that entry was supposed to create.
 
 It is deliberately a **smoke** test: one ordered walk that asks whether the payloads match, kept
 small and fast because it is the blocking check. The semantic assertions live in the full suite
