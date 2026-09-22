@@ -75,13 +75,18 @@ older plan document, this paragraph supersedes them.
 
 ### Modern line pre-stability
 
-The modern line carries a prerelease suffix until the API is frozen — `v2.0.0-alpha.N` now,
-`v2.0.0-rc.N` once the surface is frozen. The gate for dropping the
+The modern line carries a prerelease suffix until the API is frozen. It is **on `v2.0.0-rc.N` now**;
+the `-alpha.N` phase ended with `v2.0.0-alpha.3`. The gate for dropping the
 prerelease suffix is **not** resource coverage — counting endpoints says nothing about whether the API
 has stopped moving. It is: no further breaking changes intended, real-server integration green, docs
 current, one release candidate validated, and **the `/api/v2`-by-default decision revisited**.
-**Four of the five are met**; a validated release candidate is what remains. The fifth was settled on
-2026-09-15 and is recorded below.
+**Four were met before `v2.0.0-rc.1` was cut**; the fifth — *one release candidate validated* — is
+what that release exists to become. The `/api/v2` criterion was settled on 2026-09-15 and is recorded
+below.
+
+**Cutting a candidate is not validating one**, and conflating the two is the one way this criterion
+gets marked met without being met. `rc.1` is the candidate; the interval between its tag and `v2.0.0`
+is the validation, and the suffix stays for the whole of it.
 
 ### The `/api/v2` default: revisited and kept
 
@@ -114,8 +119,9 @@ version is the one who finds out what the default is.
 
 **`v2.0.0-alpha.1` was the first `v2` version**, cut in
 [#29](https://github.com/octoverse-id/octonomy-go/issues/29); the alphas ran to `v2.0.0-alpha.2`
-([#66](https://github.com/octoverse-id/octonomy-go/issues/66)), and `v2.0.0-alpha.3`
-([#80](https://github.com/octoverse-id/octonomy-go/issues/80)) is the current one. With a tag
+([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) and ended at `v2.0.0-alpha.3`
+([#80](https://github.com/octoverse-id/octonomy-go/issues/80)), and `v2.0.0-rc.1` is the current
+one — the line's first release candidate. With a tag
 published, `go get github.com/octoverse-id/octonomy-go/v2` resolves the highest prerelease rather
 than a pseudo-version off the default branch, and adoption works normally without anyone naming a
 version:
@@ -133,7 +139,7 @@ proxy query below is.
 | Line | Stamped version | State |
 | ---- | ---------- | ----- |
 | **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` — tagged 2026-08-26 | Released. Frozen — security fixes only, sunset 2027-08-31 |
-| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.3` — what `version.go` reads on this branch. **Whether its tag is pushed is the proxy query below**, never this row | Active. Prerelease until API freeze — of the five criteria [above](#modern-line-pre-stability), four are met and a validated release candidate is what remains. A necessary break may still ride an alpha bump, as `v2.0.0-alpha.2` ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) did; **a candidate is where that stops** |
+| **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-rc.1` — what `version.go` reads on this branch. **Whether its tag is pushed is the proxy query below**, never this row | Active, and **frozen**: the first release candidate. Of the five criteria [above](#modern-line-pre-stability), four were met before the cut and *a validated candidate* is what this release exists to become. A necessary break no longer rides a bump as it did at `v2.0.0-alpha.2` ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) — **it supersedes the candidate** (`rc.2`) |
 
 **There is no published `v0.x`, and never was.** The `## [0.1.0]` heading `CHANGELOG.md` used to
 carry described an early state of the tree, not a release; its contents are now filed under
@@ -149,6 +155,7 @@ v1.0.0                                      # the compat line, and no v0.x above
 $ curl -sS -w '\n[HTTP %{http_code}]\n' https://proxy.golang.org/github.com/octoverse-id/octonomy-go/v2/@v/list
 v2.0.0-alpha.1                              # one row per pushed tag, and a tag that has never been
 v2.0.0-alpha.2                              # pushed is simply absent -- the proxy fetches on first ask
+v2.0.0-alpha.3
 [HTTP 200]
 ```
 
@@ -165,16 +172,16 @@ genuinely empty list produces, which is how this kind of evidence turns into a f
 authoritative check for a release you just cut is step 8 of [release.md](release.md),
 `go list -m MODULE@TAG`, which fails loudly on a tag placed on the wrong branch.
 
-> **What `version.go` says, and what it does not.** The `Version` constant reads `2.0.0-alpha.3` —
+> **What `version.go` says, and what it does not.** The `Version` constant reads `2.0.0-rc.1` —
 > the version this tree was cut as, and the one its tag carries once [release.md](release.md) step 8
 > pushes it and step 9 verifies against the proxy — so the default User-Agent is
-> `octonomy-go/2.0.0-alpha.3`. It moves **only** in a release
+> `octonomy-go/2.0.0-rc.1`. It moves **only** in a release
 > PR (see [Where this shows up](#where-this-shows-up)), which is what keeps it meaningful, and it
 > names this line's latest release from the moment that tag is live until the next release PR moves
 > it again. What it is **not** is evidence that the version is fetchable: the bump lands one step
 > before the tag, so a tree can name a version the proxy has never heard of. The query above settles
-> that; this constant cannot. It read `0.1.0` until this release: a **placeholder left from before
-> anything was released**, matching a CHANGELOG heading for a version that was never cut. A
+> that; this constant cannot. It read `0.1.0` until `v2.0.0-alpha.1`: a **placeholder left from
+> before anything was released**, matching a CHANGELOG heading for a version that was never cut. A
 > User-Agent of `octonomy-go/0.1.0` in a server log therefore identifies **no release**: it is some
 > pre-release state of the tree, reached by pseudo-version, checkout, `replace`, or a vendored copy,
 > and it does not say which. `Config.UserAgent` can override the string entirely, too.
@@ -209,11 +216,11 @@ Backward-compatible **additions** to the exported API.
   control, that is the exposure. Unkeyed literals are rare, verbose, and `go vet`'s
   `composites` check flags them for imported types, so the practical risk is low — it is simply not
   zero, which is what "backward-compatible" would otherwise imply.
-- During the modern line's **alpha** prereleases a necessary breaking change may ride a version
-  bump, documented in the CHANGELOG — the line is on `v2.0.0-alpha.3`, so this is still true today.
-  **A release candidate is where that stops:** `v2.0.0-rc.N` means no further break is intended, and
-  one that proves necessary supersedes the candidate rather than riding it. Once `v2.0.0` proper
-  ships, a break needs a major.
+- During the modern line's **alpha** prereleases a necessary breaking change could ride a version
+  bump, documented in the CHANGELOG. **That stopped at the release candidate, and the line is on
+  `v2.0.0-rc.1`, so it no longer applies:** a candidate means no further break is intended, and one
+  that proves necessary **supersedes the candidate** — `v2.0.0-rc.2` — rather than riding a bump.
+  Once `v2.0.0` proper ships, a break needs a major and a new import path.
 
 ### MAJOR — `vN.0.0`
 Backward-**incompatible** changes to the exported Go API once a line has shipped a stable release.

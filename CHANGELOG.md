@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-rc.1] - 2026-09-22
+
+**The first release candidate of the modern line, and the point at which the API surface is frozen.**
+`v2.0.0-alpha.3` was the last version that could take a breaking change on a version bump. From here
+a break that proves necessary **supersedes this candidate** — `v2.0.0-rc.2` — rather than riding one,
+and once `v2.0.0` proper ships it needs a major and a new import path. Nothing in this release breaks
+anything: measured against `v2.0.0-alpha.3` the exported surface **grew from 217 declarations to 243
+and lost none**, every addition being the `octonomy/webhook` typed-event surface below.
+
+Of the five criteria in [`docs/versioning.md`](docs/versioning.md#modern-line-pre-stability) for
+dropping the prerelease suffix altogether, four were met before this cut and the fifth — *one release
+candidate validated* — is the one this release exists to satisfy. **Cutting a candidate is not
+validating it**: that is what the interval between this tag and `v2.0.0` is for, and it is why the
+suffix is still here.
+
 ### Changed
 - **The integration smoke walk is a registry, and recipe step 8 is enforced by something that fails**
   ([#77](https://github.com/octoverse-id/octonomy-go/issues/77)). `TestSmoke_RealServer` was one
@@ -1609,7 +1624,8 @@ of all the default surface, which is now `/api/v2`.
 - `WithActor` per-request option, and `String`/`Bool`/`Int` pointer helpers for optional fields.
 - Runnable `examples/quickstart` program and a vendored `docs/openapi.yaml` contract reference.
 
-[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.3...main
+[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-rc.1...main
+[2.0.0-rc.1]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.3...v2.0.0-rc.1
 [2.0.0-alpha.3]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.2...v2.0.0-alpha.3
 [2.0.0-alpha.2]: https://github.com/octoverse-id/octonomy-go/compare/v2.0.0-alpha.1...v2.0.0-alpha.2
 [2.0.0-alpha.1]: https://github.com/octoverse-id/octonomy-go/releases/tag/v2.0.0-alpha.1

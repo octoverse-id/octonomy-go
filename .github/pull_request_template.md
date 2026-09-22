@@ -8,7 +8,7 @@ Closes #
 - [ ] New feature (e.g. a new resource client or method)
 - [ ] Refactor / chore
 - [ ] Documentation
-- [ ] Breaking change (changes an exported API). Per `docs/versioning.md` this needs a **major** once a line has shipped a stable release; while the modern line is on `v2.0.0-alpha.N` it may ride an **alpha bump**, documented in the CHANGELOG. Never a minor — minors are additive only
+- [ ] Breaking change (changes an exported API). Per `docs/versioning.md` this needs a **major** once a line has shipped a stable release. The modern line is on `v2.0.0-rc.N`, which means **no further break is intended**: one that proves necessary **supersedes the candidate** (`rc.2`) rather than riding a bump, as it could while the line was on `v2.0.0-alpha.N`. Never a minor — minors are additive only
 
 ## Checklist
 - [ ] **Base branch is right for the line.** `main` = `.../octonomy-go/v2` (Go 1.24+, active);

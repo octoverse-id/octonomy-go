@@ -28,21 +28,27 @@
 // (go1.13.15, August 2020, was its last release), so pinning there is an informed
 // trade rather than a safe harbour. See docs/versioning.md and SECURITY.md.
 //
-// This tree is v2.0.0-alpha.3, the modern line's current release and a
-// prerelease on purpose; v2.0.0-alpha.1 was the first. go get on the /v2 path
-// resolves the highest prerelease without anyone naming a version, because the
-// go command prefers a prerelease when no stable release of that major exists.
-// The -alpha.N suffix comes off at API FREEZE, not at some endpoint count: no
-// further breaking changes intended, real-server integration green, docs
-// current, the /api/v2-by-default decision revisited (settled 2026-09-15 --
-// docs/versioning.md), and one release candidate validated. That last one is
-// what remains. Until a candidate, a necessary break may ride an alpha bump,
-// documented in the CHANGELOG -- v2.0.0-alpha.2 carried one, the three *Update
-// structs' field types (#64); a CANDIDATE is where that stops. The compat line
-// is released separately at v1.0.0.
+// This tree is v2.0.0-rc.1, the modern line's current release, its FIRST
+// RELEASE CANDIDATE, and still a prerelease on purpose; v2.0.0-alpha.1 was the
+// first version of the line. go get on the /v2 path resolves the highest
+// prerelease without anyone naming a version, because the go command prefers a
+// prerelease when no stable release of that major exists. The suffix comes off
+// at API FREEZE, not at some endpoint count: no further breaking changes
+// intended, real-server integration green, docs current, the /api/v2-by-default
+// decision revisited (settled 2026-09-15 -- docs/versioning.md), and one
+// release candidate validated. Four were met before this cut; the last is what
+// this release exists to become, and cutting a candidate is not validating one,
+// which is why the suffix is still here.
+//
+// THE CANDIDATE IS THE FREEZE. rc.1 asserts that no further break is intended.
+// One that proves necessary SUPERSEDES the candidate (v2.0.0-rc.2) rather than
+// riding a version bump, which is what it could still do while the line was on
+// -alpha.N: v2.0.0-alpha.2 carried one, the three *Update structs' field types
+// (#64). Once v2.0.0 ships a break needs a MAJOR and a new import path. The
+// compat line is released separately at v1.0.0.
 //
 // No v0.x of either line was ever published. The Version constant read "0.1.0"
-// until this release -- a placeholder from before anything was released, which
+// until v2.0.0-alpha.1 -- a placeholder from before anything was released, which
 // no tag ever corresponded to. A default User-Agent of octonomy-go/0.1.0 in a
 // server log therefore identifies NO release: it is some pre-release state of
 // the tree, reached by pseudo-version, checkout, replace, or a vendored copy,
