@@ -12,7 +12,7 @@ the **register of known gaps**, and the **reasoning** behind decisions the issue
 cannot explain. None of them is a status board; see
 [the rule](#work-alongside-the-client-rather-than-inside-it) at the end of this page.
 
-**Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.2.0), not from memory.** Every endpoint
+**Derived from [`openapi-v2.yaml`](openapi-v2.yaml) (server 3.2.1), not from memory.** Every endpoint
 and parameter below was enumerated from the vendored v2 spec. **Response shapes are a different
 matter** and were verified against a running server: the spec omits both `data` envelopes, describes
 the two bulk composites and the resource-tag replace wrongly or not at all, and carries no schema for
@@ -45,7 +45,7 @@ were written against the v2-aware transport and cover a nested list route (`Tags
 well as the collection — then:
 
 1. Read the matching schema(s) in [`openapi-v2.yaml`](openapi-v2.yaml). Read the **v2** spec, not
-   [`openapi.yaml`](openapi.yaml): both are vendored at server 3.2.0, but v1 has no namespace axis,
+   [`openapi.yaml`](openapi.yaml): both are vendored at server 3.2.1, but v1 has no namespace axis,
    so its schemas omit the `namespace_type` / `namespace_id` fields every new resource needs.
 2. Create `<resource>.go` with the model struct and **only the write shapes the contract actually
    publishes** — a read-only group such as audit logs has no `*Create` and no `*Update`, and adding
