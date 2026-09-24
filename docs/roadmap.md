@@ -137,6 +137,27 @@ review, or by nothing, like most of any contributing guide.
 | 3 — `identityFields()` | `TestEveryResponseTypeCanRefuseAnEmptyDecode` (`identityfields_test.go`), added by [#76](https://github.com/octoverse-id/octonomy-go/issues/76) | **Red `make test`**, naming the type and both mechanisms it could carry |
 | 8 — smoke assertion | `TestEveryResponseTypeHasASmokeProbe` (`smokeprobes_test.go`), added by [#77](https://github.com/octoverse-id/octonomy-go/issues/77) | **Red `make test`**, naming the response type and the table — and equally for an entry keyed for one shape that calls another |
 | 9 — `readProbes` probe | `TestEveryReadMethodHasANamespaceProbe` (`readprobes_test.go`), added by #73 | **Red `make test`**, naming the method and the table — and equally for a probe that names one endpoint and calls another |
+| *(not a recipe step)* — a prose claim about the vendored contract | `TestEveryContractVersionMentionIsCurrentOrExempt` (`contractversion_test.go`), added by [#86](https://github.com/octoverse-id/octonomy-go/issues/86) | **Red `make test`**, naming the file, the line and both readings — the claim is stale, or it is a classified exception and needs one |
+
+**The last row is deliberately not a step**, and it is in this table because it has the table's
+defining property rather than its shape. Fourteen places in this repository state which server
+contract the SDK vendors; `make contract-check` mechanizes three of them (the two specs'
+`info.version` and the `<!-- contract-version: -->` marker, all via `checkRecordedVersion`). The rest
+were prose enforced by nothing, which is the same condition steps 3, 8 and 9 were in before #76, #77
+and #73. [#84](https://github.com/octoverse-id/octonomy-go/issues/84) proved it live: its first pass
+moved eight of the fourteen and missed six — `docs/api.md` ×2, `docs/architecture.md`,
+`docs/development.md`, `docs/roadmap.md` ×2 — with every gate green. Refreshing a contract is not a
+recipe step, so the requirement has nowhere else to live.
+
+**What that guard does not do.** It is syntactic: it checks that an exemption exists and that its
+reason is non-empty, never that the reason is *true*, so a wrong exemption passes. It classifies by
+the SHAPE of a mention rather than site by site — "probed against 3.1.0" is a verification note by
+construction — which means a category written too loosely would exempt a real defect, and each
+pattern is anchored to the words that make it the category it claims. It reads two lines of
+look-back, because prose wraps and the phrase that classifies a mention is regularly on the line
+above the version it qualifies. And it says nothing about the two specs or the marker:
+`checkRecordedVersion` owns those three, and giving two gates one job lets each assume the other is
+doing it.
 
 Step 9 was the third silent one until #73 gave it a guard. The test resolves each exported service
 method's HTTP verb from the source — following a call into a helper, since `Health.Live` names no
