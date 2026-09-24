@@ -28,10 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **[`docs/designs/octonomy-3.1-upgrade-go113.md`](docs/designs/octonomy-3.1-upgrade-go113.md) says
-  it is superseded in part.** Its compat-line freeze — *"no `/api/v2`, no namespaces, no webhooks"* —
-  was reversed by #88, and a reader landing on that document needs to find the reversal rather than
-  implement a policy no longer in force. Everything else in it still holds: the two-module split, the
-  `/v2` import path, and the 2027-08-31 sunset are unchanged.
+  it is superseded in part.** Its compat-line freeze is reversed by #88 for `/api/v2`, namespace
+  scoping and the eight resource groups — **and only those**. **Webhooks remain out of scope**, now
+  as a standing policy rather than as a term of the freeze: the compat line does not ship a webhook
+  receiver, and a consumer needing one moves to `/v2`. A reader landing on that document needs to
+  find the reversal rather than implement a policy no longer in force, and needs the carve-out with
+  it. Everything else in it still holds: the two-module split, the `/v2` import path, and the
+  2027-08-31 sunset are unchanged.
 
 ## [2.0.0-rc.1] - 2026-09-22
 

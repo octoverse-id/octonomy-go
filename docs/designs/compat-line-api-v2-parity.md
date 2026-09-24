@@ -50,6 +50,28 @@ This plan targets capability parity and makes the shape delta a committed, check
 4. **The vendored contract is `info.version: 1.0.0`** — two server majors stale, with no
    `openapi-v2.yaml`, no `contract-coverage.yaml`, no `tools/`, no contract-version marker.
 
+### Defect 1 is only half-fixed, knowingly, and AGENTS.md says so
+
+`AGENTS.md:172-179` is unambiguous: *"A non-2xx with no envelope gets `CodeUnexpectedStatus`, never
+a semantic code... Do not reintroduce a status-to-code mapping."* Decision **1A keeps
+`codeFromStatus` on `APIV1`** and drops it only on `APIV2`. That is a knowing divergence, recorded
+here rather than left for a reader to discover as an apparent rule violation.
+
+**What it buys:** existing v1.0.0 callers see byte-identical behaviour, so `v1.1.0` stays a clean
+MINOR on a line that can never publish a major.
+
+**What it leaves live:** the wrong-`BaseURL` and path-stripping-proxy cases on `/api/v1` — the
+surface most compat consumers actually use. Raised as a P1 by the outside voice on
+[#105](https://github.com/octoverse-id/octonomy-go/pull/105) after this plan was written, and the
+re-read was fair: the callers a removal would "break" are ones whose not-found branch already fires
+on misconfigurations. The genuinely broken case is narrower — an envelope-stripping gateway
+returning a bare 404 for a row that really is absent.
+
+**Why it is not settled here.** The fact that decides it is not in this repository: does the
+consuming team branch on `IsNotFound`, and do they sit behind such a gateway? That is now the
+**fourth question on #89's entry criterion**, which already blocks the epic. If the answer is no,
+remove `codeFromStatus` on both surfaces and delete the version-conditional branch.
+
 ### Prior decision being reversed, deliberately
 
 `gstack-decision-search` holds this from 2026-08-19: *"P1 (contract drift, wants a growing modern
