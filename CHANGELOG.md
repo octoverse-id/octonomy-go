@@ -8,6 +8,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The prose that names the vendored contract is enforced by something that fails**
+  ([#86](https://github.com/octoverse-id/octonomy-go/issues/86)). Fourteen places in this repository
+  state which server contract the SDK vendors. `make contract-check` mechanized **three** — both
+  specs' `info.version` and the `<!-- contract-version: -->` marker, all via `checkRecordedVersion`.
+  The other eleven were prose, and nothing checked them at all.
+
+  Not hypothetical: [#84](https://github.com/octoverse-id/octonomy-go/issues/84)'s first pass moved
+  eight of the fourteen and **missed six** — `docs/api.md` ×2, `docs/architecture.md`,
+  `docs/development.md`, `docs/roadmap.md` ×2 — with every gate green. A reviewer and an independent
+  outside pass each caught the same six; had neither looked, the repository would have merged with
+  its API reference and its contributor instructions naming a contract it no longer vendored.
+
+  - **`TestEveryContractVersionMentionIsCurrentOrExempt`** (`contractversion_test.go`) walks every
+    tracked prose and source file and requires each version token to **either** equal the recorded
+    marker **or** match a category carrying a written reason. Anything else fails, naming the file,
+    the line, and both readings so the contributor chooses rather than guesses. Verified end to end
+    by reintroducing #84's exact defect: the guard flagged both injected sites by line.
+  - **It is an INVERSE registry, and the cheap alternative is refused.** A "no stale version
+    anywhere" check is worse than useless here: of the mentions that survived #84, eighteen of
+    twenty-three were correct — a decision taken when the server was older, an ordering caveat
+    naming the releases that lack the `ORDER BY`, a behaviour verified against a running container,
+    a schema comparison whose whole point is the old number, and released history. A registry of
+    sites that must MATCH is the weaker form, refused for the reason #77 refused its cheap proxy: it
+    catches drift in the sites someone registered and is silent on the one nobody did, which is the
+    failure that actually happened.
+  - **The harness pin is exempt by ROLE, never by value.** `scripts/octonomy-harness.sh` and the
+    composite action pin a container floor that is deliberately independent of the vendored
+    contract; the two numbers were different simultaneously until #84. They agree today, which is
+    the trap — a guard letting the pin pass by equality looks correct now and breaks the next time
+    the pin legitimately leads. `TestHarnessPinIsExemptByRoleNotByValue` pins the distinction *while
+    the two values still agree*, which is the only window in which a by-value implementation is
+    indistinguishable from a by-role one.
+  - **It reads two lines of look-back**, because prose wraps and the phrase that classifies a
+    mention is regularly on the line above the version it qualifies. Without it every wrapped
+    verification note reports as unclassified, and the fix a contributor reaches for is to loosen
+    the category until it stops complaining — which is how a guard stops catching anything. A
+    regression case pins both directions: a wrapped note is exempt, a wrapped *claim* is not.
+  - **Three categories were too loose in the first revision, found by outside review and pinned as
+    regression cases.** A bare `against` exempted "The SDK is written against server X"; matching an
+    SDK version on the token's numeric VALUE exempted "vendored at server 2.0.0" — the same by-value
+    mistake the harness-pin category exists to refuse, committed two categories down; and the
+    external-reference category matched a URL merely NEAR the token rather than one containing it.
+    All three are the category-too-loose failure this guard's own doc comment warns about, committed
+    inside the guard that warns about it.
+  - **Its edges are written next to the code.** It is syntactic: it checks that an exemption exists
+    and that its reason is non-empty, never that the reason is true. It classifies by shape rather
+    than site by site. It says nothing about the two specs or the marker, because
+    `checkRecordedVersion` owns those and giving two gates one job lets each assume the other is
+    doing it.
+  - Runs in `make test` with **no `integration` build tag**, on the same reasoning as #73's and
+    #77's guards: it must run in the pull request that adds the site, not only where a container
+    does. `docs/roadmap.md`'s enforcement table gains a row, marked as the one entry that is not a
+    recipe step — refreshing a contract is not a step, so the requirement had nowhere else to live.
+
+### Added
 - **A design doc for the compat line's `/api/v2` epic**
   ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)).
   [`docs/designs/compat-line-api-v2-parity.md`](docs/designs/compat-line-api-v2-parity.md) records
