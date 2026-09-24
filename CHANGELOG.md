@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A design doc for the compat line's `/api/v2` epic**
+  ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)).
+  [`docs/designs/compat-line-api-v2-parity.md`](docs/designs/compat-line-api-v2-parity.md) records
+  the reversal of the compat line's freeze and the reasoning behind it, across a CEO review, an
+  engineering review and two outside-voice passes. Nothing in this repository's SDK changes; the
+  work it plans lands on `support/go1.13`.
+  - The **premise was inverted**. Both vendored contracts publish the same 18 paths, so the gap was
+    never `/api/v2` — it was that the compat line implements **2 of 8 resource groups**.
+  - Four defects were found live on the frozen line while sizing it: `codeFromStatus` mapping a bare
+    404 to `CodeNotFound`, an absent `identityFields()` (#40's guard), an unbounded response read,
+    and a vendored contract still at `info.version: 1.0.0`.
+  - An AST generator was scoped, approved, then **cut** after the transform surface measured 7% and
+    both of its flagship silent-failure cases turned out to live in hand-written files.
+  - Three behaviours were settled by probing a real `go1.13.15` rather than reasoning: an unknown
+    `omitzero` tag option is inert, so a ported `*string` emits `null` on every PATCH; `encoding/json`
+    has neither cycle detection nor an unmarshal depth limit there; and `go vet` does ship
+    `loopclosure`, which is why the loop-capture rewrite is caught rather than silent.
+
+### Changed
+- **[`docs/designs/octonomy-3.1-upgrade-go113.md`](docs/designs/octonomy-3.1-upgrade-go113.md) says
+  it is superseded in part.** Its compat-line freeze is reversed by #88 for `/api/v2`, namespace
+  scoping and the eight resource groups — **and only those**. **Webhooks remain out of scope**, now
+  as a standing policy rather than as a term of the freeze: the compat line does not ship a webhook
+  receiver, and a consumer needing one moves to `/v2`. A reader landing on that document needs to
+  find the reversal rather than implement a policy no longer in force, and needs the carve-out with
+  it. Everything else in it still holds: the two-module split, the `/v2` import path, and the
+  2027-08-31 sunset are unchanged.
+
 ## [2.0.0-rc.1] - 2026-09-22
 
 **The first release candidate of the modern line, and the point at which the API surface is frozen.**
