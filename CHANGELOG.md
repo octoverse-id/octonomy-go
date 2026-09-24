@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     verification note reports as unclassified, and the fix a contributor reaches for is to loosen
     the category until it stops complaining — which is how a guard stops catching anything. A
     regression case pins both directions: a wrapped note is exempt, a wrapped *claim* is not.
+  - **Three categories were too loose in the first revision, found by outside review and pinned as
+    regression cases.** A bare `against` exempted "The SDK is written against server X"; matching an
+    SDK version on the token's numeric VALUE exempted "vendored at server 2.0.0" — the same by-value
+    mistake the harness-pin category exists to refuse, committed two categories down; and the
+    external-reference category matched a URL merely NEAR the token rather than one containing it.
+    All three are the category-too-loose failure this guard's own doc comment warns about, committed
+    inside the guard that warns about it.
   - **Its edges are written next to the code.** It is syntactic: it checks that an exemption exists
     and that its reason is non-empty, never that the reason is true. It classifies by shape rather
     than site by site. It says nothing about the two specs or the marker, because

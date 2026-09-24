@@ -87,6 +87,10 @@ var contractVersionMarker = regexp.MustCompile(`<!--\s*contract-version:\s*([0-9
 // base by the sdk-version category, which is the only place prereleases appear.
 var versionToken = regexp.MustCompile(`\b[0-9]+\.[0-9]+\.[0-9]+\b`)
 
+// urlSpan matches a bare URL so a version can be tested for CONTAINMENT in it
+// rather than mere proximity to one.
+var urlSpan = regexp.MustCompile(`https?://[^\s)\]>"'` + "`" + `]+`)
+
 // contractVersionExemption is one category of version mention that is NOT a
 // claim about the contract this SDK currently vendors.
 //
@@ -186,16 +190,19 @@ var contractVersionExemptions = []contractVersionExemption{
 		Name:   "verification-note",
 		Reason: "Records behaviour observed against a running server of that version. Re-pointing it at a newer server would assert a probe nobody ran.",
 		Match: func(s versionSite) bool {
+			// "probed" and "verified" are the discriminators, and they must be
+			// PRESENT -- a bare "against" is not one. "The SDK is written against
+			// server 3.1.0" is a stale CLAIM, and an earlier revision of this
+			// category exempted it, which is the category-too-loose failure this
+			// guard's own doc comment warns about, committed in the guard itself.
+			//
+			// The bare forms stay because the real sites wrap across lines:
+			// "verified across tags, vocabularies ... on server\n// 3.1.0)." and
+			// "also probed, via /api/v3 on 3.1.0". No sentence claiming what is
+			// vendored says it was probed.
 			return s.precededBy(90,
-				"probed against", "verified against", "against a running", "against a live",
-				"captured from a live", "re-verified", "was verified", "verified to fail",
-				"verified live against", "live against", "observed against", "reproduced against",
-				"against", "confirmed", "run against",
-				// Bare "probed" / "verified" are safe discriminators: a sentence
-				// CLAIMING what is vendored says "vendored at", "both track", "both
-				// at" -- never that it was probed. Needed because these wrap:
-				// "verified across tags, vocabularies ... on server\n// 3.1.0)."
-				"probed", "verified") ||
+				"probed", "verified", "observed against", "reproduced against",
+				"against a running", "against a live", "captured from a live") ||
 				s.followedBy(40, " was verified", " container", " harness", " server, where", " on postgres")
 		},
 	},
@@ -226,7 +233,7 @@ var contractVersionExemptions = []contractVersionExemption{
 			return s.precededBy(110,
 				"shipped", "the server was", "while the server", "added the", "fixed it", "fixed the",
 				"had no", "sat on", "sit on", "came to sit", "was written against", "moved",
-				"drifted", "pinned at server", "predates") ||
+				"drifted", "pinned at server", "predates", "server changelog") ||
 				s.followedBy(60, " contract while", " contract,", " and had drifted", " refresh says", " refresh", " threads", " with a second", " with an entire")
 		},
 	},
@@ -245,11 +252,19 @@ var contractVersionExemptions = []contractVersionExemption{
 			if s.Path == "version.go" {
 				return true
 			}
-			return s.precededBy(70,
+			// BY CONTEXT, NEVER BY VALUE. An earlier revision exempted every
+			// token starting 2.0.0 / 0. / 1.0.1 outright, so "The specs are
+			// vendored at server 2.0.0" passed -- a stale contract claim waved
+			// through because its digits looked like an SDK release. That is the
+			// same by-value mistake the harness-pin category exists to refuse,
+			// reproduced two categories down. The server and this module share a
+			// number space; only the surrounding words separate them.
+			return s.precededBy(80,
 				"octonomy-go", "sdk version", "version =", "`version`", "user-agent", "useragent",
-				"semver", "changelog heading", "release/v", "tagged", "`v") ||
-				strings.HasPrefix(s.Token, "2.0.0") || strings.HasPrefix(s.Token, "0.") ||
-				strings.HasPrefix(s.Token, "1.0.1")
+				"semver", "changelog heading", "release/v", "tagged", "this module",
+				"version constant", "constant read",
+				"prerelease", "bump", "alpha", "rc.", "shipping `/api/v2` support as a") ||
+				s.followedBy(40, " minor", " major", " patch", " prerelease", "-alpha", "-rc", " tag")
 		},
 	},
 	{
@@ -263,7 +278,17 @@ var contractVersionExemptions = []contractVersionExemption{
 		Name:   "external-reference",
 		Reason: "A version inside a third-party URL or spec identifier (Keep a Changelog, SemVer, the OpenAPI format version).",
 		Match: func(s versionSite) bool {
-			return s.precededBy(60, "keepachangelog", "semver.org", "openapi: ", "spec/v", "http://", "https://")
+			// The token must sit INSIDE the URL, not merely after one on the same
+			// line. An earlier revision searched the preceding 60 bytes for
+			// "https://", so "[Contract](https://example.com/spec) is vendored at
+			// server 3.1.0" was exempted by a link that had nothing to do with the
+			// version.
+			for _, span := range urlSpan.FindAllStringIndex(s.Line, -1) {
+				if s.Idx >= span[0] && s.Idx+len(s.Token) <= span[1] {
+					return true
+				}
+			}
+			return s.precededBy(24, "openapi: ", "openapi version")
 		},
 	},
 	{
@@ -603,6 +628,43 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 			token:    "3.1.0",
 			exempt:   false,
 			whatItIs: "look-back must not become a way for any nearby sentence to exempt a claim",
+		},
+		// The three below were found by an outside review of this guard's first
+		// revision, and each was a real bypass. They are the category-too-loose
+		// failure this file's own doc comment warns about, committed inside the
+		// guard that warns about it -- which is why they are pinned rather than
+		// just fixed.
+		{
+			name:     "a stale claim using bare 'against'",
+			path:     "docs/api.md",
+			line:     "The SDK is written against server 3.1.0.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "verification-note once accepted a bare 'against'; only 'probed'/'verified' establish a probe",
+		},
+		{
+			name:     "a stale claim whose digits look like an SDK release",
+			path:     "docs/api.md",
+			line:     "The specs are vendored at server 2.0.0.",
+			token:    "2.0.0",
+			exempt:   false,
+			whatItIs: "sdk-version once matched on the token's VALUE -- the same by-value mistake the harness-pin category exists to refuse",
+		},
+		{
+			name:     "a stale claim on a line that also has a link",
+			path:     "docs/api.md",
+			line:     "[Contract](https://example.com/spec) is vendored at server 3.1.0.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "external-reference once matched a URL merely NEAR the token; the token must sit inside it",
+		},
+		{
+			name:     "a version genuinely inside a URL",
+			path:     "CHANGELOG.md",
+			line:     "based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),",
+			token:    "1.1.0",
+			exempt:   true,
+			whatItIs: "containment is the test, and it must still accept the real case",
 		},
 		{
 			name:     "the harness pin",
