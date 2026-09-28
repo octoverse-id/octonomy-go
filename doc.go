@@ -24,7 +24,8 @@
 // two lines, and a consumer needs no exclude, pin, or build tag of their own. If
 // you are on Go 1.13, use the unsuffixed path. Its v1.0.0 carried Vocabularies
 // and Tags on /api/v1; it takes ports of this line's capabilities toward parity
-// (#88), never a webhook receiver and never a breaking change, and it sunsets on
+// (#88), never a webhook receiver and never a breaking change (in the sense
+// docs/versioning.md defines, which is Go's own), and it sunsets on
 // 2027-08-31, after which it receives nothing at all. Go 1.13 is itself unpatched
 // (go1.13.15, August 2020, was its last release), so pinning there is an informed
 // trade rather than a safe harbour. See docs/versioning.md and SECURITY.md.

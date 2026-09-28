@@ -73,7 +73,10 @@ older plan document, this paragraph supersedes them.
   there must keep `v1.0.0` callers compiling — with the one Go-level exception every minor carries,
   an *unkeyed* struct literal (see the MINOR rule below) — and must not move behaviour they
   correctly rely on: a break has no version to ride. (A bug fix still changes behaviour — that is
-  what makes it one. What it may not change is a signature, a field's type, or a default.) So the
+  what makes it one. What it may not change is a signature, a field's type, or a default.)
+  "Breaking" on this page, and wherever the compat line is said never to take a breaking change, has
+  the meaning Go's own compatibility promise gives it: an added struct field is not a break, and an
+  unkeyed literal of that struct is the exposure the MINOR rule names. So the
   compat `*Update` structs keep their pointer fields rather than taking this line's `Optional[T]`,
   and `/api/v2` reaches that line opt-in, with a caller who sets nothing still on `/api/v1`. How
   that branch enforces the rule is stated in [its own versioning
@@ -230,9 +233,10 @@ Backward-compatible **additions** to the exported API.
   a new `Is*` helper.
 - Existing callers keep compiling and working unchanged, with **one Go-level caveat**: adding a field
   to an exported struct breaks a caller who wrote an *unkeyed* composite literal, because such a
-  literal must supply exactly one value per field, in order. It applies to the structs whose fields are
-  **all exported** — the models, the `*Create` / `*Update` / `*ListParams` types, `Config`,
-  `ListOptions`, `Pagination` — and response models are not exempt: `Tag`'s fields are all exported,
+  literal must supply exactly one value per field, in order. It applies to every exported struct
+  whose fields are **all exported** — among them the models, the `*Create` / `*Update` /
+  `*ListParams` and bulk request and result types, `Config`, `ListOptions`, `Pagination`,
+  `HealthClient` and `TagNode` — and response models are not exempt: `Tag`'s fields are all exported,
   so nothing stops a consumer building one unkeyed in their own fixtures. It does **not** apply to
   `Client`, `APIError`, or the `*Service` types, which carry unexported fields and therefore cannot be
   written unkeyed from outside the package at all. Every example in this repository uses keyed fields,
