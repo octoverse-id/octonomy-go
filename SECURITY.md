@@ -13,11 +13,12 @@ copy of this file on `support/go1.13`; both describe the same policy.
 | — | `0.x` | — | n/a | Never released. No `v0.x` tag exists, and `proxy.golang.org` lists no `v0.x` for either path |
 
 **The `1.x` line takes security fixes, bug fixes, and ports of what this line already has** — the
-resource groups, `/api/v2` and the namespace axis ([epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). The security-fixes-only freeze published
-with `v1.0.0` was withdrawn in #89; see the support policy in [docs/versioning.md](docs/versioning.md).
-It exists for consumers pinned to **Go 1.13**. Two things never reach it — a **webhook receiver**, and
-a **breaking change**, since its unsuffixed module path can never publish a major — and if you need
-either, the upgrade is to Go 1.24+ and the `/v2` module.
+resource groups, `/api/v2` and the namespace axis
+([epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). The security-fixes-only freeze
+published with `v1.0.0` was withdrawn in #89; see the support policy in
+[docs/versioning.md](docs/versioning.md). It exists for consumers pinned to **Go 1.13**. Two things
+never reach it — a **webhook receiver**, and a **breaking change**, since its unsuffixed module path
+can never publish a major — and if you need either, the upgrade is to Go 1.24+ and the `/v2` module.
 
 **Sunset: 2027-08-31.** After that date the `1.x` line receives nothing at all, including security
 fixes. Owner: the SDK maintainer (see [`.github/CODEOWNERS`](.github/CODEOWNERS)); revisable only by

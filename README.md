@@ -82,7 +82,9 @@ repository publishes a second one with a different floor:
 >   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88); what its branch has is
 >   [its README](https://github.com/octoverse-id/octonomy-go/blob/support/go1.13/README.md#implemented-resources).
 > - **Never:** a webhook receiver (policy — move to `/v2` for one), or a breaking change. The
->   unsuffixed path can never publish a major, so every `v1.x` keeps `v1.0.0` code compiling.
+>   unsuffixed path can never publish a major, so every `v1.x` keeps `v1.0.0` code compiling —
+>   unkeyed struct literals aside, which any Go minor that adds a field can break (see the MINOR rule
+>   in [versioning.md](docs/versioning.md)).
 > - **Sunset: 2027-08-31**, owned by the SDK maintainer, after which it receives nothing at all.
 >   Plan the toolchain upgrade against that date; it is the only real fix.
 > - **Go 1.13 itself is unpatched.** Its last release was `go1.13.15` (August 2020) and the Go team

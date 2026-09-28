@@ -99,7 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its release guard, which would have failed `v1.1.0` — lands in a separate PR into that branch.
   - **Two exclusions are now stated as policy.** No webhook receiver on the compat line, and **no
     major there, ever**: its unsuffixed module path takes `v0`/`v1` versions only and `.../v2` is this
-    line's module. So every compat change has to keep `v1.0.0` callers compiling, which is why its
+    line's module. So every compat change has to keep `v1.0.0` callers compiling (unkeyed struct
+    literals aside, per the MINOR rule's existing caveat), which is why its
     `*Update` structs keep pointer fields rather than taking `Optional[T]`, and why `/api/v2` reaches
     it opt-in. `docs/versioning.md` records the no-major rule, which was previously implicit in the
     guard's module-path check.

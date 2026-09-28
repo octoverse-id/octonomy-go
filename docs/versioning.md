@@ -70,12 +70,14 @@ older plan document, this paragraph supersedes them.
   could revise: the compat module path is unsuffixed, a tree carrying a `go.mod` can tag only
   `v0`/`v1` versions on an unsuffixed path, and the suffixed path a major would need is a different
   module — `.../v2` is this line's. Every compat release is therefore a `v1.x`, and every change
-  there must keep `v1.0.0` callers compiling and must not move behaviour they correctly rely on: a
-  break has no version to ride. (A bug fix still changes behaviour — that is what makes it one. What
+  there must keep `v1.0.0` callers compiling — with the one Go-level exception every minor carries,
+  an *unkeyed* struct literal (see the MINOR rule below) — and must not move behaviour they
+  correctly rely on: a break has no version to ride. (A bug fix still changes behaviour — that is what makes it one. What
   it may not change is a signature, a field's type, or a default.) So the compat `*Update` structs
   keep their pointer fields rather than taking this line's `Optional[T]`, and `/api/v2` reaches that
-  line opt-in, with a caller who sets nothing still on `/api/v1`. The compat branch's
-  `scripts/compat-guard.sh` refuses a `v2+` release PR or tag there.
+  line opt-in, with a caller who sets nothing still on `/api/v1`. How that branch enforces the rule
+  is stated in [its own versioning policy](https://github.com/octoverse-id/octonomy-go/blob/support/go1.13/docs/versioning.md),
+  not here.
 - **Sunset: 2027-08-31**, unchanged by the reversal, after which the line receives nothing at all,
   including security fixes.
   Owner: the SDK maintainer ([`.github/CODEOWNERS`](../.github/CODEOWNERS)); revisable only by
@@ -244,8 +246,9 @@ Backward-compatible **additions** to the exported API.
   Once `v2.0.0` proper ships, a break needs a major and a new import path.
 - **On the compat line a minor is the only way an addition ships**, and the parity work ships that
   way. That line took no minors until [#89](https://github.com/octoverse-id/octonomy-go/issues/89)
-  withdrew its freeze; `v1.0.x` was the only shape a release could take there, and its
-  `scripts/compat-guard.sh` was changed with the policy.
+  withdrew its freeze; `v1.0.x` was the only shape a release could take there. The unkeyed-literal
+  caveat above applies there exactly as here — the parity work adds `Config.APIVersion` and the
+  namespace fields to structs a `v1.0.0` caller may have written unkeyed.
 
 ### MAJOR — `vN.0.0`
 Backward-**incompatible** changes to the exported Go API once a line has shipped a stable release.
