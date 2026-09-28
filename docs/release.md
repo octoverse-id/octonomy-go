@@ -77,7 +77,7 @@ the **base branch, the PR target, the commit you tag, and the verify command**. 
 
 | Line | `MODULE` | `BASE` | Versions | Policy |
 | ---- | -------- | ------ | -------- | ------ |
-| **Compat** | `github.com/octoverse-id/octonomy-go` | `support/go1.13` | `v1.x` | Frozen. Security fixes only, published sunset |
+| **Compat** | `github.com/octoverse-id/octonomy-go` | `support/go1.13` | `v1.x` | Ports of `main` ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)); never a major; published sunset |
 | **Modern** | `github.com/octoverse-id/octonomy-go/v2` | `main` | `v2.x` | Active development |
 
 > **Getting `BASE` wrong is unrecoverable.** A `v1.x` tag placed on a `main` commit points at a
@@ -108,9 +108,13 @@ and stops two feature PRs from racing the same version number.
 
 ### Backporting to the compat line
 
-A security fix that applies to both lands on `main` first, then is cherry-picked onto
-`support/go1.13` and released as a `v1.x` patch through this same runbook. The compat line takes
-**security fixes only** — no features, no ordinary bug fixes.
+A change that applies to both lands on `main` first, then is ported onto `support/go1.13` and
+released through this same runbook — as a `v1.x` patch for a fix, a `v1.x` minor for an addition,
+and **never as a major**, which that line cannot publish ([versioning.md](versioning.md)). This
+section is the cherry-pick case, where a `main` commit can be taken nearly as it is. Porting a whole
+file or resource group is a hand-port with its own rules, and those live in
+[the compat branch's `AGENTS.md`](https://github.com/octoverse-id/octonomy-go/blob/support/go1.13/AGENTS.md),
+not here.
 
 **Land it on `main` first**, then take its commit onto a branch cut from the support line — not from
 `main`:
@@ -126,9 +130,11 @@ git cherry-pick <SHA>
 
 **Expect the cherry-pick to need work, and never resolve a conflict by taking `main`'s side
 wholesale.** The two trees have diverged on purpose: the compat line has no generics, no `any`, no
-post-1.13 standard library, and no v2, namespace, health, or webhook code for a `main` hunk to land
-in. A fix touching `List[T]` has to be rewritten against `TagList` / `VocabularyList`; a fix touching
-code that exists only on `main` needs no backport at all.
+post-1.13 standard library, and never a webhook package — and code `main` has that the compat branch
+has not ported yet has nowhere for a hunk to land. Read the support branch, not this page, for what
+it has. A fix touching `List[T]` has to be rewritten against that line's per-resource list types; a
+fix touching code the compat branch does not have needs no backport of its own, because the port
+that later brings that code there starts from `main`'s current file, fix included.
 
 **Then open the PR against `support/go1.13`.** Two required checks cover different halves, and only
 one of them runs your code: **`go1.13`** builds, vets, and runs `go test -race` under a real
@@ -139,10 +145,10 @@ enforces the *language* version declared in `go.mod` but **not** the standard li
 `io.ReadAll` that rode in on a backported hunk passes `go build`, `go vet`, and staticcheck at
 `go 1.13` and fails only under a real `go1.13`.
 
-**Release it as a `v1.x` patch** through the runbook below with `BASE = support/go1.13`, record the
-backport in **both** CHANGELOGs, and check the sunset date in [versioning.md](versioning.md) and
-[`SECURITY.md`](../SECURITY.md) has not passed — after **2027-08-31** the answer to a compat-line
-advisory is "upgrade", not "patch".
+**Release it as a `v1.x` patch** — or a `v1.x` minor, if it adds exported API — through the runbook
+below with `BASE = support/go1.13`, record the backport in **both** CHANGELOGs, and check the sunset
+date in [versioning.md](versioning.md) and [`SECURITY.md`](../SECURITY.md) has not passed — after
+**2027-08-31** the answer to a compat-line advisory is "upgrade", not "patch".
 
 ## Cutting a release
 
@@ -234,5 +240,6 @@ statements. Do that only for a deliberate breaking release — see [versioning.m
 If a release targets a new Octonomy server contract, refresh **both** vendored specs —
 `docs/openapi-v2.yaml` (`/api/v2`) and `docs/openapi.yaml` (`/api/v1`) — reconcile types, and update
 the "targeted server contract" note in [versioning.md](versioning.md) in the same release PR. The
-compat line vendors `/api/v1` only, and refreshing it is a feature-shaped change that its
-security-fixes-only policy does not admit.
+compat line vendors its own copy of the contract, on its own branch, so a `main` release PR never
+refreshes it; bringing that copy up to date is
+[#90](https://github.com/octoverse-id/octonomy-go/issues/90).

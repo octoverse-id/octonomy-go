@@ -27,12 +27,13 @@ this document and the SDK's own inventory in
 
 ## Two release lines
 
-This repository publishes **two modules**, because two audiences have opposite requirements: one needs
-a client that keeps growing, the other is pinned to Go 1.13 and needs one that never changes.
+This repository publishes **two modules**, because two audiences have opposite requirements: one can
+move to a modern Go and take a breaking change at a major, the other is pinned to Go 1.13 and needs a
+client that never breaks under it.
 
 | Line | Module path | Branch | Versions | Go | Scope |
 | ---- | ----------- | ------ | -------- | -- | ----- |
-| **Compat** | `github.com/octoverse-id/octonomy-go` | `support/go1.13` | `v1.x` | 1.13 | Vocabularies + Tags, `/api/v1` only. **Frozen.** |
+| **Compat** | `github.com/octoverse-id/octonomy-go` | `support/go1.13` | `v1.x` | 1.13 | `v1.0.0` shipped Vocabularies + Tags on `/api/v1`. Since #89 the line takes ports of this one's capabilities (#88); what the branch has is [its README](https://github.com/octoverse-id/octonomy-go/blob/support/go1.13/README.md#implemented-resources). Never a major, never a webhook receiver. |
 | **Modern** | `github.com/octoverse-id/octonomy-go/v2` | `main` | `v2.x` | 1.24+ | Active development. `/api/v1` **and** `/api/v2` with namespace scoping; every resource group the vendored contracts publish. |
 
 **Go enforces the separation.** The two paths are different modules, so minimal version selection,
@@ -56,8 +57,27 @@ older plan document, this paragraph supersedes them.
 
 ### Compat line support policy
 
-- **Security fixes only.** No features, no ordinary bug fixes, no `/api/v2`, no namespaces, no webhooks.
-- **Sunset: 2027-08-31**, after which the line receives nothing at all, including security fixes.
+- **Capability parity with `main`, through the sunset.** The line takes security fixes, bug fixes,
+  and ports of what `main` already has — its resource groups, `/api/v2` with the namespace axis, and
+  its transport and decode guards ([epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)).
+  Features originate on `main` and reach the compat line by port; what originates on the compat line
+  is a fix. This reverses the security-fixes-only freeze published with `v1.0.0` — deliberately, in
+  [#89](https://github.com/octoverse-id/octonomy-go/issues/89); the reasoning is
+  [the epic's design doc](designs/compat-line-api-v2-parity.md).
+- **No webhook receiver.** The compat line does not ship one; a consumer needing one moves to `/v2`.
+  That is a standing policy, not an observation about any server's configuration.
+- **No major, ever — and so no breaking change, ever.** This is Go's rule, not one this repository
+  could revise: the compat module path is unsuffixed, a tree carrying a `go.mod` can tag only
+  `v0`/`v1` versions on an unsuffixed path, and the suffixed path a major would need is a different
+  module — `.../v2` is this line's. Every compat release is therefore a `v1.x`, and every change
+  there must keep `v1.0.0` callers compiling and must not move behaviour they correctly rely on: a
+  break has no version to ride. (A bug fix still changes behaviour — that is what makes it one. What
+  it may not change is a signature, a field's type, or a default.) So the compat `*Update` structs
+  keep their pointer fields rather than taking this line's `Optional[T]`, and `/api/v2` reaches that
+  line opt-in, with a caller who sets nothing still on `/api/v1`. The compat branch's
+  `scripts/compat-guard.sh` refuses a `v2+` release PR or tag there.
+- **Sunset: 2027-08-31**, unchanged by the reversal, after which the line receives nothing at all,
+  including security fixes.
   Owner: the SDK maintainer ([`.github/CODEOWNERS`](../.github/CODEOWNERS)); revisable only by
   agreement with the consuming team. The rule is **12 months from the `v1.0.0` tag** (2026-08-26),
   published to the end of the twelfth month so the date is fixed rather than dependent on the hour
@@ -67,11 +87,12 @@ older plan document, this paragraph supersedes them.
   release, and the Go team supports only the two most recent major versions — so a consumer on that
   toolchain carries unpatched standard-library and toolchain advisories no matter what this SDK
   ships. The compat line is an informed trade against a fixed date, not a supported-forever state.
-- Fixes land on `main` first, then are cherry-picked onto `support/go1.13` and released as a `v1.x`
-  patch. See [release.md](release.md).
+- A change that applies to both lines lands on `main` first, then is ported onto `support/go1.13` —
+  a cherry-pick where the hunk is dialect-neutral, a hand-port otherwise — and released as a `v1.x`
+  patch, or a `v1.x` minor when it adds exported API. See [release.md](release.md).
 - **`retract` does not help this audience.** The directive shipped in Go 1.16, so a Go 1.13 toolchain
   ignores it. A published `v1.x` cannot be recalled for the people it exists to serve, which is why
-  its releases are kept deliberately small and its CI runs a real `go1.13` job as a required check.
+  its CI runs a real `go1.13` job.
 
 ### Modern line pre-stability
 
@@ -138,7 +159,7 @@ proxy query below is.
 
 | Line | Stamped version | State |
 | ---- | ---------- | ----- |
-| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` — tagged 2026-08-26 | Released. Frozen — security fixes only, sunset 2027-08-31 |
+| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` — tagged 2026-08-26, the line's first release. A later `v1.x` is what the proxy query below lists, not this row | Released. Taking ports toward capability parity ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)); never a major; sunset 2027-08-31 |
 | **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-rc.1` — what `version.go` reads on this branch. **Whether its tag is pushed is the proxy query below**, never this row | Active, and **frozen**: the first release candidate. Of the five criteria [above](#modern-line-pre-stability), four were met before the cut and *a validated candidate* is what this release exists to become. A necessary break no longer rides a bump as it did at `v2.0.0-alpha.2` ([#66](https://github.com/octoverse-id/octonomy-go/issues/66)) — **it supersedes the candidate** (`rc.2`) |
 
 **There is no published `v0.x`, and never was.** The `## [0.1.0]` heading `CHANGELOG.md` used to
@@ -196,11 +217,11 @@ points into, not from its number's position in the sequence.
 
 Decide the bump from the **most significant** change in the release.
 
-### PATCH — `v1.0.x` (compat) / `v2.x.y` (modern)
+### PATCH — `v1.x.y` (compat) / `v2.x.y` (modern)
 Backward-compatible **bug fixes**. No change to the exported Go API.
 - Examples: fix a header, correct envelope decoding, fix a query param name.
 
-### MINOR — `v2.x.0` (modern only; the compat line takes no minors)
+### MINOR — `v1.x.0` (compat) / `v2.x.0` (modern)
 Backward-compatible **additions** to the exported API.
 - Examples: a new resource service, a new method, a new optional field on a `*Params`/`*Create` struct,
   a new `Is*` helper.
@@ -221,6 +242,10 @@ Backward-compatible **additions** to the exported API.
   `v2.0.0-rc.1`, so it no longer applies:** a candidate means no further break is intended, and one
   that proves necessary **supersedes the candidate** — `v2.0.0-rc.2` — rather than riding a bump.
   Once `v2.0.0` proper ships, a break needs a major and a new import path.
+- **On the compat line a minor is the only way an addition ships**, and the parity work ships that
+  way. That line took no minors until [#89](https://github.com/octoverse-id/octonomy-go/issues/89)
+  withdrew its freeze; `v1.0.x` was the only shape a release could take there, and its
+  `scripts/compat-guard.sh` was changed with the policy.
 
 ### MAJOR — `vN.0.0`
 Backward-**incompatible** changes to the exported Go API once a line has shipped a stable release.
@@ -228,6 +253,10 @@ Backward-**incompatible** changes to the exported Go API once a line has shipped
 - For Go modules, a `v2+` major also changes the import path. The modern line is already at
   `.../octonomy-go/v2`; a future `v3` would move to `.../octonomy-go/v3` and every importer would
   have to update. Plan majors deliberately.
+- **The compat line can never publish one.** Its unsuffixed path takes `v0`/`v1` versions only, and
+  the suffixed path a major needs is this line's module, so a `v2.0.0` tag on `support/go1.13` is
+  one the go command rejects. A change that would need a major there ships here instead, and a
+  consumer who needs it moves to `/v2`.
 
 ## Relationship to the server's API version
 
@@ -235,23 +264,33 @@ The Octonomy server keeps the `/api/v1` URL contract for its entire `1.x` line. 
 targets `/api/v1`, server minor/patch releases are additive and require at most a **minor** SDK bump
 to surface new fields or endpoints.
 
-A server **major** (`/api/v2`) is tracked by a corresponding **major SDK effort** — and that is
-exactly what the modern line is. Adding `/api/v2` support is why this repository moved to the
-`/v2` module path at `v2.x`, so the rule is satisfied rather than bent.
+A server **major** (`/api/v2`) was tracked by a corresponding **major SDK effort** on this line:
+`v2.x`, on the `/v2` module path, with `/api/v2` as its *default*. A default that moves every
+caller's requests is a break, so this line needed its major. It is not the only way a server major
+can be surfaced, and the compat line cannot use it: with no major available, `/api/v2` reaches
+that line **additively** — opt-in, in a `v1.x` minor, with every existing caller still on `/api/v1`.
 
 > **One live policy, recorded.** An earlier plan proposed shipping `/api/v2` support as a `0.3.0`
-> **minor**, which would have contradicted the major-effort rule above. That is settled and this
-> paragraph is the only policy in force: v2 support ships on a new module path at `v2.x`, a major.
-> The `0.x` framing it came from no longer applies to anything — see [Release state](#release-state).
+> **minor** on this module, which contradicted the major-effort rule as this page then stated it.
+> That is settled: on this line v2 support shipped on a new module path at `v2.x`, a major. The
+> `0.x` framing it came from no longer applies to anything — see [Release state](#release-state).
+> [#89](https://github.com/octoverse-id/octonomy-go/issues/89) rewrote that rule into the paragraph
+> above, so that it agrees with the independence note below — which already said a server major
+> forces an SDK major only by breaking the SDK's own API. That is what lets the compat line's
+> opt-in `/api/v2` ship as a `v1.x` minor.
 
 **Note the two axes are independent.** The SDK's major version tracks *its own* Go API
 compatibility, not the server's REST version. A future server `/api/v3` would not automatically force
-an SDK `/v3` — only a break in the SDK's own exported Go API would.
+an SDK `/v3` — only a break in the SDK's own exported Go API would. The compat line's `/api/v2` is
+that rule applied: a new surface, no break, so no major.
 
 > **Current state, to be exact:** the modern line speaks **both** surfaces. `Config.APIVersion`
 > selects one and defaults to `APIV2`, and the namespace axis is per-request (`WithNamespace`). The
-> compat line remains `/api/v1` only, permanently — that is its policy, not a gap. Every resource
-> group the vendored contracts publish is implemented on the modern line, on either surface;
+> compat line's `v1.0.0` speaks `/api/v1` only; porting `/api/v2` to it is
+> [#91](https://github.com/octoverse-id/octonomy-go/issues/91), and what that branch speaks now is
+> stated [on it](https://github.com/octoverse-id/octonomy-go/blob/support/go1.13/docs/versioning.md),
+> not here. Every resource group the vendored contracts publish is implemented on the modern line,
+> on either surface;
 > [`api.md`](api.md#implemented) holds the only complete inventory and [`roadmap.md`](roadmap.md) records
 > the gaps that remain *within* those resources.
 

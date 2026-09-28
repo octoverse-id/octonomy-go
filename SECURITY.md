@@ -9,13 +9,15 @@ copy of this file on `support/go1.13`; both describe the same policy.
 | Module | Versions | Branch | Supported | What it receives |
 | ------ | -------- | ------ | --------- | ---------------- |
 | `github.com/octoverse-id/octonomy-go/v2` | `2.x` | `main` | ✅ | Active development — features, fixes, security |
-| `github.com/octoverse-id/octonomy-go` | `1.x` | `support/go1.13` | ✅ until **2027-08-31** | **Security fixes only** |
-| — | `0.x` | — | n/a | Never released. No `v0.x` tag exists, and `proxy.golang.org` lists `v1.0.0` alone for the unsuffixed path |
+| `github.com/octoverse-id/octonomy-go` | `1.x` | `support/go1.13` | ✅ until **2027-08-31** | Security fixes, bug fixes, and ports toward capability parity with `main` ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)) — never a major, never a webhook receiver |
+| — | `0.x` | — | n/a | Never released. No `v0.x` tag exists, and `proxy.golang.org` lists no `v0.x` for either path |
 
-**The `1.x` line takes security fixes and nothing else.** No features, no ordinary bug fixes, no
-`/api/v2`, no namespaces, no webhooks — see the support policy in
-[docs/versioning.md](docs/versioning.md). It exists for consumers pinned to **Go 1.13**; if you need
-anything beyond a security fix, the upgrade is to Go 1.24+ and the `/v2` module.
+**The `1.x` line takes security fixes, bug fixes, and ports of what this line already has** — the
+resource groups, `/api/v2` and the namespace axis ([epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). The security-fixes-only freeze published
+with `v1.0.0` was withdrawn in #89; see the support policy in [docs/versioning.md](docs/versioning.md).
+It exists for consumers pinned to **Go 1.13**. Two things never reach it — a **webhook receiver**, and
+a **breaking change**, since its unsuffixed module path can never publish a major — and if you need
+either, the upgrade is to Go 1.24+ and the `/v2` module.
 
 **Sunset: 2027-08-31.** After that date the `1.x` line receives nothing at all, including security
 fixes. Owner: the SDK maintainer (see [`.github/CODEOWNERS`](.github/CODEOWNERS)); revisable only by
@@ -23,10 +25,10 @@ agreement with the consuming team. The rule is 12 months from the `v1.0.0` tag (
 published to the end of the twelfth month so the date is fixed rather than dependent on the hour the
 tag was pushed — rounding can only give you more time, never less.
 
-**A fix that applies to both lines lands on `main` first**, then is cherry-picked onto
-`support/go1.13` and released as a `1.x` patch — the backport step is part of the runbook in
-[docs/release.md](docs/release.md). A fix that only affects `/v2`, namespaces, or anything else
-absent from the compat line needs no backport.
+**A fix that applies to both lines lands on `main` first**, then is ported onto `support/go1.13`
+and released as a `1.x` patch — the backport step is part of the runbook in
+[docs/release.md](docs/release.md). A fix to code the compat branch does not have needs no backport
+of its own: the port that later brings that code there carries the fix with it.
 
 **Go 1.13 itself receives no security patches.** Its last release was `go1.13.15` (August 2020), and
 the Go team supports only the two most recent major versions, so a consumer on that toolchain carries
@@ -36,8 +38,8 @@ unpatched standard-library and toolchain advisories regardless of what this SDK 
 **A published `1.x` version cannot be recalled for that audience.** `retract` shipped in Go 1.16, so
 a Go 1.13 toolchain ignores it, and `proxy.golang.org` — the default proxy — retains a version
 permanently once it has served it, so deleting the git tag withdraws nothing. An advisory on that line is
-something to upgrade past, not something we can withdraw — which is why its releases are kept
-deliberately small and its CI runs a real `go1.13` job as a required check.
+something to upgrade past, not something we can withdraw — which is why its CI runs a real
+`go1.13` job.
 
 ## Reporting a vulnerability
 

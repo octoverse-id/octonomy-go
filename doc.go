@@ -17,13 +17,14 @@
 // The /v2 suffix is not decoration: this repository publishes two modules, and
 // the suffix is what makes them distinct to the go command.
 //
-//   - github.com/octoverse-id/octonomy-go      v1.x, Go 1.13, frozen, /api/v1 only
+//   - github.com/octoverse-id/octonomy-go      v1.x, Go 1.13, never a major
 //   - github.com/octoverse-id/octonomy-go/v2   v2.x, Go 1.24+, active development
 //
 // Because the paths differ, version selection cannot move a consumer between the
 // two lines, and a consumer needs no exclude, pin, or build tag of their own. If
-// you are on Go 1.13, use the unsuffixed path: it carries Vocabularies and Tags
-// on /api/v1 only, receives security fixes and nothing else, and sunsets on
+// you are on Go 1.13, use the unsuffixed path. Its v1.0.0 carried Vocabularies
+// and Tags on /api/v1; it takes ports of this line's capabilities toward parity
+// (#88), never a webhook receiver and never a breaking change, and it sunsets on
 // 2027-08-31, after which it receives nothing at all. Go 1.13 is itself unpatched
 // (go1.13.15, August 2020, was its last release), so pinning there is an informed
 // trade rather than a safe harbour. See docs/versioning.md and SECURITY.md.
@@ -45,7 +46,7 @@
 // riding a version bump, which is what it could still do while the line was on
 // -alpha.N: v2.0.0-alpha.2 carried one, the three *Update structs' field types
 // (#64). Once v2.0.0 ships a break needs a MAJOR and a new import path. The
-// compat line is released separately at v1.0.0.
+// compat line is released separately; its first release was v1.0.0.
 //
 // No v0.x of either line was ever published. The Version constant read "0.1.0"
 // until v2.0.0-alpha.1 -- a placeholder from before anything was released, which
