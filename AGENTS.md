@@ -12,7 +12,7 @@ You are on `support/go1.13`: module `github.com/octoverse-id/octonomy-go`, versi
 **1.13**. `main` is a different module (`/v2`, on a modern Go floor) and is where capabilities
 originate.
 
-- **This line is being brought to capability parity with `main`**
+- **This line takes capability parity with `main`**
   ([epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Until #89 this file told
   agents to refuse features, new resources, `/api/v2` and namespaces here and send them to `main`.
   That policy is withdrawn. The line takes security fixes, bug fixes, and ports of what `main`
@@ -24,13 +24,15 @@ originate.
 - **No webhook receiver, ever.** That is policy, not an observation about any server's default: a
   consumer needing one moves to `/v2`. Do not port `webhook/`.
 - **No major, ever — so no breaking change, ever.** The module path is unsuffixed, Go accepts only
-  `v0`/`v1` versions on it, and the suffixed path a major would need is `main`'s module. Every change
-  here must therefore keep `v1.0.0` callers compiling and must not move behaviour they correctly
-  rely on: a break has no version to ride. In practice — never change an exported field's type or a
-  method's signature, never remove or rename a symbol, and never change a default (so `/api/v2`
-  arrives opt-in: an existing caller's requests must not move to another surface on an in-range
-  upgrade). A bug fix still changes behaviour; that is what makes it a fix, and it is admissible.
-  `scripts/compat-guard.sh` refuses a `v2+` release PR or tag on this line.
+  `v0`/`v1` versions on it, and the suffixed path a major would need is `main`'s module. Every
+  change here must therefore keep `v1.0.0` callers compiling — an *unkeyed* struct literal aside,
+  which any Go minor that adds a field can break (`docs/versioning.md`, the MINOR rule) — and must
+  not move behaviour they correctly rely on: a break has no version to ride. In practice — never
+  change an exported field's type or a method's signature, never remove or rename a symbol, and
+  never change a default (so `/api/v2` arrives opt-in: an existing caller's requests must not move
+  to another surface on an in-range upgrade). A bug fix still changes behaviour; that is what makes
+  it a fix, and it is admissible. `scripts/compat-guard.sh` refuses a `v2+` release PR into this
+  branch, and a `v2+` tag on a tree that carries this line's module path.
 - **Sunset 2027-08-31**, unchanged by the reversal. See `SECURITY.md` and `docs/versioning.md`.
 - **A published `v1.x` cannot be recalled.** `retract` shipped in Go 1.16, so a Go 1.13 consumer's
   toolchain ignores it, and `GOPROXY` caches tags forever. Verify before tagging, not after.

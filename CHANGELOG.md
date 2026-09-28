@@ -21,15 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Two things stay out, and are now written as policy rather than as terms of a freeze.** No
     webhook receiver — a consumer needing one moves to `/v2`. And **no major, ever**: the module path
     is unsuffixed, Go accepts only `v0`/`v1` versions on it, and `.../v2` is `main`'s module. So every
-    change here has to keep `v1.0.0` callers compiling, and two decisions follow from that for the
+    change here has to keep `v1.0.0` callers compiling — unkeyed struct literals aside, a caveat
+    `docs/versioning.md`'s MINOR rule now carries on this branch too — and two decisions follow for the
     port: the `*Update` structs keep their pointer fields rather than taking `main`'s `Optional[T]`
     (so PATCH still cannot clear a nullable field here), and `/api/v2` arrives opt-in.
-  - **`scripts/compat-guard.sh` refuses a major instead of a minor.** `compat_minor_violation`, which
-    failed every `v1.x.0` at both of its call sites — the release-PR block and the tag-push block — is
-    replaced by `compat_major_violation`, which fails a `v2+` release or tag on the compat line and
-    says why by name. Go already rejected such a tag as a path mismatch, but that message reads as an
-    instruction to suffix `go.mod`, which would put `main`'s module on this branch. The major is
-    compared as a string, since a numeric test overflows on a long major and reports no violation.
+  - **`scripts/compat-guard.sh` refuses a major instead of a minor.** `compat_minor_violation`,
+    which failed every `v1.x.0` at both of its call sites — the release-PR block and the tag-push
+    block — is replaced by `compat_major_violation`, which fails a `v2+` release PR into this
+    branch, or a `v2+` tag on a tree carrying this line's module path, and says why by name. Go
+    already rejected such a tag as a path mismatch, but that message reads as an instruction to
+    suffix `go.mod`, which would put `main`'s module on this branch. The major is compared as a
+    string, since a numeric test overflows on a long major and reports no violation. One gap is
+    recorded rather than closed: a tag pushed on a commit whose `go.mod` had already been suffixed
+    away from this line's path is not caught, because a tag push has no base branch. The original
+    guard did not catch it either, and the guard's comment says so.
   - **`scripts/compat-guard-test.sh`** flips the two `v1.1.0` cases from BLOCK to pass, adds a local
     run on `release/v1.1.0` (#89's acceptance case), and adds five major refusals, including a compat
     branch whose `go.mod` was suffixed to `/v2`. 85 checks, up from 78. Each guard change was

@@ -106,6 +106,14 @@ semver_major() {
 # frozen at v1.0.x until #89 reversed that (epic #88), and minors are now how the
 # parity work ships. The two call sites below moved with it.
 #
+# What it cannot see: a TAG push carries no base branch, so on a tag on_compat
+# rests on the module path alone. A tag pushed on a support/go1.13 commit whose
+# go.mod had already been suffixed to .../v2 is therefore not refused here --
+# the original guard did not refuse it either. Suffixing go.mod on this branch
+# warns on an ordinary PR (below) and is refused on a release PR by base branch,
+# so the gap is a tag pushed with no release PR at all, which the release
+# runbook already treats as detection rather than prevention.
+#
 # The major is compared as a string, not with -ge: is_semver has already run on
 # every value reaching here, so it is digits with no leading zero, and a numeric
 # test would overflow on a 20-digit major and report no violation at all.

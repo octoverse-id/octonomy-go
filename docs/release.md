@@ -68,9 +68,10 @@ the **base branch, the PR target, the commit you tag, and the verify command**. 
 **Porting to the compat line.** A change that applies to both lands on `main` first, then is ported
 onto `support/go1.13` — a cherry-pick where the hunk is dialect-neutral, a hand-port otherwise — and
 released through this same runbook: as a `v1.x` patch for a fix, a `v1.x` minor for an addition.
-**Never as a major**: this line cannot publish one, and `compat-guard` refuses a `v2+` release PR or
-tag here ([versioning.md](versioning.md), the MAJOR rule). What the line takes is in the same file's
-support policy.
+**Never as a major**: this line cannot publish one, and `compat-guard` refuses a `v2+` release PR
+into this branch, and a `v2+` tag on a tree that carries this line's module path
+([versioning.md](versioning.md), the MAJOR rule). What the line takes is in the same file's support
+policy.
 
 ## Cutting a release
 

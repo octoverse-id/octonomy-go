@@ -20,7 +20,9 @@ multi-application tag management and taxonomy service. This SDK is a hand-writte
 >   freeze published with `v1.0.0` is withdrawn.
 > - **Never a breaking change.** This line can never publish a major — its module path is unsuffixed,
 >   and `.../v2` is the other line's module — so every release is a `v1.x`, and every `v1.x` keeps
->   `v1.0.0` code compiling, with no signature, field type, or default changed under it.
+>   `v1.0.0` code compiling, with no signature, field type, or default changed under it. (The one
+>   exception is Go's, not this line's: a minor that adds a struct field breaks an *unkeyed* literal
+>   of that struct — see the MINOR rule in [versioning.md](docs/versioning.md).)
 > - **Never a webhook receiver.** A consumer needing one moves to `/v2`.
 > - **Sunset: 2027-08-31.** After that date this line receives nothing. See
 >   [SECURITY.md](SECURITY.md).
