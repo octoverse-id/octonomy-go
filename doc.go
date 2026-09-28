@@ -21,10 +21,11 @@
 // Because the paths differ, version selection cannot move a consumer between the
 // two lines. This line takes security fixes, bug fixes, and ports of what the
 // /v2 line already has, and has a published sunset date; see docs/versioning.md.
-// It never takes a change that would break a v1.0.0 caller, because an unsuffixed
-// module path cannot publish a major, and it never ships a webhook receiver. If
-// your toolchain is current, use the /v2 path instead -- its README on main states
-// the minimum it requires, which is not a number this line can keep true.
+// It never takes a breaking change -- in the sense docs/versioning.md defines,
+// which is Go's own -- because an unsuffixed module path cannot publish a major,
+// and it never ships a webhook receiver. If your toolchain is current, use the
+// /v2 path instead -- its README on main states the minimum it requires, which is
+// not a number this line can keep true.
 //
 // # Quickstart
 //

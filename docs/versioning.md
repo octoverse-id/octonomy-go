@@ -67,14 +67,16 @@ not a ceiling, and Go before 1.16 auto-resolves `@latest` on a first build.
   keep `v1.0.0` callers compiling — with the one Go-level exception every minor carries, an
   *unkeyed* struct literal (see the MINOR rule) — and must not move behaviour they correctly rely
   on: a break has no version to ride. (A bug fix still changes behaviour — that is what makes it
-  one. What it may not change is a signature, a field's type, or a default.) Two consequences are
-  worth naming because the port meets them first. The `*Update` structs keep their pointer fields
-  rather than taking `main`'s `Optional[T]`, so a PATCH on this line cannot clear a nullable field.
-  And `/api/v2` arrives **opt-in**: a caller who sets nothing keeps speaking `/api/v1`, because an
-  in-range upgrade that moved existing callers' requests to another surface would be exactly the
-  break this line cannot publish. `scripts/compat-guard.sh` refuses a `v2+` release PR into this
-  branch, and a `v2+` tag on a tree that carries this line's module path; its comment on
-  `compat_major_violation` says what a tag push cannot see.
+  one. What it may not change is a signature, a field's type, or a default.) "Breaking" on this
+  branch has the meaning Go's own compatibility promise gives it: an added struct field is not a
+  break, and an unkeyed literal of that struct is the exposure the MINOR rule names. Two
+  consequences are worth naming because the port meets them first. The `*Update` structs keep their
+  pointer fields rather than taking `main`'s `Optional[T]`, so a PATCH on this line cannot clear a
+  nullable field. And `/api/v2` arrives **opt-in**: a caller who sets nothing keeps speaking
+  `/api/v1`, because an in-range upgrade that moved existing callers' requests to another surface
+  would be exactly the break this line cannot publish. `scripts/compat-guard.sh` refuses a `v2+`
+  release PR into this branch, and a `v2+` tag on a tree that carries this line's module path; its
+  comment on `compat_major_violation` says what a tag push cannot see.
 - **Sunset: 2027-08-31**, unchanged by the reversal. After that date this line receives nothing at
   all, including security fixes.
   Owner: the SDK maintainer ([`.github/CODEOWNERS`](../.github/CODEOWNERS)), revisable only by
@@ -161,15 +163,16 @@ Backward-compatible **bug fixes**. No change to the exported Go API.
 Backward-compatible **additions** to the exported API.
 - Examples: a new resource service, a new method, a new optional field on a `*Params`/`*Create` struct,
   a new `Is*` helper.
-- Existing callers keep compiling and working unchanged, with **one Go-level caveat**: adding a field
-  to an exported struct breaks a caller who wrote an *unkeyed* composite literal, because such a
-  literal must supply exactly one value per field, in order. It applies to every exported struct
-  whose fields are all exported — `Config`, `ListOptions`, `Pagination`, `APIError`, the models, and
-  the `*Create` / `*Update` / `*ListParams` / `*List` types — and so to the parity work, which adds
-  `Config.APIVersion` and the namespace fields on the models. It does not apply to `Client` or the
-  `*Service` types, which carry unexported fields and cannot be written unkeyed from outside the
-  package. `go vet`'s `composites` check flags unkeyed literals of imported types, so the practical
-  exposure is low; it is not zero, which is what "backward-compatible" would otherwise imply.
+- Existing callers keep compiling and working unchanged, with **one Go-level caveat**: adding a
+  field to an exported struct breaks a caller who wrote an *unkeyed* composite literal, because such
+  a literal must supply exactly one value per field, in order. It applies to every exported struct
+  whose fields are all exported — among them `Config`, `ListOptions`, `Pagination`, `APIError`, the
+  models, and the `*Create` / `*Update` / `*ListParams` / `*List` types — and so to the parity work,
+  which adds `Config.APIVersion` and the namespace fields on the models. It does not apply to
+  `Client` or the `*Service` types, which carry unexported fields and cannot be written unkeyed from
+  outside the package. `go vet`'s `composites` check flags unkeyed literals of imported types, so
+  the practical exposure is low; it is not zero, which is what "backward-compatible" would otherwise
+  imply.
 - A prerelease does not carry that guarantee:
   while a line is on prereleases, a necessary breaking change may ride a prerelease bump with a
   CHANGELOG entry, and that stops the moment a stable release of that major ships. Whether the modern

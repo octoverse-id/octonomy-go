@@ -69,6 +69,12 @@ on `main`.
     library in examples (`slices.*`). Rewrite the **module** path `.../octonomy-go/v2` to the
     unsuffixed one — but never strip `/api/v2`, which is a REST route and the capability being
     ported.
+- **Port a rule with the code it governs.** Several rules in this file describe the tree as it is —
+  every request tenant-scoped, every method taking `...RequestOption` — and `main`'s `AGENTS.md`
+  records exceptions to them that arrive with the code: the health probes are unversioned,
+  unauthenticated and take no options, and have their own constructor and request path. When a
+  port brings in code `main` governs with such an exception, bring the exception into this file in
+  the same PR. Do not bend the ported code to fit a rule written before it existed.
 - **Do not port `main`'s `Optional[T]`.** The `*Update` structs keep their pointer fields, because
   changing a published field's type breaks `v1.0.0` callers (the no-major rule above). A PATCH here
   therefore cannot clear a nullable field; that is a deliberate carve-out, not a porting gap.

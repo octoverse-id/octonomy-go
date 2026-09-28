@@ -19,8 +19,8 @@ what `main` already has** — capability parity with the `/v2` line, tracked by
 see [SECURITY.md](SECURITY.md) and [docs/versioning.md](docs/versioning.md). A new capability
 belongs on `main` first, which is the `/v2` module on a far newer Go than this line's — see
 [`main`'s README](https://github.com/octoverse-id/octonomy-go/blob/main/README.md) for its floor.
-Two things never come here: a webhook receiver, and a change that breaks `v1.0.0` callers, since
-this line can never publish a major. [AGENTS.md](AGENTS.md) has the porting rules.
+Two things never come here: a webhook receiver, and a breaking change (as
+[docs/versioning.md](docs/versioning.md) defines one), since this line can never publish a major. [AGENTS.md](AGENTS.md) has the porting rules.
 
 Requires Go **1.13**. Note what that means in practice: a modern toolchain enforces the language
 version from `go.mod` but **not** the stdlib version, so `go build` passing tells you nothing here.
