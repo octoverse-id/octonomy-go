@@ -72,12 +72,13 @@ older plan document, this paragraph supersedes them.
   module — `.../v2` is this line's. Every compat release is therefore a `v1.x`, and every change
   there must keep `v1.0.0` callers compiling — with the one Go-level exception every minor carries,
   an *unkeyed* struct literal (see the MINOR rule below) — and must not move behaviour they
-  correctly rely on: a break has no version to ride. (A bug fix still changes behaviour — that is what makes it one. What
-  it may not change is a signature, a field's type, or a default.) So the compat `*Update` structs
-  keep their pointer fields rather than taking this line's `Optional[T]`, and `/api/v2` reaches that
-  line opt-in, with a caller who sets nothing still on `/api/v1`. How that branch enforces the rule
-  is stated in [its own versioning policy](https://github.com/octoverse-id/octonomy-go/blob/support/go1.13/docs/versioning.md),
-  not here.
+  correctly rely on: a break has no version to ride. (A bug fix still changes behaviour — that is
+  what makes it one. What it may not change is a signature, a field's type, or a default.) So the
+  compat `*Update` structs keep their pointer fields rather than taking this line's `Optional[T]`,
+  and `/api/v2` reaches that line opt-in, with a caller who sets nothing still on `/api/v1`. How
+  that branch enforces the rule is stated in [its own versioning
+  policy](https://github.com/octoverse-id/octonomy-go/blob/support/go1.13/docs/versioning.md), not
+  here.
 - **Sunset: 2027-08-31**, unchanged by the reversal, after which the line receives nothing at all,
   including security fixes.
   Owner: the SDK maintainer ([`.github/CODEOWNERS`](../.github/CODEOWNERS)); revisable only by
