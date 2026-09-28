@@ -9,10 +9,11 @@ go build ./...
 make test
 ```
 
-**This branch is the frozen Go 1.13 line** (`support/go1.13`, module
-`github.com/octoverse-id/octonomy-go`, `v1.x`). It takes security fixes only and nothing else — see
-[versioning.md](versioning.md). Day-to-day work uses whatever modern toolchain you have; the section
-below is the part that is not optional.
+**This branch is the Go 1.13 line** (`support/go1.13`, module
+`github.com/octoverse-id/octonomy-go`, `v1.x`). It takes security fixes, bug fixes, and ports of what
+`main` already has, and never a change that would need a major — see [versioning.md](versioning.md),
+and [AGENTS.md](../AGENTS.md) for the porting rules. Day-to-day work uses whatever modern toolchain
+you have; the section below is the part that is not optional.
 
 There are **no runtime dependencies** — keep `go.mod` free of a runtime `require` block.
 
@@ -134,8 +135,8 @@ make dev-server-down
 
 CI runs it on the **go1.13** toolchain against the pinned container image, with
 `OCTONOMY_SMOKE_REQUIRED=1` so a missing base URL fails instead of skipping — a skip would be a green
-job that asserted nothing. That combination — the frozen client, on its own toolchain, against the
-current server — is the only one that proves this line still works, and it is what caught the
+job that asserted nothing. That combination — this line's client, on its own toolchain, against
+the current server — is the only one that proves this line still works, and it is what caught the
 single-resource envelope defect.
 
 ## Running against a real Octonomy
@@ -196,13 +197,13 @@ harness does that a naive bootstrap does not:
   testing global behaviour under a namespaced name.
 
 CI reaches it through the `.github/actions/octonomy-harness` composite action. The script on this
-branch is **this line's own copy**, frozen with the rest of it: it cannot pick up an edit made on the
-other line, and the two have already diverged. Read this one for what this line does, and do not
-assume a harness change made elsewhere reached it.
+branch is **this line's own copy**: it cannot pick up an edit made on the other line, and the two
+have already diverged. Read this one for what this line does, and do not assume a harness change
+made elsewhere reached it — porting one is the same hand-port as any other file.
 
 The harness boots server **3.1.0**, which is newer than the `1.0.0` contract this line was written
-against. That is deliberate: the frozen client's remaining job is to keep working against the server
-people actually run.
+against. That is deliberate: this line's first job is to keep working against the server people
+actually run.
 
 ### Troubleshooting
 

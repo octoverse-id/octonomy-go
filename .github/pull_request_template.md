@@ -8,7 +8,7 @@ Closes #
 - [ ] New feature (e.g. a new resource client or method)
 - [ ] Refactor / chore
 - [ ] Documentation
-- [ ] Breaking change (changes an exported API — requires a major/minor bump per `docs/versioning.md`)
+- [ ] Breaking change (changes an exported API) — **not admissible on this line**: it can never publish a major, so a break ships on `main` instead (`docs/versioning.md`)
 
 ## Checklist
 - [ ] `make fmt-check` and `go vet ./...` pass

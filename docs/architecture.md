@@ -1,7 +1,8 @@
 # Architecture
 
-`octonomy-go` is a thin, hand-written client for the Octonomy REST **v1** API. It depends only on the
-Go standard library. The design goal is that an agent (or human) can add a new resource by copying an
+`octonomy-go` is a thin, hand-written client for the Octonomy REST API — on this tree `/api/v1`
+only, because `apiPrefix` in `octonomy.go` is a constant. It depends only on the Go standard
+library. The design goal is that an agent (or human) can add a new resource by copying an
 existing resource file and changing the types and paths.
 
 ## Layers
@@ -9,7 +10,7 @@ existing resource file and changing the types and paths.
 | File | Responsibility |
 | ---- | -------------- |
 | `octonomy.go` | `Config`, `Client`, `New()` (validation + service wiring). |
-| `transport.go` | `doRaw()`: URL building under `/api/v1`, auth/tenant headers, JSON encoding, non-2xx → `*APIError`. Then one decoder per response shape: `doData()` (single resource, unwraps `{"data": ...}`), `doList()` (list envelope), `do()` (no payload, e.g. DELETE's 204). Also `RequestOption` / `WithActor`. |
+| `transport.go` | `doRaw()`: URL building under `apiPrefix` (`/api/v1`), auth/tenant headers, JSON encoding, non-2xx → `*APIError`. Then one decoder per response shape: `doData()` (single resource, unwraps `{"data": ...}`), `doList()` (list envelope), `do()` (no payload, e.g. DELETE's 204). Also `RequestOption` / `WithActor`. |
 | `errors.go` | `APIError`, error `Code*` constants, and `Is*` / `AsAPIError` helpers. |
 | `pagination.go` | `ListOptions` and `Pagination`. The list envelope itself is per-resource on this line (`TagList`, `VocabularyList`) because `List[T]` needs Go 1.18. |
 | `types.go` | Shared `Metadata` alias and the `String`/`Bool`/`Int` pointer helpers. |
@@ -21,19 +22,19 @@ existing resource file and changing the types and paths.
 1. A service method picks the transport helper that matches the response shape it expects:
    `doData` for a single resource (`Create`/`Get`/`Update`), `doList` for a list, plain `do` for a
    call with no payload to decode (`Delete`). All four funnel into `doRaw`.
-2. `doRaw` builds `BaseURL + /api/v1 + path`, attaches headers, JSON-encodes the body, and returns
-   the raw 2xx body. On a non-2xx it calls `parseError`, which decodes the `{error:{...}}` envelope
-   into an `*APIError` (falling back to the raw body + a status-derived code when the envelope is
-   absent).
+2. `doRaw` builds `BaseURL + apiPrefix + path` (`apiPrefix` is `/api/v1`), attaches headers,
+   JSON-encodes the body, and returns the raw 2xx body. On a non-2xx it calls `parseError`, which
+   decodes the `{error:{...}}` envelope into an `*APIError` (falling back to the raw body + a
+   status-derived code when the envelope is absent).
 3. The caller decodes: `doData` unwraps `{"data": {...}}`, `doList` asserts the envelope then decodes
    `{data, pagination}` whole. Either way a 2xx whose body does not carry `data` is an **error**, not
    a zero-valued result — decoding a wrapped body straight into a `*Tag` or a `*TagList` produces an
    empty struct with a nil error, and a caller cannot tell that from "no such tag" or "no tags".
 
 ```
-                       ┌─ doData ─┐                                    2xx body
-Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶ net/http ──▶ Octonomy /api/v1
-                       └─ do ─────┘        │
+                           ┌─ doData ─┐                                2xx body
+Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶ net/http ──▶ Octonomy /api/v1 (apiPrefix)
+                           └─ do ─────┘    │
    pick by response shape:                 ├─ 2xx → raw body back to the caller above:
      doData  single resource               │         doData → unwrap {"data":{…}}  → *Model
      doList  list envelope                 │         doList → require {"data":[…], "pagination":{…}}
@@ -57,7 +58,10 @@ Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶
   Only an integration test against a real server can catch a regression here, which is what
   `integration_test.go` is for.
 - **Pointers for optionality:** nullable server fields decode into `*string`; write structs use
-  pointers + `omitempty` so PATCH only sends what the caller set.
+  pointers + `omitempty` so PATCH only sends what the caller set. That stays true when `main`'s
+  structs are ported: `main` moved its `*Update` fields to `Optional[T]`, and doing the same here
+  would change published field types, which this line — unable to publish a major — cannot do (see
+  [versioning.md](versioning.md)). The cost is that PATCH cannot clear a nullable field on this line.
 - **No hidden behavior:** the client never retries, panics, logs, or mutates global state. Retries,
   timeouts, and transport tuning are the caller's `*http.Client`.
 
@@ -80,4 +84,5 @@ To add a resource, follow `tags.go`:
 3. Wire the service onto `Client` in `New()`.
 4. Add table-driven `httptest` tests and a CHANGELOG entry.
 
-See [roadmap.md](roadmap.md) for the resource groups this line does not have.
+See [roadmap.md](roadmap.md) for the resource groups this tree does not have yet, and the issues
+porting them from `main`.

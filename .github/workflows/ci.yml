@@ -206,10 +206,9 @@ jobs:
   # added coverage. The credentials still cross a step boundary (the harness
   # exports them, the test step reads them), which is what that job was proving.
   #
-  # Why it is worth blocking a merge on -- the part that does not decay: this
-  # line takes security fixes only, so a PR here is rare and a flake costs a
-  # re-run, while an unverified `v1.x` tag cannot be recalled at all (`retract`
-  # shipped in Go 1.16, after this line's floor). #29 makes a green smoke test a
+  # Why it is worth blocking a merge on -- the part that does not decay: a flake
+  # costs a re-run, while an unverified `v1.x` tag cannot be recalled at all
+  # (`retract` shipped in Go 1.16, after this line's floor). #29 makes a green smoke test a
   # precondition for cutting the tag, and a `continue-on-error` job cannot
   # satisfy a precondition. As with the go113 job, what is actually enforced
   # lives in the branch's protection settings, not in this file.
@@ -231,7 +230,7 @@ jobs:
       - name: Boot the Octonomy harness
         uses: ./.github/actions/octonomy-harness
       - name: Smoke test against the real server
-        # The frozen client on its own toolchain against the current server --
+        # This line's client on its own toolchain against the current server --
         # the only combination that proves this line still works. It caught the
         # single-resource {"data": ...} envelope that every canned httptest body
         # had been getting wrong.

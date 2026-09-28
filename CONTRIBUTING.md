@@ -12,11 +12,15 @@ go build ./...
 make test
 ```
 
-**This branch is the frozen Go 1.13 compat line** (`support/go1.13`, module
-`github.com/octoverse-id/octonomy-go`, `v1.x`). It takes **security fixes only** — no features, no
-new resources, no `/api/v2` — and has a published sunset date; see [SECURITY.md](SECURITY.md) and
-[docs/versioning.md](docs/versioning.md). Anything else belongs on `main`, which is the `/v2` module
-on a far newer Go than this line's — see [`main`'s README](https://github.com/octoverse-id/octonomy-go/blob/main/README.md) for its floor.
+**This branch is the Go 1.13 compat line** (`support/go1.13`, module
+`github.com/octoverse-id/octonomy-go`, `v1.x`). It takes security fixes, bug fixes, and **ports of
+what `main` already has** — capability parity with the `/v2` line, tracked by
+[epic #88](https://github.com/octoverse-id/octonomy-go/issues/88) — and has a published sunset date;
+see [SECURITY.md](SECURITY.md) and [docs/versioning.md](docs/versioning.md). A new capability
+belongs on `main` first, which is the `/v2` module on a far newer Go than this line's — see
+[`main`'s README](https://github.com/octoverse-id/octonomy-go/blob/main/README.md) for its floor.
+Two things never come here: a webhook receiver, and a change that breaks `v1.0.0` callers, since
+this line can never publish a major. [AGENTS.md](AGENTS.md) has the porting rules.
 
 Requires Go **1.13**. Note what that means in practice: a modern toolchain enforces the language
 version from `go.mod` but **not** the stdlib version, so `go build` passing tells you nothing here.
@@ -55,8 +59,9 @@ These mirror [AGENTS.md](AGENTS.md):
   wraps it in `{"data": {...}}`), `client.doList` for a list, `client.do` where there is no payload
   (DELETE's 204). The wrong one compiles and returns a zero-valued struct with a nil error.
 - Non-2xx responses become `*APIError`; add `Is<Code>` helpers for common codes.
-- Write structs use pointer fields with `omitempty` so PATCH sends only what is set; server
-  read-only fields are decode-only.
+- Write structs use pointer fields with `omitempty` so PATCH sends only what is set, and keep them
+  when a `main` struct is ported — `main`'s `Optional[T]` would change a published field's type.
+  Server read-only fields are decode-only.
 - The library never panics, exits, or logs — it returns wrapped errors (`octonomy:` prefix, `%w`).
 - Keep types faithful to `docs/openapi.yaml`. Document any deliberate divergence from the spec.
 - Every exported symbol has a doc comment.

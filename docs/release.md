@@ -50,7 +50,7 @@ the **base branch, the PR target, the commit you tag, and the verify command**. 
 
 | Line | `MODULE` | `BASE` | Versions | Policy |
 | ---- | -------- | ------ | -------- | ------ |
-| **Compat** | `github.com/octoverse-id/octonomy-go` | `support/go1.13` | `v1.x` | Frozen. Security fixes only, published sunset |
+| **Compat** | `github.com/octoverse-id/octonomy-go` | `support/go1.13` | `v1.x` | Ports of `main` ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)); never a major; published sunset |
 | **Modern** | `github.com/octoverse-id/octonomy-go/v2` | `main` | `v2.x` | Active development |
 
 > **Getting `BASE` wrong is unrecoverable.** A `v1.x` tag placed on a `main` commit points at a
@@ -65,9 +65,12 @@ the **base branch, the PR target, the commit you tag, and the verify command**. 
 > Tags cannot be recalled, and `retract` is inert for a Go 1.13 consumer's toolchain — so the compat
 > line has no second chance. **Check `go.mod`'s module line before you tag** (steps 1 and 7).
 
-**Backporting to the compat line.** A security fix that applies to both lands on `main` first, then is
-cherry-picked onto `support/go1.13` and released as a `v1.x` patch through this same runbook. The
-compat line takes **security fixes only** — no features, no ordinary bug fixes.
+**Porting to the compat line.** A change that applies to both lands on `main` first, then is ported
+onto `support/go1.13` — a cherry-pick where the hunk is dialect-neutral, a hand-port otherwise — and
+released through this same runbook: as a `v1.x` patch for a fix, a `v1.x` minor for an addition.
+**Never as a major**: this line cannot publish one, and `compat-guard` refuses a `v2+` release PR or
+tag here ([versioning.md](versioning.md), the MAJOR rule). What the line takes is in the same file's
+support policy.
 
 ## Cutting a release
 

@@ -148,7 +148,7 @@ func (c *Client) doData(ctx context.Context, method, path string, query url.Valu
 // A present-but-null data ("data": null) is accepted and decodes to a nil slice.
 // The server sends [] for an empty page. Both spellings mean "no rows", so treat
 // nil and empty as the same thing; this line does not normalize between them,
-// and that behavior is frozen along with the rest of it.
+// and a v1.0.0 caller may be relying on which one it gets.
 func (c *Client) doList(ctx context.Context, method, path string, query url.Values, out interface{}, opts ...RequestOption) error {
 	respBody, err := c.doRaw(ctx, method, path, query, nil, opts...)
 	if err != nil {

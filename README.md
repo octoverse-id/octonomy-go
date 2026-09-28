@@ -6,18 +6,24 @@
 
 The official Go client for [Octonomy](https://github.com/octoverse-id/octonomy) — a multi-tenant,
 multi-application tag management and taxonomy service. This SDK is a hand-written, **dependency-free**
-(standard library only) client for the stable REST **v1** API.
+(standard library only) client for the Octonomy REST API; this tree speaks `/api/v1`.
 
-> ## This is the frozen Go 1.13 line (`v1.x`)
+> ## This is the Go 1.13 line (`v1.x`)
 >
 > You are on branch `support/go1.13`. This line exists for one reason: to give a consumer pinned to
-> **Go 1.13** a client that compiles. It is **frozen**.
+> **Go 1.13** a client that compiles.
 >
-> - **Security fixes only.** No features, no ordinary bug fixes, no `/api/v2`, no namespaces, no
->   webhooks — ever.
+> - **It takes capability parity with the `/v2` line** — the resource groups, `/api/v2` and the
+>   namespace axis — ported from `main`'s code, through its sunset.
+>   [Epic #88](https://github.com/octoverse-id/octonomy-go/issues/88) tracks the work;
+>   [Implemented resources](#implemented-resources) is what this tree has. The security-fixes-only
+>   freeze published with `v1.0.0` is withdrawn.
+> - **Never a breaking change.** This line can never publish a major — its module path is unsuffixed,
+>   and `.../v2` is the other line's module — so every release is a `v1.x`, and every `v1.x` keeps
+>   `v1.0.0` code compiling, with no signature, field type, or default changed under it.
+> - **Never a webhook receiver.** A consumer needing one moves to `/v2`.
 > - **Sunset: 2027-08-31.** After that date this line receives nothing. See
 >   [SECURITY.md](SECURITY.md).
-> - **Scope: Vocabularies + Tags on `/api/v1`.** That is the whole surface, permanently.
 > - A published `v1.x` **cannot be recalled** for this audience: `retract` shipped in Go 1.16, so a
 >   Go 1.13 toolchain ignores it.
 >
@@ -139,7 +145,9 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 | -------- | ------ |
 | Vocabularies (`client.Vocabularies`) | ✅ Create / Get / List / Update / Delete |
 | Tags (`client.Tags`) | ✅ Create / Get / List / Update / Delete |
-| Tag aliases, resolution, assignments (+bulk), resource tags, audit logs, health | ⛔ never on this line — they live on [`/v2`](https://pkg.go.dev/github.com/octoverse-id/octonomy-go/v2) |
+| Tag aliases, resolution, assignments (+bulk), resource tags, audit logs | Not on this tree — [#94](https://github.com/octoverse-id/octonomy-go/issues/94) ports them from [`/v2`](https://pkg.go.dev/github.com/octoverse-id/octonomy-go/v2) |
+| Health probes | Not on this tree — [#91](https://github.com/octoverse-id/octonomy-go/issues/91) ports them |
+| Webhook receiver | ⛔ never on this line, by policy — use [`/v2`](https://pkg.go.dev/github.com/octoverse-id/octonomy-go/v2) |
 
 ### Differences from the `/v2` line you may hit
 
@@ -180,8 +188,8 @@ version from `go.mod` but not the stdlib version, so `io.ReadAll` (Go 1.16) comp
 - [Development](docs/development.md) — setup, quality gates, testing.
 - [Versioning](docs/versioning.md) — SemVer policy and which server contract this SDK targets.
 - [Release](docs/release.md) — the release runbook.
-- [Roadmap](docs/roadmap.md) — what the `/v2` line has that this one does not. **None of it comes to
-  this line.**
+- [Roadmap](docs/roadmap.md) — what the `/v2` line has that this tree does not, and the epic porting
+  it here.
 - [CHANGELOG](CHANGELOG.md)
 
 ## Contributing & security

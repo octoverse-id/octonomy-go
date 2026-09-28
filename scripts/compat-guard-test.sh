@@ -208,16 +208,48 @@ fixture "$COMPAT" 1.13 0.1.0 0.1.0
 check "release PR with no base ref still checks version.go" 1 "version.go says 0.1.0" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_HEAD_REF=release/v1.0.0
 
-echo "--- compat line publishes v1.0.x only ---"
+echo "--- compat line: minors since #89, majors never ---"
+# These two were BLOCK cases until #89 reversed the freeze (epic #88): the line
+# published v1.0.x only, and v1.1.0 is the release the parity work ships as. The
+# reason is asserted, not just rc=0, so a guard that stopped reaching the release
+# block would fail here rather than pass.
 fixture "$COMPAT" 1.13 1.1.0 1.1.0
-check "BLOCK: v1 minor release PR" 1 "publishes v1.0.x only" \
+check "a v1 minor release PR is fine" 0 "all agree" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v1.1.0
-check "BLOCK: v1 minor tag" 1 "publishes v1.0.x only" \
+check "a v1 minor tag is fine" 0 "matches version.go" \
 	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v1.1.0
+# The acceptance case on #89: runbook step 5 run locally on the release branch.
+git_fixture release/v1.1.0
+check "local run on release/v1.1.0 passes" 0 "target-branch check is skipped" \
+	GITHUB_EVENT_NAME= GITHUB_REF= GITHUB_BASE_REF= GITHUB_HEAD_REF=
+
+fixture "$COMPAT" 1.13 1.4.2 1.4.2
+check "a patch on a later minor is fine" 0 "all agree" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v1.4.2
 
 fixture "$COMPAT" 1.13 1.0.7 1.0.7
 check "a v1.0.x patch release is fine" 0 "all agree" \
 	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v1.0.7
+
+# A major is refused by name, not only as a path mismatch. The path message alone
+# ("must carry module path .../v2") reads as an instruction to suffix go.mod,
+# which would put main's module on this branch.
+fixture "$COMPAT" 1.13 2.0.0 2.0.0
+check "BLOCK: v2 release PR into the compat line" 1 "can never publish a major" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v2.0.0
+check "BLOCK: v2 tag on the compat module path" 1 "can never publish a major" \
+	GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v2.0.0
+fixture "$COMPAT" 1.13 3.0.0 3.0.0
+check "BLOCK: v3 release PR into the compat line" 1 "can never publish a major" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v3.0.0
+fixture "$COMPAT" 1.13 99999999999999999999.0.0 99999999999999999999.0.0
+check "BLOCK: a major too long for shell arithmetic" 1 "can never publish a major" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v99999999999999999999.0.0
+# The suffixed-go.mod "fix" the message warns against: still refused, because
+# the base branch alone marks the run as the compat line.
+fixture "$MODERN" 1.24 2.0.0 2.0.0
+check "BLOCK: compat branch suffixed to /v2, releasing v2" 1 "can never publish a major" \
+	GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=support/go1.13 GITHUB_HEAD_REF=release/v2.0.0
 
 fixture "$MODERN" 1.24 2.1.0 2.1.0
 check "a v2 minor is fine (modern line takes them)" 0 "all agree" \
