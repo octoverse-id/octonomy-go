@@ -100,7 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `docs/development.md`, `docs/release.md`, `docs/roadmap.md`, `docs/versioning.md`, the PR template,
     the feature-request template, and one `transport.go` comment. The contributor instructions now
     say what a refresh has to move, and which tests fail until it does.
-  - **Mutation-tested**, since on a correct tree both files pass whether or not they work. Each of 59
+  - **Mutation-tested**, since on a correct tree both files pass whether or not they work. Each of 62
     mutations failed the suite and was reverted: stale claims reintroduced in five files; either spec
     off the marker; the marker moved, removed or duplicated; surface parity broken; coverage rows
     deleted, misnamed, silent, doubled, typo'd, commented out or misquoted; and, in both guards'
