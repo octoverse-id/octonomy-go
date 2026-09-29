@@ -69,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       three sentences that carried one were reworded. The failure message says when the veto fired,
       and that the fix is a rewording, never a looser category or a ByRole one.
     - **Word-based categories read the token's sentence**, not only a byte window — a list item,
-      bulleted or numbered, is a statement of its own — and a sentence runs to its paragraph's
+      bulleted or numbered and in or out of a blockquote, is a statement of its own — and a sentence runs to its paragraph's
       edges in both directions — never across the boundary between a
       comment and the code beside it, and with a YAML block scalar's `#91 …` line read as the
       content it is. An abbreviation's full stop ("e.g.") does not end a sentence; a link's target
