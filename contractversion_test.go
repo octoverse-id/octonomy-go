@@ -191,17 +191,21 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 	`\bcontracts?\b|\bspecs?\b|openapi|info\.version|` +
 	`\b(track|tracks|tracking|target|targets|targeted|targeting)\b([^-]|$)`)
 
-// sentenceBreak matches the end of a sentence or of a statement: a full stop,
-// question or exclamation mark followed by whitespace or the end of the text; a
-// blank line; the start of a list item -- any of CommonMark's three bullets,
-// "-", "*" and "+", or a number; or the start of a Markdown table row. The last
-// three may sit behind any run of comment markers ("//", "#") and blockquote
-// markers (">"), and a line of nothing but those markers is a blank line: this
-// repository writes lists inside blockquotes (README.md's "> -" items) and
-// separates comment paragraphs with a bare "//" or "#", and reviews six and seven
-// lent one such statement's probe to the next. Headings and fenced code are
-// line kinds instead (lineKinds), since they end a statement by structure rather
-// than by punctuation. sentenceBreaksIn then drops the full stops
+// sentenceBreak matches the end of a sentence or of a statement within one
+// paragraph: a full stop, question or exclamation mark followed by whitespace
+// or the end of the text; the start of a list item -- any of CommonMark's three
+// bullets, "-", "*" and "+", or a number; or the start of a Markdown table row.
+// The last two may sit behind any run of comment markers ("//", "#") and
+// blockquote markers (">"): this repository writes lists inside blockquotes
+// (README.md's "> -" items), and the sixth review lent one quoted item's probe
+// to the next.
+//
+// Paragraph boundaries are NOT here. They are neighbours', which never hands a
+// sentence a blank line, a line of nothing but markers ("//", "#", ">" alone --
+// a blank line in its own syntax), a heading, or a line of another kind. This
+// regex once matched blank lines too, and a mutation removing neighbours' half
+// passed because this half still split the sentence: two layers doing one job,
+// with only one of them testable. The job lives in one place now. sentenceBreaksIn then drops the full stops
 // that end an abbreviation, which is what keeps "e.g. " from splitting a claim.
 //
 // Two things are deliberately NOT breaks. A semicolon: the clause after it is
@@ -214,7 +218,7 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 // nothing -- reverting it failed no test -- and it had a cost: a sentence that
 // starts with a version ("Probed against 3.2.1. 3.1.0 is the baseline") only
 // ended where it should by accident. It is gone.
-var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|\n\s*((//|#|>)\s*)*\n|` +
+var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|` +
 	`\n\s*((//|#|>)\s*)*([-*+]|[0-9]+[.)])\s|\n\s*((//|#|>)\s*)*\|`)
 
 // goWord matches "go " as a word, so "requires go >= 1.26.0" is a toolchain but
@@ -1588,6 +1592,12 @@ func TestContractVersionContextStaysWithinOneKindOfLine(t *testing.T) {
 		if got := scanContractVersionsIn(path, body, "7.7.7"); len(got) != 1 || got[0].Token != "8.8.8" {
 			t.Errorf("%s: a marker-only line must end the paragraph, got %+v", path, got)
 		}
+	}
+
+	// neighbours itself stops at a marker-only line, on either side.
+	gocomment := []string{"// a", "//", "// b", "//", "// c"}
+	if prev, next := neighbours(lineKinds("x.go", gocomment), gocomment, 2); prev != "" || next != "" {
+		t.Errorf("a bare // is a blank line: \"// b\" has no neighbours, got %q / %q", prev, next)
 	}
 
 	sh := []string{"# a", "# b", "code", "# c"}
