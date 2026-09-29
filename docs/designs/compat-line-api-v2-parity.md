@@ -485,7 +485,7 @@ the consuming team sets `Config.APIVersion = octonomy.APIV2` once.
 
 | Lane | Steps | Modules touched | Depends on |
 | --- | --- | --- | --- |
-| **A** | #89 policy reversal | docs/, .github/, scripts/, AGENTS.md (both branches) | consumer answer (entry criterion) |
+| **A** | #89 policy reversal | docs/, .github/, scripts/, AGENTS.md (both branches) | ~~consumer answer (entry criterion)~~ answered 2026-09-29 (Revision 6) |
 | **B** | #90 contract baseline | docs/ | A |
 | **C** | #91 core → #96 guard → #103 checklist | root pkg (transport, errors, pagination, octonomy, health), docs/ | A |
 | **D** | #94 resources → #95 tests → #97 readProbes | root pkg (resource files + tests) | C |
@@ -494,8 +494,8 @@ the consuming team sets `Config.APIVersion = octonomy.APIV2` once.
 | **G** | #100 parity + compatibility checks | tools/, COMPAT.md | D |
 | **H** | #101 release → #102 sunset | version.go, CHANGELOG.md | all |
 
-**Execution order.** A alone (it is the gate, and it is blocked). Then **B and C in parallel**. Then
-**D and E in parallel**. Then **F and G in parallel**. Then H.
+**Execution order.** A alone (it is the gate; ~~it is blocked~~ unblocked 2026-09-29, Revision 6).
+Then **B and C in parallel**. Then **D and E in parallel**. Then **F and G in parallel**. Then H.
 
 **Conflict flags.**
 - **C, D and F all touch the root package.** C must complete before D starts — D's resource files
@@ -518,6 +518,6 @@ the consuming team sets `Config.APIVersion = octonomy.APIV2` once.
 
 - **OUTSIDE COVERAGE:** provider `codex`, phase `plan-review`, **completed** on both runs (exit 0; 60,342 and 122,647 tokens; findings plus an explicit Recommendation line each). A native Claude subagent also ran once as the CEO review's spec-review loop and found 14 issues; that pass is native, not outside coverage, and is logged separately as `outside_status: unavailable`.
 - **CROSS-MODEL:** three overlaps and one reversal. Both reviewers independently reached the `readProbes` isolation gap with no shared context. Codex alone caught the `Optional` source break (rev 3) and the acceptance-baseline error (rev 5), neither of which the native passes found. The one **reversal went against this review**: revision 4 classified the range-over-int rewrite SILENT; Codex said LOUD; a probe confirmed `go1.13.15` vet ships `loopclosure` and reports it at exit 2, so the hand-port is safer than revision 4 claimed. One correction went the other way — Codex read #37 as newly introduced, when `support/go1.13:tags.go` already ships it on v1.0.0, which is what opened the additive fix in 8A.
-- **VERDICT:** CEO + ENG CLEARED — ready to implement, subject to the #89 entry criterion (the consumer answer) which is a business gate, not a review gate.
+- **VERDICT:** CEO + ENG CLEARED — ready to implement, subject to the #89 entry criterion (the consumer answer) which is a business gate, not a review gate. *That criterion was met on 2026-09-29 (Revision 6); the verdict now stands unconditionally.*
 
 NO UNRESOLVED DECISIONS
