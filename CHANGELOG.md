@@ -93,20 +93,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `docs/development.md`, `docs/release.md`, `docs/roadmap.md`, `docs/versioning.md`, the PR template,
     the feature-request template, and one `transport.go` comment. The contributor instructions now
     say what a refresh has to move, and which tests fail until it does.
-  - **Mutation-tested**, since on a correct tree both files pass whether or not they work. Each of 38
+  - **Mutation-tested**, since on a correct tree both files pass whether or not they work. Each of 48
     mutations failed the suite and was reverted. In the tree: a stale claim reintroduced in
     `doc.go`, `docs/versioning.md`, `docs/api.md`, on a wrapped line in `AGENTS.md`, and beside a
     history word ("shipped") in `docs/development.md`; either spec behind or ahead of the marker; the
     marker moved, removed or duplicated; an operation only one surface publishes; a path-item `$ref`
     in the real v1 spec; a published operation's row deleted; an `sdk:` naming no method; a reason
     that says nothing, and one YAML reads as a comment; a typo'd path; a typo'd key; a row both
-    implemented and unimplemented. In the guards' own code: the claim veto disabled; phrases read
-    across sentences; each loose phrase the review found restored ("from server", `" contract,"`,
-    "this module", a bare `"go "`, "moved" without its space, a bare "against", "harness image" as a
-    role); SDK versions exempted by value; a harness pin matching everything; `release-line-guard`
-    made a role; a scanner that reads no tokens; an unknown path-item key skipped; a path-item `$ref`
-    accepted; a leading `#` read as a value; folded-block indentation unchecked; the missing-row
-    check removed; and a method lookup that ignores the receiver.
+    implemented and unimplemented. In the guards' own code: the claim veto disabled, or stopped at
+    the physical line; phrases read across sentences; any full stop ending a sentence ("e.g.");
+    a sentence starting one letter late; context crossing a comment/code boundary; `v`-prefixed
+    versions invisible again; "spec(s)" and "openapi" dropped as claim words; each loose phrase the
+    reviews found restored ("from server", `" contract,"`, "this module", a bare `"go "`, `" moved"`,
+    a bare "against"); SDK versions exempted by value; the harness pin matched anywhere on the line,
+    by a nearby registry, or everywhere; an address matched by any dot; `release-line-guard` made a
+    role; `release-branch-name` disabled; a scanner that reads no tokens; an unknown path-item key
+    skipped; a path-item `$ref` accepted; a leading `#` read as a value; folded-block indentation
+    unchecked; a key given twice read last-wins; the missing-row check removed; and a method lookup
+    that ignores the receiver. One mutation first passed — reverting the sentence scoping — because
+    its test's second sentence had come to carry a claim word, so the veto stopped it alone; the
+    test now asserts its sentence carries none.
   - **The harness image stays `ghcr.io/octoverse-id/octonomy:3.1.0`.** It is pinned independently of the contract, and moving it
     is a change to what the smoke test proves, not to what the SDK is written against; `main` moved
     its own in a separate change. `docs/development.md` now says the two are different numbers and
