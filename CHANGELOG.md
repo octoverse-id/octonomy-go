@@ -114,6 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `v1.0.0` as the compat line's stamped version; each now names `v1.0.0` as the first release and
     defers to the proxy query for the rest. Descriptions of what the compat branch implements now
     link to that branch instead of restating it.
+  - **The entry criterion was answered on 2026-09-29**, and the answers are recorded as Revision 6
+    of [`docs/designs/compat-line-api-v2-parity.md`](docs/designs/compat-line-api-v2-parity.md).
+    The consuming team needs all of `/api/v2`, namespaces included, and will validate before the
+    sunset. Answer 4 (no consumer besides a service still in development) settles F1: the compat
+    line's `codeFromStatus` is **removed on both surfaces** rather than kept on `/api/v1`, which
+    changes #91's scope. C1-A and the compat `APIV1` default are recorded as not revisited.
   - Touched: `AGENTS.md`, `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, `doc.go`,
     `docs/versioning.md`, `docs/release.md`, `docs/development.md`, the PR template, both issue
     templates, and one comment in `integration_harness_test.go`. `docs/architecture.md` was checked

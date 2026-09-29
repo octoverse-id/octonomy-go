@@ -72,6 +72,11 @@ consuming team branch on `IsNotFound`, and do they sit behind such a gateway? Th
 **fourth question on #89's entry criterion**, which already blocks the epic. If the answer is no,
 remove `codeFromStatus` on both surfaces and delete the version-conditional branch.
 
+> **Settled 2026-09-29 — removed on both surfaces.** The answer was that the consuming service is
+> still being developed and there is no other consumer of this SDK, so no existing
+> `IsNotFound` branch can be flipped by the change. 1A is superseded; see
+> [Revision 6](#revision-6--entry-criterion-answered-2026-09-29).
+
 ### Prior decision being reversed, deliberately
 
 `gstack-decision-search` holds this from 2026-08-19: *"P1 (contract drift, wants a growing modern
@@ -96,7 +101,7 @@ compat already has; `Config.APIVersion`; the four scope options; `checkScopeCohe
 (`OptionalString`/`OptionalBool`/`OptionalMetadata` — **three, not four**: `Optional[time.Time]`
 occurs only in `webhook/snapshots.go`, which is cut — plus `marshalOptionalStruct`),
 `pagination_compat.go` (six `*XList` types), `errors.go` (main's 15 codes; `codeFromStatus` kept
-**v1-only** per F1), `octonomy.go`, **`health.go`** (moved here from Zone 2: it needs
+**v1-only** per F1 — *superseded by Revision 6: removed on both surfaces*), `octonomy.go`, **`health.go`** (moved here from Zone 2: it needs
 `doUnversioned` + `NewHealthClient` + `decodeHealthStatus`, and compat's `doRaw` hardcodes
 `apiPrefix`).
 
@@ -149,7 +154,7 @@ guarantee broken silently, and `go vet`'s duplicate-`%w` check postdates 1.13.
 | D3.5 | `make compat-check` REQUIRED per-PR on main | ~1 d / ~30 m | **ACCEPTED** (mechanism per F5) |
 | D3.6 | webhook on the compat line | — | **CUT** — see policy below |
 | Residuals | `BuildTagTree`, `Each`, 10 `examples/` | ~2 d / ~45 m | **ACCEPTED** |
-| F1 | `codeFromStatus` | ~0.5 d / ~15 m | **1A — version-conditional: kept on v1, dropped on v2** |
+| F1 | `codeFromStatus` | ~0.5 d / ~15 m | ~~1A — version-conditional: kept on v1, dropped on v2~~ **Removed on both surfaces** (Revision 6, 2026-09-29) |
 | F2 | Generator failure policy | ~2 d / ~45 m | **2A — fail closed + post-1.13 `go/types` deny-list** |
 | F3 | Namespace isolation coverage | ~4 d / ~1.5 h | **3A — port `readProbes` + the guard test** |
 | F4 | Contract baseline | ~6 d / ~2 h | **4A — both specs at 3.2.1, marker, coverage rows, port the gate** |
@@ -204,7 +209,7 @@ committed shape delta — is the ideal's shape.
 | `*Update` marshal: field w/o coverage | field silently never sent | Y (7A round-trip) | Y | — | Y |
 | decode: null/renamed id | zero-valued resource, nil error (#40) | Y (8A) | Y | error | Y |
 | response body: unbounded | client OOM | Y (8A 32 MiB) | Y | `ErrResponseTooLarge` | Y |
-| bare 404 on `/api/v2` | `IsNotFound` true, empty-taxonomy read (#7) | Y (1A) | Y | `CodeUnexpectedStatus` | Y |
+| bare 404 on `/api/v2` | `IsNotFound` true, empty-taxonomy read (#7) | Y (F1 — both surfaces since Revision 6) | Y | `CodeUnexpectedStatus` | Y |
 | cross-namespace read | merchant-A client sees merchant-B row | Y (3A `readProbes`) | Y | — | Y |
 | main PR breaks the transform | discovered at release time | Y (5C REQUIRED) | Y | PR fails | Y |
 | contract drift on compat | client and spec disagree silently | Y (4A gate) | Y | gate failure | Y |
@@ -240,6 +245,10 @@ committed shape delta — is the ideal's shape.
 
 ## Open question the repository cannot answer
 
+> **Answered 2026-09-29** — all of `/api/v2`, namespaces included. See
+> [Revision 6](#revision-6--entry-criterion-answered-2026-09-29). The question is kept as it was
+> asked.
+
 **What does the Go 1.13 consumer actually call today, and do they need namespaces?** Nothing in
 either repo records it. `docs/versioning.md:60-62` names "the consuming team" as the party whose
 agreement the sunset needs, so the relationship exists. This plan is sized without that input, and
@@ -250,10 +259,10 @@ Consolidated after the engineering review. Supersedes the revision-2 list.
 
 - [ ] **T1 (P1, human ~2d / CC ~45m)** — policy — Reverse the freeze everywhere it is asserted, both branches — **#89**
   - Surfaced by: F6/6A. ~20 files; compat `AGENTS.md:13` instructs agents to refuse this work. `compat_minor_violation` has TWO call sites; `compat-guard-test.sh` (311 lines) is wired into `make check` AND `release-check`. Also `docs/architecture.md` on both branches (stale diagrams).
-  - **BLOCKED** on the consumer-answer entry criterion.
+  - ~~**BLOCKED** on the consumer-answer entry criterion.~~ Answered 2026-09-29 (Revision 6).
 - [ ] **T2 (P1, human ~2.5d / CC ~1h)** — contract — Compat contract baseline to server 3.2.1 — **#90**
 - [ ] **T3 (P1, human ~7d / CC ~2.5h)** — core — Hand-write the compat core — **#91**
-  - `Config.APIVersion` (**defaults `APIV1`**), 4 scope options, `checkScopeCoherence`, `WithRequestID`, `readBounded`+`ErrResponseTooLarge`, `requireIdentity`, `health.go`, six `*XList`, 15 error codes, **version-conditional `codeFromStatus`** (1A)
+  - `Config.APIVersion` (**defaults `APIV1`**), 4 scope options, `checkScopeCoherence`, `WithRequestID`, `readBounded`+`ErrResponseTooLarge`, `requireIdentity`, `health.go`, six `*XList`, 15 error codes, **`codeFromStatus` removed on both surfaces** (Revision 6; was the version-conditional 1A)
   - **+7A** JSON depth guards both directions (~50 lines), subprocess-tested
   - **+8A** hand-written `MarshalJSON` on the three `*Update` types: nil omits, `Metadata{}` sends `{}`
   - **+C2** `ErrUnreachable` wrapper with `Unwrap()`+`Is()`; both `errors.Is` must hold
@@ -433,6 +442,44 @@ Codex read #37 as newly introduced by C1-A. `support/go1.13:tags.go` already shi
 `Metadata Metadata ` + "`json:\"metadata,omitempty\"`" + `, so the defect is live on v1.0.0 today. C1-A preserves a
 shipped defect rather than creating one — which is what opened 8A's additive fix, an option
 unavailable if the field type had to change.
+
+## Revision 6 — entry criterion answered, 2026-09-29
+
+The four questions on [#89](https://github.com/octoverse-id/octonomy-go/issues/89) were answered by
+the maintainer, relaying the consuming team. Answers as given:
+
+| # | Question | Answer |
+| --- | --- | --- |
+| 1 | Which calls block adoption today? | All of `/api/v2`, namespaces included |
+| 2 | Do they need the namespace axis at all? | Yes, per answer 1 |
+| 3 | Can they validate a replacement before 2027-08-31? | Yes. They plan to upgrade the Go toolchain on every service that consumes Octonomy before that date |
+| 4 | Do they branch on `IsNotFound` behind a gateway that can strip the error envelope? | The consuming service is still being developed; assume no other consumer of this SDK |
+
+**What each answer settles.**
+
+- **The entry criterion is met, and #89 is unblocked.** It was a business gate, not a review gate,
+  and all four answers are in.
+- **D3.2 and #94 are unchanged: all six missing resource groups.** Answer 1 asks for the whole
+  surface, so none of them drops out.
+- **F3 and #97 are load-bearing.** Answers 1 and 2 put the namespace axis in real use, so the
+  isolation coverage protects a consumer rather than a hypothetical one.
+- **F1 is settled: `codeFromStatus` is removed on both surfaces.** Answer 4 is the removal branch
+  recorded on #89 and under *Defect 1* above. With no consumer outside a service still under
+  development, no `IsNotFound` branch exists for the change to flip, so the version-conditional
+  branch and its tests are never built. Defect 1 closes fully, and the recorded divergence from
+  main's `AGENTS.md` (*Do not reintroduce a status-to-code mapping*) goes away. Under the compat
+  policy this is a bug fix, which may change behaviour but not a signature, a field type or a
+  default. It ships in `v1.1.0` with a CHANGELOG entry saying that `IsNotFound` no longer reports
+  true for a bare 404. The work belongs to #91.
+- **D3.1 stands.** Answer 3 fits the 2027-08-31 sunset. The consuming team moves to `/v2` when its
+  toolchain does.
+
+**Not revisited: C1-A (the `*Update` structs keep pointer fields) and the `APIV1` default.** Both
+were argued from published `v1.0.0` callers. Answer 4 weakens that premise without removing it:
+`v1.0.0` is on the public proxy, and knowing of no caller is not proof that none exists. On a line
+that can never publish a major, either change would also be a SemVer break with no version to
+carry it. Both decisions stand unless someone revisits them explicitly. Under the `APIV1` default,
+the consuming team sets `Config.APIVersion = octonomy.APIV2` once.
 
 ## Worktree parallelization
 
