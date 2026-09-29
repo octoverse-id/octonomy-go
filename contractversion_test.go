@@ -194,8 +194,11 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 // sentenceBreak matches the end of a sentence or of a statement: a full stop,
 // question or exclamation mark followed by whitespace or the end of the text; a
 // blank line; the start of a list item -- any of CommonMark's three bullets,
-// "-", "*" and "+", or a number -- after an optional comment marker; or the start
-// of a Markdown table row. sentenceBreaksIn then drops the full stops
+// "-", "*" and "+", or a number; or the start of a Markdown table row. The last
+// three may sit behind any run of comment markers ("//", "#") and blockquote
+// markers (">"), and a blockquoted blank line (">" alone) is a blank line: this
+// repository writes lists inside blockquotes (README.md's "> -" items), and the
+// sixth review lent one quoted item's probe to the next. sentenceBreaksIn then drops the full stops
 // that end an abbreviation, which is what keeps "e.g. " from splitting a claim.
 //
 // Two things are deliberately NOT breaks. A semicolon: the clause after it is
@@ -208,7 +211,8 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 // nothing -- reverting it failed no test -- and it had a cost: a sentence that
 // starts with a version ("Probed against 3.2.1. 3.1.0 is the baseline") only
 // ended where it should by accident. It is gone.
-var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|\n\s*\n|\n\s*(//|#)?\s*([-*+]|[0-9]+[.)])\s|\n\s*\|`)
+var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|\n[\s>]*\n|` +
+	`\n\s*((//|#|>)\s*)*([-*+]|[0-9]+[.)])\s|\n\s*((//|#|>)\s*)*\|`)
 
 // goWord matches "go " as a word, so "requires go >= 1.26.0" is a toolchain but
 // "version.go says 0.1.0" is not. main's copy at 61fce9b matched the bare
@@ -772,7 +776,8 @@ func lineKinds(path string, lines []string) []string {
 // sentenceBefore and sentenceAfter cut it to the sentence, and the word-based
 // categories' byte windows still bound how far a phrase may reach.
 func neighbours(kinds, lines []string, i int) (prev, next string) {
-	same := func(j int) bool { return kinds[j] == kinds[i] && strings.TrimSpace(lines[j]) != "" }
+	// A line of nothing but blockquote markers is a blank line inside a quote.
+	same := func(j int) bool { return kinds[j] == kinds[i] && strings.Trim(lines[j], " \t>") != "" }
 	from := i
 	for from > 0 && same(from-1) {
 		from--
@@ -1554,6 +1559,11 @@ func TestContractVersionContextStaysWithinOneKindOfLine(t *testing.T) {
 		"+ Probed against 3.1.0\n+ The baseline is 8.8.8\n",
 		"- Probed against 3.1.0\n- The baseline is 8.8.8\n",
 		"* Probed against 3.1.0\n* The baseline is 8.8.8\n",
+		// Review 6: this repository writes lists inside blockquotes.
+		"> - Probed against 3.1.0\n> - The baseline is 8.8.8\n",
+		"> 1) Probed against 3.1.0\n> 2) The baseline is 8.8.8\n",
+		// And a quoted blank line ends a quoted paragraph.
+		"> Probed against 3.1.0\n>\n> The baseline is 8.8.8\n",
 	} {
 		if got := scanContractVersionsIn("docs/development.md", list, "7.7.7"); len(got) != 1 || got[0].Token != "8.8.8" {
 			t.Errorf("the second item must not inherit the first's probe in %q, got %+v", list, got)
