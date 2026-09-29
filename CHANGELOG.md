@@ -68,15 +68,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       "two server majors behind" — since that number is recorded where the refresh happened; the
       three sentences that carried one were reworded. The failure message says when the veto fired,
       and that the fix is a rewording, never a looser category or a ByRole one.
-    - **Word-based categories read the token's sentence**, not only a byte window, and a sentence
-      runs to its paragraph's edges in both directions — never across the boundary between a
+    - **Word-based categories read the token's sentence**, not only a byte window — a list item,
+      bulleted or numbered, is a statement of its own — and a sentence runs to its paragraph's
+      edges in both directions — never across the boundary between a
       comment and the code beside it, and with a YAML block scalar's `#91 …` line read as the
       content it is. An abbreviation's full stop ("e.g.") does not end a sentence; a link's target
       is not a word the sentence says.
     - **A `v`-prefixed version is a token.** `main`'s copy never saw one, so "Both bundled specs
       target server vX.Y.Z" went unread — and the server's own tags are spelled `v3.2.1`. A word-based
-      `v-tag` category classifies this module's tags, and is not offered a sentence about the server
-      or its API.
+      `v-tag` category classifies this module's tags, and is not offered a sentence about the server,
+      its API, or Octonomy by name (`octonomy-go`, this module, excepted).
     - **Every category is as narrow as a site here needs.** `server-history` is exactly one shape,
       "Server X added"; `sdk-version` needs the version in a code span as well as its phrase; the
       harness pin is a token immediately after `octonomy:`; an address needs a digit before its dot.

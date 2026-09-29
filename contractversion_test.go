@@ -69,8 +69,8 @@ import (
 // looser category and never a ByRole one.
 //
 // Word-based categories are also scoped to the token's sentence, not merely to a
-// byte window, so "Probed against 3.1.0. Both specs: 3.1.0." does not lend the
-// first sentence's probe to the second. A sentence runs to its paragraph's edges
+// byte window, so "Probed against 3.1.0. The baseline is 3.1.0." does not lend
+// the first sentence's probe to the second. A sentence runs to its paragraph's edges
 // in both directions -- reviews wrapped a claim word onto the next line, then the
 // third -- but never across the boundary between a comment and the code beside
 // it, and a YAML block scalar's content is content even where a line of it
@@ -157,9 +157,12 @@ var versionToken = regexp.MustCompile(`\bv?[0-9]+\.[0-9]+\.[0-9]+\b`)
 var codeSpanRest = regexp.MustCompile("^[-+.0-9A-Za-z]*`")
 
 // vTagServerSubject matches a sentence about the server or its API, which is
-// never offered the v-tag category. "/api/" is a REST path, not the word, and is
-// left out: "no `/api/v2`, no namespaces" beside `v1.0.0` is about this module.
-var vTagServerSubject = regexp.MustCompile(`\bserver\b|(^|[^/])\bapi\b([^/]|$)`)
+// never offered the v-tag category -- by those words or by the server's name.
+// "/api/" is a REST path, not the word, and is left out: "no `/api/v2`, no
+// namespaces" beside `v1.0.0` is about this module. So is "octonomy-go", this
+// module's own name, which is why the product name must not be followed by a
+// hyphen.
+var vTagServerSubject = regexp.MustCompile(`\bserver\b|(^|[^/])\bapi\b([^/]|$)|\boctonomy\b([^-]|$)`)
 
 // versionDigits strips the "v" a git tag carries, for comparison with the marker.
 func versionDigits(token string) string { return strings.TrimPrefix(token, "v") }
@@ -190,8 +193,8 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 
 // sentenceBreak matches the end of a sentence or of a statement: a full stop,
 // question or exclamation mark followed by whitespace or the end of the text; a
-// blank line; the start of a list item (after an optional comment marker); or
-// the start of a Markdown table row. sentenceBreaksIn then drops the full stops
+// blank line; the start of a list item, bulleted or numbered (after an optional
+// comment marker); or the start of a Markdown table row. sentenceBreaksIn then drops the full stops
 // that end an abbreviation, which is what keeps "e.g. " from splitting a claim.
 //
 // Two things are deliberately NOT breaks. A semicolon: the clause after it is
@@ -204,7 +207,7 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 // nothing -- reverting it failed no test -- and it had a cost: a sentence that
 // starts with a version ("Probed against 3.2.1. 3.1.0 is the baseline") only
 // ended where it should by accident. It is gone.
-var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|\n\s*\n|\n\s*(//|#)?\s*[-*]\s|\n\s*\|`)
+var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|\n\s*\n|\n\s*(//|#)?\s*([-*]|[0-9]+[.)])\s|\n\s*\|`)
 
 // goWord matches "go " as a word, so "requires go >= 1.26.0" is a toolchain but
 // "version.go says 0.1.0" is not. main's copy at 61fce9b matched the bare
@@ -257,7 +260,7 @@ func (s versionSite) before() string { return s.Prev + "\n" + s.Line[:s.Idx] }
 func (s versionSite) after() string { return s.Line[s.Idx+len(s.Token):] }
 
 // sentenceBefore returns the text preceding the token back to the start of its
-// sentence (or of the look-back, whichever is nearer).
+// sentence, or of its paragraph, whichever is nearer.
 func (s versionSite) sentenceBefore() string {
 	b := s.before()
 	locs := sentenceBreaksIn(b)
@@ -269,7 +272,7 @@ func (s versionSite) sentenceBefore() string {
 
 // sentenceAfter returns the text following the token up to the end of its
 // sentence, spanning into the following lines. It used to stop at the end of the
-// token's own line, and prose wraps: "Server 3.1.0 added the contract this SDK
+// token's own line, and prose wraps: "Server 3.1.0 added the default this SDK
 // / targets today." put the claim word where the veto could not see it.
 func (s versionSite) sentenceAfter() string {
 	a := s.after()
@@ -283,10 +286,10 @@ func (s versionSite) sentenceAfter() string {
 }
 
 // abbreviation matches text ending in an abbreviation's full stop, which does
-// not end a sentence. The capital-letter rule in sentenceBreak handles "e.g. the"
-// on its own, but not a stop at the very end of the look-back: "The specs are
-// vendored at e.g. 3.1.0 and newer" ended the sentence right before the token,
-// hid "vendored" from the veto, and left " and newer" to exempt it as a range.
+// not end a sentence. It is the only thing that keeps "e.g. " whole: without it
+// "The specs are vendored at e.g. 3.1.0 and newer" ended the sentence right
+// before the token, hid "vendored" from the veto, and left " and newer" to
+// exempt it as a range.
 var abbreviation = regexp.MustCompile(`(?i)(^|[^a-z])(e\.g|i\.e|etc|vs|cf|incl|approx|resp)\.$`)
 
 // sentenceBreaksIn returns sentenceBreak's matches in text, less the full stops
@@ -687,8 +690,9 @@ func scanContractVersionsIn(path, body, marker string) []contractVersionFinding 
 		if historyFrom > 0 && lineNo >= historyFrom {
 			break
 		}
-		// Two lines of look-back. Prose wraps, and the phrase that classifies a
-		// mention is regularly on the line above it.
+		// The token's paragraph, either side of it (neighbours). Prose wraps, and
+		// the phrase that classifies a mention -- or the word that makes it a
+		// claim -- is regularly on another line of the same sentence.
 		prev, next := neighbours(kinds, lines, i)
 		for _, m := range versionToken.FindAllStringIndex(line, -1) {
 			token := line[m[0]:m[1]]
@@ -798,7 +802,7 @@ func classifyContractVersion(site versionSite) string {
 }
 
 // siteIn builds a versionSite for a token on a single line, for the guard's own
-// tests. Production scanning supplies Prev; these cases are deliberately
+// tests. Production scanning supplies Prev and Next; these cases are deliberately
 // single-line, because a category that needs look-back to reject a stale claim
 // would be a category that rejects nothing when the claim fits on one line.
 func siteIn(path, line, token string) versionSite {
@@ -1229,6 +1233,22 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 			whatItIs: "\"api\" inside the URL made this read as a sentence about the server's API",
 		},
 		{
+			name:     "review 4: a v-tag naming the server by its product name",
+			path:     "docs/api.md",
+			line:     "The SDK baseline is Octonomy v3.1.0.",
+			token:    "v3.1.0",
+			exempt:   false,
+			whatItIs: "the server's name is a server subject as much as the word \"server\" is",
+		},
+		{
+			name:     "this module's own name is not the server's",
+			path:     "docs/release.md",
+			line:     "> go: github.com/octoverse-id/octonomy-go@v1.0.0: invalid version:",
+			token:    "v1.0.0",
+			exempt:   true,
+			whatItIs: "\"octonomy-go\" is this module, so the product-name subject stops before a hyphen",
+		},
+		{
 			name:     "server history in exactly its one shape",
 			path:     "README.md",
 			line:     "- **No `CodeScopeImmutable` constant.** Server 3.1.0 added `409 scope_immutable` on tag, vocabulary,",
@@ -1445,9 +1465,9 @@ func TestContractVersionPhrasesDoNotCrossASentence(t *testing.T) {
 		t.Errorf("the second 3.1.0 is in its own sentence and must not inherit the probe, got %q", got)
 	}
 
-	// A sentence that STARTS with the version: no capital follows the stop, so
-	// the capital-letter rule does not apply, and the token still begins a new
-	// sentence -- the stop is not an abbreviation's.
+	// A sentence that STARTS with the version: the stop before it is followed by
+	// whitespace and is not an abbreviation's, so the token begins a new
+	// sentence and nothing before it can lend it a word.
 	line = "// Probed against 3.1.0. 3.1.0 is the baseline."
 	second = versionSite{Path: "transport.go", Line: line, Token: "3.1.0", Idx: strings.LastIndex(line, "3.1.0")}
 	if got := classifyContractVersion(second); got != "" {
@@ -1521,6 +1541,15 @@ func TestContractVersionContextStaysWithinOneKindOfLine(t *testing.T) {
 	md := []string{"zero", "", "one", "two", "three", "four", "five", "six", "seven", "", "eight"}
 	if prev, next := neighbours(lineKinds("x.md", md), md, 5); prev != "one\ntwo\nthree" || next != "five\nsix\nseven" {
 		t.Errorf("Markdown prose runs to the paragraph's edges, got %q / %q", prev, next)
+	}
+
+	// A numbered item is its own statement, like a bulleted one. Review 4: an
+	// unpunctuated probe item lent "Probed" to the numbered item after it. "2) "
+	// rather than "2. ", because the full stop in "2. " is already a break and
+	// would pass this whether or not numbered items are.
+	list := "1) Probed against 3.1.0\n2) The baseline is 8.8.8\n"
+	if got := scanContractVersionsIn("docs/development.md", list, "7.7.7"); len(got) != 1 || got[0].Token != "8.8.8" {
+		t.Errorf("the second item must not inherit the first's probe, got %+v", got)
 	}
 
 	// A YAML block scalar's '#' line is content, not a comment.
