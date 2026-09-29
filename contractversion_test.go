@@ -196,9 +196,12 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 // blank line; the start of a list item -- any of CommonMark's three bullets,
 // "-", "*" and "+", or a number; or the start of a Markdown table row. The last
 // three may sit behind any run of comment markers ("//", "#") and blockquote
-// markers (">"), and a blockquoted blank line (">" alone) is a blank line: this
-// repository writes lists inside blockquotes (README.md's "> -" items), and the
-// sixth review lent one quoted item's probe to the next. sentenceBreaksIn then drops the full stops
+// markers (">"), and a line of nothing but those markers is a blank line: this
+// repository writes lists inside blockquotes (README.md's "> -" items) and
+// separates comment paragraphs with a bare "//" or "#", and reviews six and seven
+// lent one such statement's probe to the next. Headings and fenced code are
+// line kinds instead (lineKinds), since they end a statement by structure rather
+// than by punctuation. sentenceBreaksIn then drops the full stops
 // that end an abbreviation, which is what keeps "e.g. " from splitting a claim.
 //
 // Two things are deliberately NOT breaks. A semicolon: the clause after it is
@@ -211,7 +214,7 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 // nothing -- reverting it failed no test -- and it had a cost: a sentence that
 // starts with a version ("Probed against 3.2.1. 3.1.0 is the baseline") only
 // ended where it should by accident. It is gone.
-var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|\n[\s>]*\n|` +
+var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|\n\s*((//|#|>)\s*)*\n|` +
 	`\n\s*((//|#|>)\s*)*([-*+]|[0-9]+[.)])\s|\n\s*((//|#|>)\s*)*\|`)
 
 // goWord matches "go " as a word, so "requires go >= 1.26.0" is a toolchain but
@@ -736,6 +739,18 @@ func lineKind(path, line string) string {
 	return "code"
 }
 
+// markdownFence and markdownHeading match a fenced code block's delimiter line
+// and an ATX heading.
+var (
+	markdownFence   = regexp.MustCompile("^\\s{0,3}(```|~~~)")
+	markdownHeading = regexp.MustCompile(`^\s{0,3}#{1,6}(\s|$)`)
+)
+
+// markerOnly matches a line that is blank once its comment and blockquote
+// markers are gone -- "//", "#", ">" alone. Each is a blank line in its own
+// syntax, and ends a paragraph like one.
+var markerOnly = regexp.MustCompile(`^\s*((//|#|>)\s*)*$`)
+
 // yamlBlockOpener matches a YAML key whose value is a block scalar: `key: >-`,
 // `key: |`, optionally anchored (`key: &name >-`).
 var yamlBlockOpener = regexp.MustCompile(`:\s+(&\S+\s+)?[|>][-+0-9]*\s*$`)
@@ -745,11 +760,36 @@ var yamlBlockOpener = regexp.MustCompile(`:\s+(&\S+\s+)?[|>][-+0-9]*\s*$`)
 // comment -- "#91 says ..." wrapped onto its own line of an `unimplemented: >-`
 // reason once split that reason's sentence in two. Block-scalar content is every
 // line more indented than the key that opened it, blank lines included.
+//
+// Markdown gets the same treatment for its own structures, which the seventh
+// review showed joining statements: an ATX heading is a line of its own kind, so
+// it never runs into the paragraph under it; a fence delimiter is too; and inside
+// a fenced block a shell or Go comment line and a command line are different
+// kinds, as they are in a .sh or .go file.
 func lineKinds(path string, lines []string) []string {
 	kinds := make([]string, len(lines))
 	isYAML := strings.HasSuffix(path, ".yml") || strings.HasSuffix(path, ".yaml")
+	isMarkdown := strings.HasSuffix(path, ".md")
 	blockKey := -1 // indentation of the key that opened the current block scalar
+	inFence := false
 	for i, line := range lines {
+		if isMarkdown {
+			t := strings.TrimSpace(line)
+			switch {
+			case markdownFence.MatchString(line):
+				inFence = !inFence
+				kinds[i] = "fence"
+			case inFence && (strings.HasPrefix(t, "#") || strings.HasPrefix(t, "//")):
+				kinds[i] = "fenced-comment"
+			case inFence:
+				kinds[i] = "fenced-code"
+			case markdownHeading.MatchString(line):
+				kinds[i] = "heading"
+			default:
+				kinds[i] = "prose"
+			}
+			continue
+		}
 		indent := len(line) - len(strings.TrimLeft(line, " "))
 		if isYAML && blockKey >= 0 {
 			if strings.TrimSpace(line) == "" || indent > blockKey {
@@ -776,8 +816,8 @@ func lineKinds(path string, lines []string) []string {
 // sentenceBefore and sentenceAfter cut it to the sentence, and the word-based
 // categories' byte windows still bound how far a phrase may reach.
 func neighbours(kinds, lines []string, i int) (prev, next string) {
-	// A line of nothing but blockquote markers is a blank line inside a quote.
-	same := func(j int) bool { return kinds[j] == kinds[i] && strings.Trim(lines[j], " \t>") != "" }
+	// A line of nothing but comment or blockquote markers is a blank line.
+	same := func(j int) bool { return kinds[j] == kinds[i] && !markerOnly.MatchString(lines[j]) }
 	from := i
 	for from > 0 && same(from-1) {
 		from--
@@ -1538,6 +1578,18 @@ func TestContractVersionContextStaysWithinOneKindOfLine(t *testing.T) {
 	if len(got) != 1 || got[0].Token != "8.8.8" || got[0].Line != 1 {
 		t.Errorf("want only the comment's own claim (8.8.8 on line 1), got %+v", got)
 	}
+	// Review 7: a bare comment marker is a blank line in that syntax.
+	for path, body := range map[string]string{
+		"transport.go":    "// Probed against 3.1.0\n//\n// The baseline is 8.8.8\n",
+		"scripts/x.sh":    "# Probed against 3.1.0\n#\n# The baseline is 8.8.8\n",
+		".github/ci.yml":  "# Probed against 3.1.0\n#\n# The baseline is 8.8.8\n",
+		"docs/example.md": "> Probed against 3.1.0\n> >\n> The baseline is 8.8.8\n",
+	} {
+		if got := scanContractVersionsIn(path, body, "7.7.7"); len(got) != 1 || got[0].Token != "8.8.8" {
+			t.Errorf("%s: a marker-only line must end the paragraph, got %+v", path, got)
+		}
+	}
+
 	sh := []string{"# a", "# b", "code", "# c"}
 	if prev, next := neighbours(lineKinds("x.sh", sh), sh, 2); prev != "" || next != "" {
 		t.Errorf("a code line between comments has no neighbours of its kind, got %q / %q", prev, next)
@@ -1564,6 +1616,10 @@ func TestContractVersionContextStaysWithinOneKindOfLine(t *testing.T) {
 		"> 1) Probed against 3.1.0\n> 2) The baseline is 8.8.8\n",
 		// And a quoted blank line ends a quoted paragraph.
 		"> Probed against 3.1.0\n>\n> The baseline is 8.8.8\n",
+		// Review 7: a heading does not run into the paragraph under it, and
+		// inside a fence a comment line and a command line are different kinds.
+		"## Probed against 3.1.0\nThe baseline is 8.8.8\n",
+		"```sh\n# Probed against 3.1.0\necho 8.8.8\n```\n",
 	} {
 		if got := scanContractVersionsIn("docs/development.md", list, "7.7.7"); len(got) != 1 || got[0].Token != "8.8.8" {
 			t.Errorf("the second item must not inherit the first's probe in %q, got %+v", list, got)
