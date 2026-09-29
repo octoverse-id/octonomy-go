@@ -70,9 +70,11 @@ import (
 //
 // Word-based categories are also scoped to the token's sentence, not merely to a
 // byte window, so "Probed against 3.1.0. Both specs: 3.1.0." does not lend the
-// first sentence's probe to the second. A sentence spans wrapped lines in both
-// directions -- the second review wrapped a claim word onto the next line -- but
-// never the boundary between a comment and the code beside it (neighbours).
+// first sentence's probe to the second. A sentence runs to its paragraph's edges
+// in both directions -- reviews wrapped a claim word onto the next line, then the
+// third -- but never across the boundary between a comment and the code beside
+// it, and a YAML block scalar's content is content even where a line of it
+// starts with '#' (lineKinds, neighbours).
 //
 // # How this copy differs from main's at 61fce9b, and why
 //
@@ -112,10 +114,11 @@ import (
 //     written in a word-based category's words AND none of the claim words is the
 //     residual gap. The regression cases below pin every construction found so
 //     far.
-//   - Sentences are found by punctuation and capitals, which is a heuristic. A
-//     sentence that starts in lower case after a full stop runs on into the one
-//     before it -- which widens the veto, the direction that fails closed, and
-//     widens the word window, which is bounded in bytes regardless.
+//   - Sentences are found by punctuation, blank lines, list items and table rows,
+//     less a short list of abbreviations. An abbreviation the list lacks ends a
+//     sentence early, narrowing both the veto and the words a category may read;
+//     the byte windows bound the second regardless, and a stop right before the
+//     token leaves nothing before it to exempt it with.
 //   - It sees only three dotted numbers. "`openapi.yaml` is the contract" names
 //     the contract with no version in it, and nothing here can see that; the
 //     contributor instructions say to read for it by hand.
