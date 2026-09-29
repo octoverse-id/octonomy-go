@@ -23,9 +23,9 @@ import (
 //   - every operation the contracts publish has a coverage row;
 //   - a row for an operation this tree does not implement carries a reason.
 //
-// On main, tools/contractdrift holds all three (checkRecordedVersion and the
-// coverage checks), in a nested go 1.24 module with a real YAML parser. This
-// branch has no tools/ -- porting that gate is #98 -- and a claim that nothing
+// On main at 61fce9b, tools/contractdrift held all three (checkRecordedVersion and
+// the coverage checks), in a nested go 1.24 module with a real YAML parser. This
+// branch has no contract gate -- porting one is #98 -- and a claim that nothing
 // checks is exactly the state #90 existed to end. So these tests hold them in the
 // meantime, in the root package, where `make test` and the go1.13 job both run
 // them.
@@ -45,13 +45,15 @@ import (
 //     the reader does not recognise is an operation it would otherwise miss.
 //   - From contract-coverage.yaml, a file this repository writes, it reads the
 //     `operations:` rows and refuses any key, value form or layout it was not
-//     written for -- the analogue of main's yaml.v3 KnownFields(true).
+//     written for -- the analogue of the strict decoding (yaml.v3's
+//     KnownFields) main's gate used at 61fce9b.
 //   - It finds zero operations in no case. An empty read of either file fails.
 //
 // # What it does NOT check
 //
 //   - The response fields, the composite bodies, and whether a method sends what
-//     the contract documents. Those are main's drivers, and they arrive with #98.
+//     the contract documents. Those take a gate that calls each method, and
+//     porting one is #98.
 //   - That an `sdk:` method implements the operation its row names. It checks the
 //     method is declared on that receiver; which route it requests is what the
 //     gate's recording stub proves, by calling it.
@@ -77,8 +79,14 @@ var httpMethods = map[string]bool{
 
 // pathItemFields are the OpenAPI path-item keys that are NOT operations. Named so
 // that anything else at that depth is refused rather than ignored.
+//
+// `$ref` is deliberately absent. A path item may be a reference to another one,
+// which publishes that item's operations under this path, and this reader does
+// not resolve references -- so accepting the key would read a path that publishes
+// operations as a path that publishes none. Refusing it is the fail-closed
+// answer; the generator does not emit one today.
 var pathItemFields = map[string]bool{
-	"summary": true, "description": true, "servers": true, "parameters": true, "$ref": true,
+	"summary": true, "description": true, "servers": true, "parameters": true,
 }
 
 // vendoredSpec is what this file reads out of one OpenAPI document.
@@ -227,8 +235,8 @@ type coverageRow struct {
 
 func (r coverageRow) key() string { return r.Method + " " + r.Path }
 
-// coverageRowKeys are the keys a row may carry -- main's CoverageOperation
-// fields, so the file stays loadable by the gate #98 ports. Anything else is a
+// coverageRowKeys are the keys a row may carry -- the fields of main's
+// CoverageOperation at 61fce9b, so the file stays loadable by the gate #98 ports. Anything else is a
 // typo, and a typo'd key is a row that silently does nothing.
 var coverageRowKeys = map[string]bool{
 	"path": true, "method": true, "sdk": true, "unimplemented": true,
@@ -344,13 +352,21 @@ func coverageValue(path string, lineNo int, raw string, rest []string, anchors m
 	consumed := 0
 	switch {
 	case raw == ">-":
+		// Every line of the block at ONE indentation, the first line's. YAML
+		// keeps a more-indented line verbatim rather than folding it, and a
+		// less-indented one ends the block -- neither of which this join
+		// reproduces, so both are refused rather than read differently.
 		var parts []string
+		blockIndent := -1
 		for _, next := range rest {
-			if strings.TrimSpace(next) == "" {
+			if strings.TrimSpace(next) == "" || indentOf(next) <= 4 {
 				break
 			}
-			if indentOf(next) <= 4 {
-				break
+			if blockIndent < 0 {
+				blockIndent = indentOf(next)
+			}
+			if indentOf(next) != blockIndent {
+				return "", 0, fmt.Errorf("%s:%d: a folded block whose lines are not at one indentation", path, lineNo+1+consumed)
 			}
 			parts = append(parts, strings.TrimSpace(next))
 			consumed++
@@ -377,7 +393,13 @@ func coverageValue(path string, lineNo int, raw string, rest []string, anchors m
 			return "", 0, fmt.Errorf("%s:%d: a single-quoted value that does not close on its line", path, lineNo)
 		}
 		value = strings.ReplaceAll(raw[1:len(raw)-1], "''", "'")
-	case raw == "" || strings.ContainsAny(raw[:1], `"|>&!%@{[`) || strings.Contains(raw, " #") || strings.Contains(raw, ": "):
+	case raw == "" || strings.ContainsAny(raw[:1], "#\"|>&!%@`{}[],?:-") ||
+		strings.Contains(raw, " #") || strings.Contains(raw, "\t#") || strings.Contains(raw, ": "):
+		// An empty value is null to YAML, and so is one that starts with '#':
+		// "unimplemented: # not ported yet" is a key followed by a COMMENT, and
+		// reading that comment as the reason would turn a silent row into a
+		// covered one. The other leading characters are YAML indicators whose
+		// meaning this reader does not implement.
 		return "", 0, fmt.Errorf("%s:%d: a value form this reader was not written for: %q", path, lineNo, raw)
 	default:
 		value = raw
@@ -626,6 +648,8 @@ func TestContractBaselineRefusesASpecLayoutItWasNotWrittenFor(t *testing.T) {
 		{"an odd depth under paths", "\n    post:\n", "\n   post:\n", "only 2 and 4 are keys"},
 		{"a stray sequence item", "\n      operationId: api_v1_tags_create\n",
 			"\n      operationId: api_v1_tags_create\n    - in: query\n", "belongs to no path-item field"},
+		{"a path item that is a reference", "\n  /health/live:\n    get:\n",
+			"\n  /health/live:\n    $ref: '#/paths/~1api~1v1~1tags'\n", "neither an HTTP method"},
 		{"no operations at all", "paths:\n", "paths: {}\nignored:\n", "no operations"},
 	}
 	for _, tc := range cases {
@@ -699,6 +723,11 @@ func TestContractBaselineRefusesACoverageLayoutItWasNotWrittenFor(t *testing.T) 
 		{"a flow mapping", "    sdk: TagService.List\n", "    sdk: {a: b}\n", "value form"},
 		{"a trailing comment", "    sdk: TagService.List\n", "    sdk: TagService.List # x\n", "value form"},
 		{"a plain value with a colon", "    sdk: TagService.List\n", "    sdk: TagService: List\n", "value form"},
+		{"a reason that is a comment", "    unimplemented: *reason\n",
+			"    unimplemented: # a comment YAML reads as null, long enough to pass as a reason\n", "value form"},
+		{"an empty value", "    sdk: TagService.List\n", "    sdk:\n", "value form"},
+		{"a folded block that changes indentation", "      folded across two lines.\n",
+			"        folded across two lines.\n", "not at one indentation"},
 		{"an empty folded block", "      A reason long enough to say something,\n      folded across two lines.\n", "", "no text under it"},
 		{"a mis-indented key", "    method: get\n    sdk:", "     method: get\n    sdk:", "was not written for"},
 		{"no operations section", "operations:\n", "operation:\n", "want exactly 1"},

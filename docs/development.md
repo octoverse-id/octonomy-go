@@ -234,7 +234,5 @@ coverage file to the specs; `contractversion_test.go` holds the prose to the mar
 version it cannot classify by file and line. What neither can see is a sentence naming the contract
 without a version number in it — "`openapi.yaml` is the contract" — so read for those by hand.
 
-That is less than `main` checks. Its contract gate, `tools/contractdrift`, also *calls* every method
-and compares what goes on the wire, and what comes back decoded, with the vendored schema. This branch
-has no `tools/` yet; porting the gate is
-[#98](https://github.com/octoverse-id/octonomy-go/issues/98).
+That is not a contract gate. Nothing on this branch calls a method and compares what it puts on the
+wire, or what it decodes, with the vendored schema; porting [`main`'s](https://github.com/octoverse-id/octonomy-go/tree/main/tools/contractdrift) to do that is [#98](https://github.com/octoverse-id/octonomy-go/issues/98).

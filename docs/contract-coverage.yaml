@@ -4,7 +4,7 @@
 # identical from the outside, and that is how this line came to sit on a server
 # 1.0.0 contract while the server shipped 3.1.0 with a second, primary API surface.
 # A row here turns "not implemented" into a decision with a reason attached. On this
-# line that matters more than on main, not less: this tree implements two of the
+# line that matters more, not less: this tree implements two of the
 # eight resource groups the contracts publish, so most of the rows below are gaps,
 # and each one says which issue closes it.
 #
@@ -20,14 +20,15 @@
 #   - an `sdk:` method is declared in this package on that receiver.
 #
 # It does NOT check the response fields, the composite bodies, or that a method
-# sends what the contract documents. On main that is `tools/contractdrift`, which
-# CALLS each method against a stub built from the vendored schema and reads the
-# request off the wire. This branch has no `tools/`; porting that gate, its
-# drivers, and the sections main's copy of this file carries beyond `operations`
-# (unsent and undocumented inputs, client headers, undocumented model fields, the
-# vendored error-code registry) is #98. Each of those sections is a statement about
-# what this client sends, decodes, or declares, and only the gate can prove one, so
-# they arrive with it rather than as prose nothing checks.
+# sends what the contract documents. That takes a contract gate: one that CALLS
+# each method against a stub built from the vendored schema and reads the request
+# off the wire. This branch has none. #98 ports main's
+# (https://github.com/octoverse-id/octonomy-go/tree/main/tools/contractdrift), and with it the sections main's copy of this file
+# carried beyond `operations` at 61fce9b -- unsent and undocumented inputs, client
+# headers, undocumented model fields, the vendored error-code registry. Each of
+# those is a statement about what this client sends, decodes, or declares, which
+# only a gate can prove, so they arrive with one rather than as prose nothing
+# checks.
 #
 # PATHS ARE VERSION-INDEPENDENT SUFFIXES — `/tags`, never `/api/v1/tags`. The
 # resource files build exactly that suffix and the transport prepends the prefix,
@@ -35,8 +36,8 @@
 # is the transport's business (octonomy.go, transport.go), not this file's.
 #
 # THE TWO RESPONSE FIELDS are the recorded divergence between the generated spec
-# and the running server, in main's vocabulary, so the gate #98 ports can read these
-# rows as they stand:
+# and the running server, in the vocabulary of main's copy of this file at
+# 61fce9b, so the gate #98 ports can read these rows as they stand:
 #
 #   documented_response   what the VENDORED spec says the success body is:
 #                         `array`, `ref:<Schema>`, `none`, or `other`.
@@ -50,14 +51,16 @@
 # generator cannot see it; a decoder written from the spec returns a zero-valued
 # struct or an empty page with a nil error (#32, the same family twice). The values
 # on every row were established against a booted server when main's inventory was
-# written, against the same two specs this branch vendors byte-for-byte; on an
-# `unimplemented:` row they are carried unchanged so the port that implements the
-# operation starts from the reviewed shape rather than re-deriving it. On this branch
-# nothing asserts them yet — that is #98.
+# written, and were copied from main's file at 61fce9b, whose specs are the two
+# vendored here byte for byte. On an `unimplemented:` row they are carried
+# unchanged so the port that implements the operation starts from the reviewed
+# shape rather than re-deriving it. On this branch nothing asserts them yet — that
+# is #98.
 #
 # `composite_body` is a WITNESS, not a transcript: the shape is what the server
 # returns, the numbers are chosen so a decoder crossing two of them changes both.
-# It is main's, unchanged, and nothing on this branch reads it until #98.
+# It is copied unchanged from main's file at 61fce9b, and nothing on this branch
+# reads it until #98.
 
 operations:
   # --- Tags (tags.go) ---------------------------------------------------------

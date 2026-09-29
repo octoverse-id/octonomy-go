@@ -12,18 +12,17 @@ import (
 
 // --- the guard over which server contract this repository claims to vendor ----
 //
-// Ported from main's contractversion_test.go (#86, landed in #106) by #90, which
-// is also the refresh that moved this line's contract from 1.0.0 to the release
-// the marker in docs/versioning.md names. The order was deliberate: the marker
-// first, then this guard, then the prose -- so that THIS is what reported the
-// refresh complete, rather than a reviewer.
+// Ported by #90 from main's contractversion_test.go as it stood at 61fce9b (#86,
+// PR #106). #90 is also the refresh that moved this line's contract from 1.0.0 to
+// the release the marker in docs/versioning.md names, and the order was
+// deliberate: the marker first, then this guard, then the prose -- so that THIS
+// is what reported the refresh complete, rather than a reviewer.
 //
-// That order is the lesson of #84. On main it refreshed the contract to 3.2.1
-// and its first pass moved eight of fourteen prose sites and missed six, with
-// every gate green; a reviewer and an independent outside pass each found the
-// same six. When #90 was scoped this branch had less protection than main had
-// then: fourteen prose mentions across seven files, no marker, and no contract
-// gate at all.
+// That order is the lesson of #84, which refreshed main's contract to 3.2.1: its
+// first pass moved eight of fourteen prose sites and missed six, with every gate
+// green, and a reviewer and an independent outside pass each found the same six.
+// When #90 was scoped this branch had less protection than main had then:
+// fourteen prose mentions across seven files, no marker, and no contract gate.
 //
 // # Why this is an INVERSE registry
 //
@@ -48,21 +47,51 @@ import (
 // refused: it catches drift in the sites someone remembered to register and is
 // silent on the one nobody did, which is the failure that actually happened.
 //
-// # How this copy differs from main's, and why
+// # A sentence that CLAIMS a contract is exempt only by role
 //
-//   - Categories are this tree's, not main's. A category that matches nothing
-//     here is a loosening with no site to justify it, so main's
-//     dated-decision-record has no counterpart: nothing on this branch needs it.
-//     A port that brings in prose needing one brings the category with it, the
-//     way AGENTS.md's "port a rule with the code it governs" asks.
+// Categories come in two kinds. A ByRole category identifies a token by what it
+// IS -- its place in an address, an image reference, a URL, or a guard's own
+// fixture file. The rest identify it by the WORDS around it: "probed", "shipped",
+// "Released entries". Words are the weak kind, because a sentence can carry both
+// the exempting word and a stale claim, and the first review of this port showed
+// three that did -- "vendored from server 3.1.0" read as a version range,
+// "the currently vendored server 3.1.0 contract, reflected in both specs" as
+// server history, "the contract vendored by this module is server 3.1.0" as an
+// SDK version.
+//
+// So before any word-based category is consulted, the token's own SENTENCE is
+// read for the words that state what is vendored (contractClaim). A token in
+// such a sentence can be exempted only by a ByRole category. The veto fails
+// closed: it makes some honest history sentences fail too -- "this line vendored
+// 1.0.0 until #90" -- and the fix for those is the wording the categories were
+// written for ("sat on", "moved from"), never a looser category.
+//
+// Word-based categories are also scoped to the token's sentence, not merely to a
+// byte window, so "Probed against 3.1.0. Both specs: 3.1.0." does not lend the
+// first sentence's probe to the second.
+//
+// # How this copy differs from main's at 61fce9b, and why
+//
+//   - The six categories #90's scoping named as porting unchanged are kept:
+//     ipv4-address, harness-image-pin, verification-note, version-range-caveat,
+//     go-toolchain-version and external-reference -- even where no site in this
+//     tree needs one yet. Each lost only phrases the first review showed were
+//     loose ("from server") or that matched by accident ("go " inside
+//     "version.go says 0.1.0").
+//   - The others keep only the phrases a site in this tree needs. A phrase with
+//     no site is a loosening nothing justifies, so server-history and sdk-version
+//     are pruned, and dated-decision-record is absent: nothing here needs it. A
+//     port that brings prose needing more brings the phrase with it, the way
+//     AGENTS.md's "port a rule with the code it governs" asks.
 //   - main's compat-line-contract category would INVERT here, into one exempting
-//     mentions of main's contract. It is absent for the same reason: this branch
-//     describes main with a link rather than a restatement (#69), so there is no
-//     mention of main's contract to exempt.
+//     mentions of main's contract. It is absent: this branch describes main with
+//     a link rather than a restatement (#69), so there is nothing to exempt.
 //   - release-line-guard is new. scripts/compat-guard.sh and its fixture suite
 //     exist only on this line, and every version in them is this module's own.
+//     It is scoped by path, so it is NOT ByRole: a claim sentence in either
+//     script is vetoed like one anywhere else.
 //   - sdk-version is sharper here than on main, because this line's own first
-//     release and the contract it vendored until #90 are the SAME number, 1.0.0.
+//     release and the contract it sat on until #90 are the SAME number, 1.0.0.
 //     A by-value rule is not merely wrong on this branch; it cannot be written.
 //
 // # What this guard CANNOT do
@@ -73,16 +102,18 @@ import (
 //   - It cannot classify a new mention on its own. A contributor writing a new
 //     sentence about an older server has to say which category it is. Making
 //     that a decision rather than an omission is the whole of what this buys.
-//   - Category patterns exempt by SHAPE, not per site. "probed against 3.1.0" is
-//     a verification note by construction, so a new one needs no ceremony; a new
-//     "both vendored at server 3.1.0" matches nothing and fails, which is the
-//     case that matters. The cost is that a category written too loosely would
-//     exempt a real defect, so each pattern is anchored to the words that make it
-//     the category it claims to be.
-//   - It says nothing about the two specs or the marker agreeing. On main
-//     tools/contractdrift's checkRecordedVersion owns those three. This branch
-//     has no tools/ -- porting the gate is #98 -- so the check lives in
-//     contractbaseline_test.go instead, and this guard only READS the marker.
+//   - Category patterns exempt by SHAPE, not per site, and the claim veto is a
+//     list of words. A stale claim written in none of those words -- and outside
+//     every word-based category -- still fails, since nothing exempts it; one
+//     written in a word-based category's words AND none of the claim words is the
+//     residual gap. The regression cases below pin every construction found so
+//     far.
+//   - It sees only three dotted numbers. "`openapi.yaml` is the contract" names
+//     the contract with no version in it, and nothing here can see that; the
+//     contributor instructions say to read for it by hand.
+//   - It says nothing about the two specs or the marker agreeing. This branch has
+//     no contract gate yet (porting one is #98), so that check is
+//     contractbaseline_test.go's, and this guard only READS the marker.
 //     Duplicating it here would give two tests one job and let each assume the
 //     other is doing it.
 
@@ -93,7 +124,7 @@ var contractVersionMarker = regexp.MustCompile(`<!--\s*contract-version:\s*([0-9
 
 // versionToken is three dotted numbers and NOTHING ELSE. Narrowing it to "3.x"
 // would encode the server's current major into the guard and stop working the
-// day the server ships 4.0.0 -- and this line vendored a 1.0.0 contract until
+// day the server ships 4.0.0 -- and this line sat on a 1.0.0 contract until
 // #90, so the major has never been a reliable discriminator.
 //
 // It deliberately does NOT match a SemVer prerelease suffix. "3.2.1-or-newer" is
@@ -104,12 +135,40 @@ var contractVersionMarker = regexp.MustCompile(`<!--\s*contract-version:\s*([0-9
 // Nor does it see a v-prefixed tag. \b needs a word/non-word transition and "v1"
 // has none, so v1.0.0 -- the spelling every mention of this module's releases
 // uses -- is not a token at all. An unprefixed SDK version (the CHANGELOG entry
-// named "1.0.0", version.go) is, and sdk-version classifies it by context.
+// named "1.0.0", version.go) is, and the sdk-version categories classify it.
 var versionToken = regexp.MustCompile(`\b[0-9]+\.[0-9]+\.[0-9]+\b`)
 
 // urlSpan matches a bare URL so a version can be tested for CONTAINMENT in it
 // rather than mere proximity to one.
 var urlSpan = regexp.MustCompile(`https?://[^\s)\]>"'` + "`" + `]+`)
+
+// contractClaim matches the words a sentence uses to say what is vendored. A
+// token whose sentence carries one is a claim, and only a ByRole category may
+// exempt it. Broad on purpose: "vendor" catches vendored, vendors and vendoring,
+// and a veto that is too broad fails a correct sentence -- visibly, with a line
+// number -- where one too narrow passes a stale claim in silence. "track" and
+// "target" are the exceptions, matched as whole verbs and never before a hyphen,
+// because "target-branch" is this repository's vocabulary for something that is
+// not a contract; "tracked" is left out for "tracked file".
+var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|at release|` +
+	`contract is|spec is|specs are|info\.version|` +
+	`\b(track|tracks|tracking|target|targets|targeted|targeting)\b([^-]|$)`)
+
+// sentenceBreak matches the end of a sentence or of a statement: a full stop,
+// question or exclamation mark followed by space or end of text, a blank line,
+// the start of a list item (after an optional comment marker), or the start of a
+// Markdown table row. Two things are deliberately NOT breaks. A semicolon: the
+// clause after it is often the claim, and a narrower sentence is a weaker veto.
+// And a table CELL: a row is one statement, and docs/release.md's placeholder
+// table names what a column holds in one cell and gives the version in the next.
+var sentenceBreak = regexp.MustCompile(`[.!?](\s|$)|\n\s*\n|\n\s*(//|#)?\s*[-*]\s|\n\s*\|`)
+
+// goWord matches "go " as a word, so "requires go >= 1.26.0" is a toolchain but
+// "version.go says 0.1.0" is not. main's copy at 61fce9b matched the bare
+// substring, and on this tree that classified the release-line guard's version
+// fixtures as Go toolchains -- right answer, wrong reason, and the wrong reason
+// would exempt "version.go says the contract is 3.1.0" too.
+var goWord = regexp.MustCompile(`(^|[^a-z0-9._/-])go `)
 
 // contractVersionExemption is one category of version mention that is NOT a
 // claim about the contract this SDK currently vendors.
@@ -120,6 +179,11 @@ var urlSpan = regexp.MustCompile(`https?://[^\s)\]>"'` + "`" + `]+`)
 type contractVersionExemption struct {
 	Name   string
 	Reason string
+	// ByRole is true when Match identifies the token by what it IS -- its place
+	// in an address, an image reference or a URL, or the guard fixture it sits
+	// in -- rather than by the words around it. Only a ByRole category can exempt
+	// a token whose sentence claims a contract.
+	ByRole bool
 	// Match reports whether this occurrence is covered.
 	Match func(site versionSite) bool
 }
@@ -147,6 +211,33 @@ func (s versionSite) before() string { return s.Prev + "\n" + s.Line[:s.Idx] }
 
 // after returns the text following the token on its own line.
 func (s versionSite) after() string { return s.Line[s.Idx+len(s.Token):] }
+
+// sentenceBefore returns the text preceding the token back to the start of its
+// sentence (or of the look-back, whichever is nearer).
+func (s versionSite) sentenceBefore() string {
+	b := s.before()
+	if locs := sentenceBreak.FindAllStringIndex(b, -1); len(locs) > 0 {
+		return b[locs[len(locs)-1][1]:]
+	}
+	return b
+}
+
+// sentenceAfter returns the text following the token up to the end of its
+// sentence on the token's own line.
+func (s versionSite) sentenceAfter() string {
+	a := s.after()
+	if loc := sentenceBreak.FindStringIndex(a); loc != nil {
+		return a[:loc[0]]
+	}
+	return a
+}
+
+// claimsContract reports whether the token's sentence, on either side of it,
+// carries a word that states what is vendored.
+func (s versionSite) claimsContract() bool {
+	return contractClaim.MatchString(strings.ToLower(s.sentenceBefore())) ||
+		contractClaim.MatchString(strings.ToLower(s.sentenceAfter()))
+}
 
 // maxInt and minInt stand in for the min and max builtins, which arrived in Go
 // 1.21. A modern toolchain compiles those builtins under `go 1.13` only because
@@ -177,24 +268,26 @@ func containsAny(line string, phrases ...string) bool {
 }
 
 // precededBy reports whether any phrase appears within window bytes before the
-// token, spanning into the previous lines. Anchoring on proximity rather than on
-// the whole file keeps one sentence from exempting an unrelated version further
-// down.
+// token AND within its sentence. The window keeps one long sentence from
+// exempting a version far along it; the sentence keeps a neighbouring one from
+// lending it a word.
 func (s versionSite) precededBy(window int, phrases ...string) bool {
-	b := s.before()
+	b := s.sentenceBefore()
 	return containsAny(b[maxInt(len(b)-window, 0):], phrases...)
 }
 
 // followedBy reports whether any phrase appears within window bytes after the
-// token. Version-range caveats qualify from either side -- "before 3.2.1" and
-// "3.2.1 and newer" are the same category read from opposite ends.
+// token, within its sentence. Version-range caveats qualify from either side --
+// "before 3.2.1" and "3.2.1 and newer" are the same category read from opposite
+// ends.
 func (s versionSite) followedBy(window int, phrases ...string) bool {
-	a := s.after()
+	a := s.sentenceAfter()
 	return containsAny(a[:minInt(window, len(a))], phrases...)
 }
 
-// contractVersionExemptions is the registry. Order does not matter; the first
-// match wins and its name is reported when a test asks why a token passed.
+// contractVersionExemptions is the registry. Order does not matter for the
+// verdict; the first match wins and its name is reported when a test asks why a
+// token passed.
 //
 // THE HARNESS PIN IS A CATEGORY OF ITS OWN, AND THAT IS LOAD-BEARING. The
 // container the smoke test runs against is pinned independently of the vendored
@@ -209,6 +302,7 @@ var contractVersionExemptions = []contractVersionExemption{
 	{
 		Name:   "ipv4-address",
 		Reason: "Not a version at all. 127.0.0.1 and 0.0.0.0 contain a three-dotted-number substring; an address is identified by a fourth octet on either side.",
+		ByRole: true,
 		Match: func(s versionSite) bool {
 			return strings.HasSuffix(s.before(), ".") ||
 				regexp.MustCompile(`^\.[0-9]`).MatchString(s.after())
@@ -216,10 +310,14 @@ var contractVersionExemptions = []contractVersionExemption{
 	},
 	{
 		Name:   "harness-image-pin",
-		Reason: "The container floor for the smoke test, deliberately independent of the vendored contract. Matched by the image reference it sits in, never by value: #90 moved this line's contract and not its pin.",
+		Reason: "The image the smoke-test harness boots, pinned independently of the vendored contract. Matched by the image reference it sits in, never by value: #90 moved this line's contract and not its pin.",
+		ByRole: true,
 		Match: func(s versionSite) bool {
+			// The image reference itself, or the variable that holds one. The
+			// words "harness image" are NOT here: they describe a pin rather than
+			// being one, and a ByRole category exempts claim sentences too.
 			return strings.Contains(s.Line, "octonomy:"+s.Token) ||
-				s.precededBy(60, "harness_image", "harness image", "ghcr.io/")
+				s.precededBy(60, "harness_image", "ghcr.io/")
 		},
 	},
 	{
@@ -241,8 +339,12 @@ var contractVersionExemptions = []contractVersionExemption{
 		Name:   "version-range-caveat",
 		Reason: "Names the servers on one side of a behaviour change. The boundary is a fact about those releases and does not move when the vendored contract does.",
 		Match: func(s versionSite) bool {
+			// main's copy at 61fce9b also accepted "from server", which the first
+			// review of this port showed exempting "The spec is vendored from
+			// server 3.1.0". The claim veto now catches that sentence regardless;
+			// the phrase is gone anyway, since nothing here needs it.
 			return s.precededBy(30,
-				"pre-", "before", "older than", "and older", "≤", "<=", "as of the", "from server",
+				"pre-", "before", "older than", "and older", "≤", "<=", "as of the",
 				"since", "pointed at", "post-", "on a server older than") ||
 				s.followedBy(26,
 					" and newer", " and older", " or newer", " or older", "-or-newer", "-or-older",
@@ -253,52 +355,53 @@ var contractVersionExemptions = []contractVersionExemption{
 		Name:   "server-history",
 		Reason: "Narrates what the server shipped when, or which contract this SDK sat on before a refresh. The reason a mechanism exists, not a claim about what is vendored now.",
 		Match: func(s versionSite) bool {
-			// " added" is anchored on what FOLLOWS the token: "Server 3.1.0 added
-			// 409 scope_immutable" is a release adding a behaviour. It does not
-			// reach "vendored at server 3.1.0", which is followed by nothing of
-			// the kind.
-			return s.precededBy(110,
-				"shipped", "the server was", "while the server", "added the", "fixed it", "fixed the",
-				"had no", "sat on", "sit on", "came to sit", "was written against", "moved",
-				"drifted", "pinned at server", "predates", "server changelog") ||
-				s.followedBy(60, " added ", " contract while", " contract,", " and had drifted", " refresh says", " refresh")
+			// Pruned to the phrases this tree uses. " moved" carries its leading
+			// space so that "removed" does not contain it, which once exempted a
+			// harness-pin sentence two lines below a list of mutations.
+			//
+			// " added " is anchored on what FOLLOWS the token: "Server 3.1.0 added
+			// 409 scope_immutable" is a release adding a behaviour.
+			return s.precededBy(110, "shipped", "sat on", "sit on", " moved") ||
+				s.followedBy(60, " added ", " refresh")
 		},
 	},
 	{
 		Name:   "go-toolchain-version",
 		Reason: "A Go toolchain or language version, not a server contract version.",
 		Match: func(s versionSite) bool {
-			return s.precededBy(40, "go ", "go1.", "golang", "go-version", "toolchain", "gotoolchain") ||
+			b := s.sentenceBefore()
+			return goWord.MatchString(strings.ToLower(b[maxInt(len(b)-40, 0):])) ||
+				s.precededBy(40, "go1.", "golang", "go-version", "toolchain", "gotoolchain") ||
 				strings.HasPrefix(s.Token, "1.13.") || strings.HasPrefix(s.Token, "1.24.") || strings.HasPrefix(s.Token, "1.25.")
+		},
+	},
+	{
+		Name:   "sdk-version-by-shape",
+		Reason: "A version of THIS module identified by where it is written: version.go, or a CHANGELOG release heading, which versions nothing but this module.",
+		ByRole: true,
+		Match: func(s versionSite) bool {
+			// "## [1.0.0]" is anchored on the bracket immediately before the
+			// token, so a heading nearby does not exempt a claim further along
+			// the line.
+			return s.Path == "version.go" || strings.HasSuffix(s.before(), "## [")
 		},
 	},
 	{
 		Name:   "sdk-version",
 		Reason: "A version of THIS module, not of the server contract. The SDK versions independently of the server (docs/versioning.md), so its numbers never track the marker.",
 		Match: func(s versionSite) bool {
-			if s.Path == "version.go" {
-				return true
-			}
-			// A CHANGELOG release heading -- "## [1.0.0]" -- names a release of
-			// this module by construction: the CHANGELOG versions nothing else. By
-			// SHAPE, anchored on the bracket immediately before the token, so a
-			// heading nearby does not exempt a claim further along the line.
-			if strings.HasSuffix(s.before(), "## [") {
-				return true
-			}
 			// BY CONTEXT, NEVER BY VALUE, and on this branch there is no other
 			// way to write it. The line's own first release is v1.0.0 and the
-			// contract it vendored until #90 was info.version 1.0.0: the same
-			// three numbers, meaning two unrelated things. A rule exempting
-			// "1.0.0" would have waved through every stale contract claim this
-			// guard was ported to catch. main's copy made the by-value mistake on
-			// 2.0.0 before an outside review found it; here it is unwriteable.
-			return s.precededBy(80,
-				"octonomy-go", "sdk version", "version =", "`version`", "user-agent", "useragent",
-				"semver", "changelog heading", "release/v", "tagged", "this module",
-				"version constant", "constant read", "released entr",
-				"prerelease", "bump", "alpha", "rc.") ||
-				s.followedBy(40, " minor", " major", " patch", " prerelease", "-alpha", "-rc", " tag", "` entry")
+			// contract it sat on until #90 was info.version 1.0.0: the same three
+			// numbers, meaning two unrelated things. A rule exempting "1.0.0"
+			// would have waved through every stale contract claim this guard was
+			// ported to catch. main's copy made the by-value mistake on 2.0.0
+			// before an outside review found it; here it is unwriteable.
+			//
+			// Pruned to this tree's phrases. The release-line guard's fixtures,
+			// which account for most SDK versions here, are release-line-guard's.
+			return s.precededBy(80, "changelog heading", "released entr") ||
+				s.followedBy(40, "` entry")
 		},
 	},
 	{
@@ -311,6 +414,7 @@ var contractVersionExemptions = []contractVersionExemption{
 	{
 		Name:   "external-reference",
 		Reason: "A version inside a third-party URL or spec identifier (Keep a Changelog, SemVer, the OpenAPI format version).",
+		ByRole: true,
 		Match: func(s versionSite) bool {
 			// The token must sit INSIDE the URL, not merely after one on the same
 			// line. A revision of main's copy searched the preceding 60 bytes for
@@ -322,12 +426,14 @@ var contractVersionExemptions = []contractVersionExemption{
 					return true
 				}
 			}
-			return s.precededBy(24, "openapi: ", "openapi version")
+			// The OpenAPI document's own format version, as the YAML key spells it.
+			return strings.HasSuffix(s.before(), "openapi: ")
 		},
 	},
 	{
 		Name:   "gate-test-fixture",
 		Reason: "A literal inside a guard's own fixtures, which must name versions the repository does not vendor in order to prove the guard can fail. Covers this file and contractbaseline_test.go: neither can both demonstrate a stale claim and forbid writing one.",
+		ByRole: true,
 		Match: func(s versionSite) bool {
 			return s.Path == "contractversion_test.go" || s.Path == "contractbaseline_test.go"
 		},
@@ -488,8 +594,15 @@ func scanContractVersionsIn(path, body, marker string) []contractVersionFinding 
 
 // classifyContractVersion returns the name of the first exemption covering this
 // occurrence, or "" when none does.
+//
+// A token whose sentence claims a contract is offered to the ByRole categories
+// only; see "A sentence that CLAIMS a contract is exempt only by role" above.
 func classifyContractVersion(site versionSite) string {
+	claim := site.claimsContract()
 	for _, ex := range contractVersionExemptions {
+		if claim && !ex.ByRole {
+			continue
+		}
 		if ex.Match(site) {
 			return ex.Name
 		}
@@ -727,6 +840,89 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 			exempt:   false,
 			whatItIs: "release-line-guard is scoped to the two compat-guard files by path, and to nothing beside them",
 		},
+		// The three below are the first review's constructions against this port:
+		// each named a stale vendored version and each was exempted by a word
+		// main's copy at 61fce9b accepted. They are why the claim veto exists.
+		{
+			name:     "review 1: vendored FROM server",
+			path:     "docs/api.md",
+			line:     "The spec is vendored from server 3.1.0.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "\"from server\" read it as a version range",
+		},
+		{
+			name:     "review 1: a claim followed by a comma",
+			path:     "docs/api.md",
+			line:     "The currently vendored server 3.1.0 contract, reflected in both specs, is the baseline.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "\" contract,\" read it as server history",
+		},
+		{
+			name:     "review 1: vendored by this module",
+			path:     "docs/api.md",
+			line:     "The contract vendored by this module is server 3.1.0.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "\"this module\" read it as an SDK version",
+		},
+		{
+			name:     "a claim whose claim word FOLLOWS the token",
+			path:     "docs/api.md",
+			line:     "Server 3.1.0 added nothing: it is what both specs track.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "the veto reads the whole sentence, not only what precedes the version",
+		},
+		{
+			name:     "a probe in one sentence does not lend itself to the next",
+			path:     "transport.go",
+			line:     "// Probed against 3.1.0. Both specs: 3.1.0.",
+			token:    "3.1.0",
+			exempt:   true,
+			whatItIs: "the FIRST token is a real note; the case below takes the second",
+		},
+		{
+			name:     "a history word next to a claim word is still a claim",
+			path:     "docs/development.md",
+			line:     "The refresh that shipped the specs left them vendored at 3.1.0.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "\"shipped\" would exempt it as server history; \"vendored\" vetoes every word-based category",
+		},
+		{
+			name:     "a claim in a release-line guard script",
+			path:     "scripts/compat-guard.sh",
+			line:     "# The contract this guard assumes is vendored at 3.1.0.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "release-line-guard is scoped by path, which is not a role, so the veto applies",
+		},
+		{
+			name:     "version.go mentioned before a claim is not a Go toolchain",
+			path:     "docs/development.md",
+			line:     "Unlike version.go the contract targets 3.1.0.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "main's bare \"go \" matched the end of version.go",
+		},
+		{
+			name:     "a harness image reference is exempt even in a claim sentence",
+			path:     "docs/development.md",
+			line:     "The vendored contract is newer than ghcr.io/octoverse-id/octonomy:3.1.0, which the harness boots.",
+			token:    "3.1.0",
+			exempt:   true,
+			whatItIs: "a ByRole category: the token IS the image tag, whatever the sentence says around it",
+		},
+		{
+			name:     "server history in this tree's own words",
+			path:     "docs/contract-coverage.yaml",
+			line:     "# how this line came to sit on a server 1.0.0 contract while the server shipped 3.1.0 with a second, primary API surface.",
+			token:    "1.0.0",
+			exempt:   true,
+			whatItIs: "\"sit on\" is the wording the veto asks history to use",
+		},
 		{
 			name:     "a version genuinely inside a URL",
 			path:     "CHANGELOG.md",
@@ -801,6 +997,90 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 					"thing this guard exists for.", tc.name, tc.whatItIs, got, tc.line)
 			}
 		})
+	}
+}
+
+// Each category is tight ON ITS OWN, not only behind the claim veto.
+//
+// The veto now stops every construction below, so the classifier test above
+// would stay green if a category were loosened again. That is defence in depth
+// becoming a blind spot: a stale claim phrased without a claim word reaches the
+// categories directly. So each known bypass is checked against the category it
+// once passed through, with the veto out of the way.
+func TestEachCategoryIsTightWithoutTheVeto(t *testing.T) {
+	cases := []struct {
+		category, prev, line, token, why string
+	}{
+		{"verification-note", "", "The SDK is written against server 3.1.0.", "3.1.0",
+			"a bare 'against' is not a probe"},
+		{"version-range-caveat", "", "The spec is vendored from server 3.1.0.", "3.1.0",
+			"\"from server\" is not a range"},
+		{"server-history", "", "The currently vendored server 3.1.0 contract, reflected in both specs, is the baseline.", "3.1.0",
+			"\" contract,\" is not history"},
+		{"server-history", "  - a row removed or duplicated, and a lookup that ignores the receiver",
+			"  while the pin stays at 3.1.0.", "3.1.0",
+			"\"removed\" must not contain the \" moved\" of history"},
+		{"sdk-version", "", "The contract vendored by this module is server 3.1.0.", "3.1.0",
+			"\"this module\" is not an SDK version"},
+		{"sdk-version", "", "The specs are vendored at server 1.0.0.", "1.0.0",
+			"never by value: 1.0.0 is this line's first release AND its old contract"},
+		{"go-toolchain-version", "", "Unlike version.go the contract targets 3.1.0.", "3.1.0",
+			"\"go \" inside version.go is not the Go toolchain"},
+		{"harness-image-pin", "", "The harness image is the same 3.1.0 the contract names.", "3.1.0",
+			"the words 'harness image' describe a pin; only the image reference is one"},
+		{"external-reference", "", "[Contract](https://example.com/spec) is vendored at server 3.1.0.", "3.1.0",
+			"the token must sit inside the URL"},
+	}
+	for _, tc := range cases {
+		var ex *contractVersionExemption
+		for i := range contractVersionExemptions {
+			if contractVersionExemptions[i].Name == tc.category {
+				ex = &contractVersionExemptions[i]
+			}
+		}
+		if ex == nil {
+			t.Fatalf("no category named %q", tc.category)
+		}
+		site := siteIn("docs/api.md", tc.line, tc.token)
+		site.Prev = tc.prev
+		if ex.Match(site) {
+			t.Errorf("%s exempts %q on its own: %s", tc.category, tc.line, tc.why)
+		}
+	}
+}
+
+// A word-based category is scoped to the token's sentence. The line below has a
+// real verification note followed by a stale claim with no claim word in it; a
+// byte window alone would lend the first sentence's "Probed" to the second.
+func TestContractVersionPhrasesDoNotCrossASentence(t *testing.T) {
+	line := "// Probed against 3.1.0. Both specs: 3.1.0."
+	second := versionSite{Path: "transport.go", Line: line, Token: "3.1.0", Idx: strings.LastIndex(line, "3.1.0")}
+	if got := classifyContractVersion(second); got != "" {
+		t.Errorf("the second 3.1.0 is in its own sentence and must not inherit the probe, got %q", got)
+	}
+}
+
+// The veto reads both sides of the token and stops at the sentence's edges.
+func TestClaimsContractReadsOneSentence(t *testing.T) {
+	cases := []struct {
+		line  string
+		token string
+		want  bool
+	}{
+		{"The spec is vendored at 3.1.0.", "3.1.0", true},
+		{"Server 3.1.0 is what both specs track.", "3.1.0", true},
+		{"Both specs track server 3.1.0.", "3.1.0", true},
+		{"The contract vendored earlier is gone. Server 3.1.0 added a 409.", "3.1.0", false},
+		{"Server 3.1.0 added a 409. The specs are vendored.", "3.1.0", false},
+		{"The target-branch check is skipped for 0.1.0.", "0.1.0", false},
+		{"The SDK targets 3.1.0.", "3.1.0", true},
+		{"| `BASE` | PR target |\n| `VERSION` | the CHANGELOG heading | `1.0.1` |", "1.0.1", false},
+	}
+	for _, tc := range cases {
+		site := versionSite{Path: "docs/api.md", Line: tc.line, Token: tc.token, Idx: strings.Index(tc.line, tc.token)}
+		if got := site.claimsContract(); got != tc.want {
+			t.Errorf("claimsContract(%q) = %v, want %v", tc.line, got, tc.want)
+		}
 	}
 }
 

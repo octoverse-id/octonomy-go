@@ -8,15 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **The vendored contract moves from server 1.0.0 to 3.2.1, and the claim is held by tests rather
-  than by prose** ([#90](https://github.com/octoverse-id/octonomy-go/issues/90), for
+- **The contract this line sat on moves from 1.0.0 to server 3.2.1, and the claim is held by tests
+  rather than by prose** ([#90](https://github.com/octoverse-id/octonomy-go/issues/90), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). This line had vendored a
   contract two server majors old, carried no `docs/openapi-v2.yaml`, no `docs/contract-coverage.yaml`
   and no contract-version marker, and fourteen prose sites across seven files stated which contract
   it vendored with nothing checking any of them. **No code changes**: no exported symbol, request or
   decode moves.
   - **`docs/openapi.yaml` is refreshed** and **`docs/openapi-v2.yaml` is vendored**, both
-    byte-identical to `main`'s copies of the server's 3.2.1 output. The v1 diff is 64 lines: `409
+    byte-identical to `main`'s copies of the server's 3.2.1 output at 61fce9b. The v1 diff is 64 lines: `409
     scope_immutable` on tag, vocabulary and alias `PATCH`; a `scope` query parameter on
     `/tag-resolution`; `default: true` on three `is_active` fields; and an `ErrorResponse` schema.
     None of it needed a type change on the two groups this tree implements — `default: true`
@@ -30,32 +30,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     implements them; nineteen carry a written `unimplemented:` reason naming the issue that closes
     the gap — [#94](https://github.com/octoverse-id/octonomy-go/issues/94) for the five resource
     groups, #91 for the health probes. It carries the `operations` section only: the rest of `main`'s
-    file states what the client sends and decodes, which only the contract gate can prove, and that
-    arrives with [#98](https://github.com/octoverse-id/octonomy-go/issues/98). The rows are `main`'s
-    schema, so that gate can read them as they stand: `main`'s own `LoadCoverage` accepts the
-    section, strict key checking included, and objects only to the absent error-code registry.
-  - **`contractbaseline_test.go`** (new; `main` has no counterpart, because its contract gate does
-    this job) holds #90's acceptance in `make test` and the `go1.13` job: both specs' `info.version`
-    equals the marker; the two publish the same operations; every published operation has exactly
-    one row and every row names a published operation; each row carries an `sdk:` method declared on
-    that receiver **or** a reason, never both and never neither. It reads YAML without a YAML
-    library, so it takes a narrow job and takes it fail-closed: from a spec, only `info.version` and
-    the keys at the two depths under `paths:`, refusing any line at those depths it cannot account
-    for; from the coverage file, only the forms that file uses, refusing a typo'd key the way
-    `main`'s strict decoder does. On the two real specs it extracts the same 29 operations yaml.v3
-    does. Its limits are written at the top of the file.
+    file at 61fce9b states what the client sends and decodes, which only a contract gate can prove,
+    and that arrives with [#98](https://github.com/octoverse-id/octonomy-go/issues/98). The rows use
+    that file's schema, so the gate #98 ports can read them as they stand: `LoadCoverage` from `main`
+    at 61fce9b accepted the section, strict key checking included, and objected only to the absent
+    error-code registry.
+  - **`contractbaseline_test.go`** (new; `main` at 61fce9b has no counterpart, because its contract
+    gate does this job) holds #90's acceptance in `make test` and the `go1.13` job: both specs'
+    `info.version` equals the marker; the two publish the same operations; every published operation
+    has exactly one row and every row names a published operation; each row carries an `sdk:` method
+    declared on that receiver **or** a reason, never both and never neither. It reads YAML without a
+    YAML library, so it takes a narrow job and takes it fail-closed. From a spec it reads only
+    `info.version` and the keys at the two depths under `paths:`, refusing any line at those depths
+    it cannot account for — a path-item `$ref` included, since it does not resolve references. From
+    the coverage file it reads only the forms that file uses, refusing a typo'd key, a value YAML
+    would read as null (`unimplemented: # …` is a comment, not a reason), and a folded block whose
+    lines change indentation. On the two real specs it extracts the same 29 operations yaml.v3 does.
+    Its limits are written at the top of the file.
   - **`contractversion_test.go`** ports `main`'s prose guard
-    ([#86](https://github.com/octoverse-id/octonomy-go/issues/86)) — every version token in a
-    tracked prose or source file must equal the marker or match a category carrying a written reason
-    — in the Go 1.13 dialect (`filepath.Walk` and `ioutil.ReadFile`, which predate `io/fs`; no
-    `min`/`max` builtins; `tc := tc` in the table loops). Its categories are this tree's rather than
-    `main`'s: `dated-decision-record` and `compat-line-contract` are dropped, since nothing here needs
-    them; `release-line-guard` is new, for `scripts/compat-guard.sh` and its fixture suite, whose every
-    version is this module's own; `sdk-version` gains the CHANGELOG-heading shape. `code-review/` is
-    out of scope, since AGENTS.md forbids committing anything in it. The trap `main` only warned about
-    is concrete here: this line's first release is `v1.0.0`, and until this change it sat on a
-    contract whose `info.version` was 1.0.0, so a rule exempting SDK versions by value could not have
-    been written.
+    ([#86](https://github.com/octoverse-id/octonomy-go/issues/86)) as it stood at 61fce9b — every
+    version token in a tracked prose or source file must equal the marker or match a category
+    carrying a written reason — in the Go 1.13 dialect (`filepath.Walk` and `ioutil.ReadFile`, which
+    predate `io/fs`; no `min`/`max` builtins; `tc := tc` in the table loops). Two changes go beyond
+    the port, both made after an outside review showed three stale claims passing through words the
+    categories accepted ("vendored *from server* X.Y.Z" read as a version range):
+    - **A sentence that claims a contract is exempt only by role.** Before any category that works
+      from the words around a token, the token's own sentence is read for the words that say what is
+      vendored — *vendor*, *tracks*, *targets*, *at server*, `info.version` and the like — and if one
+      is there, only a category that identifies the token by what it IS may exempt it: an address,
+      an image reference, a URL, a guard's own fixtures. The veto fails closed; an honest history
+      sentence it catches is rephrased ("sat on", "moved from"), never answered with a looser
+      category.
+    - **Word-based categories are scoped to the token's sentence**, not only to a byte window, so a
+      probe in one sentence does not lend itself to a claim in the next.
+
+    The categories are this tree's. The six #90's scoping named as porting unchanged are kept, less
+    `"from server"` and a bare `"go "` that matched inside `version.go`; `server-history` and
+    `sdk-version` keep only the phrases a site here needs (`" moved"` now carries its leading space,
+    since "removed" contained it); `dated-decision-record` and `compat-line-contract` are dropped,
+    since nothing here needs them; `release-line-guard` is new, for `scripts/compat-guard.sh` and its
+    fixture suite, and is subject to the veto like any path-scoped category. `code-review/` is out of
+    scope, since AGENTS.md forbids committing anything in it. The by-value trap `main`'s guard warned
+    about is concrete here: this line's first release is `v1.0.0`, and until this change it sat on
+    the 1.0.0 contract, so a rule exempting SDK versions by value could not have been written.
   - **The prose follows the marker.** The order the issue set — marker, guard, prose — let the guard
     report the refresh complete: its first run flagged `doc.go`, `docs/api.md` and
     `docs/development.md`. Sentences naming the contract with no version in them are invisible to it
@@ -72,7 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     guards' own code, a bare `against` accepted, SDK versions exempted by value, a harness pin
     matching everything, a scanner that reads no tokens, an unknown path-item key skipped, the
     missing-row check removed, and a method lookup that ignores the receiver.
-  - **The harness pin stays at `3.1.0`.** It is pinned independently of the contract, and moving it
+  - **The harness image stays `ghcr.io/octoverse-id/octonomy:3.1.0`.** It is pinned independently of the contract, and moving it
     is a change to what the smoke test proves, not to what the SDK is written against; `main` moved
     its own in a separate change. `docs/development.md` now says the two are different numbers and
     where each is written, instead of calling the harness newer than the contract.

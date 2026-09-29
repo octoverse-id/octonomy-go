@@ -164,9 +164,9 @@ stays a faithful, ergonomic client.
   not implemented — and every sentence naming the contract. `make test` fails until the specs, the
   marker and the rows agree (`contractbaseline_test.go`) and until every version token in the tree
   equals the marker or carries a registered reason (`contractversion_test.go`). A sentence naming the
-  contract *without* a version in it is invisible to both; read for those by hand. `main`'s gate also
-  calls every method against the vendored schema; this branch does not have it yet
-  ([#98](https://github.com/octoverse-id/octonomy-go/issues/98)).
+  contract *without* a version in it is invisible to both; read for those by hand. Nothing on this
+  branch calls a method and compares what it sends with the contract: porting
+  [`main`'s contract gate](https://github.com/octoverse-id/octonomy-go/tree/main/tools/contractdrift) to do that is [#98](https://github.com/octoverse-id/octonomy-go/issues/98).
 
 ## Development Pipeline
 
