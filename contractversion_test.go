@@ -193,8 +193,9 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 
 // sentenceBreak matches the end of a sentence or of a statement: a full stop,
 // question or exclamation mark followed by whitespace or the end of the text; a
-// blank line; the start of a list item, bulleted or numbered (after an optional
-// comment marker); or the start of a Markdown table row. sentenceBreaksIn then drops the full stops
+// blank line; the start of a list item -- any of CommonMark's three bullets,
+// "-", "*" and "+", or a number -- after an optional comment marker; or the start
+// of a Markdown table row. sentenceBreaksIn then drops the full stops
 // that end an abbreviation, which is what keeps "e.g. " from splitting a claim.
 //
 // Two things are deliberately NOT breaks. A semicolon: the clause after it is
@@ -207,7 +208,7 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 // nothing -- reverting it failed no test -- and it had a cost: a sentence that
 // starts with a version ("Probed against 3.2.1. 3.1.0 is the baseline") only
 // ended where it should by accident. It is gone.
-var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|\n\s*\n|\n\s*(//|#)?\s*([-*]|[0-9]+[.)])\s|\n\s*\|`)
+var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|\n\s*\n|\n\s*(//|#)?\s*([-*+]|[0-9]+[.)])\s|\n\s*\|`)
 
 // goWord matches "go " as a word, so "requires go >= 1.26.0" is a toolchain but
 // "version.go says 0.1.0" is not. main's copy at 61fce9b matched the bare
@@ -1547,9 +1548,16 @@ func TestContractVersionContextStaysWithinOneKindOfLine(t *testing.T) {
 	// unpunctuated probe item lent "Probed" to the numbered item after it. "2) "
 	// rather than "2. ", because the full stop in "2. " is already a break and
 	// would pass this whether or not numbered items are.
-	list := "1) Probed against 3.1.0\n2) The baseline is 8.8.8\n"
-	if got := scanContractVersionsIn("docs/development.md", list, "7.7.7"); len(got) != 1 || got[0].Token != "8.8.8" {
-		t.Errorf("the second item must not inherit the first's probe, got %+v", got)
+	for _, list := range []string{
+		"1) Probed against 3.1.0\n2) The baseline is 8.8.8\n",
+		// Review 5: "+" is a CommonMark bullet too.
+		"+ Probed against 3.1.0\n+ The baseline is 8.8.8\n",
+		"- Probed against 3.1.0\n- The baseline is 8.8.8\n",
+		"* Probed against 3.1.0\n* The baseline is 8.8.8\n",
+	} {
+		if got := scanContractVersionsIn("docs/development.md", list, "7.7.7"); len(got) != 1 || got[0].Token != "8.8.8" {
+			t.Errorf("the second item must not inherit the first's probe in %q, got %+v", list, got)
+		}
 	}
 
 	// A YAML block scalar's '#' line is content, not a comment.
