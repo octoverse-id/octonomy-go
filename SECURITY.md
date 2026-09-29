@@ -35,8 +35,10 @@ an advisory on this line as something to upgrade past, not something we can with
 
 ### Reporting against the compat line
 
-Report as below and say explicitly that you are on the `1.x` / Go 1.13 line. A fix lands on `main`
-first and is then ported here, so the two lines need separate verification.
+Report as below and say explicitly that you are on the `1.x` / Go 1.13 line. A fix that applies to
+both lines lands on `main` first and is then ported here, so the two lines need separate
+verification. A fix for something only this line has — a hazard specific to Go 1.13, or code that
+exists only here — lands here directly; there is nothing on `main` to change first.
 
 ## Reporting a vulnerability
 
