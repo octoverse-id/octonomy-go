@@ -28,8 +28,9 @@ option.
 > changing the field types on the three `*Update` structs
 > ([#64](https://github.com/octoverse-id/octonomy-go/issues/64)). Once `v2.0.0` ships, a break needs a
 > **major** and a new import path. Note that cutting a candidate is not the same as validating one, so
-> the suffix stays until it has been. The **compat** line is released separately: `v1.0.0`, tagged
-> 2026-08-26 on `support/go1.13`. There has never been a `v0.x` of either line. See
+> the suffix stays until it has been. The **compat** line is released separately, from
+> `support/go1.13`; its first release was `v1.0.0`, tagged 2026-08-26. There has never been a `v0.x`
+> of either line. See
 > [versioning.md](docs/versioning.md) for both lines and their support policies.
 
 > [!IMPORTANT]
@@ -53,30 +54,37 @@ go get github.com/octoverse-id/octonomy-go/v2
 Requires **Go 1.24 or newer** — that is the floor for *this* module, `.../octonomy-go/v2`. The
 repository publishes a second one with a different floor:
 
-> **On Go 1.13?** Use the frozen compatibility line. It lives at the **unsuffixed** module path,
-> targets Go 1.13, and never receives features:
+> **On Go 1.13?** Use the compatibility line. It lives at the **unsuffixed** module path and targets
+> Go 1.13:
 >
 > ```bash
-> go get github.com/octoverse-id/octonomy-go   # v1.x, Go 1.13, security fixes only
+> go get github.com/octoverse-id/octonomy-go   # v1.x, Go 1.13, never a major
 > ```
 >
 > **The unsuffixed path is what pins you to the line**, and it is the whole mechanism: it can only
-> ever resolve within `v1.x` — currently `v1.0.0`, the one version `proxy.golang.org` serves for it —
-> and Go cannot move you from it to `/v2`, because the two are different modules.
+> ever resolve within `v1.x` — the proxy query in
+> [versioning.md](docs/versioning.md#release-state) lists which versions exist — and Go cannot move
+> you from it to `/v2`, because the two are different modules.
 >
 > **Within the line, nothing is automatic.** That `go get` selects the highest `v1.x` *at the moment
-> you run it* and then records an exact `require ... v1.0.0` in your `go.mod`, so a later security
-> patch does not arrive on its own. Pull one deliberately:
+> you run it* and then records that exact version in your `go.mod`, so a later `v1.x` release does
+> not arrive on its own. Pull one deliberately:
 >
 > ```bash
 > go get github.com/octoverse-id/octonomy-go@latest   # highest v1.x; still cannot cross to /v2
 > ```
 >
-> Watch this repository's releases or [SECURITY.md](SECURITY.md), since a patch here is the only kind
-> of release this line will ever get.
+> Watch this repository's releases or [SECURITY.md](SECURITY.md), since a `v1.x` release is the only
+> way a fix or a newly ported capability reaches you.
 >
-> - **Scope:** Vocabularies and Tags, `/api/v1` only. No `/api/v2`, no namespaces, no webhooks, ever.
-> - **Support:** security fixes only — no features, no ordinary bug fixes.
+> - **Scope:** `v1.0.0` shipped Vocabularies and Tags on `/api/v1`. Since #89 the line takes ports of
+>   this one's capabilities — the other resource groups, `/api/v2` and the namespace axis — under
+>   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88); what its branch has is
+>   [its README](https://github.com/octoverse-id/octonomy-go/blob/support/go1.13/README.md#implemented-resources).
+> - **Never:** a webhook receiver (policy — move to `/v2` for one), or a breaking change. The
+>   unsuffixed path can never publish a major, so every `v1.x` keeps `v1.0.0` code compiling —
+>   unkeyed struct literals aside, which any Go minor that adds a field can break (see the MINOR rule
+>   in [versioning.md](docs/versioning.md)).
 > - **Sunset: 2027-08-31**, owned by the SDK maintainer, after which it receives nothing at all.
 >   Plan the toolchain upgrade against that date; it is the only real fix.
 > - **Go 1.13 itself is unpatched.** Its last release was `go1.13.15` (August 2020) and the Go team

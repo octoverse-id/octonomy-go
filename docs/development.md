@@ -10,7 +10,7 @@ make test
 ```
 
 Requires **Go 1.24+** — the floor for `main`, which is the module
-`github.com/octoverse-id/octonomy-go/v2`. The frozen compat line on `support/go1.13` is the module
+`github.com/octoverse-id/octonomy-go/v2`. The compat line on `support/go1.13` is the module
 `github.com/octoverse-id/octonomy-go` and targets **Go 1.13**: no generics, no `any`, no post-1.13
 standard library, and it must compile *and test* under a real `go1.13` toolchain. This page describes
 `main`; see [versioning.md](versioning.md) for the two-line policy and [release.md](release.md) for

@@ -5,9 +5,9 @@
 //
 // The legacy `// +build` line above is inert on this branch -- the modern line
 // is Go 1.24+ and `//go:build` alone would do -- and is kept anyway because it
-// costs nothing and this file is the obvious thing to copy when the frozen
-// support/go1.13 line grows a suite of its own, where a missing constraint means
-// the file compiles into an ordinary `go test` run.
+// costs nothing and this file is the obvious thing to copy when the
+// support/go1.13 line grows a suite of its own (#97), where a missing constraint
+// means the file compiles into an ordinary `go test` run.
 //
 // What lives here: loading the credentials scripts/octonomy-harness.sh exports,
 // building clients against them, and seeding one scope's worth of rows. The

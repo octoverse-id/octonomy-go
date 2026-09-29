@@ -90,6 +90,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   find the reversal rather than implement a policy no longer in force, and needs the carve-out with
   it. Everything else in it still holds: the two-module split, the `/v2` import path, and the
   2027-08-31 sunset are unchanged.
+- **This branch stops describing the compat line as frozen**
+  ([#89](https://github.com/octoverse-id/octonomy-go/issues/89)). The security-fixes-only policy
+  published with `v1.0.0` is withdrawn for [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88):
+  `support/go1.13` takes security fixes, bug fixes, and ports of what this line already has, through
+  the unchanged 2027-08-31 sunset. **No SDK change on this line**, and nothing here alters its own
+  policy; the compat branch's half — its `AGENTS.md`, which instructed agents to refuse the epic, and
+  its release guard, which would have failed `v1.1.0` — lands in a separate PR into that branch.
+  - **Two exclusions are now stated as policy.** No webhook receiver on the compat line, and **no
+    major there, ever**: its unsuffixed module path takes `v0`/`v1` versions only and `.../v2` is this
+    line's module. So every compat change has to keep `v1.0.0` callers compiling (unkeyed struct
+    literals aside, per the MINOR rule's existing caveat), which is why its
+    `*Update` structs keep pointer fields rather than taking `Optional[T]`, and why `/api/v2` reaches
+    it opt-in. `docs/versioning.md` records the no-major rule, which was previously implicit in the
+    guard's module-path check.
+  - **The bump rules admit `v1.x.0`.** `docs/versioning.md` said "the compat line takes no minors";
+    the parity work ships as one. The major-effort rule under *Relationship to the server's API
+    version* is rewritten to agree with the independence note beneath it — a server major forces an
+    SDK major only by breaking the SDK's own API or defaults — since as written it forbade the
+    compat line's opt-in `/api/v2` from shipping as a minor.
+  - **Claims that would have rotted when the compat line released again are gone.** `README.md` and
+    `SECURITY.md` stated that the proxy serves `v1.0.0` alone, and the *Release state* row named
+    `v1.0.0` as the compat line's stamped version; each now names `v1.0.0` as the first release and
+    defers to the proxy query for the rest. Descriptions of what the compat branch implements now
+    link to that branch instead of restating it.
+  - **The entry criterion was answered on 2026-09-29**, and the answers are recorded as Revision 6
+    of [`docs/designs/compat-line-api-v2-parity.md`](docs/designs/compat-line-api-v2-parity.md).
+    The consuming team needs all of `/api/v2`, namespaces included, and will validate before the
+    sunset. Answer 4 (no consumer besides a service still in development) settles F1: the compat
+    line's `codeFromStatus` is **removed on both surfaces** rather than kept on `/api/v1`, which
+    changes #91's scope. C1-A and the compat `APIV1` default are recorded as not revisited.
+  - Touched: `AGENTS.md`, `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, `doc.go`,
+    `docs/versioning.md`, `docs/release.md`, `docs/development.md`, the PR template, both issue
+    templates, and one comment in `integration_harness_test.go`. `docs/architecture.md` was checked
+    and left alone: its diagram describes only this line, and the generator whose output it was
+    flagged against was cut.
 
 ## [2.0.0-rc.1] - 2026-09-22
 

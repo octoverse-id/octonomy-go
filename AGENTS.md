@@ -310,12 +310,15 @@ third is a decision, not a convenience.
 
 - **Two lines, two Go floors — check which one you are on before you write anything.** This branch
   (`main`, module `github.com/octoverse-id/octonomy-go/v2`) targets Go **1.24+**: generics, `any`,
-  and the modern standard library are all in bounds. The frozen compat line (`support/go1.13`,
-  module `github.com/octoverse-id/octonomy-go`) targets Go **1.13** — no type parameters, no `any`
-  alias, no post-1.13 standard library — and takes **security fixes only**. A fix that must reach
-  both lands here first and is cherry-picked, where it has to compile and test under a real
-  `go1.13` toolchain. See [`docs/versioning.md`](docs/versioning.md) for the policy and the compat
-  line's sunset date, and [`docs/release.md`](docs/release.md) for the backport step.
+  and the modern standard library are all in bounds. The compat line (`support/go1.13`, module
+  `github.com/octoverse-id/octonomy-go`) targets Go **1.13** — no type parameters, no `any` alias,
+  no post-1.13 standard library — and takes ports of what this branch already has, toward
+  capability parity ([epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)); its freeze
+  was withdrawn in #89. It never takes a webhook receiver, and never a major, because its unsuffixed
+  module path cannot publish one. A change that must reach both lands here first and is ported,
+  where it has to compile and test under a real `go1.13` toolchain. The porting rules live in that
+  branch's `AGENTS.md`, not here. See [`docs/versioning.md`](docs/versioning.md) for the policy and
+  the compat line's sunset date, and [`docs/release.md`](docs/release.md) for the backport step.
 - **Standard library only** on both lines — no third-party runtime dependencies. Dev tools
   (`golangci-lint`, `govulncheck`) are not module dependencies.
 - Keep the tree `gofmt`-clean, `go vet`-clean, and `golangci-lint`-clean.
@@ -425,7 +428,7 @@ third is a decision, not a convenience.
 - Allowed branch types are `feature`, `feat`, `bugfix`, `fix`, `hotfix`, `release`, `support`,
   and `chore`.
 - `support/<description>` names a **long-lived** maintenance line that outlives any single issue
-  (for example `support/go1.13`, the frozen Go 1.13 client line). Because such a line closes no
+  (for example `support/go1.13`, the Go 1.13 client line). Because such a line closes no
   issue, it is **exempt from the issue-number requirement below**. Work targeting a support line
   still branches off it with a normal issue-numbered branch, and its version bumps and tags still
   happen in a dedicated `release/<version>` PR.

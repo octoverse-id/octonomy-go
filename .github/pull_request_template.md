@@ -8,11 +8,11 @@ Closes #
 - [ ] New feature (e.g. a new resource client or method)
 - [ ] Refactor / chore
 - [ ] Documentation
-- [ ] Breaking change (changes an exported API). Per `docs/versioning.md` this needs a **major** once a line has shipped a stable release. The modern line is on `v2.0.0-rc.N`, which means **no further break is intended**: one that proves necessary **supersedes the candidate** (`rc.2`) rather than riding a bump, as it could while the line was on `v2.0.0-alpha.N`. Never a minor — minors are additive only
+- [ ] Breaking change (changes an exported API). Per `docs/versioning.md` this needs a **major** once a line has shipped a stable release. The modern line is on `v2.0.0-rc.N`, which means **no further break is intended**: one that proves necessary **supersedes the candidate** (`rc.2`) rather than riding a bump, as it could while the line was on `v2.0.0-alpha.N`. Never a minor — minors are additive only. **Never on `support/go1.13`**, which can never publish a major
 
 ## Checklist
 - [ ] **Base branch is right for the line.** `main` = `.../octonomy-go/v2` (Go 1.24+, active);
-      `support/go1.13` = `.../octonomy-go` (Go 1.13, **security fixes only**). Getting this wrong on a
+      `support/go1.13` = `.../octonomy-go` (Go 1.13, ports from `main`, **never a major**). Getting this wrong on a
       release is unrecoverable — see `docs/release.md`
 - [ ] No version bump in this PR — **unless this *is* the `release/vX.Y.Z` PR**, which is the one place `version.go` and the CHANGELOG release heading move
 - [ ] `make fmt-check` and `go vet ./...` pass

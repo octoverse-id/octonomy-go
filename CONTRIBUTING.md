@@ -20,11 +20,11 @@ two branches, and they have different Go floors and different rules:
 | Branch | Module | Go | Takes |
 | ------ | ------ | -- | ----- |
 | `main` | `github.com/octoverse-id/octonomy-go/v2` | 1.24+ | Everything — features, fixes, security |
-| `support/go1.13` | `github.com/octoverse-id/octonomy-go` | 1.13 | **Security fixes only**, until its 2027-08-31 sunset |
+| `support/go1.13` | `github.com/octoverse-id/octonomy-go` | 1.13 | Ports of what `main` has — capability parity ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)) — plus security and bug fixes, until its 2027-08-31 sunset. **Never a major, never a webhook receiver** |
 
 The compat line has **no generics, no `any`, and no post-1.13 standard library**, and it must compile
-*and test* under a real `go1.13` toolchain. A fix that applies to both lands on `main` first and is
-cherry-picked — see [docs/release.md](docs/release.md) for the backport step and
+*and test* under a real `go1.13` toolchain. A change that applies to both lands on `main` first and
+is ported — see [docs/release.md](docs/release.md) for the backport step and
 [docs/versioning.md](docs/versioning.md) for the policy. Everything below describes `main`.
 
 The SDK has **no runtime dependencies** on either line — `go.mod` must stay free of a `require`
