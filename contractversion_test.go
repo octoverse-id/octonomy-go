@@ -1250,6 +1250,14 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 			whatItIs: "a sentence about the specs is a claim about them whatever its verb",
 		},
 		{
+			name:     "\"Server X added\" does not exempt a sentence about the specs",
+			path:     "docs/api.md",
+			line:     "Server 3.1.0 added what both specs describe.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "only the claim word \"specs\" stops this: server-history's one shape matches it",
+		},
+		{
 			name:     "probe: a full stop is not an octet",
 			path:     "docs/api.md",
 			line:     "The vendored contract.3.1.0 is here.",
