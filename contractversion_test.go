@@ -1206,6 +1206,30 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 			whatItIs: "the review read this as one sentence; the stop right before the token ends it (asserted, not argued)",
 		},
 		{
+			name:     "\"Server X added\" does not exempt a sentence about the contract",
+			path:     "docs/api.md",
+			line:     "Server 3.1.0 added the contract this SDK is on.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "only the claim word \"contract\" stops this: server-history's one shape matches it",
+		},
+		{
+			name:     "an SDK-version phrase needs the version in a code span",
+			path:     "CHANGELOG.md",
+			line:     "Released entries record 3.1.0 as the baseline.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "\"released entr\" alone once exempted any version after it",
+		},
+		{
+			name:     "a link's target is not a word the sentence says",
+			path:     "docs/versioning.md",
+			line:     "The freeze published with `v1.0.0` is reversed; see [the doc](https://example.com/compat-line-api-v2-parity.md).",
+			token:    "v1.0.0",
+			exempt:   true,
+			whatItIs: "\"api\" inside the URL made this read as a sentence about the server's API",
+		},
+		{
 			name:     "server history in exactly its one shape",
 			path:     "README.md",
 			line:     "- **No `CodeScopeImmutable` constant.** Server 3.1.0 added `409 scope_immutable` on tag, vocabulary,",
@@ -1477,8 +1501,10 @@ func TestContractVersionContextStaysWithinOneKindOfLine(t *testing.T) {
 	if prev, next := neighbours(lineKinds("x.sh", sh), sh, 2); prev != "" || next != "" {
 		t.Errorf("a code line between comments has no neighbours of its kind, got %q / %q", prev, next)
 	}
-	md := []string{"zero", "", "one", "two", "three", "four", "five", "", "six"}
-	if prev, next := neighbours(lineKinds("x.md", md), md, 4); prev != "one\ntwo" || next != "four\nfive" {
+	// Three lines each side of the token, so a two-line cap (this port's first
+	// version, and main's look-back) cannot pass it.
+	md := []string{"zero", "", "one", "two", "three", "four", "five", "six", "seven", "", "eight"}
+	if prev, next := neighbours(lineKinds("x.md", md), md, 5); prev != "one\ntwo\nthree" || next != "five\nsix\nseven" {
 		t.Errorf("Markdown prose runs to the paragraph's edges, got %q / %q", prev, next)
 	}
 
