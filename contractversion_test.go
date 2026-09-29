@@ -987,7 +987,7 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 		{
 			name:     "a probe in one sentence does not lend itself to the next",
 			path:     "transport.go",
-			line:     "// Probed against 3.1.0. Both specs: 3.1.0.",
+			line:     "// Probed against 3.1.0. The baseline is 3.1.0.",
 			token:    "3.1.0",
 			exempt:   true,
 			whatItIs: "the FIRST token is a real note; the case below takes the second",
@@ -1253,8 +1253,16 @@ func TestEachCategoryIsTightWithoutTheVeto(t *testing.T) {
 // A word-based category is scoped to the token's sentence. The line below has a
 // real verification note followed by a stale claim with no claim word in it; a
 // byte window alone would lend the first sentence's "Probed" to the second.
+//
+// "No claim word" is load-bearing. This case once read "Both specs: 3.1.0",
+// and when "specs" became a claim word the veto stopped the second token on its
+// own -- so reverting the sentence scoping passed the suite. The claim must be
+// one only the scoping can stop.
 func TestContractVersionPhrasesDoNotCrossASentence(t *testing.T) {
-	line := "// Probed against 3.1.0. Both specs: 3.1.0."
+	line := "// Probed against 3.1.0. The baseline is 3.1.0."
+	if w := (versionSite{Path: "transport.go", Line: line, Token: "3.1.0", Idx: strings.LastIndex(line, "3.1.0")}).claimWord(); w != "" {
+		t.Fatalf("the second sentence must carry no claim word, or this tests the veto instead: found %q", w)
+	}
 	second := versionSite{Path: "transport.go", Line: line, Token: "3.1.0", Idx: strings.LastIndex(line, "3.1.0")}
 	if got := classifyContractVersion(second); got != "" {
 		t.Errorf("the second 3.1.0 is in its own sentence and must not inherit the probe, got %q", got)
