@@ -186,22 +186,22 @@ var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|
 	`\b(track|tracks|tracking|target|targets|targeted|targeting)\b([^-]|$)`)
 
 // sentenceBreak matches the end of a sentence or of a statement: a full stop,
-// question or exclamation mark followed by whitespace and a sentence START -- a
-// capital letter or opening markup, after an optional comment marker -- or by
-// the end of the text; a blank line; the start of a list item; or the start of a
-// Markdown table row. Requiring the start is what keeps "e.g. " and "i.e. " from
-// ending a sentence: "The specs are vendored (e.g. as the server shipped them) at
-// 3.1.0" split there, and lent "shipped" to a claim. Two things are deliberately NOT breaks. A semicolon: the
-// clause after it is often the claim, and a narrower sentence is a weaker veto.
-// And a table CELL: a row is one statement, and docs/release.md's placeholder
-// table names what a column holds in one cell and gives the version in the next.
+// question or exclamation mark followed by whitespace or the end of the text; a
+// blank line; the start of a list item (after an optional comment marker); or
+// the start of a Markdown table row. sentenceBreaksIn then drops the full stops
+// that end an abbreviation, which is what keeps "e.g. " from splitting a claim.
 //
-// Group 1 is the next sentence's first character. RE2 has no lookahead, so the
-// match consumes it, and sentenceBefore starts the sentence AT it: slicing from
-// the end of the match turned "Probed" into "robed", and the verification note
-// with it into an unclassified token.
-var sentenceBreak = regexp.MustCompile("[.!?](?:\\s+(?:(?://|#)\\s*)?([A-Z`*_\\[(])|\\s*$)|" +
-	`\n\s*\n|\n\s*(?://|#)?\s*[-*]\s|\n\s*\|`)
+// Two things are deliberately NOT breaks. A semicolon: the clause after it is
+// often the claim, and a narrower sentence is a weaker veto. And a table CELL: a
+// row is one statement, and docs/release.md's placeholder table names what a
+// column holds in one cell and gives the version in the next.
+//
+// An earlier version also required a capital letter after the stop, to keep
+// "e.g. the" whole. Once abbreviations were handled by name that rule protected
+// nothing -- reverting it failed no test -- and it had a cost: a sentence that
+// starts with a version ("Probed against 3.2.1. 3.1.0 is the baseline") only
+// ended where it should by accident. It is gone.
+var sentenceBreak = regexp.MustCompile(`[.!?](\s+|$)|\n\s*\n|\n\s*(//|#)?\s*[-*]\s|\n\s*\|`)
 
 // goWord matches "go " as a word, so "requires go >= 1.26.0" is a toolchain but
 // "version.go says 0.1.0" is not. main's copy at 61fce9b matched the bare
@@ -261,11 +261,7 @@ func (s versionSite) sentenceBefore() string {
 	if len(locs) == 0 {
 		return b
 	}
-	last := locs[len(locs)-1]
-	if last[2] >= 0 { // the break ended on the next sentence's first character
-		return b[last[2]:]
-	}
-	return b[last[1]:]
+	return b[locs[len(locs)-1][1]:]
 }
 
 // sentenceAfter returns the text following the token up to the end of its
@@ -1125,7 +1121,7 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 		{
 			name:     "review 2: a claim word wrapped onto the next line",
 			path:     "docs/api.md",
-			line:     "Server 3.1.0 added the contract this SDK",
+			line:     "Server 3.1.0 added the default this SDK",
 			next:     "targets today.",
 			token:    "3.1.0",
 			exempt:   false,
@@ -1377,6 +1373,14 @@ func TestEachCategoryIsTightWithoutTheVeto(t *testing.T) {
 			"\"removed\" must not contain the \" moved\" of history"},
 		{"sdk-version", "", "The contract vendored by this module is server 3.1.0.", "3.1.0",
 			"\"this module\" is not an SDK version"},
+		{"sdk-version", "", "The contract vendored by this module is `3.1.0`.", "3.1.0",
+			"\"this module\" is not an SDK version even in a code span, which alone would not exempt it"},
+		{"server-history", "", "The bundled API release shipped as 3.1.0.", "3.1.0",
+			"\"shipped\" is not the one shape"},
+		{"server-history", "", "The SDK sat on 3.1.0 until the refresh.", "3.1.0",
+			"\"sat on\" is not the one shape"},
+		{"server-history", "", "The baseline 3.1.0 added to this tree is stale.", "3.1.0",
+			"\"added\" needs \"Server\" immediately before the version"},
 		{"sdk-version", "", "The specs are vendored at server 1.0.0.", "1.0.0",
 			"never by value: 1.0.0 is this line's first release AND its old contract"},
 		{"go-toolchain-version", "", "Unlike version.go the contract targets 3.1.0.", "3.1.0",
