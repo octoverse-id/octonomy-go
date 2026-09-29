@@ -1,21 +1,24 @@
 # Roadmap
 
-> **This line has no roadmap.** `support/go1.13` is the frozen Go 1.13 line: Vocabularies and Tags on
-> `/api/v1`, security fixes only, sunset 2027-08-31 (see [versioning.md](versioning.md)). Its surface
-> is settled, permanently; nothing that lives on the other line is coming here.
+> **This line's roadmap is [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)**:
+> capability parity with the `/v2` line, ported from `main`, through the 2027-08-31 sunset (see
+> [versioning.md](versioning.md)). The epic and its sub-issues carry the order and the state of that
+> work; this file does not restate either.
 
-What a reader on this line usually wants from a file with this name is what upgrading to the `/v2`
-module buys. That is the modern line's question to answer, and it is answered where it is maintained:
-[`main`'s API mapping](https://github.com/octoverse-id/octonomy-go/blob/main/docs/api.md#implemented) for what that line implements, and
+What the parity work ports is what the modern line implements, and that is answered where it is
+maintained: [`main`'s API mapping](https://github.com/octoverse-id/octonomy-go/blob/main/docs/api.md#implemented) for what that line implements, and
 [`main`'s roadmap](https://github.com/octoverse-id/octonomy-go/blob/main/docs/roadmap.md) for what is still open there.
 
 This file used to carry its own copy of that inventory, method names and routes included. It drifted —
-it went on describing a method signature `main` had already corrected, which a copy on a frozen branch
+it went on describing a method signature `main` had already corrected, which a copy on another branch
 has no way to find out — so it links to the owning branch instead.
 
-The groups this line does not have, and never will, are tag aliases, tag resolution, tag assignments
-(including the bulk pair), resource tags, audit logs, and the health probes. [`api.md`](api.md) says
-the same from the other side.
+The groups this tree does not have are tag aliases, tag resolution, tag assignments (including the
+bulk pair), resource tags, and audit logs, which
+[#94](https://github.com/octoverse-id/octonomy-go/issues/94) ports, and the health probes, which
+[#91](https://github.com/octoverse-id/octonomy-go/issues/91) ports with the transport they need.
+[`api.md`](api.md) says the same from the other side. The one group that is **never** coming is a
+webhook receiver: that is policy, and a consumer needing one moves to `/v2`.
 
 ## How to add a resource (the recipe)
 
@@ -33,6 +36,7 @@ Copy `tags.go` and `tags_test.go` as the template, then:
    values client-side; cover the error envelope).
 5. Add a `## [Unreleased]` CHANGELOG entry and update [`api.md`](api.md).
 
-The recipe is this line's, and it is here to explain the shape of the code you are reading. Adding a
-resource is work for `main` and never for this branch, so a new resource issue belongs there, against
-`main`'s copy of this file.
+The recipe is this line's, and it is here to explain the shape of the code you are reading. A resource
+new to *both* lines is work for `main` first, so a new resource issue belongs there, against `main`'s
+copy of this file; porting a resource `main` already has starts from `main`'s file rather than from
+`tags.go`, under the porting rules in [AGENTS.md](../AGENTS.md).

@@ -63,12 +63,14 @@ and the SDK follows the server (`octonomy/core/responses.py`, `octonomy/core/pag
 has a `Code*` constant; `IsNotFound`/`IsConflict`/`IsValidation`/`IsAuthError`/`IsForbidden` cover the
 common branches.
 
-Server 3.1.0 also returns `scope_immutable` (409) on tag, vocabulary, and alias `PATCH`. This line
-ships **no** constant or helper for it — a frozen-scope decision, not an oversight — but the code
-string survives decoding, so `apiErr.Code == "scope_immutable"` works today.
+Server 3.1.0 also returns `scope_immutable` (409) on tag, vocabulary, and alias `PATCH`. This tree
+ships **no** constant or helper for it — porting `main`'s error codes is
+[#91](https://github.com/octoverse-id/octonomy-go/issues/91) — but the code string survives decoding,
+so `apiErr.Code == "scope_immutable"` works today.
 
-## Never implemented on this line
+## Not implemented on this tree
 
-Tag aliases, tag resolution, tag assignments (incl. bulk), resource tags, audit logs, and health. They
-are the other side of the frozen scope rather than a backlog; [roadmap.md](roadmap.md) says what they
-are and where they do exist.
+Tag aliases, tag resolution, tag assignments (incl. bulk), resource tags, audit logs, and health.
+They are ported from `main` under [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88);
+[roadmap.md](roadmap.md) says which issue carries each and where they are implemented now. A webhook
+receiver is the one thing never implemented on this line, by policy.

@@ -1,17 +1,17 @@
 //go:build integration
 // +build integration
 
-// Minimal integration smoke test for the frozen Go 1.13 line.
+// Minimal integration smoke test for the Go 1.13 line.
 //
 // Both build-constraint forms are present on purpose: Go 1.17+ reads
 // //go:build, Go 1.13 reads only // +build, and gofmt keeps the two in sync.
 //
-// This is deliberately a smoke test, not a suite. The compat line is frozen, so
-// what needs proving on every change is narrow: that the client still speaks to
-// a real, current Octonomy server at all. Five assertions cover it -- the
-// {data, pagination} envelope (which the vendored spec does not describe, so
-// only a real server can confirm it), a list of each implemented resource, and
-// one real error envelope.
+// This is deliberately a smoke test, not a suite: what it proves on every change
+// is narrow -- that the client still speaks to a real, current Octonomy server at
+// all. Five assertions cover it -- the {data, pagination} envelope (which the
+// vendored spec does not describe, so only a real server can confirm it), a list
+// of each implemented resource, and one real error envelope. Assertions about
+// what the server DOES belong in a suite of their own; porting one is #97.
 //
 // Run it against the container harness:
 //
@@ -43,7 +43,7 @@ import (
 // OCTONOMY_SMOKE_REQUIRED=1 removes the skip entirely, and CI sets it. Skipping
 // is right on a laptop with no Docker; in the required CI job it is the worst
 // possible outcome, because a credential export that silently broke would leave
-// the frozen line's ONLY real-server check reporting green without running. The
+// this line's ONLY real-server check reporting green without running. The
 // release in #29 cannot be recalled, so "green" has to mean "ran".
 func newSmokeClient(t *testing.T) *octonomy.Client {
 	t.Helper()

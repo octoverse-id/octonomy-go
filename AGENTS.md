@@ -2,17 +2,38 @@
 
 `octonomy-go` is the official Go client SDK for [Octonomy](https://github.com/octoverse-id/octonomy),
 a multi-tenant, multi-application tag management / taxonomy service. The SDK is a hand-written,
-dependency-free client for the stable REST **v1** API (`/api/v1`).
+dependency-free client for the Octonomy REST API. This tree speaks `/api/v1` only — `apiPrefix` in
+`octonomy.go` is a constant — and porting `main`'s `/api/v2` surface is
+[#91](https://github.com/octoverse-id/octonomy-go/issues/91).
 
-## READ FIRST — this branch is the frozen Go 1.13 line
+## READ FIRST — this branch is the Go 1.13 line, and its freeze is reversed
 
 You are on `support/go1.13`: module `github.com/octoverse-id/octonomy-go`, versions `v1.x`, Go
-**1.13**. `main` is a different module (`/v2`, on a modern Go floor) and is where active development
-happens.
+**1.13**. `main` is a different module (`/v2`, on a modern Go floor) and is where capabilities
+originate.
 
-- **Security fixes only.** No features, no new resources, no `/api/v2`, no namespaces, no webhooks —
-  ever. If a task asks for any of those on this branch, stop and say it belongs on `main`.
-- **Sunset 2027-08-31.** See `SECURITY.md` and `docs/versioning.md`.
+- **This line takes capability parity with `main`**
+  ([epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Until #89 this file told
+  agents to refuse features, new resources, `/api/v2` and namespaces here and send them to `main`.
+  That policy is withdrawn. The line takes security fixes, bug fixes, and ports of what `main`
+  already has — its resource groups, `/api/v2` with the namespace axis, and its transport and decode
+  guards. Do not refuse that work, and do not route it to `main`: it is already there.
+- **Features originate on `main`; this line ports them.** A task asking for something `main` does
+  not have belongs on `main` first. What may originate here is a *fix* — a security fix, a bug fix,
+  or a guard against a hazard only Go 1.13 has.
+- **No webhook receiver, ever.** That is policy, not an observation about any server's default: a
+  consumer needing one moves to `/v2`. Do not port `webhook/`.
+- **No major, ever — so no breaking change, ever.** The module path is unsuffixed, Go accepts only
+  `v0`/`v1` versions on it, and the suffixed path a major would need is `main`'s module. Every
+  change here must therefore keep `v1.0.0` callers compiling — an *unkeyed* struct literal aside,
+  which any Go minor that adds a field can break (`docs/versioning.md`, the MINOR rule) — and must
+  not move behaviour they correctly rely on: a break has no version to ride. In practice — never
+  change an exported field's type or a method's signature, never remove or rename a symbol, and
+  never change a default (so `/api/v2` arrives opt-in: an existing caller's requests must not move
+  to another surface on an in-range upgrade). A bug fix still changes behaviour; that is what makes
+  it a fix, and it is admissible. `scripts/compat-guard.sh` refuses a `v2+` release PR into this
+  branch, and a `v2+` tag on a tree that carries this line's module path.
+- **Sunset 2027-08-31**, unchanged by the reversal. See `SECURITY.md` and `docs/versioning.md`.
 - **A published `v1.x` cannot be recalled.** `retract` shipped in Go 1.16, so a Go 1.13 consumer's
   toolchain ignores it, and `GOPROXY` caches tags forever. Verify before tagging, not after.
 - **`go.mod` must keep `go 1.13` and the unsuffixed module path.** `make compat-guard` blocks the
@@ -20,6 +41,43 @@ happens.
 - **A modern `go build`/`go vet`/`staticcheck` pass proves nothing here.** The language version is
   enforced from `go.mod`; the stdlib version is not. Run `make test-go113` (real toolchain) before
   claiming anything compiles on this line.
+
+## Porting from `main`
+
+Parity work is a **hand-port**. An AST generator was scoped for it and cut once the transform
+surface measured 7% of the code — do not build one; the reasoning is in
+[the epic's design doc](https://github.com/octoverse-id/octonomy-go/blob/main/docs/designs/compat-line-api-v2-parity.md)
+on `main`.
+
+- Branch off `support/go1.13` with an issue-numbered branch and PR back into it (see *Development
+  Pipeline*). Take the file from `main`, then rewrite it into this line's dialect.
+- The rewrite rules are the design doc's *Porting checklist* table, each marked **LOUD** (a miss
+  fails `go build` or `go vet` under a real go1.13.15, so `make test-go113` catches it) or **SILENT**
+  (a miss compiles clean and is wrong). [#103](https://github.com/octoverse-id/octonomy-go/issues/103)
+  tracks this branch's own copy of that table.
+- **The SILENT rules are the ones to hold in your head**, because each one compiles and vets clean on
+  go1.13.15 as well as on a modern toolchain:
+  - **A leftover `omitzero`.** Go 1.13's `encoding/json` does not know the option and ignores it, so
+    a ported `*string` tagged `,omitzero` emits `"field": null` on every PATCH that does not touch
+    it — a PATCH that clears columns the caller never named. Optional write fields are `omitempty`
+    here. [#96](https://github.com/octoverse-id/octonomy-go/issues/96) tracks a guard for it.
+  - **More than one `%w`.** Before Go 1.20, `fmt.Errorf` with two `%w` verbs returns an error with
+    no `Unwrap` at all, so `errors.Is` finds neither. `%w` plus `%v` keeps one and loses the other.
+    Where a sentinel and a cause must both survive, write a wrapper type whose `Unwrap()` returns the
+    cause and whose `Is()` matches the sentinel.
+  - **Doc comments.** Strip `Optional[T]`, `omitzero`, a Go 1.24 floor, and post-1.13 standard
+    library in examples (`slices.*`). Rewrite the **module** path `.../octonomy-go/v2` to the
+    unsuffixed one — but never strip `/api/v2`, which is a REST route and the capability being
+    ported.
+- **Port a rule with the code it governs.** Several rules in this file describe the tree as it is —
+  every request tenant-scoped, every method taking `...RequestOption` — and `main`'s `AGENTS.md`
+  records exceptions to them that arrive with the code: the health probes are unversioned,
+  unauthenticated and take no options, and have their own constructor and request path. When a
+  port brings in code `main` governs with such an exception, bring the exception into this file in
+  the same PR. Do not bend the ported code to fit a rule written before it existed.
+- **Do not port `main`'s `Optional[T]`.** The `*Update` structs keep their pointer fields, because
+  changing a published field's type breaks `v1.0.0` callers (the no-major rule above). A PATCH here
+  therefore cannot clear a nullable field; that is a deliberate carve-out, not a porting gap.
 
 ## Product Rules
 
@@ -56,7 +114,8 @@ stays a faithful, ergonomic client.
 - Non-2xx responses become `*APIError` carrying the `{error:{code,message,details,request_id}}`
   envelope. Add `Is<Code>` helpers for common error codes.
 - Server read-only fields are decode-only; write structs (`*Create`/`*Update`) use pointer fields
-  with `omitempty` so PATCH sends only what the caller set.
+  with `omitempty` so PATCH sends only what the caller set. They stay pointers when `main`'s
+  `*Update` structs are ported — see *Porting from `main`*.
 - No new exported surface without doc comments and tests.
 
 ## Go Conventions
@@ -107,7 +166,7 @@ stays a faithful, ergonomic client.
 - Allowed branch types are `feature`, `feat`, `bugfix`, `fix`, `hotfix`, `release`, `support`,
   and `chore`.
 - `support/<description>` names a **long-lived** maintenance line that outlives any single issue
-  (for example `support/go1.13`, the frozen Go 1.13 client line). Because such a line closes no
+  (for example `support/go1.13`, the Go 1.13 client line). Because such a line closes no
   issue, it is **exempt from the issue-number requirement below**. Work targeting a support line
   still branches off it with a normal issue-numbered branch, and its version bumps and tags still
   happen in a dedicated `release/<version>` PR.
@@ -124,8 +183,10 @@ stays a faithful, ergonomic client.
 - PR bodies for planned development must include `Closes #<issue-number>` and summarize how the
   implementation maps back to the approved plan.
 - Work targeting this line branches **off `support/go1.13`** and PRs back into it — never into `main`.
-  A fix that applies to both lines lands on `main` first and is cherry-picked here
-  (`docs/release.md`).
+  A change that applies to both lines lands on `main` first and is then ported here: a cherry-pick
+  where the hunk is dialect-neutral, a hand-port otherwise (`docs/release.md`).
+- **`Closes #N` does not fire here.** GitHub closes an issue only on a merge into the default branch,
+  so an issue a PR into this line resolves has to be closed by hand after the merge.
 - Releases follow Semantic Versioning: cut them with the runbook in `docs/release.md` and the policy
   in `docs/versioning.md`. The SDK version lives in `version.go` and is published as a git tag
   `vX.Y.Z`. Version bumps and tags happen only in a dedicated `release/<version>` PR, never in

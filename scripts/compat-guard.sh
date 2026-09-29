@@ -95,18 +95,33 @@ semver_major() {
 	printf '%s' "$1" | sed -n 's/^\([0-9]\{1,\}\)\..*/\1/p'
 }
 
-semver_minor() {
-	printf '%s' "$1" | sed -n 's/^[0-9]\{1,\}\.\([0-9]\{1,\}\)\..*/\1/p'
-}
-
-# A compat-line release must be v1.0.x. docs/versioning.md is explicit: PATCH is
-# `v1.0.x (compat)` and MINOR is "modern only; the compat line takes no minors".
-# A minor means an API addition, and this line is frozen -- so a published v1.1.0
-# would be a permanently policy-invalid release, which is exactly the class of
-# mistake this guard exists to stop. Changing that means changing the policy in
-# docs/versioning.md first, then this check.
-compat_minor_violation() {
-	[ "$(semver_major "$1")" = "1" ] && [ "$(semver_minor "$1")" != "0" ]
+# The compat line can never publish a major, and that is Go's rule rather than a
+# policy this repository could revise. The line's module path is unsuffixed; a
+# tree carrying a go.mod may tag only v0/v1 versions on an unsuffixed path; and
+# the suffixed path a major would need is a different module -- .../v2 is main's.
+# So every release cut here is v1.x, and a change that needs a major does not
+# belong on this line (docs/versioning.md, the MAJOR rule).
+#
+# This replaced compat_minor_violation, which refused every v1.x.0: the line was
+# frozen at v1.0.x until #89 reversed that (epic #88), and minors are now how the
+# parity work ships. The two call sites below moved with it.
+#
+# What it cannot see: a TAG push carries no base branch, so on a tag on_compat
+# rests on the module path alone. A tag pushed on a support/go1.13 commit whose
+# go.mod had already been suffixed to .../v2 is therefore not refused here --
+# the original guard did not refuse it either. Suffixing go.mod on this branch
+# warns on an ordinary PR (below) and is refused on a release PR by base branch,
+# so the gap is a tag pushed with no release PR at all, which the release
+# runbook already treats as detection rather than prevention.
+#
+# The major is compared as a string, not with -ge: is_semver has already run on
+# every value reaching here, so it is digits with no leading zero, and a numeric
+# test would overflow on a 20-digit major and report no violation at all.
+compat_major_violation() {
+	case "$(semver_major "$1")" in
+	0 | 1) return 1 ;;
+	*) return 0 ;;
+	esac
 }
 
 # --- Read the tree -------------------------------------------------------------
@@ -263,8 +278,8 @@ if [ "$is_release_pr" = "1" ]; then
 		# and accepts a `/v1` suffix that is not a legal Go module path at all --
 		# both publish something no consumer of this line can resolve, and both
 		# were passing with a warning.
-		if compat_minor_violation "$release_version"; then
-			fail "release PR for v$release_version: the compat line publishes v1.0.x only -- security fixes are patches, and a minor means an API addition to a frozen line (docs/versioning.md, the bump rules). If the policy has genuinely changed, change it there first."
+		if [ "$on_compat" = "1" ] && compat_major_violation "$release_version"; then
+			fail "release PR for v$release_version: the compat line can never publish a major. Its module path is unsuffixed, Go accepts only v0/v1 versions there, and the suffixed path a major needs is a different module -- .../v2 is main's (docs/versioning.md, the MAJOR rule). Do not fix this by suffixing go.mod: ship an addition as a v1.x minor, and take a change that needs a major to main."
 		fi
 		if [ "$rel_major" = "0" ]; then
 			fail "release PR for v$release_version: this repository publishes v1.x on \`$COMPAT_BRANCH\` and v2.x on \`$MODERN_BRANCH\` (docs/versioning.md). No line publishes v0, and a v0 tag would claim the unstable-API contract both lines have moved past."
@@ -327,8 +342,8 @@ if [ "$is_tag" = "1" ]; then
 			else
 				tag_major=$(semver_major "$tag_version")
 
-				if compat_minor_violation "$tag_version"; then
-					fail "tag $tag: the compat line publishes v1.0.x only, no minors (docs/versioning.md). Delete the ref before anything fetches it."
+				if [ "$on_compat" = "1" ] && compat_major_violation "$tag_version"; then
+					fail "tag $tag: the compat line can never publish a major -- an unsuffixed module path takes v0/v1 versions only, and .../v2 is main's module (docs/versioning.md). Delete the ref before anything fetches it."
 				fi
 				if [ "$tag_major" = "0" ]; then
 					fail "tag $tag publishes a v0 version, and no line here does: v1.x comes off \`$COMPAT_BRANCH\` and v2.x off \`$MODERN_BRANCH\` (docs/versioning.md). Delete the ref before anything fetches it."

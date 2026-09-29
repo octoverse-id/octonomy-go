@@ -8,21 +8,24 @@
 //
 // # Module path and release lines
 //
-// This is the frozen Go 1.13 compatibility line. Import it as:
+// This is the Go 1.13 compatibility line. Import it as:
 //
 //	import octonomy "github.com/octoverse-id/octonomy-go"
 //
 // This repository publishes two modules, and the /v2 path suffix is what makes
 // them distinct to the go command:
 //
-//   - github.com/octoverse-id/octonomy-go      v1.x, Go 1.13, frozen, /api/v1 only
-//   - github.com/octoverse-id/octonomy-go/v2   v2.x, a modern Go, active development
+//   - github.com/octoverse-id/octonomy-go      v1.x, Go 1.13, never a major
+//   - github.com/octoverse-id/octonomy-go/v2   v2.x, a modern Go, where features originate
 //
 // Because the paths differ, version selection cannot move a consumer between the
-// two lines. This line receives security fixes only, takes no features, and has a
-// published sunset date; see docs/versioning.md. If your toolchain is current, use
-// the /v2 path instead -- its README on main states the minimum it requires, which
-// is not a number this frozen line can keep true.
+// two lines. This line takes security fixes, bug fixes, and ports of what the
+// /v2 line already has, and has a published sunset date; see docs/versioning.md.
+// It never takes a breaking change -- in the sense docs/versioning.md defines,
+// which is Go's own -- because an unsuffixed module path cannot publish a major,
+// and it never ships a webhook receiver. If your toolchain is current, use the
+// /v2 path instead -- its README on main states the minimum it requires, which is
+// not a number this line can keep true.
 //
 // # Quickstart
 //
