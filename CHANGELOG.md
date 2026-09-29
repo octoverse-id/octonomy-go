@@ -68,12 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       "two server majors behind" — since that number is recorded where the refresh happened; the
       three sentences that carried one were reworded. The failure message says when the veto fired,
       and that the fix is a rewording, never a looser category or a ByRole one.
-    - **Word-based categories read the token's sentence**, not only a byte window — a list item,
-      bulleted or numbered and in or out of a blockquote, is a statement of its own — and a sentence runs to its paragraph's
-      edges in both directions — never across the boundary between a
-      comment and the code beside it, and with a YAML block scalar's `#91 …` line read as the
-      content it is. An abbreviation's full stop ("e.g.") does not end a sentence; a link's target
-      is not a word the sentence says.
+    - **Word-based categories read the token's sentence**, not only a byte window. A list item —
+      bulleted or numbered, in or out of a blockquote — is a statement of its own, and so is a
+      Markdown heading. A sentence runs to its paragraph's edges in both directions, and never past
+      a blank line or a bare `//`, `#` or `>` (a blank line in its own syntax), nor across the
+      boundary between a comment and the code beside it, in a source file or a fenced block; a YAML
+      block scalar's `#91 …` line is read as the content it is. An abbreviation's full stop ("e.g.")
+      does not end a sentence; a link's target is not a word the sentence says.
     - **A `v`-prefixed version is a token.** `main`'s copy never saw one, so "Both bundled specs
       target server vX.Y.Z" went unread — and the server's own tags are spelled `v3.2.1`. A word-based
       `v-tag` category classifies this module's tags, and is not offered a sentence about the server,
@@ -100,16 +101,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `docs/development.md`, `docs/release.md`, `docs/roadmap.md`, `docs/versioning.md`, the PR template,
     the feature-request template, and one `transport.go` comment. The contributor instructions now
     say what a refresh has to move, and which tests fail until it does.
-  - **Mutation-tested**, since on a correct tree both files pass whether or not they work. Each of 65
+  - **Mutation-tested**, since on a correct tree both files pass whether or not they work. Each of 68
     mutations failed the suite and was reverted: stale claims reintroduced in five files; either spec
     off the marker; the marker moved, removed or duplicated; surface parity broken; coverage rows
     deleted, misnamed, silent, doubled, typo'd, commented out or misquoted; and, in both guards'
     code, every layer above disabled or re-loosened one at a time. Several first PASSED, and each
     was a finding: a layer masked by another (the veto hiding a re-loosened category; "contract" as
     a claim word stopping a case written for "specs"; a wrapped claim whose first line already
-    carried a claim word), fixed by a case only that layer can stop — or, once, a layer no test
-    could miss because it protected nothing: the rule that a sentence must start with a capital,
-    made redundant by handling abbreviations by name, and removed.
+    carried a claim word), fixed by a case only that layer can stop — or, twice, a layer no test
+    could miss because another did its job: the rule that a sentence must start with a capital,
+    made redundant by handling abbreviations by name, and a blank-line break in the sentence regex
+    that duplicated the paragraph bound. Both were removed, so each job lives in one place.
   - **The harness image stays `ghcr.io/octoverse-id/octonomy:3.1.0`.** It is pinned independently of the contract, and moving it
     is a change to what the smoke test proves, not to what the SDK is written against; `main` moved
     its own in a separate change. `docs/development.md` now says the two are different numbers and
