@@ -201,9 +201,11 @@ branch is **this line's own copy**: it cannot pick up an edit made on the other 
 have already diverged. Read this one for what this line does, and do not assume a harness change
 made elsewhere reached it — porting one is the same hand-port as any other file.
 
-The harness boots server **3.1.0**, which is newer than the `1.0.0` contract this line was written
-against. That is deliberate: this line's first job is to keep working against the server people
-actually run.
+The harness pin and the vendored contract are two different numbers, and neither follows the other.
+The pin is a floor for the server the smoke test proves this client against; the contract is what the
+SDK is written against, recorded by the marker in [versioning.md](versioning.md). #90 refreshed the
+contract and left the pin alone, so read each from where it is written — the image reference in the
+script above for the one, the marker for the other — never one off the other.
 
 ### Troubleshooting
 
@@ -216,6 +218,23 @@ actually run.
 
 ## Keeping the contract current
 
-`docs/openapi.yaml` is vendored from the Octonomy server. When targeting a new server contract,
-refresh it (regenerate on the server with `make openapi`, copy the file here), reconcile any type
-changes, and note the server version in [versioning.md](versioning.md).
+`docs/openapi.yaml` (`/api/v1`) and `docs/openapi-v2.yaml` (`/api/v2`) are vendored from the Octonomy
+server, both at release **3.2.1**. When targeting a new server contract, refresh **both** (the server
+generates one per `--api-version` with `make openapi`; copy the files here), reconcile any type
+changes, and update:
+
+- the `<!-- contract-version: X.Y.Z -->` marker in [versioning.md](versioning.md), plus the prose
+  around it;
+- [`docs/contract-coverage.yaml`](contract-coverage.yaml) — a row per operation, each either naming
+  the Go method that implements it or carrying a written reason it is not implemented;
+- every other sentence that names the vendored contract.
+
+`make test` fails until those agree. `contractbaseline_test.go` holds the specs to the marker and the
+coverage file to the specs; `contractversion_test.go` holds the prose to the marker, and reports each
+version it cannot classify by file and line. What neither can see is a sentence naming the contract
+without a version number in it — "`openapi.yaml` is the contract" — so read for those by hand.
+
+That is less than `main` checks. Its contract gate, `tools/contractdrift`, also *calls* every method
+and compares what goes on the wire, and what comes back decoded, with the vendored schema. This branch
+has no `tools/` yet; porting the gate is
+[#98](https://github.com/octoverse-id/octonomy-go/issues/98).

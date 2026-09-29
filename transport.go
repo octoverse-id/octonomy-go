@@ -104,7 +104,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 // The server wraps every payload under "data": lists as
 // {"data": [...], "pagination": {...}} and single resources as {"data": {...}}
 // (octonomy/core/responses.py data_response, present since the server's first
-// release). The vendored docs/openapi.yaml documents neither wrapper, so this is
+// release). Neither vendored spec documents either wrapper, so this is
 // the same spec-vs-server divergence as the list envelope, and the same rule
 // applies -- follow the server.
 //

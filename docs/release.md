@@ -119,6 +119,9 @@ statements. Do that only for a deliberate breaking release — see [versioning.m
 
 ## Server contract changes
 
-If a release targets a new Octonomy server contract, refresh the vendored `docs/openapi.yaml`,
-reconcile types, and update the "targeted server contract" note in [versioning.md](versioning.md) in
-the same release PR.
+If a release targets a new Octonomy server contract, refresh both vendored specs —
+`docs/openapi.yaml` (`/api/v1`) and `docs/openapi-v2.yaml` (`/api/v2`) — reconcile types, and update
+the `<!-- contract-version: -->` marker, the "targeted server contract" note around it in
+[versioning.md](versioning.md), and `docs/contract-coverage.yaml`, in the same PR.
+[development.md](development.md#keeping-the-contract-current) has the checklist and the tests that
+fail until it is done.

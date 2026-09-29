@@ -24,7 +24,11 @@ webhook receiver: that is policy, and a consumer needing one moves to `/v2`.
 
 Copy `tags.go` and `tags_test.go` as the template, then:
 
-1. Read the matching schema(s) in [`openapi.yaml`](openapi.yaml).
+1. Read the matching schema(s) in [`openapi.yaml`](openapi.yaml), the `/api/v1` contract this tree's
+   requests reach. Both vendored specs are at server 3.2.1; [`openapi-v2.yaml`](openapi-v2.yaml) is
+   the one carrying the namespace fields, so a port adding those reads it instead. The operation
+   already has a row in [`contract-coverage.yaml`](contract-coverage.yaml): replace its
+   `unimplemented:` reason with `sdk: <Service>.<Method>`.
 2. Create `<resource>.go` with: the model struct, `*Create`/`*Update` write structs (pointer +
    `omitempty`), `*ListParams` with a `query()` method, and a `*Service` whose methods take
    `context.Context` first and `...RequestOption` last and delegate to the transport helper matching

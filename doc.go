@@ -2,9 +2,10 @@
 // taxonomy service (https://github.com/octoverse-id/octonomy).
 //
 // Octonomy is a multi-tenant, multi-application REST service for vocabularies,
-// tags, aliases, and tag assignments. This SDK targets the stable v1 API
-// (server release 1.0.0) served under /api/v1. The bundled docs/openapi.yaml is
-// the contract this client is written against.
+// tags, aliases, and tag assignments. This SDK speaks the /api/v1 surface of
+// server release 3.2.1. The bundled docs/openapi.yaml is the contract this
+// client is written against; docs/openapi-v2.yaml, the same release's /api/v2
+// surface, is vendored alongside it for the port that adds /api/v2 opt-in.
 //
 // # Module path and release lines
 //

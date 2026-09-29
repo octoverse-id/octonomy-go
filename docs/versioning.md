@@ -19,7 +19,17 @@ source of truth for how a change maps to a version bump.
 | ------- | ----- | ------- |
 | **Module path** | `module` line in `go.mod` | Which release line you are on. The `/v2` suffix is what makes the two lines *different modules* to Go. |
 | **SDK version** | `Version` in `version.go` + git tag `vX.Y.Z` | Canonical SemVer for the SDK and CHANGELOG. Go modules resolve versions from git tags. |
-| **Targeted server contract** | this document + the vendored `docs/openapi.yaml` | Which Octonomy REST contract the SDK is written against (currently **v1**, server `1.0.0`). |
+| **Targeted server contract** | this document + the vendored `docs/openapi.yaml` / `docs/openapi-v2.yaml` + [`docs/contract-coverage.yaml`](contract-coverage.yaml) | Which Octonomy REST contract the SDK is written against. **Both specs track server `3.2.1`**. This tree's methods reach `/api/v1` only — `apiPrefix` in `octonomy.go` is a constant — so `openapi.yaml` is the surface they are held to; `openapi-v2.yaml` is vendored for the port that adds `/api/v2` opt-in ([#91](https://github.com/octoverse-id/octonomy-go/issues/91)). |
+
+<!-- contract-version: 3.2.1 -->
+
+> The marker above is the one mechanized statement of the targeted contract. `contractbaseline_test.go`
+> asserts it against `info.version` in both vendored specs and holds `docs/contract-coverage.yaml` to
+> a row for every operation they publish; `contractversion_test.go` measures every other version this
+> repository writes down against it, and each must equal it or carry a registered reason. Both run in
+> `make test` and in the `go1.13` job. Update the marker in the same commit that refreshes the specs.
+> On `main` the spec half of that check belongs to its contract gate, `tools/contractdrift`, which
+> this branch does not have yet ([#98](https://github.com/octoverse-id/octonomy-go/issues/98)).
 
 The SDK versions **independently** of the Octonomy server. A new SDK release does not require a new
 server release, and vice versa. `make version-check` asserts `version.go` matches the latest

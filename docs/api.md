@@ -1,7 +1,16 @@
 # API mapping
 
-How SDK methods map to Octonomy REST **v1** endpoints. The authoritative contract is the vendored
-[`openapi.yaml`](openapi.yaml); this page is the client-side view.
+How SDK methods map to Octonomy REST **v1** endpoints; this page is the client-side view. The
+authoritative contracts are vendored from the server:
+
+- [`openapi.yaml`](openapi.yaml) — `/api/v1`, server **3.2.1**. The only surface this tree's methods
+  reach: `apiPrefix` in `octonomy.go` is a constant.
+- [`openapi-v2.yaml`](openapi-v2.yaml) — `/api/v2`, server **3.2.1**. Vendored for the port that adds
+  `/api/v2` opt-in ([#91](https://github.com/octoverse-id/octonomy-go/issues/91)); nothing on this tree
+  sends a request to it.
+
+[`contract-coverage.yaml`](contract-coverage.yaml) lists every operation the two publish, each naming
+the method below that implements it or the reason there is none yet.
 
 ## Base URL and headers
 
@@ -45,9 +54,9 @@ paging.
 
 ## Responses
 
-Every Octonomy payload arrives under a `data` key. The vendored `openapi.yaml` documents neither
-wrapper — it shows bare objects and bare arrays — so both are deliberate spec-vs-server divergences,
-and the SDK follows the server (`octonomy/core/responses.py`, `octonomy/core/pagination.py` upstream).
+Every Octonomy payload arrives under a `data` key. Neither vendored spec documents either wrapper —
+both show bare objects and bare arrays — so both are deliberate spec-vs-server divergences, and the
+SDK follows the server (`octonomy/core/responses.py`, `octonomy/core/pagination.py` upstream).
 
 - **Single resource:** `{ "data": { ... } }` → unwrapped by `Client.doData` into e.g. `*Tag`. A 2xx
   body with no `data` key is an error, not an empty struct.
@@ -63,8 +72,9 @@ and the SDK follows the server (`octonomy/core/responses.py`, `octonomy/core/pag
 has a `Code*` constant; `IsNotFound`/`IsConflict`/`IsValidation`/`IsAuthError`/`IsForbidden` cover the
 common branches.
 
-Server 3.1.0 also returns `scope_immutable` (409) on tag, vocabulary, and alias `PATCH`. This tree
-ships **no** constant or helper for it — porting `main`'s error codes is
+The vendored contracts also document `scope_immutable` (409) on tag, vocabulary, and alias `PATCH`,
+for a request that tries to move a row's `application_id` or namespace. This tree ships **no**
+constant or helper for it — porting `main`'s error codes is
 [#91](https://github.com/octoverse-id/octonomy-go/issues/91) — but the code string survives decoding,
 so `apiErr.Code == "scope_immutable"` works today.
 
