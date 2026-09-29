@@ -97,10 +97,13 @@ type vendoredSpec struct {
 }
 
 var (
+	// Every key pattern requires YAML's own separator after the colon -- a space
+	// or the end of the line. "get:x" is a plain scalar to YAML, not a key, and a
+	// reader that took it for one would publish an operation yaml.v3 never sees.
 	specPathKey   = regexp.MustCompile(`^  (/[^\s:'"]*):$`)
-	specFieldKey  = regexp.MustCompile(`^    ([A-Za-z$][A-Za-z0-9_$-]*):`)
-	specInfoVer   = regexp.MustCompile(`^  version:\s*['"]?([^'"\s]+)['"]?\s*$`)
-	specTopKey    = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_-]*):`)
+	specFieldKey  = regexp.MustCompile(`^    ([A-Za-z$][A-Za-z0-9_$-]*):(\s|$)`)
+	specInfoVer   = regexp.MustCompile(`^  version:\s+['"]?([^'"\s]+)['"]?\s*$`)
+	specTopKey    = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_-]*):(\s|$)`)
 	surfacePrefix = regexp.MustCompile(`^/api/([^/]+)(/.*)$`)
 )
 
@@ -245,8 +248,10 @@ var coverageRowKeys = map[string]bool{
 }
 
 var (
-	coverageItemStart = regexp.MustCompile(`^  - ([a-z_]+):(.*)$`)
-	coverageItemKey   = regexp.MustCompile(`^    ([a-z_]+):(.*)$`)
+	// ":" then whitespace or the end, as YAML requires: "unimplemented:This is
+	// absent" is one plain scalar to yaml.v3, not a key with a reason.
+	coverageItemStart = regexp.MustCompile(`^  - ([a-z_]+):(\s.*)?$`)
+	coverageItemKey   = regexp.MustCompile(`^    ([a-z_]+):(\s.*)?$`)
 	coverageAnchor    = regexp.MustCompile(`^&([A-Za-z0-9_-]+)(?:\s+(.*))?$`)
 	coverageAlias     = regexp.MustCompile(`^\*([A-Za-z0-9_-]+)$`)
 )
@@ -401,7 +406,14 @@ func coverageValue(path string, lineNo int, raw string, rest []string, anchors m
 		if len(raw) < 2 || !strings.HasSuffix(raw, "'") {
 			return "", 0, fmt.Errorf("%s:%d: a single-quoted value that does not close on its line", path, lineNo)
 		}
-		value = strings.ReplaceAll(raw[1:len(raw)-1], "''", "'")
+		inner := raw[1 : len(raw)-1]
+		// Inside single quotes a quote is written twice. One left over after
+		// removing the pairs ends the scalar early -- "'This doesn't exist'" is
+		// an error to yaml.v3 -- so it is an error here too.
+		if strings.Contains(strings.ReplaceAll(inner, "''", ""), "'") {
+			return "", 0, fmt.Errorf("%s:%d: a single-quoted value with an undoubled quote inside it", path, lineNo)
+		}
+		value = strings.ReplaceAll(inner, "''", "'")
 	case raw == "" || strings.ContainsAny(raw[:1], "#\"|>&!%@`{}[],?:-") ||
 		strings.Contains(raw, " #") || strings.Contains(raw, "\t#") || strings.Contains(raw, ": "):
 		// An empty value is null to YAML, and so is one that starts with '#':
@@ -655,6 +667,8 @@ func TestContractBaselineRefusesASpecLayoutItWasNotWrittenFor(t *testing.T) {
 		{"no info.version", "\n  version: 9.9.9\n", "\n", "want exactly 1"},
 		{"a duplicated operation", "\n    post:\n", "\n    get:\n", "published twice"},
 		{"an odd depth under paths", "\n    post:\n", "\n   post:\n", "only 2 and 4 are keys"},
+		{"a method key with no space after the colon", "\n    post:\n", "\n    post:x\n", "unrecognised path-item line"},
+		{"an info.version with no space", "\n  version: 9.9.9\n", "\n  version:9.9.9\n", "unreadable info.version"},
 		{"a stray sequence item", "\n      operationId: api_v1_tags_create\n",
 			"\n      operationId: api_v1_tags_create\n    - in: query\n", "belongs to no path-item field"},
 		{"a path item that is a reference", "\n  /health/live:\n    get:\n",
@@ -733,6 +747,10 @@ func TestContractBaselineRefusesACoverageLayoutItWasNotWrittenFor(t *testing.T) 
 		{"a trailing comment", "    sdk: TagService.List\n", "    sdk: TagService.List # x\n", "value form"},
 		{"a plain value with a colon", "    sdk: TagService.List\n", "    sdk: TagService: List\n", "value form"},
 		{"a key given twice", "    sdk: TagService.List\n", "    sdk: NoSuch.Method\n    sdk: TagService.List\n", "given twice in one row"},
+		{"no space after the colon", "    unimplemented: *reason\n",
+			"    unimplemented:This endpoint is deliberately absent from this line for now.\n", "was not written for"},
+		{"an undoubled quote inside single quotes", "    composite_body: '{\"it''s\": 1}'\n",
+			"    composite_body: '{\"it's\": 1}'\n", "undoubled quote"},
 		{"a reason that is a comment", "    unimplemented: *reason\n",
 			"    unimplemented: # a comment YAML reads as null, long enough to pass as a reason\n", "value form"},
 		{"an empty value", "    sdk: TagService.List\n", "    sdk:\n", "value form"},

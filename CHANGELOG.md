@@ -8,8 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **The contract this line sat on moves from 1.0.0 to server 3.2.1, and the claim is held by tests
-  rather than by prose** ([#90](https://github.com/octoverse-id/octonomy-go/issues/90), for
+- **This line's vendored contract moves up two server majors, to 3.2.1, and the claim is held by
+  tests rather than by prose** ([#90](https://github.com/octoverse-id/octonomy-go/issues/90), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). This line had vendored a
   contract two server majors old, carried no `docs/openapi-v2.yaml`, no `docs/contract-coverage.yaml`
   and no contract-version marker, and fourteen prose sites across seven files stated which contract
@@ -61,9 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       vendored — *vendor*, *tracks*, *targets*, *spec*/*specs*, *at server*, `info.version` and the
       like — and if one is there, only a category that identifies the token by what it IS may exempt
       it: an address, an image tag, a release branch's name, a URL, a CHANGELOG heading, a guard's
-      own fixtures. The veto fails closed; an honest history sentence it catches is reworded ("sat
-      on the X.Y.Z contract"), never answered with a looser category or a ByRole one, and the
-      failure message now says which of those applies.
+      own fixtures. The veto fails closed; an honest history sentence it catches is reworded — the old
+      number dropped ("two server majors behind") or moved into a sentence that claims nothing —
+      never answered with a looser category or a ByRole one, and the failure message now says
+      which of those applies.
     - **Word-based categories read the token's sentence**, not only a byte window: a probe in one
       sentence does not lend itself to a claim in the next, "e.g." does not end a sentence, and a
       sentence runs across wrapped lines in both directions but never across the boundary between a
@@ -83,9 +84,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     dropped, since nothing here needs them. New: `release-line-guard`, for `scripts/compat-guard.sh`
     and its fixture suite, path-scoped and therefore subject to the veto; `release-branch-name`; and
     `v-tag`. `code-review/` is out of scope, since AGENTS.md forbids committing anything in it. The
-    by-value trap `main`'s guard warned about is concrete here: this line's first release is
-    `v1.0.0`, and until this change it sat on the 1.0.0 contract, so a rule exempting SDK versions by
-    value could not have been written.
+    by-value trap `main`'s guard warned about is concrete here. This line's first release is
+    `v1.0.0`. Until this change the contract it vendored carried the same three numbers, so a rule
+    exempting SDK versions by value could not have been written.
   - **The prose follows the marker.** The order the issue set — marker, guard, prose — let the guard
     report the refresh complete: its first run flagged `doc.go`, `docs/api.md` and
     `docs/development.md`. Sentences naming the contract with no version in them are invisible to it

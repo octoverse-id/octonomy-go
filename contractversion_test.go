@@ -50,9 +50,10 @@ import (
 // # A sentence that CLAIMS a contract is exempt only by role
 //
 // Categories come in two kinds. A ByRole category identifies a token by what it
-// IS -- its place in an address, an image tag, a release branch's name, a URL, a
-// CHANGELOG heading, or a guard's own fixture file. The rest identify it by the
-// WORDS around it: "probed", "shipped", "Released entries". Words are the weak kind, because a sentence can carry both
+// IS -- its place in an address, an image tag, a release branch's name, a URL
+// or the OpenAPI format key, version.go or a CHANGELOG heading, or a guard's own
+// fixture file. The rest identify it by the WORDS around it: "probed", "Server
+// X added", "Released entries". Words are the weak kind, because a sentence can carry both
 // the exempting word and a stale claim, and the first review of this port showed
 // three that did -- "vendored from server 3.1.0" read as a version range,
 // "the currently vendored server 3.1.0 contract, reflected in both specs" as
@@ -63,9 +64,9 @@ import (
 // read for the words that state what is vendored (contractClaim). A token in
 // such a sentence can be exempted only by a ByRole category. The veto fails
 // closed: it makes some honest history sentences fail too -- "this line vendored
-// 1.0.0 until #90" -- and the fix for those is the wording the categories were
-// written for ("sat on the 1.0.0 contract"), never a looser category and never a
-// ByRole one.
+// 1.0.0 until #90" -- and the fix for those is to drop the old number ("two
+// server majors behind") or move it into a sentence that claims nothing, never a
+// looser category and never a ByRole one.
 //
 // Word-based categories are also scoped to the token's sentence, not merely to a
 // byte window, so "Probed against 3.1.0. Both specs: 3.1.0." does not lend the
@@ -148,6 +149,15 @@ var contractVersionMarker = regexp.MustCompile(`<!--\s*contract-version:\s*([0-9
 // v-tag category classifies the rest.
 var versionToken = regexp.MustCompile(`\bv?[0-9]+\.[0-9]+\.[0-9]+\b`)
 
+// codeSpanRest matches what may follow a version inside a code span before it
+// closes: a prerelease or build suffix ("`2.0.0-alpha.1`"), then the backtick.
+var codeSpanRest = regexp.MustCompile("^[-+.0-9A-Za-z]*`")
+
+// vTagServerSubject matches a sentence about the server or its API, which is
+// never offered the v-tag category. "/api/" is a REST path, not the word, and is
+// left out: "no `/api/v2`, no namespaces" beside `v1.0.0` is about this module.
+var vTagServerSubject = regexp.MustCompile(`\bserver\b|(^|[^/])\bapi\b([^/]|$)`)
+
 // versionDigits strips the "v" a git tag carries, for comparison with the marker.
 func versionDigits(token string) string { return strings.TrimPrefix(token, "v") }
 
@@ -162,12 +172,17 @@ var urlSpan = regexp.MustCompile(`https?://[^\s)\]>"'` + "`" + `]+`)
 // number -- where one too narrow passes a stale claim in silence. "track" and
 // "target" are the exceptions, matched as whole verbs and never before a hyphen,
 // because "target-branch" is this repository's vocabulary for something that is
-// not a contract; "tracked" is left out for "tracked file". "spec"/"specs" and
-// "openapi" are here because a sentence about the vendored specs that carries an
-// old version is a claim about them whatever its verb: "Both specs shipped at
-// 3.1.0" read as server history until they were.
+// not a contract; "tracked" is left out for "tracked file". "contract", "spec"/
+// "specs" and "openapi" are here because a sentence about the contract or the
+// specs that carries a non-marker version is a claim about them whatever its
+// verb: "Both specs shipped at 3.1.0" read as server history until specs was a
+// claim word, and "The bundled API contract shipped as 3.1.0" until contract
+// was. The price is that HISTORY of this line's contract cannot carry the old
+// number in prose -- "two server majors behind", not "the 1.0.0 contract" --
+// which is a small price: that number is recorded in the CHANGELOG entry that
+// moved it and in git, and a sentence repeating it is one more to go stale.
 var contractClaim = regexp.MustCompile(`vendor|written against|speaks|at server|at release|` +
-	`contract is|\bspecs?\b|openapi|info\.version|` +
+	`\bcontracts?\b|\bspecs?\b|openapi|info\.version|` +
 	`\b(track|tracks|tracking|target|targets|targeted|targeting)\b([^-]|$)`)
 
 // sentenceBreak matches the end of a sentence or of a statement: a full stop,
@@ -294,10 +309,17 @@ func (s versionSite) claimsContract() bool { return s.claimWord() != "" }
 
 // claimWord returns the first claim word in the token's sentence, or "".
 func (s versionSite) claimWord() string {
-	if m := contractClaim.FindString(strings.ToLower(s.sentenceBefore())); m != "" {
+	if m := contractClaim.FindString(proseOf(s.sentenceBefore())); m != "" {
 		return strings.TrimSpace(m)
 	}
-	return strings.TrimSpace(contractClaim.FindString(strings.ToLower(s.sentenceAfter())))
+	return strings.TrimSpace(contractClaim.FindString(proseOf(s.sentenceAfter())))
+}
+
+// proseOf lowercases text and blanks its URLs. A link's target is not a word
+// the sentence says: ".../compat-line-api-v2-parity.md" put "api" into a sentence
+// about this module's v1.0.0 and read it as one about the server's API.
+func proseOf(text string) string {
+	return strings.ToLower(urlSpan.ReplaceAllString(text, " "))
 }
 
 // maxInt and minInt stand in for the min and max builtins, which arrived in Go
@@ -416,18 +438,18 @@ var contractVersionExemptions = []contractVersionExemption{
 	},
 	{
 		Name:   "server-history",
-		Reason: "Narrates what the server shipped when, or which contract this SDK sat on before a refresh. The reason a mechanism exists, not a claim about what is vendored now.",
+		Reason: "Narrates what a server release added. The reason a behaviour exists, not a claim about what is vendored now.",
 		Match: func(s versionSite) bool {
-			// Pruned to the phrases this tree uses. "moved" was here: it matched
-			// inside "removed", which once exempted a harness-pin sentence below a
-			// list of mutations, and given a leading space it still exempted "The
-			// SDK's contract baseline moved to server 3.1.0" with no site in this
-			// tree needing it. Gone.
-			//
-			// " added " is anchored on what FOLLOWS the token: "Server 3.1.0 added
-			// 409 scope_immutable" is a release adding a behaviour.
-			return s.precededBy(110, "shipped", "sat on", "sit on") ||
-				s.followedBy(60, " added ", " refresh")
+			// Exactly one shape: "Server 3.1.0 added ...", the server immediately
+			// before the version and "added" immediately after it. Each of the
+			// looser phrases this category once carried exempted a stale claim
+			// in review -- "moved" (inside "removed", then "the contract baseline
+			// moved to server 3.1.0"), "shipped" ("the bundled API contract
+			// shipped as 3.1.0"), " contract," -- and "sat on" / "sit on" lost
+			// their sites once "contract" became a claim word, since every
+			// sentence using them was about the contract.
+			return strings.HasSuffix(strings.ToLower(s.Line[:s.Idx]), "server ") &&
+				strings.HasPrefix(s.after(), " added ")
 		},
 	},
 	{
@@ -463,8 +485,13 @@ var contractVersionExemptions = []contractVersionExemption{
 			// ported to catch. main's copy made the by-value mistake on 2.0.0
 			// before an outside review found it; here it is unwriteable.
 			//
-			// Pruned to this tree's phrases. The release-line guard's fixtures,
-			// which account for most SDK versions here, are release-line-guard's.
+			// Pruned to this tree's phrases, and the token must be a code span,
+			// "`1.0.0`", which is how this repository writes a release's number
+			// in prose. The release-line guard's fixtures, which account for most
+			// SDK versions here, are release-line-guard's.
+			if !strings.HasSuffix(s.Line[:s.Idx], "`") || !codeSpanRest.MatchString(s.after()) {
+				return false
+			}
 			return s.precededBy(80, "changelog heading", "released entr") ||
 				s.followedBy(40, "` entry")
 		},
@@ -479,9 +506,13 @@ var contractVersionExemptions = []contractVersionExemption{
 	},
 	{
 		Name:   "v-tag",
-		Reason: "A v-prefixed version, the spelling of a git tag. Every one in this tree is this module's own release (v1.0.0) or another Go module's (x/vuln v1.8.0). The server tags its releases the same way, which is why this is word-based: a sentence that claims a contract vetoes it.",
+		Reason: "A v-prefixed version, the spelling of a git tag. Every one in this tree is this module's own release (v1.0.0) or another Go module's (x/vuln v1.8.0). The server tags its releases the same way, which is why this is word-based, and why a sentence naming the server or its API is not offered it at all.",
 		Match: func(s versionSite) bool {
-			return strings.HasPrefix(s.Token, "v")
+			// "This SDK uses server v3.1.0" carries no claim word, and was a
+			// v-tag until the sentence's SUBJECT was checked too: a v-prefixed
+			// version in a sentence about the server or its API is the server's.
+			sentence := proseOf(s.sentenceBefore() + " " + s.sentenceAfter())
+			return strings.HasPrefix(s.Token, "v") && !vTagServerSubject.MatchString(sentence)
 		},
 	},
 	{
@@ -651,6 +682,7 @@ func scanContractVersionsIn(path, body, marker string) []contractVersionFinding 
 	}
 
 	lines := strings.Split(body, "\n")
+	kinds := lineKinds(path, lines)
 	for i, line := range lines {
 		lineNo := i + 1
 		if historyFrom > 0 && lineNo >= historyFrom {
@@ -658,7 +690,7 @@ func scanContractVersionsIn(path, body, marker string) []contractVersionFinding 
 		}
 		// Two lines of look-back. Prose wraps, and the phrase that classifies a
 		// mention is regularly on the line above it.
-		prev, next := neighbours(path, lines, i)
+		prev, next := neighbours(kinds, lines, i)
 		for _, m := range versionToken.FindAllStringIndex(line, -1) {
 			token := line[m[0]:m[1]]
 			if versionDigits(token) == marker {
@@ -696,17 +728,53 @@ func lineKind(path, line string) string {
 	return "code"
 }
 
-// neighbours returns up to two lines either side of line i, joined, stopping at
-// the first line of a different kind. Two lines of look-back is main's: prose
-// wraps, and the phrase that classifies a mention is regularly on the line above.
-func neighbours(path string, lines []string, i int) (prev, next string) {
-	kind := lineKind(path, lines[i])
+// yamlBlockOpener matches a YAML key whose value is a block scalar: `key: >-`,
+// `key: |`, optionally anchored (`key: &name >-`).
+var yamlBlockOpener = regexp.MustCompile(`:\s+(&\S+\s+)?[|>][-+0-9]*\s*$`)
+
+// lineKinds classifies every line of a file. It is lineKind plus one piece of
+// YAML: inside a block scalar a line starting with '#' is CONTENT, not a
+// comment -- "#91 says ..." wrapped onto its own line of an `unimplemented: >-`
+// reason once split that reason's sentence in two. Block-scalar content is every
+// line more indented than the key that opened it, blank lines included.
+func lineKinds(path string, lines []string) []string {
+	kinds := make([]string, len(lines))
+	isYAML := strings.HasSuffix(path, ".yml") || strings.HasSuffix(path, ".yaml")
+	blockKey := -1 // indentation of the key that opened the current block scalar
+	for i, line := range lines {
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if isYAML && blockKey >= 0 {
+			if strings.TrimSpace(line) == "" || indent > blockKey {
+				kinds[i] = "code"
+				continue
+			}
+			blockKey = -1
+		}
+		kinds[i] = lineKind(path, line)
+		if isYAML && kinds[i] == "code" && yamlBlockOpener.MatchString(line) {
+			blockKey = indent
+			if strings.HasPrefix(strings.TrimSpace(line), "- ") {
+				blockKey += 2 // "- key: >-": the key sits after the dash
+			}
+		}
+	}
+	return kinds
+}
+
+// neighbours returns the rest of line i's paragraph on either side, joined: the
+// contiguous non-blank lines of the same kind. main's copy at 61fce9b read two
+// lines back; this port first read two forward as well, and the third review
+// wrapped a claim word onto the third line. A paragraph is the natural bound,
+// sentenceBefore and sentenceAfter cut it to the sentence, and the word-based
+// categories' byte windows still bound how far a phrase may reach.
+func neighbours(kinds, lines []string, i int) (prev, next string) {
+	same := func(j int) bool { return kinds[j] == kinds[i] && strings.TrimSpace(lines[j]) != "" }
 	from := i
-	for from > 0 && from > i-2 && lineKind(path, lines[from-1]) == kind {
+	for from > 0 && same(from-1) {
 		from--
 	}
 	to := i + 1
-	for to < len(lines) && to < i+3 && lineKind(path, lines[to]) == kind {
+	for to < len(lines) && same(to) {
 		to++
 	}
 	return strings.Join(lines[from:i], "\n"), strings.Join(lines[i+1:to], "\n")
@@ -771,9 +839,9 @@ func TestEveryContractVersionMentionIsCurrentOrExempt(t *testing.T) {
 		"      that claims NO contract. Add its shape to contractVersionExemptions in\n" +
 		"      contractversion_test.go, WITH A REASON and a regression case.\n" +
 		"  (c) It is history, but its sentence also uses a word that claims a contract (vendored,\n" +
-		"      tracks, specs, ...). Reword it -- \"sat on the X contract\" -- so it no longer claims\n" +
-		"      one. Do NOT make a category ByRole to get past the veto: a ByRole category exempts\n" +
-		"      claims, which is the thing this guard exists to catch.\n\n" +
+		"      contract, specs, tracks, ...). Drop the old number (\"two server majors behind\") or\n" +
+		"      move it into a sentence that claims nothing. Do NOT make a category ByRole to get\n" +
+		"      past the veto: a ByRole category exempts claims, which is what this guard catches.\n\n" +
 		"On main, #84 moved eight of fourteen such sites and missed six, with every gate green.\n" +
 		"This guard exists so the sixth is a decision rather than an omission.")
 	t.Error(b.String())
@@ -1045,12 +1113,12 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 			whatItIs: "a ByRole category: the token IS the image tag, whatever the sentence says around it",
 		},
 		{
-			name:     "server history in this tree's own words",
+			name:     "contract history carrying the old number is a claim now",
 			path:     "docs/contract-coverage.yaml",
 			line:     "# how this line came to sit on a server 1.0.0 contract while the server shipped 3.1.0 with a second, primary API surface.",
 			token:    "1.0.0",
-			exempt:   true,
-			whatItIs: "\"sit on\" is the wording the veto asks history to use",
+			exempt:   false,
+			whatItIs: "\"contract\" is a claim word; this sentence was reworded to carry no version",
 		},
 		// The second review's constructions, and the author's own probes of the
 		// round-1 fix, each of which passed the guard before this round.
@@ -1102,6 +1170,48 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 			token:    "3.1.0",
 			exempt:   false,
 			whatItIs: "a stop at the very end of the look-back ended the sentence and hid \"vendored\"",
+		},
+		// The third review's constructions.
+		{
+			name:     "review 3: a v-tag naming the server",
+			path:     "docs/api.md",
+			line:     "This SDK uses server v3.1.0.",
+			token:    "v3.1.0",
+			exempt:   false,
+			whatItIs: "no claim word; the v-tag category now refuses a sentence about the server",
+		},
+		{
+			name:     "review 3: a contract that shipped",
+			path:     "docs/api.md",
+			line:     "The bundled API contract shipped as 3.1.0.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "\"shipped\" read it as server history; \"contract\" is now a claim word",
+		},
+		{
+			name:     "review 3: a claim word on the paragraph's fourth line",
+			path:     "docs/api.md",
+			line:     "The server shipped 3.1.0 as the API version that",
+			next:     "every example in this file uses, and which the\nbundled client is written to, and which is the\ntarget for this SDK today.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "context was capped at two lines; it is the paragraph now",
+		},
+		{
+			name:     "review 3: a version starting its sentence after a probe",
+			path:     "transport.go",
+			line:     "// Probed against 3.2.1. 3.1.0 is the baseline.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "the review read this as one sentence; the stop right before the token ends it (asserted, not argued)",
+		},
+		{
+			name:     "server history in exactly its one shape",
+			path:     "README.md",
+			line:     "- **No `CodeScopeImmutable` constant.** Server 3.1.0 added `409 scope_immutable` on tag, vocabulary,",
+			token:    "3.1.0",
+			exempt:   true,
+			whatItIs: "\"Server X added\" is what a release did, not what is vendored",
 		},
 		{
 			name:     "probe: the image registry nearby is not the image tag",
@@ -1363,11 +1473,28 @@ func TestContractVersionContextStaysWithinOneKindOfLine(t *testing.T) {
 	if len(got) != 1 || got[0].Token != "8.8.8" || got[0].Line != 1 {
 		t.Errorf("want only the comment's own claim (8.8.8 on line 1), got %+v", got)
 	}
-	if prev, next := neighbours("x.sh", []string{"# a", "# b", "code", "# c"}, 2); prev != "" || next != "" {
+	sh := []string{"# a", "# b", "code", "# c"}
+	if prev, next := neighbours(lineKinds("x.sh", sh), sh, 2); prev != "" || next != "" {
 		t.Errorf("a code line between comments has no neighbours of its kind, got %q / %q", prev, next)
 	}
-	if prev, _ := neighbours("x.md", []string{"one", "two", "three"}, 2); prev != "one\ntwo" {
-		t.Errorf("Markdown prose wraps across lines, got %q", prev)
+	md := []string{"zero", "", "one", "two", "three", "four", "five", "", "six"}
+	if prev, next := neighbours(lineKinds("x.md", md), md, 4); prev != "one\ntwo" || next != "four\nfive" {
+		t.Errorf("Markdown prose runs to the paragraph's edges, got %q / %q", prev, next)
+	}
+
+	// A YAML block scalar's '#' line is content, not a comment.
+	yaml := []string{
+		"    unimplemented: >-",
+		"      The server release named 3.1.0 is the one that",
+		"      #91 says both bundled specs target today.",
+		"    documented_response: none",
+	}
+	kinds := lineKinds("docs/contract-coverage.yaml", yaml)
+	if kinds[2] != "code" || kinds[1] != "code" {
+		t.Errorf("block-scalar content must be one kind whatever it starts with, got %v", kinds)
+	}
+	if got := scanContractVersionsIn("docs/contract-coverage.yaml", strings.Join(yaml, "\n"), "7.7.7"); len(got) != 1 || got[0].Token != "3.1.0" {
+		t.Errorf("the reason's own claim must be read across its '#91' line, got %+v", got)
 	}
 }
 

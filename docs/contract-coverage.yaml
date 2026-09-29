@@ -1,8 +1,9 @@
 # Octonomy contract coverage — the SDK's own statement about the contract it vendors.
 #
 # WHY IT EXISTS. An endpoint nobody implemented and an endpoint nobody noticed look
-# identical from the outside, and that is how this line came to sit on a server
-# 1.0.0 contract while the server shipped 3.1.0 with a second, primary API surface.
+# identical from the outside, and that is how this line came to sit two server
+# majors behind, vendoring a contract from before the server made a second API
+# surface its primary one.
 # A row here turns "not implemented" into a decision with a reason attached. On this
 # line that matters more, not less: this tree implements two of the
 # eight resource groups the contracts publish, so most of the rows below are gaps,
