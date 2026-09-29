@@ -242,7 +242,7 @@ func (s versionSite) after() string { return s.Line[s.Idx+len(s.Token):] }
 // sentence (or of the look-back, whichever is nearer).
 func (s versionSite) sentenceBefore() string {
 	b := s.before()
-	locs := sentenceBreak.FindAllStringSubmatchIndex(b, -1)
+	locs := sentenceBreaksIn(b)
 	if len(locs) == 0 {
 		return b
 	}
@@ -262,10 +262,30 @@ func (s versionSite) sentenceAfter() string {
 	if s.Next != "" {
 		a += "\n" + s.Next
 	}
-	if loc := sentenceBreak.FindStringIndex(a); loc != nil {
-		return a[:loc[0]]
+	if locs := sentenceBreaksIn(a); len(locs) > 0 {
+		return a[:locs[0][0]]
 	}
 	return a
+}
+
+// abbreviation matches text ending in an abbreviation's full stop, which does
+// not end a sentence. The capital-letter rule in sentenceBreak handles "e.g. the"
+// on its own, but not a stop at the very end of the look-back: "The specs are
+// vendored at e.g. 3.1.0 and newer" ended the sentence right before the token,
+// hid "vendored" from the veto, and left " and newer" to exempt it as a range.
+var abbreviation = regexp.MustCompile(`(?i)(^|[^a-z])(e\.g|i\.e|etc|vs|cf|incl|approx|resp)\.$`)
+
+// sentenceBreaksIn returns sentenceBreak's matches in text, less the full stops
+// that end an abbreviation.
+func sentenceBreaksIn(text string) [][]int {
+	var out [][]int
+	for _, m := range sentenceBreak.FindAllStringSubmatchIndex(text, -1) {
+		if text[m[0]] == '.' && abbreviation.MatchString(text[:m[0]+1]) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // claimsContract reports whether the token's sentence, on either side of it,
@@ -1076,6 +1096,14 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 			whatItIs: "\"e.g. \" split the claim word from \"shipped\"",
 		},
 		{
+			name:     "probe: an abbreviation right before the token",
+			path:     "docs/api.md",
+			line:     "The specs are vendored at e.g. 3.1.0 and newer.",
+			token:    "3.1.0",
+			exempt:   false,
+			whatItIs: "a stop at the very end of the look-back ended the sentence and hid \"vendored\"",
+		},
+		{
 			name:     "probe: the image registry nearby is not the image tag",
 			path:     "docs/development.md",
 			line:     "Pulled from ghcr.io/octoverse-id/octonomy, the specs are at server 3.1.0.",
@@ -1266,6 +1294,15 @@ func TestContractVersionPhrasesDoNotCrossASentence(t *testing.T) {
 	second := versionSite{Path: "transport.go", Line: line, Token: "3.1.0", Idx: strings.LastIndex(line, "3.1.0")}
 	if got := classifyContractVersion(second); got != "" {
 		t.Errorf("the second 3.1.0 is in its own sentence and must not inherit the probe, got %q", got)
+	}
+
+	// A sentence that STARTS with the version: no capital follows the stop, so
+	// the capital-letter rule does not apply, and the token still begins a new
+	// sentence -- the stop is not an abbreviation's.
+	line = "// Probed against 3.1.0. 3.1.0 is the baseline."
+	second = versionSite{Path: "transport.go", Line: line, Token: "3.1.0", Idx: strings.LastIndex(line, "3.1.0")}
+	if got := classifyContractVersion(second); got != "" {
+		t.Errorf("a sentence starting with the version must not inherit the probe before it, got %q", got)
 	}
 }
 
