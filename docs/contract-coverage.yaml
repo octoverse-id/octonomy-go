@@ -158,8 +158,8 @@ operations:
   - path: /tag-resolution
     method: get
     # One specialized read: no list, no writes. `scope` is a query parameter here
-    # and nowhere else, and it is one of the few things the 1.0.0 -> 3.2.1 refresh
-    # added to docs/openapi.yaml.
+    # and nowhere else, and it is one of the few things #90's refresh added to
+    # docs/openapi.yaml.
     unimplemented: *not_ported_94
     documented_response: ref:TagResolution
     actual_response: data-envelope

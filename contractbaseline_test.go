@@ -262,6 +262,7 @@ func parseCoverageRows(path, body string) ([]coverageRow, error) {
 	anchors := map[string]string{}
 	var rows []coverageRow
 	var cur *coverageRow
+	var curKeys map[string]int // key -> line, for the row being read
 	sections := 0
 	inOps := false
 
@@ -299,6 +300,7 @@ func parseCoverageRows(path, body string) ([]coverageRow, error) {
 		if m := coverageItemStart.FindStringSubmatch(line); m != nil {
 			flush()
 			cur = &coverageRow{Line: lineNo}
+			curKeys = map[string]int{}
 			key, raw = m[1], m[2]
 		} else if m := coverageItemKey.FindStringSubmatch(line); m != nil && cur != nil {
 			key, raw = m[1], m[2]
@@ -308,6 +310,13 @@ func parseCoverageRows(path, body string) ([]coverageRow, error) {
 		if !coverageRowKeys[key] {
 			return nil, fmt.Errorf("%s:%d: unknown row key %q", path, lineNo, key)
 		}
+		// A key given twice in one row is an error, as it is to yaml.v3. Letting
+		// the second win would read "sdk: NoSuch.Method" + "sdk: TagService.List"
+		// as a covered row that the gate #98 ports refuses to load at all.
+		if first, dup := curKeys[key]; dup {
+			return nil, fmt.Errorf("%s:%d: %q is given twice in one row (first at line %d)", path, lineNo, key, first)
+		}
+		curKeys[key] = lineNo
 
 		value, consumed, err := coverageValue(path, lineNo, strings.TrimSpace(raw), lines[i+1:], anchors)
 		if err != nil {
@@ -723,6 +732,7 @@ func TestContractBaselineRefusesACoverageLayoutItWasNotWrittenFor(t *testing.T) 
 		{"a flow mapping", "    sdk: TagService.List\n", "    sdk: {a: b}\n", "value form"},
 		{"a trailing comment", "    sdk: TagService.List\n", "    sdk: TagService.List # x\n", "value form"},
 		{"a plain value with a colon", "    sdk: TagService.List\n", "    sdk: TagService: List\n", "value form"},
+		{"a key given twice", "    sdk: TagService.List\n", "    sdk: NoSuch.Method\n    sdk: TagService.List\n", "given twice in one row"},
 		{"a reason that is a comment", "    unimplemented: *reason\n",
 			"    unimplemented: # a comment YAML reads as null, long enough to pass as a reason\n", "value form"},
 		{"an empty value", "    sdk: TagService.List\n", "    sdk:\n", "value form"},
