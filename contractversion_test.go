@@ -1705,7 +1705,11 @@ func TestContractVersionGuardReadsOnlyTrackedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(dir) // t.Cleanup needs Go 1.14
+	defer func() { // t.Cleanup needs Go 1.14
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove %s: %v", dir, err)
+		}
+	}()
 
 	git := func(args ...string) {
 		cmd := exec.Command("git", args...)
