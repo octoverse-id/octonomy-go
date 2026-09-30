@@ -63,7 +63,10 @@ These mirror [AGENTS.md](AGENTS.md):
   when a `main` struct is ported — `main`'s `Optional[T]` would change a published field's type.
   Server read-only fields are decode-only.
 - The library never panics, exits, or logs — it returns wrapped errors (`octonomy:` prefix, `%w`).
-- Keep types faithful to `docs/openapi.yaml`. Document any deliberate divergence from the spec.
+- Keep types faithful to the vendored contracts — `docs/openapi.yaml` (`/api/v1`, the surface this
+  tree's requests reach) and `docs/openapi-v2.yaml` (`/api/v2`), both at server 3.2.1. Document any
+  deliberate divergence from the spec, and keep `docs/contract-coverage.yaml` naming the method (or
+  the reason there is none) for every operation they publish.
 - Every exported symbol has a doc comment.
 
 ## Testing expectations

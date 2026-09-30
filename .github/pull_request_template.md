@@ -15,7 +15,7 @@ Closes #
 - [ ] `make lint` passes (golangci-lint)
 - [ ] `make test` passes (`go test -race`)
 - [ ] `make examples` builds
-- [ ] New/changed types stay faithful to `docs/openapi.yaml` (divergences documented)
+- [ ] New/changed types stay faithful to the vendored contracts — `docs/openapi.yaml` (`/api/v1`) and `docs/openapi-v2.yaml` (`/api/v2`) — with any divergence documented, and `docs/contract-coverage.yaml` updated for any operation this PR implements
 - [ ] Exported symbols have doc comments
 - [ ] Docs updated (README / `docs/`) if behavior or usage changed
 - [ ] CHANGELOG `[Unreleased]` updated for user-facing changes

@@ -92,11 +92,13 @@ stays a faithful, ergonomic client.
   `DELETE` and must document the deactivation semantics rather than implying data loss.
 - Tag aliases are alternate identifiers that resolve to canonical tags and follow tenant/application
   compatibility rules.
-- Keep the SDK faithful to `docs/openapi.yaml`, the bundled contract reference. Where the live server
-  diverges from the generated spec — notably the **two response envelopes** the spec omits:
-  `{data, pagination}` on lists and `{data}` on single resources — trust the server's real behavior
-  and document the divergence in a comment. Both were verified against a running server, not read off
-  the spec.
+- Keep the SDK faithful to the bundled contract references: `docs/openapi.yaml` (`/api/v1`, the only
+  surface this tree's requests reach) and `docs/openapi-v2.yaml` (`/api/v2`), both vendored at server
+  **3.2.1**. A port that adds the namespace axis reads the **v2** spec — v1's schemas omit the
+  `namespace_type` / `namespace_id` fields. Where the live server diverges from the generated spec —
+  notably the **two response envelopes** the spec omits: `{data, pagination}` on lists and `{data}`
+  on single resources — trust the server's real behavior and document the divergence in a comment.
+  Both were verified against a running server, not read off the spec.
 
 ## API Client Rules
 
@@ -155,8 +157,16 @@ stays a faithful, ergonomic client.
   the real gate: also run `make test-go113` (real go1.13 toolchain) and, for anything touching
   decoding or transport, `make dev-server && make smoke` against a real server.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
-- Refresh the vendored `docs/openapi.yaml` from the Octonomy server when targeting a new contract,
-  and record the server version it tracks in `docs/versioning.md`.
+- **A contract refresh is not done when the YAML lands.** Refresh both vendored specs from the Octonomy
+  server (`make openapi` there, one per `--api-version`), then move three things with them: the
+  `<!-- contract-version: X.Y.Z -->` marker in `docs/versioning.md`, a row per operation in
+  `docs/contract-coverage.yaml` — naming the Go method that implements it or a written reason it is
+  not implemented — and every sentence naming the contract. `make test` fails until the specs, the
+  marker and the rows agree (`contractbaseline_test.go`) and until every version token in the tree
+  equals the marker or carries a registered reason (`contractversion_test.go`). A sentence naming the
+  contract *without* a version in it is invisible to both; read for those by hand. Nothing on this
+  branch calls a method and compares what it sends with the contract: porting
+  [`main`'s contract gate](https://github.com/octoverse-id/octonomy-go/tree/main/tools/contractdrift) to do that is [#98](https://github.com/octoverse-id/octonomy-go/issues/98).
 
 ## Development Pipeline
 

@@ -50,11 +50,14 @@ Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶
 
 ## Conventions that keep it faithful
 
-- **Contract reference:** `docs/openapi.yaml` is vendored from the server. Types mirror it
-  field-for-field. The deliberate divergences are both response envelopes: the generated spec shows a
-  bare array for lists and a bare object for single resources, while the server wraps lists in
-  `{data, pagination}` (`octonomy/core/pagination.py`) and single resources in `{data}`
-  (`octonomy/core/responses.py`). The SDK follows the server; both divergences are noted in code.
+- **Contract reference:** `docs/openapi.yaml` (`/api/v1`) and `docs/openapi-v2.yaml` (`/api/v2`) are
+  vendored from the server, both at release 3.2.1. This tree's types mirror the **v1** schemas
+  field-for-field, because `/api/v1` is the only surface its requests reach; v1's schemas carry no
+  namespace fields and v2's do, so a port that adds them reads `openapi-v2.yaml`. The deliberate
+  divergences are both response envelopes: the generated specs show a bare array for lists and a bare
+  object for single resources, while the server wraps lists in `{data, pagination}`
+  (`octonomy/core/pagination.py`) and single resources in `{data}` (`octonomy/core/responses.py`).
+  The SDK follows the server; both divergences are noted in code.
   Only an integration test against a real server can catch a regression here, which is what
   `integration_test.go` is for.
 - **Pointers for optionality:** nullable server fields decode into `*string`; write structs use
@@ -76,7 +79,8 @@ an `application_id`. The SDK passes these through faithfully — the server enfo
 To add a resource, follow `tags.go`:
 
 1. Define the model, `*Create`/`*Update`, and `*ListParams` (with a `query()` method) from the
-   matching `docs/openapi.yaml` schema.
+   matching schema in the vendored contracts, and give the operation its row in
+   `docs/contract-coverage.yaml` (replacing its `unimplemented:` reason with `sdk:`).
 2. Add a `*Service` with `context.Context`-first, `...RequestOption`-last methods delegating to the
    helper that matches each response shape: `client.doData` for a single resource, `client.doList`
    for a list, `client.do` where there is no payload (DELETE). Reaching for `do` when the response
