@@ -90,8 +90,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `version.go`, the harness pin's nearby words). `dated-decision-record` and `compat-line-contract`
     are dropped, since nothing here needs them. New: `release-line-guard`, for
     `scripts/compat-guard.sh` and its fixture suite, path-scoped and therefore subject to the veto;
-    `release-branch-name`; and `v-tag`. `code-review/` is out of scope, since AGENTS.md forbids
-    committing anything in it. The by-value trap `main`'s guard warned about is concrete here. This
+    `release-branch-name`; and `v-tag`. It reads the files git tracks (`git ls-files`), not whatever
+    else is in the checkout, so a local untracked or ignored note cannot fail anyone's `go test`;
+    where git cannot answer — the module cache has no `.git` — it walks the tree instead, reading
+    more rather than less. `code-review/` is out of scope, since AGENTS.md forbids committing
+    anything in it. The by-value trap `main`'s guard warned about is concrete here. This
     line's first release is `v1.0.0`. Until this change the contract it vendored carried the same
     three numbers, so a rule exempting SDK versions by value could not have been written.
   - **The prose follows the marker.** The order the issue set — marker, guard, prose — let the guard

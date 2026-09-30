@@ -1,9 +1,11 @@
 package octonomy
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -647,43 +649,79 @@ type contractVersionFinding struct {
 	Claim string
 }
 
-// scanContractVersions walks the repository and returns every version token that
-// neither equals the marker nor matches a registered exemption.
-//
-// filepath.Walk rather than WalkDir: WalkDir and io/fs arrived in Go 1.16, and
-// this file has to compile on go1.13.15.
+// scanContractVersions reads every repository-owned file in scope and returns
+// every version token that neither equals the marker nor matches a registered
+// exemption.
 func scanContractVersions(t *testing.T, marker string) []contractVersionFinding {
 	t.Helper()
+	files, _, err := repositoryFiles(".")
+	if err != nil {
+		t.Fatalf("list the repository's files: %v", err)
+	}
 	var findings []contractVersionFinding
+	for _, path := range files {
+		if ok, _ := inScope(path); !ok {
+			continue
+		}
+		raw, err := ioutil.ReadFile(filepath.FromSlash(path))
+		if os.IsNotExist(err) {
+			continue // tracked, but deleted in this checkout: no prose left to check
+		}
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		findings = append(findings, scanContractVersionsIn(path, string(raw), marker)...)
+	}
+	return findings
+}
 
-	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+// repositoryFiles lists the files this guard reads: the ones git tracks under
+// dir, as slash-separated paths relative to it, and which source answered.
+//
+// It used to walk the directory, which read whatever else happened to be in the
+// checkout -- an untracked notes.md, an ignored scratch file -- and failed
+// `go test` on a developer's machine over a file the repository does not
+// contain, while this file's own doc comment promised TRACKED files (the review
+// on #109). `git ls-files` is the tracked set, exactly. A tracked file deleted
+// in the checkout is still listed; the caller skips it. The cost runs the other
+// way: a new file is read once it is added to the index, not before, so run the
+// guard after `git add` -- CI reads the commit, where nothing is untracked.
+//
+// When git cannot answer -- no git binary, or a copy with no .git such as the
+// module cache -- it falls back to the walk. That is the direction that fails
+// closed, reading more rather than less, and a copy without .git has no
+// untracked files to be wrong about.
+func repositoryFiles(dir string) (files []string, source string, err error) {
+	cmd := exec.Command("git", "ls-files", "-z")
+	cmd.Dir = dir
+	out, gitErr := cmd.Output()
+	if gitErr == nil {
+		for _, name := range bytes.Split(out, []byte{0}) {
+			if len(name) > 0 {
+				files = append(files, string(name))
+			}
+		}
+		return files, "git", nil
+	}
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		path = filepath.ToSlash(path)
+		rel, relErr := filepath.Rel(dir, path)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
 		if info.IsDir() {
-			if path == "." {
-				return nil
-			}
-			if _, skipped := contractVersionSkipDirs[path]; skipped {
+			if _, skipped := contractVersionSkipDirs[rel]; skipped {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if ok, _ := inScope(path); !ok {
-			return nil
-		}
-		raw, readErr := ioutil.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		findings = append(findings, scanContractVersionsIn(path, string(raw), marker)...)
+		files = append(files, rel)
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("walk the repository: %v", err)
-	}
-	return findings
+	return files, "walk", err
 }
 
 // scanContractVersionsIn classifies every version token in one file's body.
@@ -1649,6 +1687,71 @@ func TestContractVersionContextStaysWithinOneKindOfLine(t *testing.T) {
 	}
 	if got := scanContractVersionsIn("docs/contract-coverage.yaml", strings.Join(yaml, "\n"), "7.7.7"); len(got) != 1 || got[0].Token != "3.1.0" {
 		t.Errorf("the reason's own claim must be read across its '#91' line, got %+v", got)
+	}
+}
+
+// The guard reads the files the repository TRACKS, and nothing else in the
+// checkout. Built on a throwaway repository so the untracked and ignored cases
+// are real rather than assumed: a local notes file with a stale claim in it must
+// not fail anyone's `go test` (the review on #109).
+func TestContractVersionGuardReadsOnlyTrackedFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		// Only the git path is under test here, and without a git binary it
+		// cannot run: repositoryFiles walks instead, which the guard's own run
+		// above exercises. Every CI job this line has checks out with git.
+		t.Skip("no git binary; repositoryFiles falls back to walking, which this test does not cover")
+	}
+	dir, err := ioutil.TempDir("", "contractversion-files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir) // t.Cleanup needs Go 1.14
+
+	git := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(name, body string) {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := ioutil.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-q")
+	write("docs/tracked.md", "tracked\n")
+	write("notes.md", "Scratch notes: the spec is vendored at server 3.1.0.\n")
+	write("ignored/scratch.md", "vendored at server 3.1.0\n")
+	write(".gitignore", "ignored/\n")
+	git("add", "docs/tracked.md", ".gitignore")
+
+	files, source, err := repositoryFiles(dir)
+	if err != nil {
+		t.Fatalf("repositoryFiles: %v", err)
+	}
+	if source != "git" {
+		t.Fatalf("a git work tree must be listed by git, got %q", source)
+	}
+	if got := strings.Join(files, ","); got != ".gitignore,docs/tracked.md" {
+		t.Errorf("want exactly the tracked files, slash-separated; got %q", got)
+	}
+
+	// And with no .git to ask, the walk is the fallback: it reads everything,
+	// which fails closed.
+	if err := os.RemoveAll(filepath.Join(dir, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	files, source, err = repositoryFiles(dir)
+	if err != nil || source != "walk" {
+		t.Fatalf("without .git the walk must answer, got %q, %v", source, err)
+	}
+	if got := strings.Join(files, ","); !strings.Contains(got, "notes.md") || !strings.Contains(got, "ignored/scratch.md") {
+		t.Errorf("the fallback walk reads every file, got %q", got)
 	}
 }
 
