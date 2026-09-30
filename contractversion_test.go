@@ -548,14 +548,15 @@ func gitIn(dir string, args ...string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// withoutVariables returns environ minus every entry named in names. Names are
-// compared case-insensitively because Windows' environment is, so a git_dir set
-// there can be read as GIT_DIR, while --local-env-vars prints upper case.
-// Elsewhere git ignores a lower-case git_dir, so dropping one changes nothing.
+// withoutVariables returns environ minus every entry named in names, which are
+// upper case as --local-env-vars prints them. An entry's name is upper-cased
+// before the comparison because Windows' environment is case-insensitive, so a
+// git_dir set there can be read as GIT_DIR. Elsewhere git ignores a lower-case
+// git_dir, so dropping one changes nothing.
 func withoutVariables(environ, names []string) []string {
 	drop := map[string]bool{}
 	for _, name := range names {
-		drop[strings.ToUpper(name)] = true
+		drop[name] = true
 	}
 	kept := []string{} // non-nil: a nil exec.Cmd.Env inherits everything
 	for _, kv := range environ {
