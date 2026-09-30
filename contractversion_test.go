@@ -5,13 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -80,7 +77,7 @@ import (
 //     is the price of not failing on a developer's untracked notes (#110), and CI
 //     pays none of it. What keeps `go test` from replaying a cached PASS after
 //     that `git add` is a set of directory reads and one Stat of the index, which
-//     no unit test here can observe; recordTrackedSetForTestCache says what they
+//     no unit test here can observe; recordCheckoutForTestCache says what they
 //     cover, the one sequence they cannot, and why each has to stay.
 
 // contractVersionMarker is the one mechanized statement of the targeted contract.
@@ -526,7 +523,7 @@ func gitTrackedFiles(dir string) ([]string, bool) {
 	if len(files) == 0 {
 		return nil, false // an enclosing repository that tracks none of dir
 	}
-	recordTrackedSetForTestCache(dir, files)
+	recordCheckoutForTestCache(dir)
 	return files, true
 }
 
@@ -545,57 +542,61 @@ func gitIn(dir string, args ...string) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	local := map[string]bool{}
-	for _, name := range strings.Fields(string(out)) {
-		local[name] = true
-	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Env = []string{} // non-nil: a nil Env would inherit everything
-	for _, kv := range os.Environ() {
-		if name, _, _ := strings.Cut(kv, "="); !local[name] {
-			cmd.Env = append(cmd.Env, kv)
-		}
-	}
+	cmd.Env = withoutVariables(os.Environ(), strings.Fields(string(out)))
 	return cmd, nil
 }
 
-// recordTrackedSetForTestCache makes `go test`'s result cache depend on the
-// tracked set. Every call in it is load-bearing, and the results are not needed.
-//
-// The cache replays a PASS unless something the test process opened or stat-ed
-// has changed, and it cannot see what a subprocess read. The walk opened every
-// directory, so a new file changed a recorded listing; `git ls-files` opens
-// none, and without this a new file carrying a stale claim, created and
-// `git add`ed between two runs, replayed the first run's PASS (verified on #110,
-// in both a checkout and a linked worktree). So it opens every directory that
-// holds a tracked file, and their parents: any new path is then a new entry in
-// one of them.
-//
-// That does not cover a file that was already there, untracked, during the last
-// run and is then `git add`ed: only the index changes. The Stat of the index
-// covers it in an ordinary checkout. It cannot in a linked worktree or a
-// submodule, where .git is a file and the index lives outside the module --
-// `go test` rechecks only files inside the module, so there that sequence can
-// replay a PASS. `go test -count=1` runs it regardless, and CI's fresh checkout
-// never matches a cached run.
-func recordTrackedSetForTestCache(dir string, files []string) {
-	for _, d := range trackedDirs(files) {
-		_, _ = os.ReadDir(filepath.Join(dir, filepath.FromSlash(d)))
+// withoutVariables returns environ minus every entry named in names. Names are
+// compared case-insensitively because Windows' environment is, so a git_dir set
+// there can be read as GIT_DIR, while --local-env-vars prints upper case.
+// Elsewhere git ignores a lower-case git_dir, so dropping one changes nothing.
+func withoutVariables(environ, names []string) []string {
+	drop := map[string]bool{}
+	for _, name := range names {
+		drop[strings.ToUpper(name)] = true
 	}
-	_, _ = os.Stat(filepath.Join(dir, ".git", "index"))
-}
-
-// trackedDirs returns every directory holding one of files, and each of their
-// parents up to ".", sorted.
-func trackedDirs(files []string) []string {
-	seen := map[string]bool{".": true}
-	for _, f := range files {
-		for d := path.Dir(f); !seen[d]; d = path.Dir(d) {
-			seen[d] = true
+	kept := []string{} // non-nil: a nil exec.Cmd.Env inherits everything
+	for _, kv := range environ {
+		if name, _, _ := strings.Cut(kv, "="); !drop[strings.ToUpper(name)] {
+			kept = append(kept, kv)
 		}
 	}
-	return slices.Sorted(maps.Keys(seen))
+	return kept
+}
+
+// recordCheckoutForTestCache makes `go test`'s result cache depend on what git
+// would list. Both calls in it are load-bearing, and their results are not
+// needed.
+//
+// The cache replays a PASS unless something the test process opened or stat-ed
+// has changed, and it cannot see what a subprocess read. The old walk opened
+// every directory it read, so a new file there changed a recorded listing;
+// `git ls-files` opens none, and without this a new file carrying a stale claim, created and
+// `git add`ed between two runs, replayed the first run's PASS (verified on #110,
+// in both a checkout and a linked worktree). So it opens every directory outside
+// .git, and a new path anywhere is a new entry in one of them.
+// Opening only the directories that hold tracked files is not enough: a file
+// created inside an untracked directory that already existed changes no listing
+// those directories record.
+//
+// That does not cover a file that was already there, untracked, during the last
+// run and is then `git add`ed, because only the index changes. The Stat of
+// <dir>/.git/index covers it when that is where the index is. Wherever it is not
+// -- a linked worktree, a submodule or a --separate-git-dir checkout, where .git
+// is a file, or a copy tracked inside a larger repository -- the index is
+// outside the module, `go test` rechecks only files inside the module, and that
+// one sequence can replay a PASS. `go test -count=1` runs it regardless, and
+// CI's fresh checkout never matches a cached run.
+func recordCheckoutForTestCache(dir string) {
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && d.Name() == ".git" {
+			return fs.SkipDir // it changes on every git command, and objects/ is large
+		}
+		return nil
+	})
+	_, _ = os.Stat(filepath.Join(dir, ".git", "index"))
 }
 
 // classifyContractVersion returns the name of the first exemption covering this
@@ -1013,14 +1014,18 @@ func TestContractVersionGuardReadsOnlyTrackedFiles(t *testing.T) {
 	})
 }
 
-// The directories opened for `go test`'s cache are every one holding a tracked
-// file and each parent up to the root, so that any new path is a new entry in
-// one of them. Only the set is testable here: that the cache then notices is a
-// fact about cmd/go, verified by hand on #110 (recordTrackedSetForTestCache).
-func TestTrackedDirsCoverEveryParentOfATrackedFile(t *testing.T) {
-	got := trackedDirs([]string{"go.mod", "docs/api.md", "tools/contractdrift/testdata/a/b.yaml", "docs/api.md"})
-	want := ".,docs,tools,tools/contractdrift,tools/contractdrift/testdata,tools/contractdrift/testdata/a"
-	if strings.Join(got, ",") != want {
-		t.Errorf("want %s, got %s", want, strings.Join(got, ","))
+// The variables gitIn removes are matched without regard to case, as Windows
+// matches them, and removing every one of them must not hand exec.Cmd a nil Env,
+// which would inherit the lot.
+func TestWithoutVariablesDropsGitsLocalVariablesInAnyCase(t *testing.T) {
+	local := []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"}
+	environ := []string{"PATH=/bin", "GIT_DIR=/a", "git_index_file=/b", "Git_Work_Tree=/c",
+		"GIT_EDITOR=vi", "=C:=C:\\", "NOEQUALS"}
+	got := strings.Join(withoutVariables(environ, local), " ")
+	if want := `PATH=/bin GIT_EDITOR=vi =C:=C:\ NOEQUALS`; got != want {
+		t.Errorf("want %q, got %q", want, got)
+	}
+	if env := withoutVariables([]string{"GIT_DIR=/a"}, local); env == nil || len(env) != 0 {
+		t.Errorf("an environment with everything removed must be empty and non-nil, got %#v", env)
 	}
 }

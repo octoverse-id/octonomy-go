@@ -71,13 +71,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     repository that tracks none of the directory and would otherwise make it scan nothing and pass,
     or a checkout git refuses as another user's.
   - **Listing through git needed its own care for `go test`'s cache**, because the cache cannot see
-    what a subprocess reads. The walk opened every directory, so a new file invalidated a cached
-    PASS; `git ls-files` opens none, and a stale file created and `git add`ed between two runs
-    replayed the first run's PASS. The guard now opens every directory holding a tracked file and
-    stats the index. One sequence is still uncovered: in a linked worktree the index is outside the
-    module, where `go test` does not look, so adding a file that was already present during the
-    last run can replay it. `go test -count=1` runs it anyway, and CI's fresh checkout never
-    matches a cached run.
+    what a subprocess reads. The walk opened every directory it read, so a new file there
+    invalidated a cached PASS; `git ls-files` opens none, and a stale file created and `git add`ed
+    between two runs replayed the first run's PASS. The guard now opens every directory outside `.git` and stats
+    `.git/index`. One sequence is still uncovered: wherever the index is not at `.git/index` — a
+    linked worktree, a submodule, a `--separate-git-dir` checkout, a copy tracked inside a larger
+    repository — it is outside the module, where `go test` does not look, so adding a file that was
+    already present during the last run can replay that run. `go test -count=1` runs it anyway, and
+    CI's fresh checkout never matches a cached run.
 
 ### Added
 - **A design doc for the compat line's `/api/v2` epic**
