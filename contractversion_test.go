@@ -407,7 +407,7 @@ func scanContractVersions(t *testing.T, dir, marker string) []contractVersionFin
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(path)))
 		if errors.Is(err, fs.ErrNotExist) {
-			continue // tracked, but deleted in this checkout: no prose left to check
+			continue // tracked, but absent from this checkout: see repositoryFiles
 		}
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
@@ -574,10 +574,10 @@ func withoutVariables(environ, names []string) []string {
 // The cache replays a PASS unless something the test process opened or stat-ed
 // has changed, and it cannot see what a subprocess read. The old walk opened
 // every directory it read, so a new file there changed a recorded listing;
-// `git ls-files` opens none, and without this a new file carrying a stale claim, created and
-// `git add`ed between two runs, replayed the first run's PASS (verified on #110,
-// in both a checkout and a linked worktree). So it opens every directory outside
-// .git, and a new path anywhere is a new entry in one of them.
+// `git ls-files` opens none, and without this a new file carrying a stale claim,
+// created and `git add`ed between two runs, replayed the first run's PASS
+// (verified on #110, in both a checkout and a linked worktree). So it opens every
+// directory outside .git, and a new path anywhere is a new entry in one of them.
 // Opening only the directories that hold tracked files is not enough: a file
 // created inside an untracked directory that already existed changes no listing
 // those directories record.
