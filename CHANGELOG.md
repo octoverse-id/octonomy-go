@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside pass each caught the same six; had neither looked, the repository would have merged with
   its API reference and its contributor instructions naming a contract it no longer vendored.
 
-  - **`TestEveryContractVersionMentionIsCurrentOrExempt`** (`contractversion_test.go`) walks every
+  - **`TestEveryContractVersionMentionIsCurrentOrExempt`** (`contractversion_test.go`) reads every
     tracked prose and source file and requires each version token to **either** equal the recorded
     marker **or** match a category carrying a written reason. Anything else fails, naming the file,
     the line, and both readings so the contributor chooses rather than guesses. Verified end to end
@@ -61,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     #77's guards: it must run in the pull request that adds the site, not only where a container
     does. `docs/roadmap.md`'s enforcement table gains a row, marked as the one entry that is not a
     recipe step — refreshing a contract is not a step, so the requirement had nowhere else to live.
+  - **It reads what git tracks, and at first it did not**
+    ([#110](https://github.com/octoverse-id/octonomy-go/issues/110)). The first revision walked the
+    whole checkout, so an untracked `notes.md` or an ignored review artifact under `code-review/`
+    that mentioned an old contract failed `go test` on one machine, over a file the repository does
+    not contain. It now lists its input with `git ls-files`. It walks the tree only when git cannot
+    answer: no git binary, no `.git` (the module cache), or an enclosing repository that tracks none
+    of the directory and would otherwise make the guard scan nothing and pass. It also stats the git
+    index, because `go test` cannot see what a subprocess reads: without that, `git add` of a new
+    file carrying a stale claim replays the last cached PASS. The walk never had that problem,
+    since it opened every directory. A throwaway-repository test covers the untracked, ignored,
+    deleted-but-tracked, enclosing-repository, no-git-binary, no-`.git` and linked-worktree cases.
 
 ### Added
 - **A design doc for the compat line's `/api/v2` epic**
