@@ -1,9 +1,12 @@
 package octonomy
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -69,6 +72,13 @@ import (
 //   - It says nothing about the two specs or the marker. checkRecordedVersion
 //     already owns those three, and duplicating them here would give two gates
 //     one job and let each assume the other is doing it.
+//   - It reads the files git TRACKS when git can say what they are
+//     (repositoryFiles), so a new file is invisible to it until `git add`. That
+//     is the price of not failing on a developer's untracked notes (#110), and CI
+//     pays none of it. What keeps `go test` from replaying a cached PASS after
+//     that `git add` is a set of directory reads and one Stat of the index, which
+//     no unit test here can observe; recordCheckoutForTestCache says what they
+//     cover, the one sequence they cannot, and why each has to stay.
 
 // contractVersionMarker is the one mechanized statement of the targeted contract.
 // tools/contractdrift asserts it against both specs' info.version; this guard
@@ -380,71 +390,214 @@ type contractVersionFinding struct {
 	Text  string
 }
 
-// scanContractVersions walks the repository and returns every version token that
-// neither equals the marker nor matches a registered exemption.
-func scanContractVersions(t *testing.T, marker string) []contractVersionFinding {
+// scanContractVersions reads every in-scope file repositoryFiles lists under dir
+// that is present on disk, and returns every version token that neither equals
+// the marker nor matches a registered exemption. Paths in findings are relative
+// to dir, slash-separated, which is the form the exemptions match on.
+func scanContractVersions(t *testing.T, dir, marker string) []contractVersionFinding {
 	t.Helper()
+	files, _, err := repositoryFiles(dir)
+	if err != nil {
+		t.Fatalf("list the repository's files: %v", err)
+	}
+	var findings []contractVersionFinding
+	for _, path := range files {
+		if ok, _ := inScope(path); !ok {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(path)))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // tracked, but absent from this checkout: see repositoryFiles
+		}
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		findings = append(findings, scanContractVersionsIn(path, string(raw), marker)...)
+	}
+	return findings
+}
+
+// scanContractVersionsIn classifies every version token in one file's body.
+func scanContractVersionsIn(path, body, marker string) []contractVersionFinding {
 	var findings []contractVersionFinding
 
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	historyFrom := 0
+	if path == "CHANGELOG.md" {
+		historyFrom = changelogHistoryStart(body)
+	}
+
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		lineNo := i + 1
+		if historyFrom > 0 && lineNo >= historyFrom {
+			break
+		}
+		// Two lines of look-back. Prose wraps, and the phrase that classifies
+		// a mention is regularly on the line above it.
+		prev := strings.Join(lines[max(i-2, 0):i], "\n")
+		for _, m := range versionToken.FindAllStringIndex(line, -1) {
+			token := line[m[0]:m[1]]
+			if token == marker {
+				continue
+			}
+			site := versionSite{Path: path, Prev: prev, Line: line, Token: token, Idx: m[0]}
+			if classifyContractVersion(site) != "" {
+				continue
+			}
+			findings = append(findings, contractVersionFinding{
+				Path: path, Line: lineNo, Token: token, Text: strings.TrimSpace(line),
+			})
+		}
+	}
+	return findings
+}
+
+// repositoryFiles lists the candidate files under dir, as slash-separated paths
+// relative to it, and names which source answered: "git" or "walk". The caller
+// filters them by scope.
+//
+// It used to walk the directory, which read whatever else was in the checkout --
+// an untracked notes.md, an ignored file under code-review/ -- and failed
+// `go test` on one developer's machine over a file the repository does not
+// contain (#110, found on the compat port in #109). When git can answer,
+// `git ls-files` is the tracked set, exactly. The cost runs the other way: a new
+// file is read once it is in the index and not before, so run the guard after
+// `git add`. CI reads a fresh checkout of the commit, where nothing is untracked.
+//
+// Two things git lists are still not read, and neither is new: a tracked file
+// absent from the checkout -- deleted, or outside a sparse checkout -- has no
+// copy on disk, and the walk never saw it either; CI's checkout is full. A
+// tracked symlink is read through to its target, as the walk read it.
+//
+// When git cannot answer for dir, it walks instead. That is the direction that
+// fails closed -- reading more rather than less -- and each case is one where
+// git's answer would be missing or wrong: no git binary; no repository at all,
+// as in the module cache; a repository that encloses dir without tracking any of
+// it, which lists nothing and would pass vacuously (a module cache under a home
+// directory kept in git); or git refusing a checkout another user owns
+// (safe.directory). In the last case the walk reads untracked files again,
+// which is #110 on that machine; overriding git's ownership check from a test
+// would be the worse trade.
+func repositoryFiles(dir string) (files []string, source string, err error) {
+	if files, ok := gitTrackedFiles(dir); ok {
+		return files, "git", nil
+	}
+	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		path = filepath.ToSlash(path)
+		rel, relErr := filepath.Rel(dir, path)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if ok, _ := inScope(path); !ok && path != "." {
-				if _, skipped := contractVersionSkipDirs[path]; skipped {
-					return fs.SkipDir
-				}
-			}
-			if strings.HasPrefix(path, ".git/") || path == ".git" {
+			if _, skipped := contractVersionSkipDirs[rel]; skipped {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if ok, _ := inScope(path); !ok {
-			return nil
-		}
-		raw, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		body := string(raw)
+		files = append(files, rel)
+		return nil
+	})
+	return files, "walk", err
+}
 
-		historyFrom := 0
-		if path == "CHANGELOG.md" {
-			historyFrom = changelogHistoryStart(body)
+// gitTrackedFiles returns the files git tracks under dir, and false when git
+// cannot answer for it -- see repositoryFiles for the cases.
+func gitTrackedFiles(dir string) ([]string, bool) {
+	cmd, err := gitIn(dir, "ls-files", "-z")
+	if err != nil {
+		return nil, false
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	var files []string
+	for name := range bytes.SplitSeq(out, []byte{0}) {
+		if len(name) > 0 {
+			files = append(files, string(name))
 		}
+	}
+	if len(files) == 0 {
+		return nil, false // an enclosing repository that tracks none of dir
+	}
+	recordCheckoutForTestCache(dir)
+	return files, true
+}
 
-		lines := strings.Split(body, "\n")
-		for i, line := range lines {
-			lineNo := i + 1
-			if historyFrom > 0 && lineNo >= historyFrom {
-				break
-			}
-			// Two lines of look-back. Prose wraps, and the phrase that classifies
-			// a mention is regularly on the line above it.
-			prev := strings.Join(lines[max(i-2, 0):i], "\n")
-			for _, m := range versionToken.FindAllStringIndex(line, -1) {
-				token := line[m[0]:m[1]]
-				if token == marker {
-					continue
-				}
-				site := versionSite{Path: path, Prev: prev, Line: line, Token: token, Idx: m[0]}
-				if classifyContractVersion(site) != "" {
-					continue
-				}
-				findings = append(findings, contractVersionFinding{
-					Path: path, Line: lineNo, Token: token, Text: strings.TrimSpace(line),
-				})
-			}
+// gitIn returns a git command that runs in dir and finds its repository from dir
+// alone.
+//
+// Git exports GIT_DIR, GIT_INDEX_FILE and the rest to every hook, so a guard run
+// from one would otherwise list whatever index the hook was handed. A partial
+// index lists part of the tree, and a non-empty answer about the wrong tree is
+// the one fail-open the empty-listing check cannot see. The variables removed
+// are the ones git itself clears before it works in another repository, asked of
+// the git that will run (`git rev-parse --local-env-vars`) rather than copied
+// here, where a newer git's addition would be missed.
+func gitIn(dir string, args ...string) (*exec.Cmd, error) {
+	out, err := exec.Command("git", "rev-parse", "--local-env-vars").Output()
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = withoutVariables(os.Environ(), strings.Fields(string(out)))
+	return cmd, nil
+}
+
+// withoutVariables returns environ minus every entry named in names, which are
+// upper case as --local-env-vars prints them. An entry's name is upper-cased
+// before the comparison because Windows' environment is case-insensitive, so a
+// git_dir set there can be read as GIT_DIR. Elsewhere git ignores a lower-case
+// git_dir, so dropping one changes nothing.
+func withoutVariables(environ, names []string) []string {
+	drop := map[string]bool{}
+	for _, name := range names {
+		drop[name] = true
+	}
+	kept := []string{} // non-nil: a nil exec.Cmd.Env inherits everything
+	for _, kv := range environ {
+		if name, _, _ := strings.Cut(kv, "="); !drop[strings.ToUpper(name)] {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
+}
+
+// recordCheckoutForTestCache makes `go test`'s result cache depend on what git
+// would list. Both calls in it are load-bearing, and their results are not
+// needed.
+//
+// The cache replays a PASS unless something the test process opened or stat-ed
+// has changed, and it cannot see what a subprocess read. The old walk opened
+// every directory it read, so a new file there changed a recorded listing;
+// `git ls-files` opens none, and without this a new file carrying a stale claim,
+// created and `git add`ed between two runs, replayed the first run's PASS
+// (verified on #110, in both a checkout and a linked worktree). So it opens every
+// directory outside .git, and a new path anywhere is a new entry in one of them.
+// Opening only the directories that hold tracked files is not enough: a file
+// created inside an untracked directory that already existed changes no listing
+// those directories record.
+//
+// That does not cover a file that was already there, untracked, during the last
+// run and is then `git add`ed, because only the index changes. The Stat of
+// <dir>/.git/index covers it when that is where the index is. Wherever it is not
+// -- a linked worktree, a submodule or a --separate-git-dir checkout, where .git
+// is a file, or a copy tracked inside a larger repository -- the index is
+// outside the module, `go test` rechecks only files inside the module, and that
+// one sequence can replay a PASS. `go test -count=1` runs it regardless, and
+// CI's fresh checkout never matches a cached run.
+func recordCheckoutForTestCache(dir string) {
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && d.Name() == ".git" {
+			return fs.SkipDir // it changes on every git command, and objects/ is large
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("walk the repository: %v", err)
-	}
-	return findings
+	_, _ = os.Stat(filepath.Join(dir, ".git", "index"))
 }
 
 // classifyContractVersion returns the name of the first exemption covering this
@@ -475,7 +628,7 @@ func siteIn(path, line, token string) versionSite {
 func TestEveryContractVersionMentionIsCurrentOrExempt(t *testing.T) {
 	marker := readContractVersionMarker(t)
 
-	findings := scanContractVersions(t, marker)
+	findings := scanContractVersions(t, ".", marker)
 	if len(findings) == 0 {
 		return
 	}
@@ -724,5 +877,156 @@ func TestContractVersionScopeExclusionsAreDeliberate(t *testing.T) {
 		if ok, _ := inScope(path); !ok {
 			t.Errorf("%s carries contract claims and must be in scope", path)
 		}
+	}
+}
+
+// The guard reads what the repository TRACKS when git can say what that is, and
+// not the rest of the checkout (#110). Built on a throwaway repository so the
+// untracked, ignored and deleted cases are real rather than assumed: a local
+// notes file carrying a stale claim must not fail anyone's `go test`, and a
+// tracked one still must.
+func TestContractVersionGuardReadsOnlyTrackedFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git binary: repositoryFiles walks instead, and the git path is what this test is about")
+	}
+	// Every git call here goes through gitIn, which already drops a hook's
+	// GIT_DIR and GIT_INDEX_FILE. What is left to shut out is the developer's
+	// own configuration, and HOME does that on any git; GIT_CONFIG_GLOBAL alone
+	// needs 2.32. Nothing here commits, so no hook or signing setting is reached.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd, err := gitIn(dir, args...)
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(dir, name, body string) {
+		t.Helper()
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed := func(files []string) string { return strings.Join(files, ",") }
+
+	// A claim no exemption covers, measured against a marker it does not equal.
+	const stale, marker = "The two specs are vendored at server 9.9.9.\n", "7.7.7"
+	dir := t.TempDir()
+	git(dir, "init", "-q")
+	write(dir, ".gitignore", "ignored/\n")
+	write(dir, "docs/tracked.md", stale)
+	write(dir, "docs/deleted.md", stale)
+	write(dir, "notes.md", stale)           // untracked
+	write(dir, "ignored/scratch.md", stale) // ignored
+	git(dir, "add", ".gitignore", "docs/tracked.md", "docs/deleted.md")
+	if err := os.Remove(filepath.Join(dir, "docs", "deleted.md")); err != nil {
+		t.Fatal(err)
+	}
+	const tracked = ".gitignore,docs/deleted.md,docs/tracked.md"
+
+	t.Run("git lists exactly the tracked set", func(t *testing.T) {
+		files, source, err := repositoryFiles(dir)
+		if err != nil || source != "git" {
+			t.Fatalf("a git work tree must be listed by git, got %q, %v", source, err)
+		}
+		if got := listed(files); got != tracked {
+			t.Errorf("want the tracked files, slash-separated, the deleted one included; got %q", got)
+		}
+	})
+
+	t.Run("only the tracked stale claim is a finding", func(t *testing.T) {
+		got := scanContractVersions(t, dir, marker)
+		if len(got) != 1 || got[0].Path != "docs/tracked.md" || got[0].Line != 1 || got[0].Token != "9.9.9" {
+			t.Errorf("want one finding at docs/tracked.md:1, and nothing from the untracked, ignored "+
+				"or deleted files; got %+v", got)
+		}
+	})
+
+	t.Run("a hook's repository variables do not redirect the listing", func(t *testing.T) {
+		// What a hook hands its children, pointed at a second repository whose
+		// index holds one unrelated file: a non-empty answer about the wrong tree.
+		other := t.TempDir()
+		git(other, "init", "-q")
+		write(other, "elsewhere.md", "unrelated\n")
+		git(other, "add", "elsewhere.md")
+		t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+		t.Setenv("GIT_WORK_TREE", other)
+		t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+
+		files, source, err := repositoryFiles(dir)
+		if err != nil || source != "git" {
+			t.Fatalf("got %q, %v", source, err)
+		}
+		if got := listed(files); got != tracked {
+			t.Errorf("the listing must come from the repository at dir, not from the environment; got %q", got)
+		}
+	})
+
+	t.Run("an enclosing repository that tracks none of dir is walked", func(t *testing.T) {
+		// ignored/ sits inside a repository that lists nothing under it, which
+		// is a module cache under a home directory kept in git. Taking that empty
+		// answer would scan nothing and pass.
+		files, source, err := repositoryFiles(filepath.Join(dir, "ignored"))
+		if err != nil || source != "walk" {
+			t.Fatalf("an empty listing must fall back to the walk, got %q, %v", source, err)
+		}
+		if got := listed(files); got != "scratch.md" {
+			t.Errorf("the walk reads what is there, got %q", got)
+		}
+	})
+
+	t.Run("with no git binary the walk reads everything but .git", func(t *testing.T) {
+		t.Setenv("PATH", "")
+		files, source, err := repositoryFiles(dir)
+		if err != nil || source != "walk" {
+			t.Fatalf("without git the walk must answer, got %q, %v", source, err)
+		}
+		if got := listed(files); got != ".gitignore,docs/tracked.md,ignored/scratch.md,notes.md" {
+			t.Errorf("the fallback reads every file outside .git, got %q", got)
+		}
+	})
+
+	t.Run("with no .git the walk reads everything", func(t *testing.T) {
+		if err := os.RemoveAll(filepath.Join(dir, ".git")); err != nil {
+			t.Fatal(err)
+		}
+		files, source, err := repositoryFiles(dir)
+		if err != nil || source != "walk" {
+			t.Fatalf("without .git the walk must answer, got %q, %v", source, err)
+		}
+		if got := listed(files); got != ".gitignore,docs/tracked.md,ignored/scratch.md,notes.md" {
+			t.Errorf("the fallback reads every file, which fails closed; got %q", got)
+		}
+		if got := scanContractVersions(t, dir, marker); len(got) != 3 {
+			t.Errorf("with nothing to say what is tracked, every stale claim is a finding; got %+v", got)
+		}
+	})
+}
+
+// The variables gitIn removes are matched without regard to case, as Windows
+// matches them, and removing every one of them must not hand exec.Cmd a nil Env,
+// which would inherit the lot.
+func TestWithoutVariablesDropsGitsLocalVariablesInAnyCase(t *testing.T) {
+	local := []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"}
+	environ := []string{"PATH=/bin", "GIT_DIR=/a", "git_index_file=/b", "Git_Work_Tree=/c",
+		"GIT_EDITOR=vi", "=C:=C:\\", "NOEQUALS"}
+	got := strings.Join(withoutVariables(environ, local), " ")
+	if want := `PATH=/bin GIT_EDITOR=vi =C:=C:\ NOEQUALS`; got != want {
+		t.Errorf("want %q, got %q", want, got)
+	}
+	if env := withoutVariables([]string{"GIT_DIR=/a"}, local); env == nil || len(env) != 0 {
+		t.Errorf("an environment with everything removed must be empty and non-nil, got %#v", env)
 	}
 }

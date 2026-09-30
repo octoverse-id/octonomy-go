@@ -20,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside pass each caught the same six; had neither looked, the repository would have merged with
   its API reference and its contributor instructions naming a contract it no longer vendored.
 
-  - **`TestEveryContractVersionMentionIsCurrentOrExempt`** (`contractversion_test.go`) walks every
-    tracked prose and source file and requires each version token to **either** equal the recorded
+  - **`TestEveryContractVersionMentionIsCurrentOrExempt`** (`contractversion_test.go`) reads the
+    prose and source files git tracks and requires each version token to **either** equal the recorded
     marker **or** match a category carrying a written reason. Anything else fails, naming the file,
     the line, and both readings so the contributor chooses rather than guesses. Verified end to end
     by reintroducing #84's exact defect: the guard flagged both injected sites by line.
@@ -61,6 +61,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     #77's guards: it must run in the pull request that adds the site, not only where a container
     does. `docs/roadmap.md`'s enforcement table gains a row, marked as the one entry that is not a
     recipe step — refreshing a contract is not a step, so the requirement had nowhere else to live.
+  - **It reads what git tracks, and at first it did not**
+    ([#110](https://github.com/octoverse-id/octonomy-go/issues/110)). The first revision walked the
+    whole checkout, so an untracked `notes.md` or an ignored review artifact under `code-review/`
+    that mentioned an old contract failed `go test` on one machine, over a file the repository does
+    not contain. It now lists its input with `git ls-files`, run with the repository-locating
+    variables a git hook exports removed, so a hook cannot point it at a partial index. It walks
+    the tree only when git cannot answer: no git binary, no `.git` (the module cache), an enclosing
+    repository that tracks none of the directory and would otherwise make it scan nothing and pass,
+    or a checkout git refuses as another user's.
+  - **Listing through git needed its own care for `go test`'s cache**, because the cache cannot see
+    what a subprocess reads. The walk opened every directory it read, so a new file there
+    invalidated a cached PASS; `git ls-files` opens none, and a stale file created and `git add`ed
+    between two runs replayed the first run's PASS. The guard now opens every directory outside `.git` and stats
+    `.git/index`. One sequence is still uncovered: wherever the index is not at `.git/index` — a
+    linked worktree, a submodule, a `--separate-git-dir` checkout, a copy tracked inside a larger
+    repository — it is outside the module, where `go test` does not look, so adding a file that was
+    already present during the last run can replay that run. `go test -count=1` runs it anyway, and
+    CI's fresh checkout never matches a cached run.
 
 ### Added
 - **A design doc for the compat line's `/api/v2` epic**
