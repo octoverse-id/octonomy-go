@@ -20,10 +20,10 @@ import (
 
 // --- The envelope-less non-2xx rule --------------------------------------
 //
-// This is a REGRESSION suite, not a feature suite. v1.0.0 mapped an
-// envelope-less non-2xx by status (codeFromStatus), so a bare 404 -- a wrong
-// BaseURL, a path-stripping proxy, or a server with no /api/v2 route -- became
-// CodeNotFound, IsNotFound(err) reported true, and a caller's ordinary "that tag
+// This is a REGRESSION suite, not a feature suite. This line's first release
+// mapped an envelope-less non-2xx by status (codeFromStatus), so a bare 404 --
+// a wrong BaseURL, a path-stripping proxy, or a server with no /api/v2 route --
+// became CodeNotFound, IsNotFound(err) reported true, and a caller's ordinary "that tag
 // doesn't exist" branch saw an empty taxonomy and no error at all.
 //
 // v1.0.0's own suite could not catch it: its one envelope-less test used a 502

@@ -6,7 +6,8 @@
 
 The official Go client for [Octonomy](https://github.com/octoverse-id/octonomy) — a multi-tenant,
 multi-application tag management and taxonomy service. This SDK is a hand-written, **dependency-free**
-(standard library only) client for the Octonomy REST API; this tree speaks `/api/v1`.
+(standard library only) client for the Octonomy REST API. It speaks `/api/v1` by default and
+`/api/v2` — with the namespace axis — opt-in; see [API version and namespaces](#api-version-and-namespaces).
 
 > ## This is the Go 1.13 line (`v1.x`)
 >
@@ -68,7 +69,7 @@ import (
 
 func main() {
 	client, err := octonomy.New(octonomy.Config{
-		BaseURL:  "https://octonomy.example.com", // SDK appends /api/v1
+		BaseURL:  "https://octonomy.example.com", // SDK appends /api/v1 (the default surface)
 		Token:    "svc_live_...",                 // service token -> Authorization: Bearer
 		TenantID: "acme",                         // -> X-Tenant-ID
 	})
@@ -103,13 +104,53 @@ Every request carries two credentials from `Config`:
 | `Authorization: Bearer <token>` | `Config.Token` | Service token (scopes: `tags:read`, `tags:write`, `audit:read`) |
 | `X-Tenant-ID` | `Config.TenantID` | Scopes every request to one tenant |
 | `X-Actor-ID` *(optional)* | `Config.ActorID` or `WithActor(...)` | Attributes mutations in the audit log |
+| `X-Request-ID` *(optional)* | `WithRequestID(...)`, per call | Joins the server's audit row, event and logs to your own; never sent unless you supply one |
 
 ```go
-// Attribute a single mutation to a specific actor.
+// Attribute a single mutation to a specific actor, and correlate it with your logs.
 tag, err := client.Tags.Update(ctx, id, octonomy.TagUpdate{
 	IsActive: octonomy.Bool(false),
-}, octonomy.WithActor("svc-catalog"))
+}, octonomy.WithActor("svc-catalog"), octonomy.WithRequestID(traceID))
 ```
+
+## API version and namespaces
+
+`Config.APIVersion` selects the REST surface. **On this line it defaults to `APIV1`**, which is where
+every `v1.0.0` request went, so upgrading moves no existing caller to another surface. That is the one
+default that differs from the `/v2` module, whose default is `APIV2`: this line can never change a
+default under a caller.
+
+`/api/v2` adds the namespace axis — merchant or sub-tenant scoping below the tenant — and needs an
+Octonomy server of 2.0 or later. Opt in, then scope each request; there is deliberately no client-level
+namespace, so one shared `*Client` cannot scope every read to whichever merchant was configured first:
+
+```go
+client, err := octonomy.New(octonomy.Config{
+	BaseURL:    "https://octonomy.example.com",
+	Token:      "svc_live_...",
+	TenantID:   "acme",
+	APIVersion: octonomy.APIV2,
+})
+
+// A namespaced read must name its application; namespaced reads exclude
+// tenant-shared rows unless you add WithIncludeGlobal.
+tags, err := client.Tags.List(ctx, nil,
+	octonomy.WithNamespace("merchant", "acme-store"),
+	octonomy.WithApplication("storefront"))
+```
+
+| Option | Sends | Applies to |
+| ------ | ----- | ---------- |
+| `WithNamespace(type, id)` | `X-Namespace-Type` / `X-Namespace-ID` | `APIV2` only |
+| `WithGlobalNamespace()` | no namespace headers — the tenant-shared namespace | any request; cancels an earlier `WithNamespace` |
+| `WithApplication(id)` | `application_id` query parameter | bodyless requests (`Get`, `List`, `Delete`); a write names its application in the body's `ApplicationID` |
+| `WithIncludeGlobal()` | `include_global=true` | `APIV2` reads only |
+
+A request whose options contradict each other or the client's API version — a namespace on a v1
+client, two different namespaces, `WithApplication` on a create — is refused **before it is sent**,
+with an error naming the fix. Last-wins on a scope is never how a contradiction is resolved. `Tag` and
+`Vocabulary` carry `NamespaceType` / `NamespaceID`, which are nil on a global row and on every
+`/api/v1` response.
 
 ## Errors
 
@@ -121,10 +162,42 @@ Non-2xx responses are returned as `*octonomy.APIError`, which exposes the server
 _, err := client.Tags.Get(ctx, id)
 switch {
 case octonomy.IsNotFound(err):
-	// 404
+	// Octonomy said 404 not_found
 case octonomy.IsValidation(err):
 	apiErr, _ := octonomy.AsAPIError(err)
 	fmt.Println(apiErr.Details)
+case octonomy.IsUnexpectedStatus(err):
+	// a non-2xx that Octonomy did not write: a proxy, a wrong BaseURL, or a
+	// server with no route for this API version
+case errors.Is(err, octonomy.ErrUnreachable):
+	// no response at all
+}
+```
+
+**The helpers match the code in Octonomy's error envelope, never a bare status.** A 404 with no
+envelope — a wrong `BaseURL`, a misrouted proxy — is `IsUnexpectedStatus`, not `IsNotFound`; reading it
+as "no such tag" would turn an infrastructure failure into an empty taxonomy. (This line's first
+release inferred a code from the status, and that was a defect; see the [CHANGELOG](CHANGELOG.md).) `IsScopeImmutable` names
+the `409` a `PATCH` gets for trying to move a row's scope, which `IsConflict` deliberately does not
+match: re-create the row in the target scope instead of retrying.
+
+## Health probes
+
+`/health/live` and `/health/ready` are unauthenticated and sit outside `/api/<version>`, so they need no
+token and no tenant. Use `client.Health` on a full client, or build a probe-only client from a base URL:
+
+```go
+hc, err := octonomy.NewHealthClient(baseURL,
+	octonomy.WithHealthHTTPClient(&http.Client{Timeout: 2 * time.Second}))
+
+_, err = hc.Health.Ready(ctx)
+switch {
+case err == nil:
+	// ready
+case octonomy.IsNotReady(err):
+	// the server answered and is not serving -- back off and re-probe
+case errors.Is(err, octonomy.ErrUnreachable):
+	// nothing answered -- wrong URL, process gone, or the deadline passed
 }
 ```
 
@@ -148,23 +221,23 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 | Vocabularies (`client.Vocabularies`) | ✅ Create / Get / List / Update / Delete |
 | Tags (`client.Tags`) | ✅ Create / Get / List / Update / Delete |
 | Tag aliases, resolution, assignments (+bulk), resource tags, audit logs | Not on this tree — [#94](https://github.com/octoverse-id/octonomy-go/issues/94) ports them from [`/v2`](https://pkg.go.dev/github.com/octoverse-id/octonomy-go/v2) |
-| Health probes | Not on this tree — [#91](https://github.com/octoverse-id/octonomy-go/issues/91) ports them |
+| Health probes (`client.Health`, `NewHealthClient`) | ✅ Live / Ready |
 | Webhook receiver | ⛔ never on this line, by policy — use [`/v2`](https://pkg.go.dev/github.com/octoverse-id/octonomy-go/v2) |
 
 ### Differences from the `/v2` line you may hit
 
 - **No `List[T]`.** Type parameters need Go 1.18. `TagList` and `VocabularyList` replace it; the
   fields are identical.
-- **No `CodeScopeImmutable` constant.** Server 3.1.0 added `409 scope_immutable` on tag, vocabulary,
-  and alias `PATCH`; this line exposes `PATCH` for the first two. The named constant and an `Is*` helper
-  are absent, but nothing is lost at runtime: `parseError` preserves whatever `code` the server
-  sends, so branch on the string directly.
-
-  ```go
-  if apiErr, ok := octonomy.AsAPIError(err); ok && apiErr.Code == "scope_immutable" {
-      // the tag's scope cannot be changed after creation
-  }
-  ```
+- **The default API version is `APIV1`**, not `APIV2` — see
+  [API version and namespaces](#api-version-and-namespaces).
+- **A `PATCH` cannot clear a nullable field.** The `*Update` fields are pointers, where nil means
+  "leave it alone", and the `/v2` module's `Optional[T]` is not ported because changing a published
+  field's type would break `v1.0.0` callers. `Metadata` is the exception: `Metadata{}` sends `{}` and
+  empties the stored object, while a nil `Metadata` leaves it alone.
+- **JSON nests at most 10,000 levels**, in a request body and in a response. Go 1.13's
+  `encoding/json` has no limit of its own, so a self-containing `Metadata` would hang it and a deeply
+  nested response would exhaust the stack; this line refuses both with an error. The `/v2` module's
+  standard library enforces the same response limit itself.
 - **`Metadata` is `map[string]interface{}`**, not `map[string]any` — the same type, spelled the way
   Go 1.13 spells it.
 
@@ -192,6 +265,8 @@ version from `go.mod` but not the stdlib version, so `io.ReadAll` (Go 1.16) comp
 - [Release](docs/release.md) — the release runbook.
 - [Roadmap](docs/roadmap.md) — what the `/v2` line has that this tree does not, and the epic porting
   it here.
+- [Porting checklist](docs/porting-checklist.md) — the rewrites a port from `main` makes, each marked
+  by whether a miss fails the go1.13 build or compiles and is wrong.
 - [CHANGELOG](CHANGELOG.md)
 
 ## Contributing & security

@@ -2,10 +2,11 @@
 // taxonomy service (https://github.com/octoverse-id/octonomy).
 //
 // Octonomy is a multi-tenant, multi-application REST service for vocabularies,
-// tags, aliases, and tag assignments. This SDK speaks the /api/v1 surface of
-// server release 3.2.1. The bundled docs/openapi.yaml is the contract this
-// client is written against; docs/openapi-v2.yaml, the same release's /api/v2
-// surface, is vendored alongside it for the port that adds /api/v2 opt-in.
+// tags, aliases, and tag assignments. This SDK speaks both REST surfaces of
+// server release 3.2.1: /api/v1 by default, and /api/v2 -- which adds the
+// namespace axis -- when Config.APIVersion is APIV2. The bundled
+// docs/openapi.yaml and docs/openapi-v2.yaml are the contracts this client is
+// written against.
 //
 // # Module path and release lines
 //
@@ -57,14 +58,43 @@
 //
 // Every request carries the service token (Authorization: Bearer) and the tenant
 // (X-Tenant-ID) from Config. Set Config.ActorID (or pass WithActor per call) to
-// populate X-Actor-ID for audit trails. Tokens are scoped to tags:read,
-// tags:write, and audit:read on the server side.
+// populate X-Actor-ID for audit trails, and pass WithRequestID to correlate one
+// call with your own logs. Tokens are scoped to tags:read, tags:write, and
+// audit:read on the server side.
+//
+// # API version and namespaces
+//
+// Config.APIVersion defaults to APIV1 on this line -- the surface every v1.0.0
+// request reached -- because this line never changes a default under a caller.
+// The /v2 module defaults to APIV2 instead. Set APIV2 here to reach /api/v2, and
+// scope a request to a merchant or sub-tenant namespace per call:
+//
+//	tags, err := client.Tags.List(ctx, nil,
+//		octonomy.WithNamespace("merchant", "acme-store"),
+//		octonomy.WithApplication("storefront"))
+//
+// There is no client-level namespace, on purpose. A request whose scope options
+// contradict each other, or the client's API version, is refused before it is
+// sent, with an error naming the fix; WithNamespace, WithApplication, and
+// WithIncludeGlobal each document what they require.
 //
 // # Errors
 //
 // Non-2xx responses are returned as *APIError, which exposes the Octonomy error
 // envelope (Code, Message, Details, RequestID) plus the HTTP StatusCode. Use the
 // IsNotFound, IsConflict, and IsValidation helpers to branch on common cases.
+//
+// The helpers match the code in the envelope, never a bare status: a non-2xx
+// that Octonomy did not write -- a proxy's 502, a wrong BaseURL's 404 -- is
+// IsUnexpectedStatus, and a request that got no response at all matches
+// errors.Is(err, ErrUnreachable).
+//
+// # Health probes
+//
+// Client.Health probes /health/live and /health/ready, which are unauthenticated
+// and outside /api/<version>. NewHealthClient builds a client for them from a
+// base URL alone, with no token and no tenant. IsNotReady (the server answered
+// and is not serving) and ErrUnreachable (nothing answered) stay distinct.
 //
 // # List responses
 //

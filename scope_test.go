@@ -98,7 +98,7 @@ func TestNew_APIVersion(t *testing.T) {
 		})
 	}
 	if DefaultAPIVersion != APIV1 {
-		t.Errorf("DefaultAPIVersion = %q, want %q: copying the /v2 module's default would move every v1.0.0 caller's requests to another surface", DefaultAPIVersion, APIV1)
+		t.Errorf("DefaultAPIVersion = %q, want %q: copying the /v2 module's default would move every existing caller's requests to another surface", DefaultAPIVersion, APIV1)
 	}
 }
 

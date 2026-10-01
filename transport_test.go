@@ -234,9 +234,9 @@ func TestDoRaw_TransportFailureKeepsTheSentinelAndTheCause(t *testing.T) {
 
 // A base URL with a path prefix, which a deployment behind a reverse proxy
 // has, and an id that needs escaping. Client.joinPath keeps url.URL's decoded
-// Path and escaped RawPath in step; v1.0.0 assigned the escaped path to Path
-// alone, so String() escaped it twice and "tag 1" reached the server as the
-// literal "tag%201".
+// Path and escaped RawPath in step; the first release assigned the escaped
+// path to Path alone, so String() escaped it twice and "tag 1" reached the
+// server as the literal "tag%201".
 func TestBaseURL_WithPathPrefix(t *testing.T) {
 	tests := []struct {
 		name        string

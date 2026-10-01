@@ -19,7 +19,7 @@ source of truth for how a change maps to a version bump.
 | ------- | ----- | ------- |
 | **Module path** | `module` line in `go.mod` | Which release line you are on. The `/v2` suffix is what makes the two lines *different modules* to Go. |
 | **SDK version** | `Version` in `version.go` + git tag `vX.Y.Z` | Canonical SemVer for the SDK and CHANGELOG. Go modules resolve versions from git tags. |
-| **Targeted server contract** | this document + the vendored `docs/openapi.yaml` / `docs/openapi-v2.yaml` + [`docs/contract-coverage.yaml`](contract-coverage.yaml) | Which Octonomy REST contract the SDK is written against. **Both specs track server `3.2.1`**. This tree's methods reach `/api/v1` only — `apiPrefix` in `octonomy.go` is a constant — so `openapi.yaml` is the surface they are held to; `openapi-v2.yaml` is vendored for the port that adds `/api/v2` opt-in ([#91](https://github.com/octoverse-id/octonomy-go/issues/91)). |
+| **Targeted server contract** | this document + the vendored `docs/openapi.yaml` / `docs/openapi-v2.yaml` + [`docs/contract-coverage.yaml`](contract-coverage.yaml) | Which Octonomy REST contract the SDK is written against. **Both specs track server `3.2.1`**. This tree's methods reach `/api/v1` by default and `/api/v2` when `Config.APIVersion` is `APIV2`, so both are surfaces they are held to; the models follow `openapi-v2.yaml`, whose schemas are the superset. |
 
 <!-- contract-version: 3.2.1 -->
 
@@ -137,10 +137,10 @@ ports it — and some never will be. The third column says which:
 | Missing | Why | Workaround |
 | ------- | --- | ---------- |
 | `List[T]` | Type parameters need Go 1.18 — **never**, since the floor never moves | `TagList`, `VocabularyList` — same fields |
-| `CodeScopeImmutable` + `Is*` helper | Server 3.1.0 added `409 scope_immutable` on tag/vocabulary/alias PATCH after this line was scoped; [#91](https://github.com/octoverse-id/octonomy-go/issues/91) ports `main`'s codes | `apiErr.Code == "scope_immutable"` — `parseError` preserves any code the server sends |
-| Every other resource group, `/api/v2`, namespaces | Not ported yet — [#91](https://github.com/octoverse-id/octonomy-go/issues/91), [#94](https://github.com/octoverse-id/octonomy-go/issues/94) | Wait for the port, or upgrade the toolchain and move to the `/v2` module |
+| Every other resource group | Not ported yet — [#94](https://github.com/octoverse-id/octonomy-go/issues/94); [`contract-coverage.yaml`](contract-coverage.yaml) records which operations this tree implements | Wait for the port, or upgrade the toolchain and move to the `/v2` module |
+| `/api/v2` **by default** | **Never** — this line cannot change a default under a caller, so `DefaultAPIVersion` is `APIV1` here and `APIV2` on `main` | Set `Config.APIVersion = APIV2` |
 | A webhook receiver | **Never** — policy, above | Move to the `/v2` module |
-| Clearing a nullable field with PATCH | **Not planned** — a named carve-out of the epic: the `*Update` fields stay pointers, since `main`'s `Optional[T]` would change their types (no major, above) | Move to the `/v2` module |
+| Clearing a nullable field with PATCH | **Not planned** — a named carve-out of the epic: the `*Update` fields stay pointers, since `main`'s `Optional[T]` would change their types (no major, above). `Metadata` is not affected: `Metadata{}` sends `{}` and empties it | Move to the `/v2` module |
 | `t.Cleanup` in tests | Needs Go 1.14 — **never** | `newTestClient` returns a cleanup func the caller defers |
 
 ## Release state
@@ -219,12 +219,12 @@ compatibility, not the server's REST version. A future server `/api/v3` would no
 an SDK `/v3` — only a break in the SDK's own exported Go API would. The compat line's `/api/v2` is
 that rule applied: a new surface, no break, so no major.
 
-> **Where *this* tree stands, to be exact:** it speaks `/api/v1` and nothing else. `apiPrefix` is a
-> hardcoded constant (`octonomy.go`) and `Config` has no API-version selector. That stopped being
-> permanent when [#89](https://github.com/octoverse-id/octonomy-go/issues/89) withdrew the freeze:
-> porting `main`'s `Config.APIVersion` is
-> [#91](https://github.com/octoverse-id/octonomy-go/issues/91), and it arrives opt-in, per the
-> support policy above. What the modern line reaches is stated on `main` — in
+> **Where *this* tree stands, to be exact:** `Config.APIVersion` selects the surface, and it defaults
+> to `APIV1` — so a caller who sets nothing reaches `/api/v1`, exactly as this line's first release
+> did, and `APIV2` is the opt-in. [#91](https://github.com/octoverse-id/octonomy-go/issues/91) ported the
+> selector from `main` with that one value changed, per the support policy above, after
+> [#89](https://github.com/octoverse-id/octonomy-go/issues/89) withdrew the freeze that had kept
+> this tree on `/api/v1` alone. What the modern line reaches is stated on `main` — in
 > [its README](https://github.com/octoverse-id/octonomy-go/blob/main/README.md) and
 > [its versioning policy](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md)
 > — and not here.

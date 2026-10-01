@@ -1,7 +1,7 @@
 # Architecture
 
-`octonomy-go` is a thin, hand-written client for the Octonomy REST API — on this tree `/api/v1`
-only, because `apiPrefix` in `octonomy.go` is a constant. It depends only on the Go standard
+`octonomy-go` is a thin, hand-written client for the Octonomy REST API — `/api/v1` by default on
+this line, `/api/v2` when `Config.APIVersion` is `APIV2`. It depends only on the Go standard
 library. The design goal is that an agent (or human) can add a new resource by copying an
 existing resource file and changing the types and paths.
 
@@ -9,11 +9,14 @@ existing resource file and changing the types and paths.
 
 | File | Responsibility |
 | ---- | -------------- |
-| `octonomy.go` | `Config`, `Client`, `New()` (validation + service wiring). |
-| `transport.go` | `doRaw()`: URL building under `apiPrefix` (`/api/v1`), auth/tenant headers, JSON encoding, non-2xx → `*APIError`. Then one decoder per response shape: `doData()` (single resource, unwraps `{"data": ...}`), `doList()` (list envelope), `do()` (no payload, e.g. DELETE's 204). Also `RequestOption` / `WithActor`. |
+| `octonomy.go` | `Config`, `APIVersion` (default `APIV1` on this line), `Client`, `New()` (validation + service wiring). |
+| `transport.go` | `doRaw()`: URL building under `/api/<version>`, auth/tenant/scope headers, the request-option chokepoint (`WithActor`, `WithRequestID`, the four scope options, `checkScopeCoherence`), JSON encoding, the 32 MiB read ceiling, non-2xx → `*APIError`. Then one decoder per response shape: `doData()` (single resource, unwraps `{"data": ...}`), `doList()` (list envelope), `do()` (no payload, e.g. DELETE's 204), each rejecting a decode with no identity. `doUnversioned()` is the separate, unauthenticated path for the health probes. |
+| `jsondepth.go` | Compat-only: the nesting guards Go 1.13's `encoding/json` lacks — `checkBodyDepth` before every request is encoded, `decodeJSON` around every response decode. |
 | `errors.go` | `APIError`, error `Code*` constants, and `Is*` / `AsAPIError` helpers. |
+| `health.go` | `HealthService`, `NewHealthClient`, and the bare `{"status": …}` decoder. |
 | `pagination.go` | `ListOptions` and `Pagination`. The list envelope itself is per-resource on this line (`TagList`, `VocabularyList`) because `List[T]` needs Go 1.18. |
 | `types.go` | Shared `Metadata` alias and the `String`/`Bool`/`Int` pointer helpers. |
+| `tags.go`, `vocabularies.go` | The two resources, each with a value-receiver `MarshalJSON` on its `*Update` so `Metadata{}` reaches the server as `{}`. |
 | `version.go` | `Version` constant (single source of truth) and the default User-Agent. |
 | `<resource>.go` | One file per resource: the model, `*Create`/`*Update` write structs, `*ListParams`, and the `*Service` with CRUD methods. |
 
@@ -22,18 +25,21 @@ existing resource file and changing the types and paths.
 1. A service method picks the transport helper that matches the response shape it expects:
    `doData` for a single resource (`Create`/`Get`/`Update`), `doList` for a list, plain `do` for a
    call with no payload to decode (`Delete`). All four funnel into `doRaw`.
-2. `doRaw` builds `BaseURL + apiPrefix + path` (`apiPrefix` is `/api/v1`), attaches headers,
-   JSON-encodes the body, and returns the raw 2xx body. On a non-2xx it calls `parseError`, which
-   decodes the `{error:{...}}` envelope into an `*APIError` (falling back to the raw body + a
-   status-derived code when the envelope is absent).
+2. `doRaw` applies the request options, refuses an incoherent scope before anything is sent, builds
+   `BaseURL + /api/<version> + path`, attaches headers, bounds and JSON-encodes the body, and returns
+   the raw 2xx body. On a non-2xx it calls `parseError`, which decodes the `{error:{...}}` envelope
+   into an `*APIError` — or, when the envelope is absent, keeps the raw body under
+   `CodeUnexpectedStatus`, never a code inferred from the status. A request that got no response
+   wraps `ErrUnreachable` instead.
 3. The caller decodes: `doData` unwraps `{"data": {...}}`, `doList` asserts the envelope then decodes
    `{data, pagination}` whole. Either way a 2xx whose body does not carry `data` is an **error**, not
    a zero-valued result — decoding a wrapped body straight into a `*Tag` or a `*TagList` produces an
-   empty struct with a nil error, and a caller cannot tell that from "no such tag" or "no tags".
+   empty struct with a nil error, and a caller cannot tell that from "no such tag" or "no tags". The
+   same holds one level in: a resource, or a list row, that decodes with no `id` is an error too.
 
 ```
                            ┌─ doData ─┐                                2xx body
-Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶ net/http ──▶ Octonomy /api/v1 (apiPrefix)
+Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶ net/http ──▶ Octonomy /api/<version>
                            └─ do ─────┘    │
    pick by response shape:                 ├─ 2xx → raw body back to the caller above:
      doData  single resource               │         doData → unwrap {"data":{…}}  → *Model
@@ -43,6 +49,9 @@ Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶
                                            └─ !2xx → *APIError (Code, Message, Details,
                                                      RequestID, StatusCode)
 
+Health.Live / Ready ──▶ doUnversioned ──▶ net/http ──▶ Octonomy /health/{live,ready}
+                        no auth, no tenant, no options; bare {"status": …} body
+
    A 2xx that does not carry the envelope its caller expects is an ERROR, never a
    zero-valued result: an empty struct with a nil error is indistinguishable from
    "no such tag", and an empty page from "no tags".
@@ -51,9 +60,9 @@ Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶
 ## Conventions that keep it faithful
 
 - **Contract reference:** `docs/openapi.yaml` (`/api/v1`) and `docs/openapi-v2.yaml` (`/api/v2`) are
-  vendored from the server, both at release 3.2.1. This tree's types mirror the **v1** schemas
-  field-for-field, because `/api/v1` is the only surface its requests reach; v1's schemas carry no
-  namespace fields and v2's do, so a port that adds them reads `openapi-v2.yaml`. The deliberate
+  vendored from the server, both at release 3.2.1. This tree's types mirror the **v2** schemas, the
+  superset: v1's carry no namespace fields, so `NamespaceType` / `NamespaceID` decode to nil on a v1
+  response. The deliberate
   divergences are both response envelopes: the generated specs show a bare array for lists and a bare
   object for single resources, while the server wraps lists in `{data, pagination}`
   (`octonomy/core/pagination.py`) and single resources in `{data}` (`octonomy/core/responses.py`).

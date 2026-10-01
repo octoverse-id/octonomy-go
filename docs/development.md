@@ -65,8 +65,14 @@ What the floor rules out, and what to write instead:
 | `io.ReadAll` | 1.16 | `ioutil.ReadAll` (`io/ioutil`) |
 | `os.ReadFile`, `os.WriteFile` | 1.16 | `ioutil.ReadFile`, `ioutil.WriteFile` |
 | `t.Cleanup` | 1.14 | return a cleanup func and `defer` it at the call site |
+| `http.Header.Values` | 1.14 | `h[http.CanonicalHeaderKey(name)]` |
+| `url.Values.Has` | 1.17 | `_, ok := q[key]` |
 | `errors.Join`, `min`/`max`, `for range int`, `strings.CutPrefix` | 1.20+ | spell it out |
+| two `%w` in one `fmt.Errorf` | 1.20 | a wrapper type with `Unwrap()` and `Is()` — this one **compiles and vets clean** on go1.13 and returns an error with no `Unwrap` at all |
 | `//go:build` **alone** | 1.17 | keep a matching `// +build` line beneath it |
+
+[`porting-checklist.md`](porting-checklist.md) is the full set of rewrites a port from `main` makes,
+each marked by whether go1.13.15 catches a miss — and, for the ones it does not, what does.
 
 `ioutil` is correct here and must not be "modernized". `staticcheck` stays silent (SA1019 keys off the
 declared language version, and the deprecation postdates `go 1.13`), but golangci-lint's `govet`
@@ -113,6 +119,13 @@ Tests use `net/http/httptest` to stand up a fake Octonomy and assert the wire co
 `(*Client, func())` and the caller **must** `defer cleanup()` — `t.Cleanup` needs Go 1.14, and a
 `defer srv.Close()` inside the helper would close the server before the test ever used it. Keep new
 code covered and run with `-race`.
+
+`newVersionedTestClient(t, version, handler)` (`scope_test.go`) pins the API version, and
+`newUnreachableClient` fails the test if a request is sent at all — use it for any guard that promises
+to refuse before sending. The JSON nesting guards' unguarded cases hang or kill the process, so
+`jsondepth_test.go` runs them in a **child process**: the test re-executes its own binary with
+`OCTONOMY_JSONDEPTH_CHILD` set and a deadline, and the parent reads the outcome from the exit status
+and output. Follow that pattern for any guard whose failure would take the test binary with it.
 
 Canned single-resource responses go through `writeData`, which wraps the body in the server's
 `{"data": {...}}` envelope. Handlers that returned the bare object matched the vendored spec rather
