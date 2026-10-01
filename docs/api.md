@@ -144,9 +144,11 @@ the body, so `WithApplication` is refused on all of them — each write struct n
 | `BulkAssign` | All or nothing; one unknown id fails the whole call. Takes `TagIDs`, `AliasSlugs`, or both. |
 | `BulkRemove` | A **`POST`**, not a `DELETE`. Canonical tag ids only — no alias form. Tolerates ids that match nothing. |
 
-**A bad target reports the first check it fails, in the server's order**, and the order differs by
-how the tag was named — so a row that is both inactive and in another application reports its
-inactivity, never the mismatch:
+**How a bad target is refused depends on how it was named.** By `TagID` or `AliasID` the server
+reports the first check that fails, in the order of the columns below, so a row that is both inactive
+and in another application reports its inactivity, never the mismatch. By `AliasSlug` there is no
+order: visibility, activity and application are all conditions of one lookup, so every failure is
+the same not-found `validation_error`, indistinguishable from an unknown slug:
 
 | Named by | Not visible | Inactive | Another application |
 | -------- | ----------- | -------- | ------------------- |

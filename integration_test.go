@@ -475,13 +475,14 @@ func TestSmoke_ResourceGroups(t *testing.T) {
 		t.Errorf("Assignments.Remove on an absent assignment: %v", err)
 	}
 
-	// A bad target reports the first server check it fails, and the order
-	// depends on how it is named (AssignmentService.Create). The retired tag and
-	// its alias live in app and are assigned from otherApp, so each call fails
-	// two checks at once -- inactive AND another application -- and must report
-	// the inactivity: inactive_tag by TagID, a validation_error through an alias
-	// (deactivating the tag cascades to the alias, which the server refuses
-	// before it ever compares applications).
+	// How a bad target is refused depends on how it is named
+	// (AssignmentService.Create). The retired tag and its alias live in app and
+	// are assigned from otherApp, so each call fails two conditions at once --
+	// inactive AND another application. By TagID and AliasID the server checks
+	// in order and reports the inactivity (inactive_tag; a validation_error for
+	// the alias, which deactivating the tag cascaded to). By AliasSlug there is
+	// no order, only a lookup that finds nothing: the not-found validation_error.
+	// None of the three may be application_mismatch.
 	otherApp := app + "-other"
 	retired, err := client.Tags.Create(ctx, octonomy.TagCreate{
 		ApplicationID: octonomy.String(app), Name: "Go 1.13 retired", Slug: uniqueSlug("smoke-rg-retired"), Type: "label",
@@ -502,16 +503,17 @@ func TestSmoke_ResourceGroups(t *testing.T) {
 		name string
 		in   octonomy.AssignmentCreate
 		want func(error) bool
+		what string
 	}{
-		{"by TagID", octonomy.AssignmentCreate{TagID: octonomy.String(retired.ID)}, octonomy.IsInactiveTag},
-		{"by AliasID", octonomy.AssignmentCreate{AliasID: octonomy.String(retiredAlias.ID)}, octonomy.IsValidation},
-		{"by AliasSlug", octonomy.AssignmentCreate{AliasSlug: octonomy.String(retiredAlias.Slug)}, octonomy.IsValidation},
+		{"by TagID", octonomy.AssignmentCreate{TagID: octonomy.String(retired.ID)}, octonomy.IsInactiveTag, "its inactivity, as inactive_tag"},
+		{"by AliasID", octonomy.AssignmentCreate{AliasID: octonomy.String(retiredAlias.ID)}, octonomy.IsValidation, "its inactivity, as a validation_error"},
+		{"by AliasSlug", octonomy.AssignmentCreate{AliasSlug: octonomy.String(retiredAlias.Slug)}, octonomy.IsValidation, "the not-found validation_error"},
 	} {
 		in := tc.in
 		in.ApplicationID, in.ResourceType, in.ResourceID = otherApp, "order", orderID
 		_, err := client.Assignments.Create(ctx, in)
 		if !tc.want(err) || octonomy.IsApplicationMismatch(err) {
-			t.Errorf("assigning an inactive, other-application target %s: got %v, want its inactivity reported and not the mismatch", tc.name, err)
+			t.Errorf("assigning an inactive, other-application target %s: got %v, want %s and not application_mismatch", tc.name, err, tc.what)
 		}
 	}
 

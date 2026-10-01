@@ -248,10 +248,11 @@ type AssignmentService struct {
 // carries.
 //
 // The target tag must exist, be active, and be assignable in the named
-// application. Which error a bad target gets depends on how it was named,
-// because the server runs its checks in a fixed order and reports the FIRST that
-// fails -- so a row that is both inactive and in another application reports
-// its inactivity, never the mismatch:
+// application. Which error a bad target gets depends on how it was named. By
+// TagID or AliasID the server runs its checks in a fixed order and reports the
+// FIRST that fails, so a row that is both inactive and in another application
+// reports its inactivity, never the mismatch. By AliasSlug there is no order:
+// every condition is one lookup, so every failure is the same not-found.
 //
 //   - By TagID: not visible, a validation_error naming tag_id; then inactive,
 //     an inactive_tag error (IsInactiveTag); then another application's tag, an
