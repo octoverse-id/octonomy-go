@@ -24,7 +24,7 @@ existing resource file and changing the types and paths.
 
 1. A service method picks the transport helper that matches the response shape it expects:
    `doData` for a single resource (`Create`/`Get`/`Update`), `doList` for a list, plain `do` for a
-   call with no payload to decode (`Delete`). All four funnel into `doRaw`.
+   call with no payload to decode (`Delete`). All three funnel into `doRaw`.
 2. `doRaw` applies the request options, refuses an incoherent scope before anything is sent, builds
    `BaseURL + /api/<version> + path`, attaches headers, bounds and JSON-encodes the body, and returns
    the raw 2xx body. On a non-2xx it calls `parseError`, which decodes the `{error:{...}}` envelope

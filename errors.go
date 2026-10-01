@@ -18,8 +18,11 @@ const (
 	CodeInactiveTag         = "inactive_tag"
 	CodeScopeImmutable      = "scope_immutable"
 
-	// Namespace codes. Every one of these is reachable only on /api/v2 (see
-	// APIVersion); v1 has no namespace axis.
+	// Namespace codes. namespace_not_supported is /api/v1's answer to namespace
+	// headers, since v1 has no namespace axis; the other three are reachable
+	// only on /api/v2 (see APIVersion). This SDK refuses namespace options on a
+	// v1 client before sending, so it reaches the first only when something
+	// other than WithNamespace set the headers.
 	CodeNamespaceNotSupported    = "namespace_not_supported"
 	CodeNamespaceInvalid         = "namespace_invalid"
 	CodeNamespacedWritesDisabled = "namespaced_writes_disabled"
