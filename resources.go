@@ -1,0 +1,345 @@
+package octonomy
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
+	"time"
+)
+
+// ResourceTag is one tag as seen FROM a resource: the tag itself plus the
+// assignment that links it. It is the read side of Assignments.Create, projected
+// so a caller listing a resource's tags gets the tag inline rather than a tag id
+// to look up.
+//
+// AssignmentID is the id of the underlying Assignment, which is what
+// Assignments.Remove and BulkRemove act on -- though both identify the row by
+// (application, tag, resource) rather than by this id.
+type ResourceTag struct {
+	AssignmentID string `json:"assignment_id"`
+
+	// NamespaceType and NamespaceID identify the merchant or sub-tenant namespace
+	// that owns the assignment; both are nil for a global row, and on every
+	// /api/v1 response. Decode-only, as everywhere.
+	NamespaceType *string   `json:"namespace_type"`
+	NamespaceID   *string   `json:"namespace_id"`
+	AssignedBy    *string   `json:"assigned_by"`
+	AssignedAt    time.Time `json:"assigned_at"`
+	Tag           Tag       `json:"tag"`
+}
+
+// identityFields names assignment_id, which is this row's identity -- it has no
+// "id" of its own -- and the embedded tag's id.
+//
+// The nested tag is named here and not on other models because BOTH vendored
+// contracts mark "tag" required on this schema, and because it is the whole
+// point of the route: ResourceTag exists to hand back the tag inline rather than
+// a tag id to look up, so {"assignment_id": "asg_1", "tag": {}} is a row that
+// answers nothing while looking complete. A nested resource is not automatically
+// part of a row's identity; this one is, because the contract says so.
+func (r ResourceTag) identityFields() []identityField {
+	return []identityField{
+		{name: "assignment_id", value: r.AssignmentID},
+		{name: "tag.id", value: r.Tag.ID},
+	}
+}
+
+// ResourceTagList is the envelope GET /resources/{resource_type}/{resource_id}/tags
+// returns: {"data": [...], "pagination": {...}}. It is the ResourceTag
+// instantiation of a shape that would otherwise be one generic type; see
+// pagination.go for why this line spells it out per resource.
+type ResourceTagList struct {
+	Data       []ResourceTag `json:"data"`
+	Pagination Pagination    `json:"pagination"`
+}
+
+// rows hands doList the decoded rows so it can check each one's identity.
+func (l *ResourceTagList) rows() []identifiedResource {
+	rows := make([]identifiedResource, len(l.Data))
+	for i := range l.Data {
+		rows[i] = l.Data[i]
+	}
+	return rows
+}
+
+// TagResource is one resource as seen FROM a tag -- the mirror of ResourceTag,
+// and the reason the two exist separately. It carries no tag, because the tag is
+// what you started from, and no assignment id, because the route answers "what
+// is this tag on" rather than "which links exist".
+type TagResource struct {
+	ApplicationID string `json:"application_id"`
+
+	// NamespaceType and NamespaceID identify the merchant or sub-tenant namespace
+	// that owns the assignment; both are nil for a global row.
+	NamespaceType *string   `json:"namespace_type"`
+	NamespaceID   *string   `json:"namespace_id"`
+	ResourceType  string    `json:"resource_type"`
+	ResourceID    string    `json:"resource_id"`
+	AssignedBy    *string   `json:"assigned_by"`
+	AssignedAt    time.Time `json:"assigned_at"`
+}
+
+// identityFields names resource_id: a TagResource carries no id of its own, and
+// the contract marks resource_id required.
+func (r TagResource) identityFields() []identityField {
+	return []identityField{{name: "resource_id", value: r.ResourceID}}
+}
+
+// TagResourceList is the envelope GET /tags/{tag_id}/resources returns:
+// {"data": [...], "pagination": {...}}. It is the TagResource instantiation of a
+// shape that would otherwise be one generic type; see pagination.go for why this
+// line spells it out per resource.
+type TagResourceList struct {
+	Data       []TagResource `json:"data"`
+	Pagination Pagination    `json:"pagination"`
+}
+
+// rows hands doList the decoded rows so it can check each one's identity.
+func (l *TagResourceList) rows() []identifiedResource {
+	rows := make([]identifiedResource, len(l.Data))
+	for i := range l.Data {
+		rows[i] = l.Data[i]
+	}
+	return rows
+}
+
+// ResourceReplace is the request body for replacing a resource's whole tag set.
+//
+// It names no resource: ResourceType and ResourceID come from the PATH, and the
+// server overwrites whatever a body carries for them with the path values. The
+// contract lists them on this schema all the same, which is why they are absent
+// here -- a field that cannot affect the request does not belong on it.
+//
+// TagIDs and AliasSlugs are unioned, exactly as on BulkAssign. Unlike BulkAssign,
+// though, BOTH MAY BE EMPTY, and that is not a validation error -- see
+// ResourceService.ReplaceTags, because it is the destructive case.
+type ResourceReplace struct {
+	ApplicationID string   `json:"application_id"`
+	TagIDs        []string `json:"tag_ids,omitempty"`
+	AliasSlugs    []string `json:"alias_slugs,omitempty"`
+	AssignedBy    *string  `json:"assigned_by,omitempty"`
+}
+
+// ResourceReplaceResult reports what a replace changed: how many assignments it
+// added, how many it deleted, and the resource's resulting tag set.
+//
+// Tags is []Tag and NOT []ResourceTag, which is worth reading twice -- the
+// replace answers with the tags themselves, not with the assignments that link
+// them, so there is no AssignmentID or AssignedAt here. UsageCount on each Tag is
+// populated by the server for this response.
+//
+// Created and Removed are counts of assignments, so a replace that swaps one tag
+// for another reports 1 and 1 while Tags has the same length as before.
+type ResourceReplaceResult struct {
+	Created int   `json:"created"`
+	Removed int   `json:"removed"`
+	Tags    []Tag `json:"tags"`
+}
+
+// UnmarshalJSON requires the keys a caller acts on, for the reason given on
+// BulkAssignResult: this is a composite of counters, where the zero value is a
+// perfectly ordinary answer. Created 0, Removed 0 is what a replace reports when
+// the requested set already matched, so a body whose keys the server renamed
+// would read as "nothing needed changing" rather than as the contract break it
+// is. A present-but-null tags array normalizes to an empty non-nil slice.
+//
+// Every decode goes through decodeJSON, for the reason TagResolution's
+// UnmarshalJSON records.
+func (r *ResourceReplaceResult) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Created *int            `json:"created"`
+		Removed *int            `json:"removed"`
+		Tags    json.RawMessage `json:"tags"`
+	}
+	if err := decodeJSON(data, &wire); err != nil {
+		return err
+	}
+	switch {
+	case wire.Created == nil:
+		return fmt.Errorf(`octonomy: replace response has no "created" count`)
+	case wire.Removed == nil:
+		return fmt.Errorf(`octonomy: replace response has no "removed" count`)
+	case wire.Tags == nil:
+		return fmt.Errorf(`octonomy: replace response has no "tags" array`)
+	}
+	out := ResourceReplaceResult{Created: *wire.Created, Removed: *wire.Removed}
+	// Each row is held to the resource standard, for the reason given on
+	// BulkAssignResult: a null or {} row decodes to a blank Tag in an otherwise
+	// good result.
+	const what = `replace "tags"`
+	if err := requireResourceArray(wire.Tags, what); err != nil {
+		return err
+	}
+	if err := decodeJSON(wire.Tags, &out.Tags); err != nil {
+		return fmt.Errorf("octonomy: decode %s: %w", what, err)
+	}
+	for i := range out.Tags {
+		if err := requireIdentity(out.Tags[i], fmt.Sprintf("%s element %d", what, i)); err != nil {
+			return err
+		}
+	}
+	if out.Tags == nil {
+		out.Tags = []Tag{}
+	}
+	*r = out
+	return nil
+}
+
+// ResourceListTagsParams filters and pages a resource's tag list.
+//
+// ApplicationID is REQUIRED on this route -- the only list in this SDK where that
+// is true -- and a request supplying it from neither source is a validation_error
+// naming the parameter. Set it here, or with WithApplication; setting both to
+// different values is a contradiction rather than a precedence question. A nil
+// *params is therefore fine WITH the option and fails without it. The SDK does
+// not default it, because the alternative is inventing an application, and there
+// is no safe one to invent.
+//
+// IncludeInactive is NOT the is_active filter the tag and alias lists take. It is
+// a different parameter with different polarity: nil or false returns only
+// assignments whose tag is active, and true widens to include deactivated tags.
+// There is no way to ask for deactivated tags ALONE.
+type ResourceListTagsParams struct {
+	ListOptions
+	ApplicationID   *string
+	IncludeInactive *bool
+	Type            *string
+}
+
+func (p *ResourceListTagsParams) query() url.Values {
+	q := url.Values{}
+	if p == nil {
+		return q
+	}
+	p.apply(q)
+	if p.ApplicationID != nil {
+		q.Set(applicationIDParam, *p.ApplicationID)
+	}
+	if p.IncludeInactive != nil {
+		q.Set("include_inactive", strconv.FormatBool(*p.IncludeInactive))
+	}
+	if p.Type != nil {
+		q.Set("type", *p.Type)
+	}
+	return q
+}
+
+// TagListResourcesParams filters and pages the resources a tag is on. Unlike
+// ResourceListTagsParams, ApplicationID is optional here: with it unset the list
+// spans every application the caller can see.
+type TagListResourcesParams struct {
+	ListOptions
+	ApplicationID *string
+	ResourceType  *string
+}
+
+func (p *TagListResourcesParams) query() url.Values {
+	q := url.Values{}
+	if p == nil {
+		return q
+	}
+	p.apply(q)
+	if p.ApplicationID != nil {
+		q.Set(applicationIDParam, *p.ApplicationID)
+	}
+	if p.ResourceType != nil {
+		q.Set("resource_type", *p.ResourceType)
+	}
+	return q
+}
+
+// ResourceService accesses the /resources endpoints, which look at tagging from
+// the resource's side. Reach it via Client.Resources.
+type ResourceService struct {
+	client *Client
+}
+
+// resourcePath escapes each segment exactly once -- see Client.resolvePath, which
+// is what makes "once" true rather than twice.
+//
+// A resourceID CONTAINING A SLASH cannot be addressed at all, and no amount of
+// escaping changes that. The server's route is a Django <str:resource_id>
+// converter, which matches anything but a slash, and WSGI hands it a path with
+// %2F already decoded -- so the segment splits and no route matches. Probed
+// against 3.1.0: %2F answers 404 with an HTML body and no Octonomy error
+// envelope, which this SDK surfaces as CodeUnexpectedStatus (IsUnexpectedStatus),
+// never as IsNotFound. The failure is loud, which is why the SDK documents the
+// limit here rather than rejecting the input: refusing it locally would be
+// encoding the server's routing, and the server is free to change it.
+//
+// The server's own validator accepts a slash (validate_external_id checks only
+// for blankness), so this is a gap between what Octonomy will STORE and what it
+// will ROUTE, not an SDK restriction. A resource id with a slash can be created
+// through Assignments.Create, whose id travels in the body, and then never read
+// back through these routes.
+func resourcePath(resourceType, resourceID, suffix string) string {
+	return "/resources/" + url.PathEscape(resourceType) + "/" + url.PathEscape(resourceID) + suffix
+}
+
+// ListTags returns a page of the tags on one resource
+// (GET /resources/{resource_type}/{resource_id}/tags).
+//
+// params must supply ApplicationID, or the call must carry WithApplication: the
+// server requires it here and answers a validation_error without it.
+//
+// Deactivated tags are excluded unless ResourceListTagsParams.IncludeInactive is
+// true. Since Tags.Delete is deactivation, a tag "deleted" after being assigned
+// keeps its assignment and simply stops appearing here.
+func (s *ResourceService) ListTags(ctx context.Context, resourceType, resourceID string, params *ResourceListTagsParams, opts ...RequestOption) (*ResourceTagList, error) {
+	var out ResourceTagList
+	if err := s.client.doList(ctx, http.MethodGet, resourcePath(resourceType, resourceID, "/tags"), params.query(), &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ReplaceTags sets a resource's tag set to exactly what the body names
+// (POST /resources/{resource_type}/{resource_id}/tags).
+//
+// THIS REPLACES, IT DOES NOT MERGE. Every tag currently on the resource and
+// absent from the request is REMOVED. Reading the current set, appending to it,
+// and sending the result is the merge; sending only the additions deletes
+// everything else.
+//
+// AN EMPTY REQUEST IS LEGAL AND CLEARS THE RESOURCE. ResourceReplace with no
+// TagIDs and no AliasSlugs removes every tag and returns Created 0 with Removed
+// equal to what was there. That is a deliberate difference from BulkAssign, which
+// refuses an empty request -- so an empty slice that reached this call by
+// accident, from a filter that matched nothing, wipes the resource silently and
+// successfully.
+//
+// The whole operation is one atomic unit and shares a single operation_id across
+// every audit and outbox event it emits, so the removals and additions can be
+// correlated as one act rather than read as unrelated churn.
+//
+// The response is a COMPOSITE under the data envelope, and both vendored specs
+// are wrong about it twice over: they claim a bare array, and they claim the
+// elements are ResourceTag. Neither holds -- the server sends
+// {"data": {"created": N, "removed": N, "tags": [...]}}, and those tags are Tag
+// values. A client written from the spec decodes an empty slice and a nil error;
+// one that guessed the envelope but kept the element type would decode Tags with
+// every field empty.
+func (s *ResourceService) ReplaceTags(ctx context.Context, resourceType, resourceID string, in ResourceReplace, opts ...RequestOption) (*ResourceReplaceResult, error) {
+	var out ResourceReplaceResult
+	if err := s.client.doData(ctx, http.MethodPost, resourcePath(resourceType, resourceID, "/tags"), nil, in, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListResources returns a page of the resources one tag is assigned to
+// (GET /tags/{tag_id}/resources).
+//
+// It lives here rather than in tags.go because everything it decodes belongs to
+// the resource side. A tag the request's scope cannot see is a not_found for the
+// TAG, not an empty page.
+func (s *TagService) ListResources(ctx context.Context, tagID string, params *TagListResourcesParams, opts ...RequestOption) (*TagResourceList, error) {
+	var out TagResourceList
+	if err := s.client.doList(ctx, http.MethodGet, "/tags/"+url.PathEscape(tagID)+"/resources", params.query(), &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

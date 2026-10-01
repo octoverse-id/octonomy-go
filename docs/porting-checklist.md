@@ -22,7 +22,8 @@ on `main` ([#103](https://github.com/octoverse-id/octonomy-go/issues/103)); rows
 | `*List[Tag]` (and each other `List[T]`) | a per-resource `*TagList`, with a `rows()` method | **LOUD** | go1.13 build; `doList` takes an `identifiedList`, so a list type without `rows()` does not compile as its argument |
 | `doData[Tag](ctx, c, …)` | `var out Tag; c.doData(…, &out)` — a statement rewrite, not an expression | **LOUD** | go1.13 build |
 | `doList[Tag](ctx, c, …)` | `var out TagList; c.doList(…, &out)` | **LOUD** | go1.13 build |
-| `decodeResourceArray[T]` | `requireResourceArray` + the list type's `rows()` (#91) | **LOUD** | go1.13 build |
+| `decodeResourceArray[T]` | in a list, `requireResourceArray` + the list type's `rows()` (#91); in a composite's `UnmarshalJSON`, `requireResourceArray`, then `decodeJSON` into the typed slice, then `requireIdentity` per row (#94) | **LOUD** | go1.13 build |
+| `decodeResourceArray[T]`'s null handling, in a composite | after the decode, `if rows == nil { rows = []T{} }` — `main`'s helper returns an empty non-nil slice for a present-but-null array, and a whole-slice `decodeJSON` leaves nil (#94). **Not** in `doList`, which keeps a null page nil as `v1.0.0` did | **SILENT** | It compiles either way and only a nil-versus-empty check sees it: the null cases in `assignments_test.go` and `resources_test.go`. A new composite needs its own. A type error inside one row also loses its index — the whole slice decodes at once — which those tests pin as the accepted message |
 | `slices.Reverse`, `slices.DeleteFunc`, `slices.SortFunc`, … | a local helper, or `sort.Slice` | **LOUD** | go1.13 build |
 | `strings.Cut` / `CutPrefix`, `errors.Join`, `min` / `max` builtins | spell it out | **LOUD** | go1.13 build |
 | `url.Values.Has` (1.17) | `_, ok := q[key]` | **LOUD** | go1.13 build |

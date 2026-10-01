@@ -4,10 +4,10 @@
 # identical from the outside, and that is how this line came to sit two server
 # majors behind, vendoring a contract from before the server made a second API
 # surface its primary one.
-# A row here turns "not implemented" into a decision with a reason attached. On this
-# line that matters more, not less: this tree implements three of the
-# eight resource groups the contracts publish, so most of the rows below are gaps,
-# and each one says which issue closes it.
+# A row here turns "not implemented" into a decision with a reason attached. Since
+# #94 this tree implements all eight resource groups the contracts publish, so
+# every row below names a method. One that ever loses its method needs an
+# `unimplemented:` reason in its place, which is the gap made visible.
 #
 # WHAT READS IT ON THIS BRANCH, AND WHAT DOES NOT. `contractbaseline_test.go` runs
 # in `make test` and in the go1.13 job, and holds this file to four things:
@@ -53,10 +53,11 @@
 # struct or an empty page with a nil error (#32, the same family twice). The values
 # on every row were established against a booted server when main's inventory was
 # written, and were copied from main's file at 61fce9b, whose specs are the two
-# vendored here byte for byte. On an `unimplemented:` row they are carried
-# unchanged so the port that implements the operation starts from the reviewed
-# shape rather than re-deriving it. On this branch nothing asserts them yet — that
-# is #98.
+# vendored here byte for byte. They were carried unchanged on the rows #94 later
+# implemented, so its port started from the reviewed shape rather than
+# re-deriving it, and every `composite-envelope` row decodes through doData with a
+# result struct, never doList. On this branch nothing asserts the values yet —
+# that is #98.
 #
 # `composite_body` is a WITNESS, not a transcript: the shape is what the server
 # returns, the numbers are chosen so a decoder crossing two of them changes both.
@@ -119,63 +120,58 @@ operations:
     documented_response: none
     actual_response: none
 
-  # --- Tag aliases (not on this tree) -----------------------------------------
+  # --- Tag aliases (aliases.go) -----------------------------------------------
   - path: /tag-aliases
     method: get
-    unimplemented: &not_ported_94 >-
-      Not ported to this line. The tree implements three of the eight resource
-      groups the contracts publish, tags, vocabularies and the health probes; the
-      other resource groups are hand-ported from main under epic #88, and #94
-      carries this one.
-      Replace this reason with the method's name in the PR that adds it.
+    sdk: AliasService.List
     documented_response: array
     actual_response: list-envelope
   - path: /tag-aliases
     method: post
-    unimplemented: *not_ported_94
+    sdk: AliasService.Create
     documented_response: ref:TagAlias
     actual_response: data-envelope
   - path: /tag-aliases/{alias_id}
     method: get
-    unimplemented: *not_ported_94
+    sdk: AliasService.Get
     documented_response: ref:TagAlias
     actual_response: data-envelope
   - path: /tag-aliases/{alias_id}
     method: patch
-    unimplemented: *not_ported_94
+    sdk: AliasService.Update
     documented_response: ref:TagAlias
     actual_response: data-envelope
   - path: /tag-aliases/{alias_id}
     method: delete
-    unimplemented: *not_ported_94
+    sdk: AliasService.Delete
     documented_response: none
     actual_response: none
   - path: /tags/{tag_id}/aliases
     method: get
-    unimplemented: *not_ported_94
+    sdk: TagService.ListAliases
     documented_response: array
     actual_response: list-envelope
 
-  # --- Tag resolution (not on this tree) --------------------------------------
+  # --- Tag resolution (resolution.go) -----------------------------------------
   - path: /tag-resolution
     method: get
     # One specialized read: no list, no writes. `scope` is a query parameter here
     # and nowhere else, and it is one of the few things #90's refresh added to
     # docs/openapi.yaml.
-    unimplemented: *not_ported_94
+    sdk: TagService.Resolve
     documented_response: ref:TagResolution
     actual_response: data-envelope
 
-  # --- Assignments (not on this tree) -----------------------------------------
+  # --- Assignments (assignments.go) -------------------------------------------
   - path: /tag-assignments
     method: post
-    unimplemented: *not_ported_94
+    sdk: AssignmentService.Create
     documented_response: ref:Assignment
     actual_response: data-envelope
   - path: /tag-assignments
     method: delete
     # A DELETE that carries a body; the ids travel in it rather than in the path.
-    unimplemented: *not_ported_94
+    sdk: AssignmentService.Remove
     undocumented_request_body: >-
       The ids travel in the payload rather than the path, and the generated spec
       documents no requestBody for a DELETE at all — drf-spectacular does not emit
@@ -188,8 +184,9 @@ operations:
     method: post
     # The spec claims a bare array. The server returns
     # {"data": {"created": N, "existing": N, "skipped": N, "assignments": [...]}} —
-    # a composite, not a page, so it carries no pagination block.
-    unimplemented: *not_ported_94
+    # a composite, not a page, so it carries no pagination block and decodes through
+    # doData rather than doList.
+    sdk: AssignmentService.BulkAssign
     documented_response: array
     actual_response: composite-envelope
     composite_body: '{"created": 1, "existing": 2, "skipped": 3, "assignments": [{"id": "11111111-1111-4111-8111-111111111111", "tenant_id": "cd~tenant_id", "application_id": "cd~application_id", "namespace_type": "cd~namespace_type", "namespace_id": "cd~namespace_id", "tag_id": "22222222-2222-4222-8222-222222222222", "resource_type": "cd~resource_type", "resource_id": "cd~resource_id", "assigned_by": "cd~assigned_by", "assigned_at": "2026-01-02T03:04:05Z"}]}'
@@ -197,46 +194,46 @@ operations:
     method: post
     # The spec documents NO response schema at all. The server returns
     # {"data": {"removed": N}}.
-    unimplemented: *not_ported_94
+    sdk: AssignmentService.BulkRemove
     documented_response: none
     actual_response: composite-envelope
     composite_body: '{"removed": 4}'
 
-  # --- Resource tags (not on this tree) ---------------------------------------
+  # --- Resource tags (resources.go) -------------------------------------------
   - path: /resources/{resource_type}/{resource_id}/tags
     method: get
-    unimplemented: *not_ported_94
+    sdk: ResourceService.ListTags
     documented_response: array
     actual_response: list-envelope
   - path: /resources/{resource_type}/{resource_id}/tags
     method: post
     # Composite replace, not an append: same bare-array claim as bulk-assign, same
     # composite body in reality.
-    unimplemented: *not_ported_94
+    sdk: ResourceService.ReplaceTags
     documented_response: array
     actual_response: composite-envelope
     composite_body: '{"created": 5, "removed": 6, "tags": [{"id": "33333333-3333-4333-8333-333333333333", "tenant_id": "cd~tenant_id", "application_id": "cd~application_id", "namespace_type": "cd~namespace_type", "namespace_id": "cd~namespace_id", "name": "cd~name", "slug": "cd~slug", "type": "cd~type", "description": "cd~description", "parent_id": "44444444-4444-4444-8444-444444444444", "vocabulary_id": "55555555-5555-4555-8555-555555555555", "metadata": {"cd~metadata": "value"}, "is_active": true, "usage_count": 7, "created_at": "2026-01-02T03:04:05Z", "updated_at": "2026-01-03T03:04:05Z"}]}'
   - path: /tags/{tag_id}/resources
     method: get
-    unimplemented: *not_ported_94
+    sdk: TagService.ListResources
     documented_response: array
     actual_response: list-envelope
 
-  # --- Audit logs (not on this tree) ------------------------------------------
+  # --- Audit logs (audit.go) --------------------------------------------------
   # List-only, on all three routes. There is no Get.
   - path: /audit-logs
     method: get
-    unimplemented: *not_ported_94
+    sdk: AuditLogService.List
     documented_response: array
     actual_response: list-envelope
   - path: /tags/{tag_id}/audit-logs
     method: get
-    unimplemented: *not_ported_94
+    sdk: TagService.ListAuditLogs
     documented_response: array
     actual_response: list-envelope
   - path: /resources/{resource_type}/{resource_id}/audit-logs
     method: get
-    unimplemented: *not_ported_94
+    sdk: ResourceService.ListAuditLogs
     documented_response: array
     actual_response: list-envelope
 

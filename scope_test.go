@@ -5,9 +5,6 @@ package octonomy
 // C-style loop with an explicit i := i for range-over-int):
 //
 //   - The default-version cases assert APIV1, this line's default.
-//   - The include_global-alongside-scope=merchant case goes through doRaw with a
-//     hand-built query, since TagService.Resolve is not on this tree; the rule
-//     belongs to checkScopeCoherence either way.
 //   - TagUpdate fields are pointers here, so String("N") replaces Set("N").
 
 import (
@@ -252,13 +249,15 @@ func TestScopeGuards_RejectBeforeSendingAnything(t *testing.T) {
 			wantIn: "Config.APIVersion = APIV2",
 		},
 		{
-			// The scope param's own contradiction. The server resolves this one
-			// silently in favor of the scope instead of rejecting it.
+			// The scope param's own contradiction. It is asserted here rather than
+			// only in resolution_test.go because checkScopeCoherence owns it, and
+			// because the server resolves this one silently in favor of the scope
+			// instead of rejecting it.
 			name:    "include_global alongside scope=merchant",
 			version: APIV2,
 			call: func(c *Client) error {
-				_, _, err := c.doRaw(context.Background(), http.MethodGet, "/tag-resolution",
-					mustQuery("slug", "sale", scopeParam, scopeMerchantValue, applicationIDParam, "shop"), nil,
+				_, err := c.Tags.Resolve(context.Background(), "sale",
+					&TagResolveParams{Scope: ResolutionScopeMerchant, ApplicationID: String("shop")},
 					WithNamespace("merchant", "m1"), WithIncludeGlobal())
 				return err
 			},
@@ -531,8 +530,8 @@ func TestMergeQuery_DoesNotMutateTheCallersParams(t *testing.T) {
 // is a reserved namespace TYPE. The two rules live on different parameters and a
 // flat "reject global" would break a valid call.
 //
-// The resolution route is not on this tree, so these exercise the transport
-// rule through a query of the shape that route builds.
+// They go through doRaw, as main's do, so they pin the transport rule apart
+// from Resolve's own query builder; resolution_test.go covers the Resolve call.
 func TestScopeParam_MerchantNeedsANamespaceButGlobalDoesNot(t *testing.T) {
 	t.Run("scope=merchant without a namespace is refused locally", func(t *testing.T) {
 		c, cleanup := newUnreachableClient(t, APIV2)

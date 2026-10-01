@@ -34,8 +34,9 @@ type Pagination struct {
 
 // The list envelope every Octonomy endpoint returns -- {"data": [...],
 // "pagination": {...}} -- is declared once per resource on this line, as TagList
-// (tags.go) and VocabularyList (vocabularies.go), rather than once as a generic
-// List[T]. Type parameters need Go 1.18 and this line targets Go 1.13, so a new
+// (tags.go), VocabularyList (vocabularies.go), TagAliasList (aliases.go),
+// ResourceTagList and TagResourceList (resources.go) and AuditLogList
+// (audit.go), rather than once as a generic List[T]. Type parameters need Go 1.18 and this line targets Go 1.13, so a new
 // resource repeats the two-field struct instead of instantiating a shared one.
 // Only the Data field differs; Pagination and ListOptions above carry no type
 // parameter and so needed no such treatment.

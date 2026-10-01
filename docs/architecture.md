@@ -14,7 +14,7 @@ existing resource file and changing the types and paths.
 | `jsondepth.go` | Compat-only: the nesting guards Go 1.13's `encoding/json` lacks — `checkBodyDepth` before every request is encoded, `decodeJSON` around every response decode. |
 | `errors.go` | `APIError`, error `Code*` constants, and `Is*` / `AsAPIError` helpers. |
 | `health.go` | `HealthService`, `NewHealthClient`, and the bare `{"status": …}` decoder. |
-| `pagination.go` | `ListOptions` and `Pagination`. The list envelope itself is per-resource on this line (`TagList`, `VocabularyList`) because `List[T]` needs Go 1.18. |
+| `pagination.go` | `ListOptions` and `Pagination`. The list envelope itself is per-resource on this line (`TagList`, `VocabularyList`, `TagAliasList`, `ResourceTagList`, `TagResourceList`, `AuditLogList`) because `List[T]` needs Go 1.18. |
 | `types.go` | Shared `Metadata` alias and the `String`/`Bool`/`Int` pointer helpers. |
 | `tags.go`, `vocabularies.go` | The two resources, each with a value-receiver `MarshalJSON` on its `*Update` so `Metadata{}` reaches the server as `{}`. |
 | `version.go` | `Version` constant (single source of truth) and the default User-Agent. |
@@ -99,5 +99,5 @@ To add a resource, follow `tags.go`:
 3. Wire the service onto `Client` in `New()`.
 4. Add table-driven `httptest` tests and a CHANGELOG entry.
 
-See [roadmap.md](roadmap.md) for the resource groups this tree does not have yet, and the issues
-porting them from `main`.
+Every resource group the vendored contracts publish is implemented; [api.md](api.md) maps each
+method to its route, and [roadmap.md](roadmap.md) says where the remaining parity work is tracked.

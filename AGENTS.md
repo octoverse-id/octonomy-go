@@ -146,12 +146,28 @@ stays a faithful, ergonomic client.
   at runtime by the envelope, identity, pagination and 204 assertions — keep every one of them, since
   a decoder without them returns a zero-valued struct or an empty-looking page with a nil error.
   `doRaw` is the shared request path; do not call it directly from a resource file.
+- **Bulk and replace return a composite object under `data`** — `bulk-assign`, `bulk-remove` and
+  the resource-tag replace, e.g. `{"data": {"created": 1, "existing": 0, "skipped": 0,
+  "assignments": [...]}}`. Both vendored specs are wrong about them: a bare array for `bulk-assign`
+  and the replace, no response schema at all for `bulk-remove`. A bare-array decoder against these
+  bodies yields an empty slice and a nil error. They go through `doData` with a composite result
+  struct whose `UnmarshalJSON` requires its keys, since a zero count is an ordinary answer. Do
+  **not** relax `doList`'s pagination requirement to accept them: they carry no pagination block
+  because they are not pages. This line has no `decodeResourceArray[T]`, so a composite's row array
+  is held to the resource standard by hand — `requireResourceArray`, `decodeJSON` into the typed
+  slice, `requireIdentity` per row — and a present-but-null array normalizes to an empty non-nil
+  slice, as on `main`. That normalization is the composites' rule only: `doList` keeps a null page
+  nil, as `v1.0.0` did.
 - **A new response model must implement `identityFields()`** (`transport.go`) on its **value**
   receiver, naming the field that identifies its row — what the contract's `required:` list marks,
-  never every field. `doData` and `doList` call it on every decoded value and reject a blank one, so
-  `{"data": {"id": null}}` is an error rather than a zero-valued resource. A list type must implement
-  `rows()`, which `doList`'s parameter type requires, so forgetting it does not compile. A composite
-  result carries no identity of its own and requires its keys in its own decoder instead.
+  never every field: `id` for most, `assignment_id` on `ResourceTag`, `resource_id` on
+  `TagResource`. `doData` and `doList` call it on every decoded value and reject a blank one, so
+  `{"data": {"id": null}}` is an error rather than a zero-valued resource. A nested resource counts
+  only where the contract marks it required and the route exists to deliver it — `ResourceTag.Tag`
+  and `TagResolution.Tag` both qualify; read the schema's `required:` list rather than assuming. A
+  list type must implement `rows()`, which `doList`'s parameter type requires, so forgetting it does
+  not compile. A composite result carries no identity of its own and requires its keys in its own
+  decoder instead; `TagResolution` does both, since the tag it exists to deliver is a resource.
 - **Every decode of response bytes goes through `decodeJSON`** (`jsondepth.go`), never a bare
   `json.Unmarshal` or `json.NewDecoder`. Go 1.13's `encoding/json` has no depth limit, so an
   unguarded decode lets a server exhaust the stack — a fatal runtime error, not a panic.

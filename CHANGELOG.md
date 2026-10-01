@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The six missing resource groups, hand-ported from `main`**
+  ([#94](https://github.com/octoverse-id/octonomy-go/issues/94), for
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). `main`'s `aliases.go`,
+  `resolution.go`, `assignments.go`, `resources.go` and `audit.go` at 5e40964, rewritten into the
+  Go 1.13 dialect under `docs/porting-checklist.md`; the health probes, the sixth group, landed with
+  the compat core below. Every operation in `docs/contract-coverage.yaml` now names a method, and
+  `docs/api.md` maps each one. Nothing published in `v1.0.0` changes type or signature.
+  - **New services on `Client`:** `Aliases` (`AliasService`: Create / Get / List / Update / Delete),
+    `Assignments` (`AssignmentService`: Create / Remove / BulkAssign / BulkRemove), `Resources`
+    (`ResourceService`: ListTags / ReplaceTags / ListAuditLogs) and `AuditLogs` (`AuditLogService`:
+    List — list-only, as on the server). `TagService` gains `ListAliases`, `Resolve`,
+    `ListResources` and `ListAuditLogs`.
+  - **Four list types** where `main` returns `*List[T]`: `TagAliasList`, `ResourceTagList`,
+    `TagResourceList` and `AuditLogList`, each with `rows()` so `doList` checks every row's identity.
+  - **Three composite results**, decoded through `doData`, never `doList`: `BulkAssignResult`,
+    `BulkRemoveResult` and `ResourceReplaceResult`. Both vendored specs describe these bodies
+    wrongly — a bare array for bulk-assign and the replace, no schema at all for bulk-remove — so a
+    decoder written from them returns an empty slice and a nil error. Each requires its own keys,
+    and holds every row to the resource standard; a new smoke test asserts the real counts against a
+    booted server.
+  - **`TagAliasUpdate` has pointer fields and a value-receiver `MarshalJSON`**, as `TagUpdate` and
+    `VocabularyUpdate` do, so `TagAliasUpdate{Metadata: Metadata{}}` sends `{}` and empties the stored
+    object. `main`'s `Optional[T]` is not ported, by design.
+  - **Every new model implements `identityFields()`**: `id` on most, `assignment_id` and the nested
+    `tag.id` on `ResourceTag`, `resource_id` on `TagResource`, and the tag (plus the alias, when one
+    matched) on `TagResolution`.
+  - **The composite and resolution decoders go through `decodeJSON`**, so they are depth-bounded on
+    Go 1.13 like every other response decode.
+  - **`ResolutionScopeMerchant` with no namespace names the opt-in on a v1 client.** The transport's
+    refusal said "add WithNamespace(...)", which on this line's default `APIV1` client leads straight
+    into `WithNamespace`'s own refusal, so there it names `Config.APIVersion = APIV2` too.
+  - `main`'s five test files for these groups are ported alongside, and `TestSmoke_ResourceGroups`
+    and `TestSmoke_APIV2ResourceGroups` call every new method against a real server.
 - **The compat core: `/api/v2` opt-in, the namespace axis, request correlation, the health probes,
   and `main`'s error vocabulary** ([#91](https://github.com/octoverse-id/octonomy-go/issues/91), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). A hand-port of `main`'s

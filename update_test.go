@@ -6,8 +6,8 @@ package octonomy
 // these tests are this line's own.
 //
 // The tests are driven by reflection over the struct, not by a list of fields,
-// so a field added to TagUpdate or VocabularyUpdate later is covered the day it
-// is added -- and one the hand-written MarshalJSON forgets to carry fails here
+// so a field added to TagUpdate, VocabularyUpdate or TagAliasUpdate later is
+// covered the day it is added -- and one the hand-written MarshalJSON forgets to carry fails here
 // instead of being silently dropped from every PATCH.
 
 import (
@@ -26,6 +26,7 @@ import (
 type (
 	plainTagUpdate        TagUpdate
 	plainVocabularyUpdate VocabularyUpdate
+	plainTagAliasUpdate   TagAliasUpdate
 )
 
 // updateBodies pairs each *Update type with its tag-only encoding.
@@ -39,6 +40,9 @@ var updateBodies = []struct {
 	}},
 	{"VocabularyUpdate", reflect.TypeOf(VocabularyUpdate{}), func(v reflect.Value) interface{} {
 		return plainVocabularyUpdate(v.Interface().(VocabularyUpdate))
+	}},
+	{"TagAliasUpdate", reflect.TypeOf(TagAliasUpdate{}), func(v reflect.Value) interface{} {
+		return plainTagAliasUpdate(v.Interface().(TagAliasUpdate))
 	}},
 }
 
@@ -140,7 +144,7 @@ func TestUpdateMarshalJSON_AllFieldsMatchTheTagEncodingInOrder(t *testing.T) {
 	}
 }
 
-// The fix itself, #37: the three states of Metadata, each on both types.
+// The fix itself, #37: the three states of Metadata, on each *Update type.
 func TestUpdateMarshalJSON_MetadataHasThreeStates(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -161,6 +165,10 @@ func TestUpdateMarshalJSON_MetadataHasThreeStates(t *testing.T) {
 			vocab := marshal(t, VocabularyUpdate{Name: String("N"), Metadata: tt.metadata})
 			if string(vocab) != tt.want {
 				t.Errorf("VocabularyUpdate = %s, want %s", vocab, tt.want)
+			}
+			alias := marshal(t, TagAliasUpdate{Name: String("N"), Metadata: tt.metadata})
+			if string(alias) != tt.want {
+				t.Errorf("TagAliasUpdate = %s, want %s", alias, tt.want)
 			}
 		})
 	}
@@ -185,6 +193,10 @@ func TestUpdate_EmptyMetadataReachesTheServer(t *testing.T) {
 		}},
 		{"vocabularies", func(c *Client) error {
 			_, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{Metadata: Metadata{}})
+			return err
+		}},
+		{"tag aliases", func(c *Client) error {
+			_, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{Metadata: Metadata{}})
 			return err
 		}},
 	}
