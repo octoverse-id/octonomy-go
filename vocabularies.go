@@ -2,6 +2,7 @@ package octonomy
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,9 +13,18 @@ import (
 // ApplicationID is shared across all applications in the tenant; otherwise it is
 // scoped to a single application.
 type Vocabulary struct {
-	ID            string    `json:"id"`
-	TenantID      string    `json:"tenant_id"`
-	ApplicationID *string   `json:"application_id"`
+	ID            string  `json:"id"`
+	TenantID      string  `json:"tenant_id"`
+	ApplicationID *string `json:"application_id"`
+
+	// NamespaceType and NamespaceID identify the merchant or sub-tenant namespace
+	// that owns this row; both are nil for a global (tenant-shared) row. They are
+	// decode-only and appear on the v2 surface: the server sets them from the
+	// X-Namespace-* headers at creation and never from the request body, and they
+	// are fixed for the row's lifetime (attempting to change them is a 409
+	// scope_immutable). /api/v1 responses omit them, so they decode to nil there.
+	NamespaceType *string   `json:"namespace_type"`
+	NamespaceID   *string   `json:"namespace_id"`
 	Name          string    `json:"name"`
 	Slug          string    `json:"slug"`
 	Description   *string   `json:"description"`
@@ -22,6 +32,11 @@ type Vocabulary struct {
 	IsActive      bool      `json:"is_active"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// identityFields makes a blank id an error, as on Tag.
+func (v Vocabulary) identityFields() []identityField {
+	return []identityField{{name: "id", value: v.ID}}
 }
 
 // VocabularyCreate is the request body for creating a vocabulary. Name and Slug
@@ -37,6 +52,10 @@ type VocabularyCreate struct {
 
 // VocabularyUpdate is the PATCH body for updating a vocabulary. Only non-nil
 // fields are sent, so the server updates exactly what you set.
+//
+// Metadata has three states -- a populated map replaces the stored object,
+// Metadata{} sends {} and empties it, and nil omits the key -- for the reason
+// TagUpdate records; MarshalJSON below is what makes Metadata{} reach the wire.
 type VocabularyUpdate struct {
 	ApplicationID *string  `json:"application_id,omitempty"`
 	Name          *string  `json:"name,omitempty"`
@@ -44,6 +63,27 @@ type VocabularyUpdate struct {
 	Description   *string  `json:"description,omitempty"`
 	Metadata      Metadata `json:"metadata,omitempty"`
 	IsActive      *bool    `json:"is_active,omitempty"`
+}
+
+// MarshalJSON encodes a VocabularyUpdate as its struct tags would, except that a
+// non-nil Metadata is always sent, so Metadata{} goes out as "metadata":{}. It
+// is on the VALUE receiver for the reason TagUpdate.MarshalJSON records.
+func (u VocabularyUpdate) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ApplicationID *string   `json:"application_id,omitempty"`
+		Name          *string   `json:"name,omitempty"`
+		Slug          *string   `json:"slug,omitempty"`
+		Description   *string   `json:"description,omitempty"`
+		Metadata      *Metadata `json:"metadata,omitempty"`
+		IsActive      *bool     `json:"is_active,omitempty"`
+	}{
+		ApplicationID: u.ApplicationID,
+		Name:          u.Name,
+		Slug:          u.Slug,
+		Description:   u.Description,
+		Metadata:      sentMetadata(u.Metadata),
+		IsActive:      u.IsActive,
+	})
 }
 
 // VocabularyListParams filters and pages the vocabulary list. A nil *params lists
@@ -82,6 +122,16 @@ type VocabularyList struct {
 	Pagination Pagination   `json:"pagination"`
 }
 
+// rows hands doList the decoded vocabularies so it can check each one's
+// identity.
+func (l *VocabularyList) rows() []identifiedResource {
+	rows := make([]identifiedResource, len(l.Data))
+	for i := range l.Data {
+		rows[i] = l.Data[i]
+	}
+	return rows
+}
+
 // VocabularyService accesses the /vocabularies endpoints. Reach it via
 // Client.Vocabularies.
 type VocabularyService struct {
@@ -116,6 +166,9 @@ func (s *VocabularyService) List(ctx context.Context, params *VocabularyListPara
 }
 
 // Update partially updates a vocabulary (PATCH /vocabularies/{id}).
+//
+// Scope is fixed at creation: a body that changes ApplicationID, or the namespace
+// the row already holds, is refused with a 409 that IsScopeImmutable matches.
 func (s *VocabularyService) Update(ctx context.Context, id string, in VocabularyUpdate, opts ...RequestOption) (*Vocabulary, error) {
 	var out Vocabulary
 	if err := s.client.doData(ctx, http.MethodPatch, "/vocabularies/"+url.PathEscape(id), nil, in, &out, opts...); err != nil {

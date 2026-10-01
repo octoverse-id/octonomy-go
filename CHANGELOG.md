@@ -8,6 +8,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The compat core: `/api/v2` opt-in, the namespace axis, request correlation, the health probes,
+  and `main`'s error vocabulary** ([#91](https://github.com/octoverse-id/octonomy-go/issues/91), for
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). A hand-port of `main`'s
+  `transport.go`, `octonomy.go`, `errors.go` and `health.go` at 5e40964 into the Go 1.13 dialect, under
+  the rules in the new `docs/porting-checklist.md`. Every exported `v1.0.0` symbol keeps its type and
+  signature; what changes behaviour is listed under *Fixed*.
+  - **`Config.APIVersion`, with `APIV1` and `APIV2`, defaults to `APIV1` on this line** —
+    `DefaultAPIVersion` is `APIV1` here, where `main` had `APIV2` at the commit this was ported from,
+    and that is deliberate. `v1.0.0` sent
+    every request to `/api/v1`, and this line can never change a default under a caller, so a client
+    that sets nothing keeps speaking `/api/v1` after the upgrade. Set `APIVersion: octonomy.APIV2` to
+    reach `/api/v2`; it needs an Octonomy server of 2.0 or later. `Client.APIVersion()` reports the
+    surface. The `apiPrefix` constant is gone.
+  - **The four scope options** — `WithNamespace`, `WithGlobalNamespace`, `WithApplication`,
+    `WithIncludeGlobal` — enforced at the transport chokepoint by `checkScopeCoherence`, so every
+    method inherits them. A request whose own options contradict each other, or the API version, is
+    refused before anything is sent: a namespace on a v1 client (the default), a half or reserved
+    namespace pair, a namespaced bodyless request with no application, `WithApplication` on a write,
+    `WithIncludeGlobal` on a write or on v1. **A contradictory scope is an error, never last-wins**,
+    option-versus-option and option-versus-params alike; `WithGlobalNamespace` is the one explicit
+    override. `Tag` and `Vocabulary` gain decode-only `NamespaceType` / `NamespaceID`, nil on a global
+    row and on every `/api/v1` response.
+  - **`WithRequestID`**, send-only and per call, with `main`'s wire-grammar checks (non-blank,
+    printable ASCII, no outer whitespace). The SDK never mints one and `Config` has no field for it.
+  - **The health probes**: `Client.Health` and `NewHealthClient` (with `WithHealthHTTPClient` and
+    `WithHealthUserAgent`), `HealthService.Live` / `Ready`, `HealthStatus`, `HealthStatusOK` /
+    `HealthStatusUnavailable`. They sit outside `/api/<version>`, authenticate nobody and carry no
+    data envelope, so they have a request path, a decoder and a constructor of their own; `doData`'s
+    envelope requirement and `New`'s validation were not loosened to fit them. An unready server is an
+    `*APIError` with `CodeNotReady` (`IsNotReady`); an unreachable one is no `*APIError` at all.
+  - **`ErrUnreachable`**, wrapping every request that got no HTTP response. `errors.Is` finds both it
+    and the cause — `context.Canceled`, a `*net.OpError` — through a small wrapper type, because
+    `main`'s `fmt.Errorf("%w: %w", …)` returns an error with no `Unwrap` at all before Go 1.20. The
+    message is the `octonomy: request failed: …` it always was.
+  - **`ErrResponseTooLarge`**: response bodies are read under a 32 MiB ceiling. A non-2xx that trips
+    it is still an `*APIError` (`CodeUnexpectedStatus`), and `APIError.Unwrap` lets `errors.Is` find
+    the cause.
+  - **`main`'s 16 error codes and 16 `Is*` helpers**, up from 8 and 5. New codes:
+    `CodeScopeImmutable`, the four namespace codes, `CodeAmbiguousResolution`,
+    `CodeUnexpectedStatus` and `CodeNotReady`; new helpers: `IsTenantMismatch`,
+    `IsApplicationMismatch`, `IsInactiveTag`, and one per new code. `IsScopeImmutable` reports a `409`
+    that `IsConflict` does not, which is the point of it.
+  - Unkeyed literals: `Config`, `Tag`, `Vocabulary` gain fields, and `APIError` gains an unexported
+    one, so an *unkeyed* composite literal of any of them stops compiling — the Go-level caveat
+    `docs/versioning.md`'s MINOR rule describes. Keyed literals are unaffected.
+- **`docs/porting-checklist.md`** — this branch's copy of the epic's porting rules, one row per rule,
+  each **LOUD** (a miss fails `go build` / `go vet` under go1.13.15) or **SILENT** (it compiles and is
+  wrong), and each SILENT row naming what catches it or saying nothing does
+  ([#103](https://github.com/octoverse-id/octonomy-go/issues/103)). It lands with the first port that
+  needs it; `AGENTS.md` points at it.
 - **This line's vendored contract moves up two server majors, to 3.2.1, and the claim is held by
   tests rather than by prose** ([#90](https://github.com/octoverse-id/octonomy-go/issues/90), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). This line had vendored a
@@ -166,6 +216,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that calls a compat-line minor policy-invalid — that is what was true when it shipped.
 
 ### Fixed
+- **`IsNotFound` no longer reports true for a bare 404**
+  ([#91](https://github.com/octoverse-id/octonomy-go/issues/91)). This line's first release mapped
+  any non-2xx that arrived without the Octonomy error envelope to a code by its status
+  (`codeFromStatus`), so a 404 from a wrong `BaseURL`, a path-stripping proxy, or a server with no
+  route for the requested surface satisfied `IsNotFound`, and a caller's ordinary "that tag doesn't exist" branch read an
+  infrastructure failure as an empty taxonomy, with no error. That mapping is **removed, on both API
+  versions**: an envelope-less non-2xx now carries `CodeUnexpectedStatus` (`IsUnexpectedStatus`),
+  with the raw body in `Message` and `StatusCode` unchanged. The same holds for the other four codes
+  it used to infer — a bare 400, 401, 403 or 409 no longer satisfies `IsValidation`, `IsAuthError`,
+  `IsForbidden` or `IsConflict`. An enveloped response keeps the server's code verbatim, so a real
+  Octonomy `not_found` is still `IsNotFound`. **What to check:** code that relied on `IsNotFound` (or
+  the other four) for a response Octonomy itself did not write — a gateway's 404, for instance — now
+  sees `IsUnexpectedStatus` instead. This is the same change `main` made in
+  [#7](https://github.com/octoverse-id/octonomy-go/issues/7); it ships here as a fix, which the
+  compat policy allows to change behaviour but not a signature, a field type or a default.
+- **`TagUpdate{Metadata: Metadata{}}` now empties the stored metadata**
+  ([#37](https://github.com/octoverse-id/octonomy-go/issues/37), on this line). `Metadata` with
+  `omitempty` counts an empty map as empty, so `v1.0.0` sent no `metadata` key at all and a caller
+  clearing the object got a 200 with the old object still in place. `TagUpdate` and
+  `VocabularyUpdate` gain a value-receiver `MarshalJSON`: a nil `Metadata` still omits the key, a
+  non-nil empty one sends `"metadata":{}`, a populated one replaces the object. Every other field,
+  and the order of all of them, goes out byte-identical to `v1.0.0`; the field types do not change.
+  (Clearing any *other* nullable field still cannot be expressed here — the pointer fields have no
+  third state, and `main`'s `Optional[T]` is not ported, by design.)
+- **A 2xx whose payload is not a resource is an error, not a zero value**
+  ([#40](https://github.com/octoverse-id/octonomy-go/issues/40)'s class). `{"data": {}}`,
+  `{"data": {"id": null}}`, a renamed `id`, and a list row that is `null`, `{}` or id-less all used
+  to decode into a zero-valued `Tag` or `Vocabulary` with a nil error; each is now an error naming
+  the position, and the list index of a bad row.
+- **Response bodies are bounded.** `v1.0.0` read every body with an unbounded `ioutil.ReadAll`, so
+  one response could grow the client's memory without limit. The ceiling is 32 MiB
+  (`ErrResponseTooLarge`, above).
+- **Two Go 1.13 hazards no longer reach the process.** Go 1.13's `encoding/json` has no cycle
+  detection and no depth limit: probed on go1.13.15, a `Metadata` that contains itself hangs
+  `json.Marshal`, and a deeply nested response decodes until the stack is exhausted — a fatal runtime
+  error, not a panic, so nothing can recover it. A request body is now walked before it is encoded —
+  following what `encoding/json` follows, so a field tagged `json:"-"` or a caller's own
+  `json.Marshaler` is not walked (one conservative difference, embedded-field dominance, is recorded
+  in `jsondepth.go`) — and a response is scanned before it is decoded, each refused past 10,000
+  levels: the limit the standard library adopted once it had one, so the two lines refuse the same
+  responses. Both are proven
+  in child processes, since the unguarded case cannot be observed from inside the process it kills.
+  `main` had no counterpart when this was written: a modern `encoding/json` detects encoding cycles
+  and bounds decoding depth itself.
+- **A list whose `pagination` block is unusable is an error.** The first release required only that
+  the key be present and not null, so `{"data": [], "pagination": {}}` decoded to a page with
+  `Limit` 0 and `Count` 0 — "one page, nothing after it" to a caller paging on `Count` — with a nil
+  error. A real response always carries `limit` of at least 1 (the server falls back to 50), so a
+  block below that is now refused, as `main` refuses it. `"data": null` still decodes to a nil slice,
+  as it did.
+- **`Delete` requires the `204 No Content` Octonomy answers it with.** The first release accepted
+  any 2xx and discarded the body, so a `200 {"data": {...}}` — a host that is not Octonomy answering
+  at the `BaseURL`, or a helper routed to the wrong call — reported a deactivation that may not have
+  happened, with a nil error. Any other status, or a body on a 204, is now an error (not an
+  `*APIError`: nothing said no). Octonomy answers every `DELETE` with 204 and no body.
+- **A nil `RequestOption` is an error, not a panic.** `v1.0.0` called every option unconditionally.
+- **A path segment is escaped once.** The first release assigned an already-escaped path to
+  `url.URL.Path`, so `String()` escaped it again and an id of `a b` reached the server as the literal `a%20b`. Tag and
+  vocabulary ids are server-minted uuids, which never need escaping, so no call this tree could make
+  was affected; the fix lands with the transport port because the resource groups still to come
+  address rows by caller-chosen ids.
 - **The `vuln` CI job stopped running govulncheck at all, and took every merge with it.**
   `golang/govulncheck-action` installs `golang.org/x/vuln/cmd/govulncheck@latest` and offers no
   version input, while `actions/setup-go` exports `GOTOOLCHAIN=local` so the pinned Go really is the

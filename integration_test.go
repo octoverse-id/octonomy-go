@@ -7,11 +7,14 @@
 // //go:build, Go 1.13 reads only // +build, and gofmt keeps the two in sync.
 //
 // This is deliberately a smoke test, not a suite: what it proves on every change
-// is narrow -- that the client still speaks to a real, current Octonomy server at
-// all. Five assertions cover it -- the {data, pagination} envelope (which the
-// vendored spec does not describe, so only a real server can confirm it), a list
-// of each implemented resource, and one real error envelope. Assertions about
-// what the server DOES belong in a suite of their own; porting one is #97.
+// is narrow -- that the client still decodes what a real, current Octonomy server
+// sends. It covers the {data, pagination} envelope (which the vendored spec does
+// not describe, so only a real server can confirm it), a list of each
+// implemented resource, one real error envelope, the bare {"status": ...} body
+// of both health probes, an empty Metadata reaching the server as {}, and the
+// namespace pair decoding off a real /api/v2 response. Assertions about what the
+// server DOES -- isolation, authorization -- belong in a suite of their own;
+// porting one is #97.
 //
 // Run it against the container harness:
 //
@@ -183,5 +186,133 @@ func TestSmoke_RealServer(t *testing.T) {
 	}
 	if apiErr.StatusCode != 404 || apiErr.Code != octonomy.CodeNotFound {
 		t.Errorf("APIError = {status:%d code:%q}, want {404 %q}", apiErr.StatusCode, apiErr.Code, octonomy.CodeNotFound)
+	}
+
+	// Metadata{} must reach the server as {} and empty the stored object. The
+	// struct-tag encoding dropped the key, so the PATCH succeeded and changed
+	// nothing; the unit tests prove what is sent, and only the server proves
+	// that what is sent clears it.
+	if _, err := client.Tags.Update(ctx, tag.ID, octonomy.TagUpdate{Metadata: octonomy.Metadata{}}); err != nil {
+		t.Fatalf("Tags.Update(Metadata{}): %v", err)
+	}
+	reread, err := client.Tags.Get(ctx, tag.ID)
+	if err != nil {
+		t.Fatalf("Tags.Get after clearing metadata: %v", err)
+	}
+	if len(reread.Metadata) != 0 {
+		t.Errorf("tag.Metadata = %v after Update(Metadata{}), want it emptied", reread.Metadata)
+	}
+	if _, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{Metadata: octonomy.Metadata{"k": "v"}}); err != nil {
+		t.Fatalf("Vocabularies.Update(populated): %v", err)
+	}
+	clearedVocab, err := client.Vocabularies.Update(ctx, vocab.ID, octonomy.VocabularyUpdate{Metadata: octonomy.Metadata{}})
+	if err != nil {
+		t.Fatalf("Vocabularies.Update(Metadata{}): %v", err)
+	}
+	if len(clearedVocab.Metadata) != 0 {
+		t.Errorf("vocabulary.Metadata = %v after Update(Metadata{}), want it emptied", clearedVocab.Metadata)
+	}
+}
+
+// The health probes are the one response with no data envelope, and they are
+// rooted outside /api/<version> and unauthenticated -- three things only a real
+// server confirms at once. Both entry points are probed: the full client, whose
+// credentials must not be needed, and a client built from the base URL alone.
+func TestSmoke_HealthProbes(t *testing.T) {
+	client := newSmokeClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for name, probe := range map[string]func(context.Context) (*octonomy.HealthStatus, error){
+		"Client.Health.Live":  client.Health.Live,
+		"Client.Health.Ready": client.Health.Ready,
+	} {
+		st, err := probe(ctx)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if st.Status != octonomy.HealthStatusOK {
+			t.Errorf("%s: Status = %q, want %q", name, st.Status, octonomy.HealthStatusOK)
+		}
+	}
+
+	hc, err := octonomy.NewHealthClient(os.Getenv("OCTONOMY_TEST_BASE_URL"))
+	if err != nil {
+		t.Fatalf("NewHealthClient: %v", err)
+	}
+	st, err := hc.Health.Ready(ctx)
+	if err != nil {
+		t.Fatalf("HealthClient.Ready: %v", err)
+	}
+	if st.Status != octonomy.HealthStatusOK {
+		t.Errorf("HealthClient.Ready: Status = %q, want %q", st.Status, octonomy.HealthStatusOK)
+	}
+}
+
+// /api/v2 is opt-in on this line. What only a real server shows is that the v2
+// responses carry the namespace pair under the names the models decode, on a
+// row created in a namespace and on the list that returns it, and that a v2
+// not_found is still an enveloped one.
+func TestSmoke_APIV2Namespace(t *testing.T) {
+	newSmokeClient(t) // the skip-or-fail gate
+	nsType := os.Getenv("OCTONOMY_TEST_NAMESPACE_TYPE")
+	nsID := os.Getenv("OCTONOMY_TEST_NAMESPACE_ID")
+	app := os.Getenv("OCTONOMY_TEST_APPLICATION_ID")
+	if nsType == "" || nsID == "" || app == "" {
+		t.Fatal("OCTONOMY_TEST_NAMESPACE_TYPE/_ID and OCTONOMY_TEST_APPLICATION_ID must be set: the harness exports them")
+	}
+	client, err := octonomy.New(octonomy.Config{
+		BaseURL:    os.Getenv("OCTONOMY_TEST_BASE_URL"),
+		Token:      os.Getenv("OCTONOMY_TEST_TOKEN"),
+		TenantID:   os.Getenv("OCTONOMY_TEST_TENANT_ID"),
+		APIVersion: octonomy.APIV2,
+		ActorID:    "go113-smoke",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	scope := []octonomy.RequestOption{octonomy.WithNamespace(nsType, nsID)}
+	read := append([]octonomy.RequestOption{octonomy.WithApplication(app)}, scope...)
+
+	slug := uniqueSlug("smoke-v2")
+	tag, err := client.Tags.Create(ctx, octonomy.TagCreate{
+		ApplicationID: octonomy.String(app),
+		Name:          "Go 1.13 v2 smoke",
+		Slug:          slug,
+		Type:          "label",
+	}, append(scope, octonomy.WithRequestID("go113-smoke-"+slug))...)
+	if err != nil {
+		t.Fatalf("namespaced Tags.Create: %v", err)
+	}
+	defer func() {
+		if err := client.Tags.Delete(ctx, tag.ID, read...); err != nil {
+			t.Errorf("namespaced Tags.Delete: %v", err)
+		}
+	}()
+	if tag.NamespaceType == nil || *tag.NamespaceType != nsType || tag.NamespaceID == nil || *tag.NamespaceID != nsID {
+		t.Fatalf("created tag's namespace = (%v, %v), want (%s, %s): the pair did not decode", tag.NamespaceType, tag.NamespaceID, nsType, nsID)
+	}
+
+	got, err := client.Tags.Get(ctx, tag.ID, read...)
+	if err != nil {
+		t.Fatalf("namespaced Tags.Get: %v", err)
+	}
+	if got.NamespaceID == nil || *got.NamespaceID != nsID {
+		t.Errorf("Tags.Get namespace_id = %v, want %s", got.NamespaceID, nsID)
+	}
+
+	page, err := client.Tags.List(ctx, &octonomy.TagListParams{Slug: octonomy.String(slug)}, read...)
+	if err != nil {
+		t.Fatalf("namespaced Tags.List: %v", err)
+	}
+	if len(page.Data) != 1 || page.Data[0].ID != tag.ID || page.Data[0].NamespaceID == nil || *page.Data[0].NamespaceID != nsID {
+		t.Fatalf("namespaced Tags.List did not return the created row with its namespace: %+v", page.Data)
+	}
+
+	_, err = client.Tags.Get(ctx, "00000000-0000-0000-0000-000000000000", read...)
+	if !octonomy.IsNotFound(err) || octonomy.IsUnexpectedStatus(err) {
+		t.Errorf("v2 Tags.Get on a missing id: want an enveloped not_found, got %v", err)
 	}
 }

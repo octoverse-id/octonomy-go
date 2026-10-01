@@ -2,9 +2,11 @@
 
 `octonomy-go` is the official Go client SDK for [Octonomy](https://github.com/octoverse-id/octonomy),
 a multi-tenant, multi-application tag management / taxonomy service. The SDK is a hand-written,
-dependency-free client for the Octonomy REST API. This tree speaks `/api/v1` only — `apiPrefix` in
-`octonomy.go` is a constant — and porting `main`'s `/api/v2` surface is
-[#91](https://github.com/octoverse-id/octonomy-go/issues/91).
+dependency-free client for the Octonomy REST API. `Config.APIVersion` selects the surface and
+defaults to **v1** (`/api/v1`) on this line; `/api/v2`, which carries the namespace axis, is opt-in
+with `APIV2`. That is the one *default* that differs from `main`'s, which was v2 when the selector was
+ported from it (5e40964): `v1.0.0` sent every request to `/api/v1`, and this line can never change a
+default under a caller (see *READ FIRST*).
 
 ## READ FIRST — this branch is the Go 1.13 line, and its freeze is reversed
 
@@ -51,10 +53,11 @@ on `main`.
 
 - Branch off `support/go1.13` with an issue-numbered branch and PR back into it (see *Development
   Pipeline*). Take the file from `main`, then rewrite it into this line's dialect.
-- The rewrite rules are the design doc's *Porting checklist* table, each marked **LOUD** (a miss
-  fails `go build` or `go vet` under a real go1.13.15, so `make test-go113` catches it) or **SILENT**
-  (a miss compiles clean and is wrong). [#103](https://github.com/octoverse-id/octonomy-go/issues/103)
-  tracks this branch's own copy of that table.
+- The rewrite rules are [`docs/porting-checklist.md`](docs/porting-checklist.md), one row per rule,
+  each marked **LOUD** (a miss fails `go build` or `go vet` under a real go1.13.15, so
+  `make test-go113` catches it) or **SILENT** (a miss compiles clean and is wrong), and each SILENT
+  row naming what catches it or saying that nothing does. Add a row when a port meets a rule the
+  table lacks.
 - **The SILENT rules are the ones to hold in your head**, because each one compiles and vets clean on
   go1.13.15 as well as on a modern toolchain:
   - **A leftover `omitzero`.** Go 1.13's `encoding/json` does not know the option and ignores it, so
@@ -69,6 +72,9 @@ on `main`.
     library in examples (`slices.*`). Rewrite the **module** path `.../octonomy-go/v2` to the
     unsuffixed one — but never strip `/api/v2`, which is a REST route and the capability being
     ported.
+  - **A default.** Copy a value from `main` and its default comes with it. `DefaultAPIVersion` was
+    `APIV2` there at 5e40964 and is `APIV1` here, and it is not the last default the port will meet:
+    a default on this line never changes, so read each one against `v1.0.0`, not against `main`.
 - **Port a rule with the code it governs.** Several rules in this file describe the tree as it is —
   every request tenant-scoped, every method taking `...RequestOption` — and `main`'s `AGENTS.md`
   records exceptions to them that arrive with the code: the health probes are unversioned,
@@ -85,17 +91,25 @@ These mirror server semantics the client must respect — business rules live on
 stays a faithful, ergonomic client.
 
 - The SDK adds ergonomics, not behavior. Do not encode server-side validation or invariants here.
-- Every request is tenant-scoped via the `X-Tenant-ID` header; `Config.TenantID` is required.
+  **One recorded exemption, ported from `main`: `checkScopeCoherence` in `transport.go`.** It
+  rejects a request whose own scoping options contradict each other or the client's API version — a
+  namespace on a v1 client (which, here, is every client that did not opt in), a half-set or reserved
+  namespace pair, a namespaced bodyless request with no application, `WithIncludeGlobal` on a write.
+  None of those consults resource state or can disagree with the server about a row; each names an
+  SDK symbol in its remediation. **A check that could only cite a server rule does not belong there.**
+- Every request **on the versioned API** is tenant-scoped via the `X-Tenant-ID` header;
+  `Config.TenantID` is required. The health probes are the documented exception — see the health
+  rules below.
 - `application_id` is optional on tags and vocabularies (`nil` = shared across the tenant) and is
   required for assignments.
 - Tag deletion is **deactivation** on the server, not hard delete. `Delete` methods call HTTP
   `DELETE` and must document the deactivation semantics rather than implying data loss.
 - Tag aliases are alternate identifiers that resolve to canonical tags and follow tenant/application
   compatibility rules.
-- Keep the SDK faithful to the bundled contract references: `docs/openapi.yaml` (`/api/v1`, the only
-  surface this tree's requests reach) and `docs/openapi-v2.yaml` (`/api/v2`), both vendored at server
-  **3.2.1**. A port that adds the namespace axis reads the **v2** spec — v1's schemas omit the
-  `namespace_type` / `namespace_id` fields. Where the live server diverges from the generated spec —
+- Keep the SDK faithful to the bundled contract references: `docs/openapi.yaml` (`/api/v1`, the
+  default surface on this line) and `docs/openapi-v2.yaml` (`/api/v2`, opt-in), both vendored at
+  server **3.2.1**. Read the **v2** spec when porting a resource — v1's schemas omit the
+  `namespace_type` / `namespace_id` fields every model that carries namespace identity needs. Where the live server diverges from the generated spec —
   notably the **two response envelopes** the spec omits: `{data, pagination}` on lists and `{data}`
   on single resources — trust the server's real behavior and document the divergence in a comment.
   Both were verified against a running server, not read off the spec.
@@ -104,20 +118,77 @@ stays a faithful, ergonomic client.
 
 - One file per resource (`tags.go`, `vocabularies.go`, …). Each defines a `*Service` reached from a
   field on `Client`.
-- Methods take `context.Context` first and accept variadic `...RequestOption` last.
+- Methods take `context.Context` first and accept variadic `...RequestOption` last. The health
+  probes take no options at all, and `HealthService` records why.
+- **Scoping is the transport's job, not each resource's.** `WithNamespace`, `WithGlobalNamespace`,
+  `WithApplication` and `WithIncludeGlobal` apply to any method and are enforced at the chokepoint,
+  so a new resource inherits them by doing nothing. Do not add a namespace field to `Config`, a
+  per-resource namespace parameter, or a duplicate of a guard already in `checkScopeCoherence`.
+  **Application scope follows the body:** on a bodyless request the query is authoritative
+  (`WithApplication`), and on a `POST`/`PATCH` the body's `ApplicationID` is, so the option is
+  refused there.
+- **A scope option that contradicts one already on the request is an error, never last-wins** —
+  option-versus-params and option-versus-option alike. `WithGlobalNamespace` is the one explicit
+  override.
+- **Request correlation is send-only, per call, and never minted here.** `WithRequestID` sets
+  `X-Request-ID` only when the caller supplied one. Do not add a `Config.RequestID` — a request id
+  names one request — and do not mint one client-side. The option validates wire grammar only; the
+  server's 100-character column is a server rule and stays out of this package.
+- Response models that carry namespace identity get `NamespaceType` / `NamespaceID` as `*string`,
+  **decode-only**: the server sets them from the `X-Namespace-*` headers, never from a body, so they
+  must not appear on a `*Create` / `*Update`.
 - List methods return a **per-resource** envelope (`*TagList`, `*VocabularyList`) decoding
   `{data, pagination}` — this line has no `List[T]`, because type parameters need Go 1.18. Embed
   `ListOptions` in each resource's `*ListParams`.
 - Pick the transport helper by response shape: `client.doData` for a single resource (unwraps the
   server's `{"data": {...}}`), `client.doList` for a list envelope, `client.do` for a call with no
-  payload to decode (DELETE's 204). Getting this wrong does not fail loudly — it returns a
-  zero-valued struct or an empty-looking page with a nil error. `doRaw` is the shared request path;
-  do not call it directly from a resource file.
+  payload to decode (DELETE's 204, which it asserts). The wrong choice compiles, and is caught only
+  at runtime by the envelope, identity, pagination and 204 assertions — keep every one of them, since
+  a decoder without them returns a zero-valued struct or an empty-looking page with a nil error.
+  `doRaw` is the shared request path; do not call it directly from a resource file.
+- **A new response model must implement `identityFields()`** (`transport.go`) on its **value**
+  receiver, naming the field that identifies its row — what the contract's `required:` list marks,
+  never every field. `doData` and `doList` call it on every decoded value and reject a blank one, so
+  `{"data": {"id": null}}` is an error rather than a zero-valued resource. A list type must implement
+  `rows()`, which `doList`'s parameter type requires, so forgetting it does not compile. A composite
+  result carries no identity of its own and requires its keys in its own decoder instead.
+- **Every decode of response bytes goes through `decodeJSON`** (`jsondepth.go`), never a bare
+  `json.Unmarshal` or `json.NewDecoder`. Go 1.13's `encoding/json` has no depth limit, so an
+  unguarded decode lets a server exhaust the stack — a fatal runtime error, not a panic.
+  `TestEveryResponseDecodeIsDepthBounded` fails on a bypass. The request side is `checkBodyDepth`,
+  run in `doRaw` before `json.Marshal`, which on Go 1.13 has no cycle detection either. **This guard
+  had no counterpart on `main` when it was written** — a modern `encoding/json` detects encoding
+  cycles and bounds decoding depth itself — so it is a deliberate divergence, not a porting gap:
+  never "port away" what `main` lacks here.
 - Non-2xx responses become `*APIError` carrying the `{error:{code,message,details,request_id}}`
   envelope. Add `Is<Code>` helpers for common error codes.
+- **Every non-2xx becomes an `*APIError`, including one whose body could not be read.** An
+  oversized body must not downgrade to a bare read error: wrap the cause so `errors.Is` still finds
+  `ErrResponseTooLarge`.
+- **A non-2xx with no envelope gets `CodeUnexpectedStatus`, never a semantic code, on both API
+  versions.** Do not reintroduce a status-to-code mapping: this line's first release had one,
+  `codeFromStatus`, and it made a wrong `BaseURL`'s 404 satisfy `IsNotFound`, so a caller's
+  not-found branch read an infrastructure failure as an empty taxonomy. A code that arrives *in* an envelope is preserved verbatim. `CodeNotReady` is
+  not an exception: it is established by the health view's own `{"status": …}` body, not inferred
+  from a status.
+- **Health is outside the API surface in three ways at once** — rooted outside `/api/<version>`, a
+  bare `{"status": "ok"}` with no `data` envelope, and unauthenticated. It therefore has its own
+  request path (`doUnversioned`), decoder (`decodeHealthStatus`) and credential-free constructor
+  (`NewHealthClient`). Do not loosen `doData`'s envelope requirement or `New`'s validation to make it
+  fit, and do not move the auth suppression into `doRaw` as a `skipAuth` flag.
+- **Unreachable and unready stay distinguishable.** A request that got no HTTP response wraps
+  `ErrUnreachable` and is never an `*APIError`; a probe the server answered with a non-2xx and its
+  own status body is an `*APIError` with `CodeNotReady`. Both `errors.Is(err, ErrUnreachable)` and
+  `errors.Is(err, <cause>)` must hold, which on Go 1.13 takes the `unreachableError` type, not a
+  two-`%w` `fmt.Errorf`.
 - Server read-only fields are decode-only; write structs (`*Create`/`*Update`) use pointer fields
   with `omitempty` so PATCH sends only what the caller set. They stay pointers when `main`'s
   `*Update` structs are ported — see *Porting from `main`*.
+- **A `*Update` carrying `Metadata` needs a value-receiver `MarshalJSON`** that sends a non-nil map,
+  empty or not, so `Metadata{}` empties the stored object instead of being dropped by `omitempty`
+  (#37). A pointer receiver is skipped by `encoding/json` without a word, because `Update` takes the
+  struct by value. Keep the method's field list in declaration order and add the type to
+  `updateBodies` in `update_test.go`, which checks every field against the struct-tag encoding.
 - No new exported surface without doc comments and tests.
 
 ## Go Conventions
@@ -148,7 +219,14 @@ stays a faithful, ergonomic client.
   wrapper. `writeJSON` sends the body verbatim — use it for list and error envelopes only. Handlers
   that returned bare objects matched the vendored spec instead of the server and hid a real defect.
 - Cover success paths, the `{data, pagination}` list envelope, and error decoding
-  (404 → `IsNotFound`, 409 → `IsConflict`, 400 → `IsValidation`).
+  (404 → `IsNotFound`, 409 → `IsConflict`, 400 → `IsValidation`) — each from an **enveloped** body;
+  a bare status satisfies none of them.
+- **A fixture that decodes into a field must not be marshalled from the struct under test.** A
+  `Tag` run through `writeData` round-trips through its own JSON tags, so a misspelled tag passes.
+  Write the wire spelling as raw JSON where the field name is what is being asserted.
+- **A guard whose unguarded case kills the process is tested in a child process** — re-exec the test
+  binary with an environment variable, as `jsondepth_test.go` does, with a deadline. A cyclic body or
+  a stack-exhausting response cannot be observed from inside the process it hangs or kills.
 - Run tests with `-race`. Keep new code covered.
 
 ## Local Development
@@ -157,6 +235,11 @@ stays a faithful, ergonomic client.
   the real gate: also run `make test-go113` (real go1.13 toolchain) and, for anything touching
   decoding or transport, `make dev-server && make smoke` against a real server.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
+- **Describe `main` with a link, or with the commit a comparison was made at — never by restating
+  its current state.** A sentence about what `main` has *now* rots on `main`'s schedule, and nothing
+  on this branch can catch it; a relative link resolves to this branch's own stale copy, so link to
+  `https://github.com/octoverse-id/octonomy-go/blob/main/…`. "Ported from `main`'s `transport.go` at
+  5e40964" cannot rot. This is the policy #69 applied to this branch's docs.
 - **A contract refresh is not done when the YAML lands.** Refresh both vendored specs from the Octonomy
   server (`make openapi` there, one per `--api-version`), then move three things with them: the
   `<!-- contract-version: X.Y.Z -->` marker in `docs/versioning.md`, a row per operation in

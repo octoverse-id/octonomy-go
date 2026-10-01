@@ -15,26 +15,30 @@ has no way to find out — so it links to the owning branch instead.
 
 The groups this tree does not have are tag aliases, tag resolution, tag assignments (including the
 bulk pair), resource tags, and audit logs, which
-[#94](https://github.com/octoverse-id/octonomy-go/issues/94) ports, and the health probes, which
-[#91](https://github.com/octoverse-id/octonomy-go/issues/91) ports with the transport they need.
-[`api.md`](api.md) says the same from the other side. The one group that is **never** coming is a
+[#94](https://github.com/octoverse-id/octonomy-go/issues/94) ports.
+[`contract-coverage.yaml`](contract-coverage.yaml) is the record that a test holds true: every
+operation names its method or the reason there is none. [`api.md`](api.md) says the same from the
+other side. The one group that is **never** coming is a
 webhook receiver: that is policy, and a consumer needing one moves to `/v2`.
 
 ## How to add a resource (the recipe)
 
 Copy `tags.go` and `tags_test.go` as the template, then:
 
-1. Read the matching schema(s) in [`openapi.yaml`](openapi.yaml), the `/api/v1` contract this tree's
-   requests reach. Both vendored specs are at server 3.2.1; [`openapi-v2.yaml`](openapi-v2.yaml) is
-   the one carrying the namespace fields, so a port adding those reads it instead. The operation
-   already has a row in [`contract-coverage.yaml`](contract-coverage.yaml): replace its
-   `unimplemented:` reason with `sdk: <Service>.<Method>`.
-2. Create `<resource>.go` with: the model struct, `*Create`/`*Update` write structs (pointer +
-   `omitempty`), `*ListParams` with a `query()` method, and a `*Service` whose methods take
-   `context.Context` first and `...RequestOption` last and delegate to the transport helper matching
-   the response shape: `client.doData` for a single resource, `client.doList` for a list,
-   `client.do` for a call with no payload (DELETE). Using `do` where `doData` belongs does not fail
-   loudly — it returns a zero-valued struct with a nil error.
+1. Read the matching schema(s) in [`openapi-v2.yaml`](openapi-v2.yaml), the superset of the two
+   vendored specs (both at server 3.2.1): it carries the `namespace_type` / `namespace_id` fields
+   that [`openapi.yaml`](openapi.yaml) omits. The operation already has a row in
+   [`contract-coverage.yaml`](contract-coverage.yaml): replace its `unimplemented:` reason with
+   `sdk: <Service>.<Method>`.
+2. Create `<resource>.go` with: the model struct and its value-receiver `identityFields()`,
+   `*Create`/`*Update` write structs (pointer + `omitempty`, and a value-receiver `MarshalJSON` on a
+   `*Update` carrying `Metadata`), a `*List` type with `rows()`, `*ListParams` with a `query()`
+   method, and a `*Service` whose methods take `context.Context` first and `...RequestOption` last
+   and delegate to the transport helper matching the response shape: `client.doData` for a single
+   resource, `client.doList` for a list, `client.do` for a call with no payload (DELETE). The wrong
+   helper compiles: `do` on a call that returns a resource fails with "expected 204", and `doData` or
+   `doList` on a shape they do not expect fails on the envelope, identity or pagination check.
+   Scoping, request ids and the depth guards come from the transport; add nothing for them.
 3. Wire the service onto `Client` in `New()` (`octonomy.go`).
 4. Add table-driven `httptest` tests (assert method/path/headers/query/body server-side; assert decoded
    values client-side; cover the error envelope).
