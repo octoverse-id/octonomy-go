@@ -5,7 +5,7 @@
 # majors behind, vendoring a contract from before the server made a second API
 # surface its primary one.
 # A row here turns "not implemented" into a decision with a reason attached. On this
-# line that matters more, not less: this tree implements two of the
+# line that matters more, not less: this tree implements three of the
 # eight resource groups the contracts publish, so most of the rows below are gaps,
 # and each one says which issue closes it.
 #
@@ -123,9 +123,10 @@ operations:
   - path: /tag-aliases
     method: get
     unimplemented: &not_ported_94 >-
-      Not ported to this line. The tree implements two of the eight resource
-      groups the contracts publish, tags and vocabularies; the other resource
-      groups are hand-ported from main under epic #88, and #94 carries this one.
+      Not ported to this line. The tree implements three of the eight resource
+      groups the contracts publish, tags, vocabularies and the health probes; the
+      other resource groups are hand-ported from main under epic #88, and #94
+      carries this one.
       Replace this reason with the method's name in the PR that adds it.
     documented_response: array
     actual_response: list-envelope
@@ -239,23 +240,20 @@ operations:
     documented_response: array
     actual_response: list-envelope
 
-  # --- Health (not on this tree) ----------------------------------------------
+  # --- Health (health.go) -----------------------------------------------------
   # Outside /api/<version>, unauthenticated, and no envelope: a bare
   # {"status": "ok"}. The spec documents a 200 with no content at all, which is why
-  # both rows read `none` -> `bare` rather than `none` -> `none`.
+  # both rows read `none` -> `bare` rather than `none` -> `none`. They have a
+  # request path of their own (doUnversioned) and a constructor of their own
+  # (NewHealthClient), so neither doData's envelope requirement nor New's
+  # credential validation was loosened to fit them.
   - path: /health/live
     method: get
-    unimplemented: &not_ported_91 >-
-      Not ported to this line. The health probes come with the compat core, #91,
-      rather than with the resource groups, because they need a request path of
-      their own: they sit outside /api/<version>, authenticate nobody, and carry
-      no data envelope, so neither doData's envelope requirement nor New's
-      credential validation may be loosened to fit them. Replace this reason with
-      the method's name in the PR that adds it.
+    sdk: HealthService.Live
     documented_response: none
     actual_response: bare
   - path: /health/ready
     method: get
-    unimplemented: *not_ported_91
+    sdk: HealthService.Ready
     documented_response: none
     actual_response: bare
