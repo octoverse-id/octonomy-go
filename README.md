@@ -271,8 +271,9 @@ version from `go.mod` but not the stdlib version, so `io.ReadAll` (Go 1.16) comp
 - [Development](docs/development.md) — setup, quality gates, testing.
 - [Versioning](docs/versioning.md) — SemVer policy and which server contract this SDK targets.
 - [Release](docs/release.md) — the release runbook.
-- [Roadmap](docs/roadmap.md) — what the `/v2` line has that this tree does not, and the epic porting
-  it here.
+- [Roadmap](docs/roadmap.md) — the parity policy and where its remaining work is tracked; it links to
+  [`main`'s API mapping](https://github.com/octoverse-id/octonomy-go/blob/main/docs/api.md#implemented)
+  for what the `/v2` line implements.
 - [Porting checklist](docs/porting-checklist.md) — the rewrites a port from `main` makes, each marked
   by whether a miss fails the go1.13 build or compiles and is wrong.
 - [CHANGELOG](CHANGELOG.md)

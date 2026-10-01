@@ -164,7 +164,7 @@ func TestWithNamespace_SendsTheHeaderPair(t *testing.T) {
 	}
 }
 
-// The same pair decodes onto Vocabulary, the other model this tree has.
+// The same pair also decodes onto Vocabulary.
 func TestVocabulary_DecodesTheNamespacePair(t *testing.T) {
 	c, cleanup := newVersionedTestClient(t, APIV2, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, http.StatusOK, map[string]interface{}{"data": map[string]interface{}{

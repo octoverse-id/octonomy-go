@@ -253,9 +253,15 @@ type AssignmentService struct {
 // validation_error (IsValidation) naming that field -- an inactive alias, which
 // is what deactivating its tag leaves behind, or an alias whose tag is inactive
 // -- because the server refuses it while resolving the alias, before the tag
-// check runs (octonomy/tags/alias_services.py). A tag or alias belonging to a
-// different application is an application_mismatch (IsApplicationMismatch)
-// either way.
+// check runs (octonomy/tags/alias_services.py).
+//
+// The same split decides how another application's row is refused. By TagID or
+// AliasID, a tag or alias belonging to a different application is an
+// application_mismatch (IsApplicationMismatch). By AliasSlug it is never found:
+// a slug resolves only among the named application's aliases and the
+// tenant-shared ones (octonomy/tags/alias_selectors.py), so another
+// application's alias is the same validation_error, naming alias_slug, that an
+// unknown slug gets.
 func (s *AssignmentService) Create(ctx context.Context, in AssignmentCreate, opts ...RequestOption) (*Assignment, error) {
 	var out Assignment
 	if err := s.client.doData(ctx, http.MethodPost, "/tag-assignments", nil, in, &out, opts...); err != nil {

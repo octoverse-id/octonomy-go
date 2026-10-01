@@ -150,6 +150,12 @@ func (r *TagResolution) UnmarshalJSON(data []byte) error {
 	} else if out.MatchedType == MatchedTypeAlias {
 		return fmt.Errorf(`octonomy: resolution response matched an alias but its "matched_alias" is null`)
 	}
+	// The identity check doData runs after every decode, run here as well so a
+	// caller decoding a TagResolution directly gets the same guarantee: a tag
+	// with no id is not an answer. The composites check their rows the same way.
+	if err := requireIdentity(out, "resolution response"); err != nil {
+		return err
+	}
 	*r = out
 	return nil
 }

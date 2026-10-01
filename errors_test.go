@@ -6,8 +6,8 @@ package octonomy
 //   - The envelope-less 404 rule is asserted on BOTH API versions. On main it
 //     was only ever a v2 question; here v1 is the default surface and is where
 //     v1.0.0's codeFromStatus actually ran, so v1 is the case that matters most.
-//   - TestIsScopeImmutable walks the two PATCH routes this tree has, and both
-//     surfaces; main's also covers tag aliases, which are not ported yet.
+//   - TestIsScopeImmutable walks all three PATCH routes (tags, vocabularies and,
+//     since #94, tag aliases) on both surfaces: six call sites.
 
 import (
 	"context"

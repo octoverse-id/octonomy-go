@@ -737,3 +737,18 @@ func TestTagResolution_UnmarshalJSONIsDepthBounded(t *testing.T) {
 		t.Errorf("error should be the depth guard's, got: %v", err)
 	}
 }
+
+// UnmarshalJSON carries the identity guard itself, not only through doData, so
+// a caller decoding a TagResolution directly cannot get a blank tag with a nil
+// error -- the same guarantee the composites give their rows.
+func TestTagResolution_UnmarshalJSONRequiresIdentityOnItsOwn(t *testing.T) {
+	for _, body := range []string{
+		`{"matched_type":"tag","matched_alias":null,"tag":{"slug":"x"}}`,
+		`{"matched_type":"alias","matched_alias":{"slug":"y"},"tag":{"id":"tag_1"}}`,
+	} {
+		var r TagResolution
+		if err := json.Unmarshal([]byte(body), &r); err == nil || !strings.Contains(err.Error(), "decoded with no") {
+			t.Errorf("json.Unmarshal(%s) = %v, want an identity error", body, err)
+		}
+	}
+}

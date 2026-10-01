@@ -139,12 +139,13 @@ the body, so `WithApplication` is refused on all of them — each write struct n
 
 | Call | Shape worth knowing |
 | ---- | ------------------- |
-| `Create` | Idempotent. Re-assigning returns the existing row with `200` rather than `201`, and is not an error. Name the tag with **exactly one** of `TagID`, `AliasID`, `AliasSlug`. An inactive tag is `inactive_tag` (`IsInactiveTag`) only when named by `TagID`; through an alias it is a `validation_error`. |
+| `Create` | Idempotent. Re-assigning returns the existing row with `200` rather than `201`, and is not an error. Name the tag with **exactly one** of `TagID`, `AliasID`, `AliasSlug`. An inactive tag is `inactive_tag` (`IsInactiveTag`) only when named by `TagID`; through an alias it is a `validation_error`. Another application's tag or alias is `application_mismatch` by `TagID` or `AliasID`, but by `AliasSlug` it is simply not found — a `validation_error`. |
 | `Remove` | A `DELETE` **carrying a JSON body** — the row has no id route, so the four body fields identify it. Removing what is not there is a `204`. |
 | `BulkAssign` | All or nothing; one unknown id fails the whole call. Takes `TagIDs`, `AliasSlugs`, or both. |
 | `BulkRemove` | A **`POST`**, not a `DELETE`. Canonical tag ids only — no alias form. Tolerates ids that match nothing. |
 
-`Assignment.ApplicationID` is a plain `string` rather than the `*string` the other models carry: an
+`Assignment.ApplicationID` (and `TagResource.ApplicationID`, which reads the same row) is a plain
+`string` rather than the `*string` that `Tag`, `Vocabulary`, `TagAlias` and `AuditLog` carry: an
 assignment is always application-scoped, so there is no tenant-shared case to represent. `Remove`
 deletes the row outright — the exception to Octonomy's deactivate-don't-delete rule, since an
 assignment is a link and an inactive link is an absent one.
@@ -230,11 +231,14 @@ walks backwards through history.
 | Call | Filters |
 | ---- | ------- |
 | `AuditLogs.List` | the full set: `action`, `actor_id`, `application_id`, `entity_id`, `entity_type`, `operation_id`, `resource_id`, `resource_type`, `tag_id` |
-| `Tags.ListAuditLogs` | `action`, `actor_id`, `application_id`, `operation_id` |
+| `Tags.ListAuditLogs` | `action`, `actor_id`, `application_id` (documented on `/api/v2` only), `operation_id` |
 | `Resources.ListAuditLogs` | `action`, `actor_id`, `application_id`, `operation_id` |
 
 The two nested routes take narrower params types than the collection, matching what the contract
-documents for each — as `TagListAliasesParams` does against `TagAliasListParams`. Every filter is an
+documents for each — as `TagListAliasesParams` does against `TagAliasListParams`. The one exception
+is `application_id` on the tag route: `/api/v2` documents it, as the application scope a namespaced
+read must carry, and `/api/v1` does not. The server's shared filter honors it on both, so the field
+is kept on both surfaces rather than split by version. Every filter is an
 **exact match**, they combine with AND, and the server ignores one set to the empty string.
 
 **`EntityType` and `Action` are spelled differently for assignments.** The entity is

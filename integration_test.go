@@ -504,6 +504,33 @@ func TestSmoke_ResourceGroups(t *testing.T) {
 		t.Errorf("assigning an inactive tag through its alias: want a validation_error, got %v", err)
 	}
 
+	// Another application's alias: application_mismatch by AliasID, but by
+	// AliasSlug it is never a candidate, so it is the not-found validation_error.
+	appAlias, err := client.Aliases.Create(ctx, octonomy.TagAliasCreate{
+		ApplicationID: octonomy.String(app), TagID: tag.ID, Name: "Go 1.13 app alias", Slug: uniqueSlug("smoke-rg-app-alias"),
+	})
+	if err != nil {
+		t.Fatalf("Aliases.Create (application-scoped): %v", err)
+	}
+	defer func() {
+		if err := client.Aliases.Delete(ctx, appAlias.ID); err != nil {
+			t.Errorf("Aliases.Delete (application-scoped): %v", err)
+		}
+	}()
+	otherApp := app + "-other"
+	_, err = client.Assignments.Create(ctx, octonomy.AssignmentCreate{
+		ApplicationID: otherApp, AliasID: octonomy.String(appAlias.ID), ResourceType: "order", ResourceID: orderID,
+	})
+	if !octonomy.IsApplicationMismatch(err) {
+		t.Errorf("another application's alias by AliasID: want application_mismatch, got %v", err)
+	}
+	_, err = client.Assignments.Create(ctx, octonomy.AssignmentCreate{
+		ApplicationID: otherApp, AliasSlug: octonomy.String(appAlias.Slug), ResourceType: "order", ResourceID: orderID,
+	})
+	if !octonomy.IsValidation(err) || octonomy.IsApplicationMismatch(err) {
+		t.Errorf("another application's alias by AliasSlug: want a validation_error, got %v", err)
+	}
+
 	// --- resource tags and the replace composite ----------------------------
 	cartID := uniqueSlug("smoke-rg-cart")
 	replaced, err := client.Resources.ReplaceTags(ctx, "cart", cartID, octonomy.ResourceReplace{

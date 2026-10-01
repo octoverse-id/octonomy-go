@@ -131,10 +131,11 @@ $ go list -m github.com/octoverse-id/octonomy-go/v2@latest
 
 ### What this line lacks, concretely
 
-Some of what `main` has is not on this tree **yet** — [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)
-ports it — and some never will be. The third column says which:
+Every resource group the vendored contracts publish is on this tree. What remains are deliberate
+differences from the modern line — permanent, or not planned — and the second column says which;
+[epic #88](https://github.com/octoverse-id/octonomy-go/issues/88) tracks the rest of the parity work.
 
-| Missing | Why | Workaround |
+| Difference | Why | Workaround |
 | ------- | --- | ---------- |
 | `List[T]` | Type parameters need Go 1.18 — **never**, since the floor never moves | A per-resource type (`TagList`, `TagAliasList`, `AuditLogList`, …) — same fields |
 | `/api/v2` **by default** | **Never** — this line cannot change a default under a caller, so `DefaultAPIVersion` is `APIV1` here, where `main` had `APIV2` when the selector was ported | Set `Config.APIVersion = APIV2` |
