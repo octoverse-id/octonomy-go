@@ -35,8 +35,9 @@ Copy `tags.go` and `tags_test.go` as the template, then:
    `*Update` carrying `Metadata`), a `*List` type with `rows()`, `*ListParams` with a `query()`
    method, and a `*Service` whose methods take `context.Context` first and `...RequestOption` last
    and delegate to the transport helper matching the response shape: `client.doData` for a single
-   resource, `client.doList` for a list, `client.do` for a call with no payload (DELETE). Using `do`
-   where `doData` belongs does not fail loudly — it returns a zero-valued struct with a nil error.
+   resource, `client.doList` for a list, `client.do` for a call with no payload (DELETE). The wrong
+   helper compiles: `do` on a call that returns a resource fails with "expected 204", and `doData` or
+   `doList` on a shape they do not expect fails on the envelope, identity or pagination check.
    Scoping, request ids and the depth guards come from the transport; add nothing for them.
 3. Wire the service onto `Client` in `New()` (`octonomy.go`).
 4. Add table-driven `httptest` tests (assert method/path/headers/query/body server-side; assert decoded

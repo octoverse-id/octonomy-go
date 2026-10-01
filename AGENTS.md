@@ -142,9 +142,10 @@ stays a faithful, ergonomic client.
   `ListOptions` in each resource's `*ListParams`.
 - Pick the transport helper by response shape: `client.doData` for a single resource (unwraps the
   server's `{"data": {...}}`), `client.doList` for a list envelope, `client.do` for a call with no
-  payload to decode (DELETE's 204). Getting this wrong does not fail loudly — it returns a
-  zero-valued struct or an empty-looking page with a nil error. `doRaw` is the shared request path;
-  do not call it directly from a resource file.
+  payload to decode (DELETE's 204, which it asserts). The wrong choice compiles, and is caught only
+  at runtime by the envelope, identity, pagination and 204 assertions — keep every one of them, since
+  a decoder without them returns a zero-valued struct or an empty-looking page with a nil error.
+  `doRaw` is the shared request path; do not call it directly from a resource file.
 - **A new response model must implement `identityFields()`** (`transport.go`) on its **value**
   receiver, naming the field that identifies its row — what the contract's `required:` list marks,
   never every field. `doData` and `doList` call it on every decoded value and reject a blank one, so

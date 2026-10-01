@@ -93,8 +93,9 @@ To add a resource, follow `tags.go`:
    `docs/contract-coverage.yaml` (replacing its `unimplemented:` reason with `sdk:`).
 2. Add a `*Service` with `context.Context`-first, `...RequestOption`-last methods delegating to the
    helper that matches each response shape: `client.doData` for a single resource, `client.doList`
-   for a list, `client.do` where there is no payload (DELETE). Reaching for `do` when the response
-   carries a resource compiles and returns a zero-valued struct with a nil error.
+   for a list, `client.do` where there is no payload (DELETE). The wrong choice compiles; it is caught
+   at runtime by the envelope, identity, pagination and 204 assertions, which is why they exist — a
+   decoder without them returns a zero-valued struct with a nil error.
 3. Wire the service onto `Client` in `New()`.
 4. Add table-driven `httptest` tests and a CHANGELOG entry.
 

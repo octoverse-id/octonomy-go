@@ -61,7 +61,8 @@ type Config struct {
 	// Token is the service token sent as "Authorization: Bearer <token>".
 	Token string
 
-	// TenantID is sent as the X-Tenant-ID header and scopes every request.
+	// TenantID is sent as the X-Tenant-ID header and scopes every request on the
+	// versioned API. The health probes, which authenticate nobody, send none.
 	TenantID string
 
 	// APIVersion selects the REST surface. Empty means DefaultAPIVersion, which

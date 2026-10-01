@@ -252,10 +252,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detection and no depth limit: probed on go1.13.15, a `Metadata` that contains itself hangs
   `json.Marshal`, and a deeply nested response decodes until the stack is exhausted — a fatal runtime
   error, not a panic, so nothing can recover it. A request body is now walked before it is encoded —
-  following exactly what `encoding/json` follows, so a field tagged `json:"-"` or a caller's own
-  `json.Marshaler` is not walked — and a response is scanned before it is decoded, each refused past
-  10,000 levels — the limit the
-  standard library adopted once it had one, so the two lines refuse the same bodies. Both are proven
+  following what `encoding/json` follows, so a field tagged `json:"-"` or a caller's own
+  `json.Marshaler` is not walked (one conservative difference, embedded-field dominance, is recorded
+  in `jsondepth.go`) — and a response is scanned before it is decoded, each refused past 10,000
+  levels: the limit the standard library adopted once it had one, so the two lines refuse the same
+  responses. Both are proven
   in child processes, since the unguarded case cannot be observed from inside the process it kills.
   `main` had no counterpart when this was written: a modern `encoding/json` detects encoding cycles
   and bounds decoding depth itself.

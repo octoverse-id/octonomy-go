@@ -107,12 +107,20 @@ func checkJSONDepth(data []byte) error {
 // checkBodyDepth bounds how deep json.Marshal would have to recurse to encode
 // body, refusing a cycle as the unbounded depth it is.
 //
-// It walks what encoding/json walks, and only that: through pointers and
-// interfaces, into maps, slices, arrays, and the struct fields encoding/json
-// encodes. A field it skips -- unexported, tagged json:"-", or an unexported
-// embedded type that is not a struct -- is skipped here too, so a back-reference
-// a caller excludes from the wire with json:"-" is no reason to refuse the
-// request. Every map, slice, array, struct, and pointer it enters counts one
+// It walks what encoding/json walks: through pointers and interfaces, into maps,
+// slices, arrays, and the struct fields encoding/json encodes. A field it skips
+// -- unexported, tagged json:"-", or an unexported embedded type that is not a
+// struct -- is skipped here too, so a back-reference a caller excludes from the
+// wire with json:"-" is no reason to refuse the request.
+//
+// ONE KNOWN, CONSERVATIVE DIFFERENCE: the walk does not resolve embedded-field
+// dominance. Where two embedded structs promote fields with the same JSON name,
+// encoding/json omits both, and the walk still follows each -- so a body whose
+// only cycle sits behind such a conflicting field is refused although the
+// encoder would have dropped it. That needs a caller to build both the conflict
+// and the cycle; mirroring typeFields' selection rules to close it would be a
+// second copy of the encoder to keep in step. The difference only ever refuses
+// more, never less, so it cannot let a cycle reach json.Marshal. Every map, slice, array, struct, and pointer it enters counts one
 // level; interfaces count none, since one cannot hold itself without a pointer
 // or a container in between. Counting pointers is what stops a cycle that runs
 // through no container at all -- a *interface{} that points at itself -- and it
