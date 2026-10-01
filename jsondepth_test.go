@@ -176,16 +176,10 @@ func TestDecode_AcceptsAResponseWithinTheCeiling(t *testing.T) {
 
 // --- checkBodyDepth ---------------------------------------------------------
 
+// Bounded inputs only. A cycle handed to a walk that had lost its depth bound
+// would recurse until the stack ran out and take this whole binary with it, so
+// every cyclic case runs in a child process, below.
 func TestCheckBodyDepth(t *testing.T) {
-	cyclic := Metadata{}
-	cyclic["self"] = cyclic
-
-	a, b := Metadata{}, Metadata{}
-	a["b"], b["a"] = b, a
-
-	selfPointer := new(interface{})
-	*selfPointer = selfPointer
-
 	type hidden struct {
 		Name string
 		next *hidden
@@ -202,14 +196,12 @@ func TestCheckBodyDepth(t *testing.T) {
 		{"a create body", TagCreate{Name: "N", Slug: "n", Type: "t", Description: String("d"), Metadata: Metadata{"k": []interface{}{1, "two"}}}, false},
 		{"deep but legal metadata", TagCreate{Metadata: nestedMetadata(maxJSONDepth - 10)}, false},
 		{"metadata over the ceiling", TagCreate{Metadata: nestedMetadata(maxJSONDepth + 1)}, true},
-		{"metadata that contains itself", TagCreate{Metadata: cyclic}, true},
-		{"two maps containing each other", VocabularyCreate{Metadata: a}, true},
-		{"an update body, through its value", TagUpdate{Metadata: cyclic}, true},
-		{"a pointer to a body", &TagCreate{Metadata: cyclic}, true},
-		{"a cycle through no container at all", TagCreate{Metadata: Metadata{"p": selfPointer}}, true},
+		{"an update body, through its value", TagUpdate{Metadata: nestedMetadata(maxJSONDepth + 1)}, true},
+		{"a pointer to a body", &TagCreate{Metadata: nestedMetadata(maxJSONDepth + 1)}, true},
 		{"a large byte slice is one string", TagCreate{Metadata: Metadata{"b": make([]byte, 4*maxJSONDepth)}}, false},
 		// encoding/json skips an unexported field, so the walk does too: a cycle
-		// there is never encoded and is no reason to refuse the request.
+		// there is never encoded and is no reason to refuse the request. (The
+		// walk never enters it, so this one is safe in-process.)
 		{"a cycle behind an unexported field", TagCreate{Metadata: Metadata{"h": loop}}, false},
 	}
 	for _, tt := range tests {
@@ -302,7 +294,10 @@ func childReport(err error, wantIn string, reached bool) {
 func TestCyclicMetadataIsRefusedRatherThanHanging(t *testing.T) {
 	scenario := os.Getenv(depthChildEnv)
 	if scenario == "" {
-		for _, s := range []string{"tag-create", "tag-update", "vocabulary-create", "vocabulary-update"} {
+		for _, s := range []string{
+			"tag-create", "tag-update", "vocabulary-create", "vocabulary-update",
+			"walk-mutual-maps", "walk-pointer-to-body", "walk-self-pointer",
+		} {
 			s := s
 			t.Run(s, func(t *testing.T) { runDepthChild(t, s) })
 		}
@@ -325,8 +320,20 @@ func TestCyclicMetadataIsRefusedRatherThanHanging(t *testing.T) {
 
 	m := Metadata{"name": "loop"}
 	m["self"] = m
+	a, b := Metadata{}, Metadata{}
+	a["b"], b["a"] = b, a
+	// A cycle through no container at all: only counting pointers stops it.
+	selfPointer := new(interface{})
+	*selfPointer = selfPointer
+
 	ctx := context.Background()
 	switch scenario {
+	case "walk-mutual-maps":
+		err = checkBodyDepth(VocabularyCreate{Metadata: a})
+	case "walk-pointer-to-body":
+		err = checkBodyDepth(&TagCreate{Metadata: m})
+	case "walk-self-pointer":
+		err = checkBodyDepth(TagCreate{Metadata: Metadata{"p": selfPointer}})
 	case "tag-create":
 		_, err = c.Tags.Create(ctx, TagCreate{Name: "N", Slug: "n", Type: "t", Metadata: m})
 	case "tag-update":
