@@ -143,11 +143,12 @@ func TestWithNamespace_SendsTheHeaderPair(t *testing.T) {
 		if got := r.URL.Query().Get(applicationIDParam); got != "shop" {
 			t.Errorf("%s = %q, want shop", applicationIDParam, got)
 		}
-		writeData(t, w, http.StatusOK, Tag{
-			ID:            "abc",
-			NamespaceType: String("merchant"),
-			NamespaceID:   String("acme-store"),
-		})
+		// Raw JSON, not a Tag run through writeData: a fixture marshalled by the
+		// struct under test round-trips through its own tags, so a misspelled
+		// one would pass here.
+		writeJSON(t, w, http.StatusOK, map[string]interface{}{"data": map[string]interface{}{
+			"id": "abc", "namespace_type": "merchant", "namespace_id": "acme-store",
+		}})
 	})
 	defer cleanup()
 

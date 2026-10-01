@@ -12,6 +12,7 @@ package octonomy
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -371,6 +372,31 @@ func TestReadBounded(t *testing.T) {
 				t.Errorf("body = %q, want %q", got, tt.body)
 			}
 		})
+	}
+}
+
+// countingReader is an endless source that records how much was taken from it.
+type countingReader struct{ n int64 }
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'x'
+	}
+	r.n += int64(len(p))
+	return len(p), nil
+}
+
+// The ceiling bounds what is READ, not only what is returned. Reading the whole
+// body and then comparing its length would report ErrResponseTooLarge just the
+// same -- after holding every byte of it in memory, which is the failure the
+// ceiling exists to prevent. Against an endless body that read never returns.
+func TestReadBounded_StopsReadingAtTheCeiling(t *testing.T) {
+	src := &io.LimitedReader{R: &countingReader{}, N: 1 << 20}
+	if _, err := readBounded(src, 8); !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("err = %v, want ErrResponseTooLarge", err)
+	}
+	if read := (1 << 20) - src.N; read > 8+512 {
+		t.Errorf("readBounded consumed %d bytes of a 1 MiB body with an 8-byte ceiling; it must stop just past the ceiling", read)
 	}
 }
 
