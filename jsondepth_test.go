@@ -18,6 +18,7 @@ package octonomy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -187,6 +188,24 @@ func TestCheckBodyDepth(t *testing.T) {
 	loop := &hidden{Name: "loop"}
 	loop.next = loop
 
+	// A back-reference excluded from the wire with json:"-": encoding/json
+	// never follows it, so a cycle through it is legal and v1.0.0 sent it.
+	type node struct {
+		Value  string
+		Parent *node `json:"-"`
+	}
+	child := &node{Value: "child"}
+	child.Parent = child
+
+	// An unexported embedded non-struct is skipped by encoding/json too.
+	type hiddenMap map[string]interface{}
+	type withHiddenMap struct {
+		Name string
+		hiddenMap
+	}
+	cyclicHidden := hiddenMap{}
+	cyclicHidden["self"] = cyclicHidden
+
 	tests := []struct {
 		name    string
 		body    interface{}
@@ -203,6 +222,13 @@ func TestCheckBodyDepth(t *testing.T) {
 		// there is never encoded and is no reason to refuse the request. (The
 		// walk never enters it, so this one is safe in-process.)
 		{"a cycle behind an unexported field", TagCreate{Metadata: Metadata{"h": loop}}, false},
+		{"a cycle behind a json:\"-\" field", TagCreate{Metadata: Metadata{"n": child}}, false},
+		{"a cycle in an unexported embedded map", TagCreate{Metadata: Metadata{"w": withHiddenMap{Name: "w", hiddenMap: cyclicHidden}}}, false},
+		// json.RawMessage is opaque to the encoder, which emits it through its
+		// iterative scanner rather than by recursion, so its nesting is not the
+		// walk's to count. (At the ceiling: a modern encoding/json's compact
+		// refuses anything deeper, though go1.13's would emit it.)
+		{"a json.RawMessage at the ceiling", TagCreate{Metadata: Metadata{"raw": json.RawMessage(nestedArrays(maxJSONDepth, "1"))}}, false},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -210,6 +236,13 @@ func TestCheckBodyDepth(t *testing.T) {
 			err := checkBodyDepth(tt.body)
 			if tt.wantErr != (err != nil) {
 				t.Fatalf("checkBodyDepth = %v, want error: %v", err, tt.wantErr)
+			}
+			// The walk must agree with the encoder: whatever it accepts,
+			// encoding/json can encode.
+			if err == nil && tt.body != nil {
+				if _, err := json.Marshal(tt.body); err != nil {
+					t.Errorf("checkBodyDepth accepted a body json.Marshal refuses: %v", err)
+				}
 			}
 			if err != nil && !strings.Contains(err.Error(), "nests deeper than") {
 				t.Errorf("error should say what was refused: %v", err)

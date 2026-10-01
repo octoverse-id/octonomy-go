@@ -71,8 +71,9 @@ var ErrUnreachable = errors.New("octonomy: request failed")
 // errors.Is(err, context.Canceled) -- or errors.As into *net.OpError -- by
 // following Unwrap to the cause.
 //
-// It is a type rather than fmt.Errorf("%w: %w", ErrUnreachable, err), which is
-// how the /v2 module spells it, because that spelling needs Go 1.20. Before
+// It is a type rather than fmt.Errorf("%w: %w", ErrUnreachable, err) -- the
+// spelling in the main transport.go this was ported from (5e40964) -- because
+// that spelling needs Go 1.20. Before
 // 1.20, fmt.Errorf with two %w verbs returns an error with NO Unwrap method at
 // all, so errors.Is finds neither the sentinel nor the cause -- and it compiles
 // and vets clean on Go 1.13, so nothing but a test notices. "%w: %v" is no fix
@@ -402,7 +403,7 @@ func WithIncludeGlobal() RequestOption {
 // was requested. Keeping the decode out of here is what makes "a 2xx that
 // carries nothing where a payload was expected" an error instead of a zero
 // value. Resource files must not call doRaw directly.
-func (c *Client) doRaw(ctx context.Context, method, path string, query url.Values, body interface{}, opts ...RequestOption) ([]byte, error) {
+func (c *Client) doRaw(ctx context.Context, method, path string, query url.Values, body interface{}, opts ...RequestOption) (int, []byte, error) {
 	// A probe client (NewHealthClient) holds no token and no tenant. Nothing
 	// exported can route an API call through one -- HealthClient exposes only
 	// Health, and every service field lives on a Client that New built -- so
@@ -411,7 +412,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 	// would send "Authorization: Bearer " and an empty X-Tenant-ID, a well-formed
 	// request that no server can attribute to anyone.
 	if c.probeOnly {
-		return nil, fmt.Errorf("octonomy: this client was built by NewHealthClient and carries no credentials, so it can reach only the health probes; use New for API calls")
+		return 0, nil, fmt.Errorf("octonomy: this client was built by NewHealthClient and carries no credentials, so it can reach only the health probes; use New for API calls")
 	}
 
 	var rc requestConfig
@@ -420,7 +421,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		// from a caller assembling a slice conditionally, and calling it would
 		// take the process down over a mistake in one argument.
 		if opt == nil {
-			return nil, fmt.Errorf("octonomy: RequestOption %d is nil; omit it rather than passing a nil option", i)
+			return 0, nil, fmt.Errorf("octonomy: RequestOption %d is nil; omit it rather than passing a nil option", i)
 		}
 		opt(&rc)
 	}
@@ -432,20 +433,20 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 	// promises to surface -- stayed hidden, pointing the remediation at the wrong
 	// argument.
 	if rc.err != nil {
-		return nil, rc.err
+		return 0, nil, rc.err
 	}
 
 	query, err := rc.mergeQuery(query)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if err := c.checkScopeCoherence(method, rc, query, body != nil); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
 	endpoint, err := c.resolvePath(path)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if len(query) > 0 {
 		endpoint.RawQuery = query.Encode()
@@ -458,18 +459,18 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		// is exhausted, which is a fatal runtime error rather than a recoverable
 		// panic. See checkBodyDepth.
 		if err := checkBodyDepth(body); err != nil {
-			return nil, fmt.Errorf("octonomy: encode request body: %w", err)
+			return 0, nil, fmt.Errorf("octonomy: encode request body: %w", err)
 		}
 		buf, err := json.Marshal(body)
 		if err != nil {
-			return nil, fmt.Errorf("octonomy: encode request body: %w", err)
+			return 0, nil, fmt.Errorf("octonomy: encode request body: %w", err)
 		}
 		reqBody = bytes.NewReader(buf)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, endpoint.String(), reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("octonomy: build request: %w", err)
+		return 0, nil, fmt.Errorf("octonomy: build request: %w", err)
 	}
 	req.Header = c.headers(rc, body != nil)
 
@@ -477,7 +478,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 	// on the same call in doUnversioned.
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, &unreachableError{cause: err}
+		return 0, nil, &unreachableError{cause: err}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -495,15 +496,15 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		// classification worth preserving when the status said success and the
 		// payload is the thing that failed.
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, unreadableBodyError(resp.StatusCode, err)
+			return resp.StatusCode, nil, unreadableBodyError(resp.StatusCode, err)
 		}
-		return nil, fmt.Errorf("octonomy: read response body: %w", err)
+		return resp.StatusCode, nil, fmt.Errorf("octonomy: read response body: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, parseError(resp.StatusCode, respBody, versionHint(resp.StatusCode, c.apiVersion))
+		return resp.StatusCode, respBody, parseError(resp.StatusCode, respBody, versionHint(resp.StatusCode, c.apiVersion))
 	}
-	return respBody, nil
+	return resp.StatusCode, respBody, nil
 }
 
 // doUnversioned performs a GET against a route that sits OUTSIDE
@@ -830,11 +831,31 @@ func readBounded(r io.Reader, limit int64) ([]byte, error) {
 }
 
 // do performs a call whose 2xx response carries no payload the caller needs --
-// DELETE, which Octonomy answers with 204 and an empty body. Any body the server
-// does send is ignored, deliberately: there is nothing to decode into.
+// DELETE, which Octonomy answers with 204 and an empty body on every resource
+// (verified across tags, vocabularies, aliases, and assignments on server
+// 3.1.0).
+//
+// It asserts that shape rather than ignoring the response, which this line's
+// first release did. A 200 carrying {"data": ...} -- a resource method routed
+// through the wrong helper, or a host that is not Octonomy answering at the
+// BaseURL -- would otherwise report a deactivation that may never have
+// happened, with a nil error. That is the silent success doData exists to
+// prevent, so the wrong helper for a method must not compile-and-pass, and an
+// answer that is not Octonomy's DELETE answer is not a success.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body interface{}, opts ...RequestOption) error {
-	_, err := c.doRaw(ctx, method, path, query, body, opts...)
-	return err
+	status, respBody, err := c.doRaw(ctx, method, path, query, body, opts...)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusNoContent {
+		return fmt.Errorf("octonomy: expected 204 No Content, got %d: this call returned a payload, so it needs doData or doList", status)
+	}
+	// Belt and braces: net/http discards a body on a 204, so this is a guard on
+	// the contract rather than a branch a real server can reach.
+	if len(bytes.TrimSpace(respBody)) > 0 {
+		return fmt.Errorf("octonomy: 204 response carried a %d-byte body, expected none", len(respBody))
+	}
+	return nil
 }
 
 // doData performs a call whose 2xx body is a SINGLE resource and unwraps the
@@ -854,7 +875,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 // contents are not a resource (requireResourceObject), or decode to one with no
 // identity (requireIdentity).
 func (c *Client) doData(ctx context.Context, method, path string, query url.Values, body, out interface{}, opts ...RequestOption) error {
-	respBody, err := c.doRaw(ctx, method, path, query, body, opts...)
+	_, respBody, err := c.doRaw(ctx, method, path, query, body, opts...)
 	if err != nil {
 		return err
 	}
@@ -894,10 +915,15 @@ type identifiedList interface {
 // Count == 0, and a caller cannot tell that from "this tenant has no tags". That
 // is the same silent failure doData exists to prevent, one type further out.
 //
-// BOTH keys are required, not just data. A missing or null pagination block
-// decodes to a zero-valued Pagination -- Count 0, Limit 0, nil Next -- and a
-// caller paging on Count reads that as "one page, nothing after it". Same
-// indistinguishable-empty-page failure, one field over.
+// BOTH keys are required, and pagination has to be usable rather than merely
+// present. A missing, null, or {} pagination block decodes to a zero-valued
+// Pagination -- Limit 0, Count 0, nil Next -- which a caller paging on Count
+// reads as "one page, nothing after it". Limit is the field that tells those
+// apart: the server's paginator resolves it through DRF's strict positive-int
+// parse and falls back to default_limit 50, so a real response never carries
+// Limit < 1 (octonomy/core/pagination.py). Count and Offset are legitimately 0
+// on an empty first page and cannot carry this check. (This line's first
+// release required only that the key be present and not null.)
 //
 // Each ROW is held to the same standard as a single resource: it must be an
 // object (requireResourceArray) and must decode with its identity
@@ -910,7 +936,7 @@ type identifiedList interface {
 // nil and empty as the same thing; this line does not normalize between them,
 // and a v1.0.0 caller may be relying on which one it gets.
 func (c *Client) doList(ctx context.Context, method, path string, query url.Values, out identifiedList, opts ...RequestOption) error {
-	respBody, err := c.doRaw(ctx, method, path, query, nil, opts...)
+	_, respBody, err := c.doRaw(ctx, method, path, query, nil, opts...)
 	if err != nil {
 		return err
 	}
@@ -920,6 +946,13 @@ func (c *Client) doList(ctx context.Context, method, path string, query url.Valu
 	}
 	if pagination == nil || string(pagination) == "null" {
 		return fmt.Errorf(`octonomy: list response has no "pagination" block`)
+	}
+	var page Pagination
+	if err := decodeJSON(pagination, &page); err != nil {
+		return fmt.Errorf("octonomy: decode response pagination: %w", err)
+	}
+	if page.Limit < 1 {
+		return fmt.Errorf(`octonomy: list response has an unusable "pagination" block (limit=%d), which would read as a single complete page`, page.Limit)
 	}
 	if err := requireResourceArray(data, `list response "data"`); err != nil {
 		return err

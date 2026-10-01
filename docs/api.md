@@ -71,8 +71,11 @@ SDK follows the server (`octonomy/core/responses.py`, `octonomy/core/pagination.
 - **Single resource:** `{ "data": { ... } }` → unwrapped by `Client.doData` into e.g. `*Tag`. A 2xx
   body with no `data` key is an error, not an empty struct.
 - **List:** `{ "data": [...], "pagination": { "limit", "offset", "count", "next", "previous" } }` →
-  `*TagList` / `*VocabularyList` (this line has no `List[T]`; type parameters need Go 1.18).
-- **Delete:** `204`, no body (deactivation on the server).
+  `*TagList` / `*VocabularyList` (this line has no `List[T]`; type parameters need Go 1.18). Both keys
+  are required, and `pagination.limit` must be at least 1 — a real response always carries one — so
+  `{}` cannot pass for "one page, nothing after it".
+- **Delete:** `204`, no body (deactivation on the server). Any other 2xx, or a body, is an error:
+  it is not evidence the row was deactivated.
 - **Health:** a bare `{ "status": "ok" }`, with **no** `data` envelope — the one route without one,
   decoded by its own decoder. A 2xx with no readable `status` is an error.
 - **Errors:** `{ "error": { "code", "message", "details", "request_id" } }` → `*APIError`.

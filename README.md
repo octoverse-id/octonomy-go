@@ -97,7 +97,8 @@ A complete, runnable program lives in [`examples/quickstart`](examples/quickstar
 
 ## Authentication and tenant scope
 
-Every request carries two credentials from `Config`:
+Every request on the versioned API carries two credentials from `Config` (the
+[health probes](#health-probes) carry neither):
 
 | Header | Source | Purpose |
 | ------ | ------ | ------- |
@@ -116,9 +117,9 @@ tag, err := client.Tags.Update(ctx, id, octonomy.TagUpdate{
 ## API version and namespaces
 
 `Config.APIVersion` selects the REST surface. **On this line it defaults to `APIV1`**, which is where
-every `v1.0.0` request went, so upgrading moves no existing caller to another surface. That is the one
-default that differs from the `/v2` module, whose default is `APIV2`: this line can never change a
-default under a caller.
+every `v1.0.0` request went, so upgrading moves no existing caller to another surface. The `/v2`
+module defaulted to `APIV2` when this selector was ported from it; this line cannot copy that,
+because it can never change a default under a caller.
 
 `/api/v2` adds the namespace axis — merchant or sub-tenant scoping below the tenant — and needs an
 Octonomy server of 2.0 or later. Opt in, then scope each request; there is deliberately no client-level
@@ -236,8 +237,8 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
   empties the stored object, while a nil `Metadata` leaves it alone.
 - **JSON nests at most 10,000 levels**, in a request body and in a response. Go 1.13's
   `encoding/json` has no limit of its own, so a self-containing `Metadata` would hang it and a deeply
-  nested response would exhaust the stack; this line refuses both with an error. The `/v2` module's
-  standard library enforces the same response limit itself.
+  nested response would exhaust the stack; this line refuses both with an error. A modern toolchain's
+  `encoding/json` enforces the same response limit itself.
 - **`Metadata` is `map[string]interface{}`**, not `map[string]any` — the same type, spelled the way
   Go 1.13 spells it.
 

@@ -65,8 +65,8 @@ func TestNew_APIVersion(t *testing.T) {
 		want    APIVersion
 		wantErr bool
 	}{
-		// The one deliberate divergence from the /v2 module: an empty version is
-		// v1 here, because v1.0.0 sent everything to /api/v1 and this line cannot
+		// Unlike the /v2 module's default at the time of the port, an empty
+		// version is v1 here, because v1.0.0 sent everything to /api/v1 and this line cannot
 		// change a default under a caller.
 		{"empty defaults to v1", "", APIV1, false},
 		{"explicit v2", APIV2, APIV2, false},
@@ -257,7 +257,7 @@ func TestScopeGuards_RejectBeforeSendingAnything(t *testing.T) {
 			name:    "include_global alongside scope=merchant",
 			version: APIV2,
 			call: func(c *Client) error {
-				_, err := c.doRaw(context.Background(), http.MethodGet, "/tag-resolution",
+				_, _, err := c.doRaw(context.Background(), http.MethodGet, "/tag-resolution",
 					mustQuery("slug", "sale", scopeParam, scopeMerchantValue, applicationIDParam, "shop"), nil,
 					WithNamespace("merchant", "m1"), WithIncludeGlobal())
 				return err
@@ -537,7 +537,7 @@ func TestScopeParam_MerchantNeedsANamespaceButGlobalDoesNot(t *testing.T) {
 	t.Run("scope=merchant without a namespace is refused locally", func(t *testing.T) {
 		c, cleanup := newUnreachableClient(t, APIV2)
 		defer cleanup()
-		_, err := c.doRaw(context.Background(), http.MethodGet, "/tag-resolution",
+		_, _, err := c.doRaw(context.Background(), http.MethodGet, "/tag-resolution",
 			mustQuery("slug", "sale", scopeParam, scopeMerchantValue), nil)
 		if err == nil {
 			t.Fatal("expected a client-side error")
@@ -555,7 +555,7 @@ func TestScopeParam_MerchantNeedsANamespaceButGlobalDoesNot(t *testing.T) {
 			writeData(t, w, http.StatusOK, map[string]interface{}{"matched_type": "tag"})
 		})
 		defer cleanup()
-		_, err := c.doRaw(context.Background(), http.MethodGet, "/tag-resolution",
+		_, _, err := c.doRaw(context.Background(), http.MethodGet, "/tag-resolution",
 			mustQuery("slug", "sale", scopeParam, "global"), nil)
 		if err != nil {
 			t.Fatalf("doRaw: %v", err)
@@ -570,7 +570,7 @@ func TestScopeParam_MerchantNeedsANamespaceButGlobalDoesNot(t *testing.T) {
 			writeData(t, w, http.StatusOK, map[string]interface{}{"matched_type": "tag"})
 		})
 		defer cleanup()
-		_, err := c.doRaw(context.Background(), http.MethodGet, "/tag-resolution",
+		_, _, err := c.doRaw(context.Background(), http.MethodGet, "/tag-resolution",
 			mustQuery("slug", "sale", scopeParam, scopeMerchantValue), nil,
 			WithNamespace("merchant", "m1"), WithApplication("shop"))
 		if err != nil {

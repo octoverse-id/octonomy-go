@@ -56,8 +56,9 @@
 //
 // # Authentication and scope
 //
-// Every request carries the service token (Authorization: Bearer) and the tenant
-// (X-Tenant-ID) from Config. Set Config.ActorID (or pass WithActor per call) to
+// Every request on the versioned API carries the service token (Authorization:
+// Bearer) and the tenant (X-Tenant-ID) from Config; the health probes, below,
+// carry neither. Set Config.ActorID (or pass WithActor per call) to
 // populate X-Actor-ID for audit trails, and pass WithRequestID to correlate one
 // call with your own logs. Tokens are scoped to tags:read, tags:write, and
 // audit:read on the server side.
@@ -66,7 +67,8 @@
 //
 // Config.APIVersion defaults to APIV1 on this line -- the surface every v1.0.0
 // request reached -- because this line never changes a default under a caller.
-// The /v2 module defaults to APIV2 instead. Set APIV2 here to reach /api/v2, and
+// (The /v2 module defaulted to APIV2 when this line ported the selector from it.)
+// Set APIV2 here to reach /api/v2, and
 // scope a request to a merchant or sub-tenant namespace per call:
 //
 //	tags, err := client.Tags.List(ctx, nil,

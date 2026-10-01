@@ -1,6 +1,7 @@
 package octonomy
 
 import (
+	"encoding"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -29,20 +30,20 @@ import (
 //     server-controlled free-form JSON, so a server -- or anything able to
 //     answer in its place -- chooses how deep they go.
 //
-// The /v2 module has no counterpart, because its toolchain's encoding/json
-// enforces both limits itself, so this is a deliberate divergence between the
-// lines rather than a porting gap.
+// The main transport.go this was ported from (5e40964) has no counterpart: a
+// modern encoding/json detects encoding cycles and bounds decoding depth itself.
+// So this is a deliberate divergence between the lines, not a porting gap.
 
 // maxJSONDepth is the nesting ceiling for both halves. It is the limit the
-// standard library's own decoder adopted once it had one, so a body this line
-// refuses is one the /v2 module's decoder refuses too, and it is far beyond any
+// standard library's own decoder adopted once it had one, so a response this
+// line refuses is one a modern encoding/json refuses too, and it is far beyond any
 // real Octonomy payload while far below a depth that threatens the stack.
 const maxJSONDepth = 10000
 
 // errJSONTooDeep is what decodeJSON returns for a response nested past the
-// ceiling. It is unexported because the /v2 module has no counterpart for a
-// caller to compare against -- its standard library rejects the same body with
-// its own error -- and because a body this deep is a malformed response, not a
+// ceiling. It is unexported because a caller on a modern toolchain has no
+// counterpart to compare against -- its standard library rejects the same body
+// with its own error -- and because a body this deep is a malformed response, not a
 // condition a caller branches on. Its text is distinct from the standard
 // library's ("exceeded max depth") so a test run on a modern toolchain can still
 // tell which of the two refused.
@@ -106,18 +107,78 @@ func checkJSONDepth(data []byte) error {
 // checkBodyDepth bounds how deep json.Marshal would have to recurse to encode
 // body, refusing a cycle as the unbounded depth it is.
 //
-// It walks what encoding/json walks: through pointers and interfaces, into
-// maps, slices, arrays, and the exported (or embedded) fields of a struct.
-// Every map, slice, array, struct, and pointer it enters counts one level;
-// interfaces count none, since one cannot hold itself without a pointer or a
-// container in between. Counting pointers is what stops a cycle that runs
-// through no container at all -- a *interface{} that points at itself.
+// It walks what encoding/json walks, and only that: through pointers and
+// interfaces, into maps, slices, arrays, and the struct fields encoding/json
+// encodes. A field it skips -- unexported, tagged json:"-", or an unexported
+// embedded type that is not a struct -- is skipped here too, so a back-reference
+// a caller excludes from the wire with json:"-" is no reason to refuse the
+// request. Every map, slice, array, struct, and pointer it enters counts one
+// level; interfaces count none, since one cannot hold itself without a pointer
+// or a container in between. Counting pointers is what stops a cycle that runs
+// through no container at all -- a *interface{} that points at itself -- and it
+// makes the request ceiling at most, not exactly, the response one. The bodies
+// this package defines carry pointers only at their leaves.
 //
-// A caller's own json.Marshaler is walked as the value it is rather than as
-// whatever its MarshalJSON emits; this bounds the SDK's types and the Metadata
-// a caller puts in them, not arbitrary code a caller supplies.
+// A value whose type implements json.Marshaler or encoding.TextMarshaler, and
+// is declared outside this package, is opaque: encoding/json calls its method
+// instead of walking its fields, so the walk stops there too. That covers
+// json.RawMessage, whose bytes are emitted through the iterative scanner and so
+// cannot exhaust the stack however deep they nest. What such a method does is
+// the caller's code, not this package's. This package's own *Update types do
+// implement json.Marshaler, and are walked: their MarshalJSON encodes exactly
+// their fields, Metadata included.
 func checkBodyDepth(body interface{}) error {
 	return walkBodyDepth(reflect.ValueOf(body), 0)
+}
+
+var (
+	jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+	textMarshalerType = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
+	thisPackage       = reflect.TypeOf(Client{}).PkgPath()
+)
+
+// opaqueToTheEncoder reports whether encoding/json would hand v to a method of
+// the caller's rather than walk it -- the rule checkBodyDepth's comment states.
+func opaqueToTheEncoder(v reflect.Value) bool {
+	t := v.Type()
+	named := t
+	if named.Kind() == reflect.Ptr {
+		named = named.Elem()
+	}
+	if named.PkgPath() == thisPackage {
+		return false
+	}
+	if t.Implements(jsonMarshalerType) || t.Implements(textMarshalerType) {
+		return true
+	}
+	// encoding/json also uses a pointer-receiver method when the value is
+	// addressable -- a struct field reached through a pointer, a slice element.
+	if t.Kind() != reflect.Ptr && v.CanAddr() {
+		pt := reflect.PtrTo(t)
+		return pt.Implements(jsonMarshalerType) || pt.Implements(textMarshalerType)
+	}
+	return false
+}
+
+// skippedByTheEncoder reports whether encoding/json leaves struct field f off
+// the wire entirely, so the walk need not follow it.
+func skippedByTheEncoder(f reflect.StructField) bool {
+	if f.Tag.Get("json") == "-" {
+		return true
+	}
+	if f.PkgPath == "" {
+		return false
+	}
+	if !f.Anonymous {
+		return true
+	}
+	// An unexported embedded field is encoded only when it is a struct, or a
+	// pointer to one, whose exported fields are promoted.
+	t := f.Type
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	return t.Kind() != reflect.Struct
 }
 
 func walkBodyDepth(v reflect.Value, depth int) error {
@@ -129,6 +190,12 @@ func walkBodyDepth(v reflect.Value, depth int) error {
 		return nil
 	}
 
+	if !v.IsValid() {
+		return nil
+	}
+	if v.Kind() != reflect.Interface && opaqueToTheEncoder(v) {
+		return nil
+	}
 	switch v.Kind() {
 	case reflect.Interface:
 		if v.IsNil() {
@@ -178,10 +245,7 @@ func walkBodyDepth(v reflect.Value, depth int) error {
 		}
 		t := v.Type()
 		for i := 0; i < v.NumField(); i++ {
-			// encoding/json skips an unexported field unless it is embedded, so
-			// the walk does too; following one would reach state no request
-			// carries, such as a time.Time's location.
-			if f := t.Field(i); f.PkgPath != "" && !f.Anonymous {
+			if skippedByTheEncoder(t.Field(i)) {
 				continue
 			}
 			if err := walkBodyDepth(v.Field(i), depth); err != nil {

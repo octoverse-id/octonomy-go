@@ -28,8 +28,8 @@ const (
 
 // DefaultAPIVersion is the surface New selects when Config.APIVersion is empty.
 //
-// IT IS APIV1 ON THIS LINE, and that is the one place this package deliberately
-// differs from the /v2 module, whose default is APIV2. v1.0.0 sent every request
+// IT IS APIV1 ON THIS LINE, which is not the value the /v2 module had when this
+// selector was ported from it (main at 5e40964, APIV2). v1.0.0 sent every request
 // to /api/v1 unconditionally, and this line can never publish a major, so it can
 // never change a default under a caller: copying the /v2 module's value would
 // move every existing caller's requests to a different REST surface on an

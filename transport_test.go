@@ -531,3 +531,115 @@ func TestEveryDecodedModelCarriesAnIdentity(t *testing.T) {
 		}
 	}
 }
+
+// --- Shapes the first release accepted, and main refuses ---------------------
+
+// A list whose pagination block is present but unusable reads as "one page,
+// nothing after it" to a caller paging on Count. Limit is never below 1 in a
+// real response, so it is the field that tells the two apart.
+func TestDoList_RefusesAnUnusablePaginationBlock(t *testing.T) {
+	lists := []struct {
+		name string
+		call func(*Client) error
+	}{
+		{"tags", func(c *Client) error {
+			_, err := c.Tags.List(context.Background(), nil)
+			return err
+		}},
+		{"vocabularies", func(c *Client) error {
+			_, err := c.Vocabularies.List(context.Background(), nil)
+			return err
+		}},
+	}
+	bodies := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"empty pagination object", `{"data":[],"pagination":{}}`, "limit=0"},
+		{"null data and empty pagination", `{"data":null,"pagination":{}}`, "limit=0"},
+		{"zero limit", `{"data":[],"pagination":{"limit":0,"count":0}}`, "limit=0"},
+		{"negative limit", `{"data":[],"pagination":{"limit":-1}}`, "limit=-1"},
+		{"pagination is not an object", `{"data":[],"pagination":"50"}`, "pagination"},
+	}
+	for _, list := range lists {
+		for _, body := range bodies {
+			list, body := list, body
+			t.Run(list.name+"/"+body.name, func(t *testing.T) {
+				c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+					writeRaw(w, http.StatusOK, body.body)
+				})
+				defer cleanup()
+				err := list.call(c)
+				if err == nil {
+					t.Fatal("expected an error, got a page")
+				}
+				if !strings.Contains(err.Error(), body.want) {
+					t.Errorf("error should mention %q, got: %v", body.want, err)
+				}
+			})
+		}
+	}
+}
+
+// DELETE is answered with 204 and no body on every resource. Anything else --
+// a payload, or a 2xx that is not Octonomy's answer -- is not evidence that the
+// row was deactivated, and the first release reported it as success.
+func TestDo_RefusesA2xxThatIsNotTheDeleteAnswer(t *testing.T) {
+	deletes := []struct {
+		name string
+		call func(*Client) error
+	}{
+		{"tags", func(c *Client) error { return c.Tags.Delete(context.Background(), "tag_1") }},
+		{"vocabularies", func(c *Client) error { return c.Vocabularies.Delete(context.Background(), "voc_1") }},
+	}
+	answers := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"200 carrying a resource", http.StatusOK, `{"data":{"id":"still-active"}}`, "expected 204"},
+		{"200 with no body", http.StatusOK, "", "expected 204"},
+		{"202 accepted", http.StatusAccepted, "", "expected 204"},
+	}
+	for _, del := range deletes {
+		for _, answer := range answers {
+			del, answer := del, answer
+			t.Run(del.name+"/"+answer.name, func(t *testing.T) {
+				c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != http.MethodDelete {
+						t.Errorf("method = %s, want DELETE", r.Method)
+					}
+					w.WriteHeader(answer.status)
+					_, _ = w.Write([]byte(answer.body))
+				})
+				defer cleanup()
+				err := del.call(c)
+				if err == nil {
+					t.Fatal("a DELETE that was not answered with 204 reported success")
+				}
+				if !strings.Contains(err.Error(), answer.want) {
+					t.Errorf("error should mention %q, got: %v", answer.want, err)
+				}
+				if _, ok := AsAPIError(err); ok {
+					t.Errorf("a 2xx became an *APIError (%v); the server did not say no", err)
+				}
+			})
+		}
+	}
+
+	// The body check, reached directly: net/http drops a body on a real 204, so
+	// no server can trip it, and only the helper's contract can be asserted.
+	t.Run("204 is still a success", func(t *testing.T) {
+		c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		defer cleanup()
+		for _, del := range deletes {
+			if err := del.call(c); err != nil {
+				t.Errorf("%s: %v", del.name, err)
+			}
+		}
+	})
+}

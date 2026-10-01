@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the rules in the new `docs/porting-checklist.md`. Every exported `v1.0.0` symbol keeps its type and
   signature; what changes behaviour is listed under *Fixed*.
   - **`Config.APIVersion`, with `APIV1` and `APIV2`, defaults to `APIV1` on this line** —
-    `DefaultAPIVersion` is `APIV1` here and `APIV2` on `main`, and that is deliberate. `v1.0.0` sent
+    `DefaultAPIVersion` is `APIV1` here, where `main` had `APIV2` at the commit this was ported from,
+    and that is deliberate. `v1.0.0` sent
     every request to `/api/v1`, and this line can never change a default under a caller, so a client
     that sets nothing keeps speaking `/api/v1` after the upgrade. Set `APIVersion: octonomy.APIV2` to
     reach `/api/v2`; it needs an Octonomy server of 2.0 or later. `Client.APIVersion()` reports the
@@ -250,11 +251,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Two Go 1.13 hazards no longer reach the process.** Go 1.13's `encoding/json` has no cycle
   detection and no depth limit: probed on go1.13.15, a `Metadata` that contains itself hangs
   `json.Marshal`, and a deeply nested response decodes until the stack is exhausted — a fatal runtime
-  error, not a panic, so nothing can recover it. A request body is now walked before it is encoded,
-  and a response is scanned before it is decoded, each refused past 10,000 levels — the limit the
+  error, not a panic, so nothing can recover it. A request body is now walked before it is encoded —
+  following exactly what `encoding/json` follows, so a field tagged `json:"-"` or a caller's own
+  `json.Marshaler` is not walked — and a response is scanned before it is decoded, each refused past
+  10,000 levels — the limit the
   standard library adopted once it had one, so the two lines refuse the same bodies. Both are proven
   in child processes, since the unguarded case cannot be observed from inside the process it kills.
-  `main` has no counterpart: its toolchain enforces both limits itself.
+  `main` had no counterpart when this was written: a modern `encoding/json` detects encoding cycles
+  and bounds decoding depth itself.
+- **A list whose `pagination` block is unusable is an error.** The first release required only that
+  the key be present and not null, so `{"data": [], "pagination": {}}` decoded to a page with
+  `Limit` 0 and `Count` 0 — "one page, nothing after it" to a caller paging on `Count` — with a nil
+  error. A real response always carries `limit` of at least 1 (the server falls back to 50), so a
+  block below that is now refused, as `main` refuses it. `"data": null` still decodes to a nil slice,
+  as it did.
+- **`Delete` requires the `204 No Content` Octonomy answers it with.** The first release accepted
+  any 2xx and discarded the body, so a `200 {"data": {...}}` — a host that is not Octonomy answering
+  at the `BaseURL`, or a helper routed to the wrong call — reported a deactivation that may not have
+  happened, with a nil error. Any other status, or a body on a 204, is now an error (not an
+  `*APIError`: nothing said no). Octonomy answers every `DELETE` with 204 and no body.
 - **A nil `RequestOption` is an error, not a panic.** `v1.0.0` called every option unconditionally.
 - **A path segment is escaped once.** The first release assigned an already-escaped path to
   `url.URL.Path`, so `String()` escaped it again and an id of `a b` reached the server as the literal `a%20b`. Tag and

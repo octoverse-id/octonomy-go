@@ -562,7 +562,7 @@ func TestHealthClient_RefusesAPICalls(t *testing.T) {
 		t.Fatalf("NewHealthClient: %v", err)
 	}
 
-	_, err = hc.Health.client.doRaw(context.Background(), http.MethodGet, "/tags", nil, nil)
+	_, _, err = hc.Health.client.doRaw(context.Background(), http.MethodGet, "/tags", nil, nil)
 	if err == nil {
 		t.Fatal("a probe-only client must refuse an API call")
 	}

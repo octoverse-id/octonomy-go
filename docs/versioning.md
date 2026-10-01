@@ -138,7 +138,7 @@ ports it — and some never will be. The third column says which:
 | ------- | --- | ---------- |
 | `List[T]` | Type parameters need Go 1.18 — **never**, since the floor never moves | `TagList`, `VocabularyList` — same fields |
 | Every other resource group | Not ported yet — [#94](https://github.com/octoverse-id/octonomy-go/issues/94); [`contract-coverage.yaml`](contract-coverage.yaml) records which operations this tree implements | Wait for the port, or upgrade the toolchain and move to the `/v2` module |
-| `/api/v2` **by default** | **Never** — this line cannot change a default under a caller, so `DefaultAPIVersion` is `APIV1` here and `APIV2` on `main` | Set `Config.APIVersion = APIV2` |
+| `/api/v2` **by default** | **Never** — this line cannot change a default under a caller, so `DefaultAPIVersion` is `APIV1` here, where `main` had `APIV2` when the selector was ported | Set `Config.APIVersion = APIV2` |
 | A webhook receiver | **Never** — policy, above | Move to the `/v2` module |
 | Clearing a nullable field with PATCH | **Not planned** — a named carve-out of the epic: the `*Update` fields stay pointers, since `main`'s `Optional[T]` would change their types (no major, above). `Metadata` is not affected: `Metadata{}` sends `{}` and empties it | Move to the `/v2` module |
 | `t.Cleanup` in tests | Needs Go 1.14 — **never** | `newTestClient` returns a cleanup func the caller defers |

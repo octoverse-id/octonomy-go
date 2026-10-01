@@ -10,7 +10,7 @@ existing resource file and changing the types and paths.
 | File | Responsibility |
 | ---- | -------------- |
 | `octonomy.go` | `Config`, `APIVersion` (default `APIV1` on this line), `Client`, `New()` (validation + service wiring). |
-| `transport.go` | `doRaw()`: URL building under `/api/<version>`, auth/tenant/scope headers, the request-option chokepoint (`WithActor`, `WithRequestID`, the four scope options, `checkScopeCoherence`), JSON encoding, the 32 MiB read ceiling, non-2xx → `*APIError`. Then one decoder per response shape: `doData()` (single resource, unwraps `{"data": ...}`), `doList()` (list envelope), `do()` (no payload, e.g. DELETE's 204), each rejecting a decode with no identity. `doUnversioned()` is the separate, unauthenticated path for the health probes. |
+| `transport.go` | `doRaw()`: URL building under `/api/<version>`, auth/tenant/scope headers, the request-option chokepoint (`WithActor`, `WithRequestID`, the four scope options, `checkScopeCoherence`), JSON encoding, the 32 MiB read ceiling, non-2xx → `*APIError`. Then one decoder per response shape: `doData()` (single resource, unwraps `{"data": ...}`), `doList()` (list envelope), `do()` (no payload: requires DELETE's 204 with an empty body). `doData` and `doList` reject a decode with no identity, and `doList` a pagination block with no usable limit. `doUnversioned()` is the separate, unauthenticated path for the health probes. |
 | `jsondepth.go` | Compat-only: the nesting guards Go 1.13's `encoding/json` lacks — `checkBodyDepth` before every request is encoded, `decodeJSON` around every response decode. |
 | `errors.go` | `APIError`, error `Code*` constants, and `Is*` / `AsAPIError` helpers. |
 | `health.go` | `HealthService`, `NewHealthClient`, and the bare `{"status": …}` decoder. |
@@ -45,7 +45,7 @@ Caller ──▶ Service.Method ─┼─ doList ─┼──▶ doRaw ──▶
      doData  single resource               │         doData → unwrap {"data":{…}}  → *Model
      doList  list envelope                 │         doList → require {"data":[…], "pagination":{…}}
      do      no payload (DELETE 204)       │                  → *ModelList
-                                           │         do     → nothing to decode
+                                           │         do     → require 204, no body
                                            └─ !2xx → *APIError (Code, Message, Details,
                                                      RequestID, StatusCode)
 
@@ -79,7 +79,8 @@ Health.Live / Ready ──▶ doUnversioned ──▶ net/http ──▶ Octonom
 
 ## Multi-tenancy
 
-Every request is scoped to one tenant via `X-Tenant-ID` (`Config.TenantID`, required). Tags and
+Every request on the versioned API is scoped to one tenant via `X-Tenant-ID` (`Config.TenantID`,
+required); the health probes, outside `/api/<version>`, carry no tenant and no token. Tags and
 vocabularies may be shared (`application_id == nil`) or application-specific; assignments always carry
 an `application_id`. The SDK passes these through faithfully — the server enforces isolation.
 

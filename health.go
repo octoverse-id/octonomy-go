@@ -243,9 +243,10 @@ func (s *HealthService) Ready(ctx context.Context) (*HealthStatus, error) {
 //   - non-2xx WITH a status body -> *APIError carrying CodeNotReady. The
 //     response came from the health view itself, so the server is up and saying
 //     it cannot serve.
-//   - non-2xx WITHOUT one -> parseError, i.e. CodeUnexpectedStatus. Something
-//     that is not the health view answered: a proxy, a gateway, or a host that
-//     is not Octonomy.
+//   - non-2xx WITHOUT one -> parseError. Something that is not the health view
+//     answered: a proxy, a gateway, or a host that is not Octonomy. Its body is
+//     CodeUnexpectedStatus unless it carries a well-formed Octonomy error
+//     envelope, whose code parseError keeps verbatim, as everywhere else.
 //
 // That last split is why CodeNotReady is not the status-to-code mapping
 // CodeUnexpectedStatus exists to forbid. Nothing here infers a meaning from an

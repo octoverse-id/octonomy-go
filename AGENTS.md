@@ -4,9 +4,9 @@
 a multi-tenant, multi-application tag management / taxonomy service. The SDK is a hand-written,
 dependency-free client for the Octonomy REST API. `Config.APIVersion` selects the surface and
 defaults to **v1** (`/api/v1`) on this line; `/api/v2`, which carries the namespace axis, is opt-in
-with `APIV2`. That default is the one place this line deliberately differs from `main`, whose default
-is v2: `v1.0.0` sent every request to `/api/v1`, and this line can never change a default under a
-caller (see *READ FIRST*).
+with `APIV2`. That is the one *default* that differs from `main`'s, which was v2 when the selector was
+ported from it (5e40964): `v1.0.0` sent every request to `/api/v1`, and this line can never change a
+default under a caller (see *READ FIRST*).
 
 ## READ FIRST — this branch is the Go 1.13 line, and its freeze is reversed
 
@@ -72,9 +72,9 @@ on `main`.
     library in examples (`slices.*`). Rewrite the **module** path `.../octonomy-go/v2` to the
     unsuffixed one — but never strip `/api/v2`, which is a REST route and the capability being
     ported.
-  - **A default.** Copy a value from `main` and its default comes with it. `DefaultAPIVersion` is
-    `APIV2` there and `APIV1` here, and it is not the last default the port will meet: a default on
-    this line never changes, so read each one against `v1.0.0`, not against `main`.
+  - **A default.** Copy a value from `main` and its default comes with it. `DefaultAPIVersion` was
+    `APIV2` there at 5e40964 and is `APIV1` here, and it is not the last default the port will meet:
+    a default on this line never changes, so read each one against `v1.0.0`, not against `main`.
 - **Port a rule with the code it governs.** Several rules in this file describe the tree as it is —
   every request tenant-scoped, every method taking `...RequestOption` — and `main`'s `AGENTS.md`
   records exceptions to them that arrive with the code: the health probes are unversioned,
@@ -156,8 +156,9 @@ stays a faithful, ergonomic client.
   unguarded decode lets a server exhaust the stack — a fatal runtime error, not a panic.
   `TestEveryResponseDecodeIsDepthBounded` fails on a bypass. The request side is `checkBodyDepth`,
   run in `doRaw` before `json.Marshal`, which on Go 1.13 has no cycle detection either. **This guard
-  has no counterpart on `main`** — its toolchain bounds both directions itself — so it is a
-  deliberate divergence, not a porting gap: never "port away" what `main` lacks here.
+  had no counterpart on `main` when it was written** — a modern `encoding/json` detects encoding
+  cycles and bounds decoding depth itself — so it is a deliberate divergence, not a porting gap:
+  never "port away" what `main` lacks here.
 - Non-2xx responses become `*APIError` carrying the `{error:{code,message,details,request_id}}`
   envelope. Add `Is<Code>` helpers for common error codes.
 - **Every non-2xx becomes an `*APIError`, including one whose body could not be read.** An
@@ -233,6 +234,11 @@ stays a faithful, ergonomic client.
   the real gate: also run `make test-go113` (real go1.13 toolchain) and, for anything touching
   decoding or transport, `make dev-server && make smoke` against a real server.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
+- **Describe `main` with a link, or with the commit a comparison was made at — never by restating
+  its current state.** A sentence about what `main` has *now* rots on `main`'s schedule, and nothing
+  on this branch can catch it; a relative link resolves to this branch's own stale copy, so link to
+  `https://github.com/octoverse-id/octonomy-go/blob/main/…`. "Ported from `main`'s `transport.go` at
+  5e40964" cannot rot. This is the policy #69 applied to this branch's docs.
 - **A contract refresh is not done when the YAML lands.** Refresh both vendored specs from the Octonomy
   server (`make openapi` there, one per `--api-version`), then move three things with them: the
   `<!-- contract-version: X.Y.Z -->` marker in `docs/versioning.md`, a row per operation in
