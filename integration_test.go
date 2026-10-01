@@ -474,6 +474,35 @@ func TestSmoke_ResourceGroups(t *testing.T) {
 		t.Errorf("Assignments.Remove on an absent assignment: %v", err)
 	}
 
+	// How an inactive tag is refused depends on how it is named, which
+	// AssignmentService.Create documents: inactive_tag by TagID, but a plain
+	// validation_error through an alias, since deactivating the tag cascades to
+	// its aliases and the server refuses the alias before it reaches the tag.
+	retiredSlug := uniqueSlug("smoke-rg-retired")
+	retired, err := client.Tags.Create(ctx, octonomy.TagCreate{Name: "Go 1.13 retired", Slug: retiredSlug, Type: "label"})
+	if err != nil {
+		t.Fatalf("Tags.Create (to retire): %v", err)
+	}
+	retiredAliasSlug := uniqueSlug("smoke-rg-retired-alias")
+	if _, err := client.Aliases.Create(ctx, octonomy.TagAliasCreate{TagID: retired.ID, Name: "Go 1.13 retired alias", Slug: retiredAliasSlug}); err != nil {
+		t.Fatalf("Aliases.Create (to retire): %v", err)
+	}
+	if err := client.Tags.Delete(ctx, retired.ID); err != nil {
+		t.Fatalf("Tags.Delete (retire): %v", err)
+	}
+	_, err = client.Assignments.Create(ctx, octonomy.AssignmentCreate{
+		ApplicationID: app, TagID: octonomy.String(retired.ID), ResourceType: "order", ResourceID: orderID,
+	})
+	if !octonomy.IsInactiveTag(err) {
+		t.Errorf("assigning an inactive tag by TagID: want inactive_tag, got %v", err)
+	}
+	_, err = client.Assignments.Create(ctx, octonomy.AssignmentCreate{
+		ApplicationID: app, AliasSlug: octonomy.String(retiredAliasSlug), ResourceType: "order", ResourceID: orderID,
+	})
+	if !octonomy.IsValidation(err) || octonomy.IsInactiveTag(err) {
+		t.Errorf("assigning an inactive tag through its alias: want a validation_error, got %v", err)
+	}
+
 	// --- resource tags and the replace composite ----------------------------
 	cartID := uniqueSlug("smoke-rg-cart")
 	replaced, err := client.Resources.ReplaceTags(ctx, "cart", cartID, octonomy.ResourceReplace{

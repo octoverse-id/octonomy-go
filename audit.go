@@ -200,9 +200,11 @@ func (p *AuditLogListParams) query() url.Values {
 // meaning here at all: the path names the tag.
 //
 // ApplicationID is documented on the v2 route as the application scope a
-// namespaced read must carry, and it filters as well. WithApplication supplies
-// the same parameter; setting both to different values is a contradiction the
-// transport reports rather than resolving.
+// namespaced read must carry, and it filters as well. The v1 route documents no
+// application_id at all; the server's shared filter honors it there too, so the
+// field is kept on both surfaces rather than split by version. WithApplication
+// supplies the same parameter; setting both to different values is a
+// contradiction the transport reports rather than resolving.
 type TagListAuditLogsParams struct {
 	ListOptions
 	Action        *string

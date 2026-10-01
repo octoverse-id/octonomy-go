@@ -139,7 +139,7 @@ the body, so `WithApplication` is refused on all of them — each write struct n
 
 | Call | Shape worth knowing |
 | ---- | ------------------- |
-| `Create` | Idempotent. Re-assigning returns the existing row with `200` rather than `201`, and is not an error. Name the tag with **exactly one** of `TagID`, `AliasID`, `AliasSlug`. |
+| `Create` | Idempotent. Re-assigning returns the existing row with `200` rather than `201`, and is not an error. Name the tag with **exactly one** of `TagID`, `AliasID`, `AliasSlug`. An inactive tag is `inactive_tag` (`IsInactiveTag`) only when named by `TagID`; through an alias it is a `validation_error`. |
 | `Remove` | A `DELETE` **carrying a JSON body** — the row has no id route, so the four body fields identify it. Removing what is not there is a `204`. |
 | `BulkAssign` | All or nothing; one unknown id fails the whole call. Takes `TagIDs`, `AliasSlugs`, or both. |
 | `BulkRemove` | A **`POST`**, not a `DELETE`. Canonical tag ids only — no alias form. Tolerates ids that match nothing. |

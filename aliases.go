@@ -229,8 +229,11 @@ type AliasService struct {
 // (application_mismatch, IsApplicationMismatch), and a namespaced alias may
 // target only a global or same-namespace tag. An inactive target is a plain
 // validation_error (IsValidation) rather than inactive_tag, which the server
-// reserves for assignment. A second active alias with the same tenant,
-// application, and slug is a conflict (IsConflict).
+// reserves for assignment. A second active alias with the same slug in the same
+// scope -- tenant, application, and namespace -- is a conflict (IsConflict); the
+// same slug in another application or namespace is not. (The server's own
+// message names only tenant, application and slug; its unique constraints carry
+// the namespace too, octonomy/tags/models.py.)
 func (s *AliasService) Create(ctx context.Context, in TagAliasCreate, opts ...RequestOption) (*TagAlias, error) {
 	var out TagAlias
 	if err := s.client.doData(ctx, http.MethodPost, "/tag-aliases", nil, in, &out, opts...); err != nil {

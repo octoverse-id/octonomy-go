@@ -244,9 +244,15 @@ type AssignmentService struct {
 // its Created and Existing counts are the same fact, in a form the response body
 // carries.
 //
-// The target tag must be active and assignable in the named application:
-// an inactive tag is an inactive_tag error (IsInactiveTag) and a tag belonging to
-// a different application is an application_mismatch (IsApplicationMismatch).
+// The target tag must be active and assignable in the named application, and
+// how an inactive one is refused depends on how it was named. By TagID it is an
+// inactive_tag error (IsInactiveTag). Through AliasID or AliasSlug it is a plain
+// validation_error (IsValidation) naming that field -- an inactive alias, which
+// is what deactivating its tag leaves behind, or an alias whose tag is inactive
+// -- because the server refuses it while resolving the alias, before the tag
+// check runs (octonomy/tags/alias_services.py). A tag or alias belonging to a
+// different application is an application_mismatch (IsApplicationMismatch)
+// either way.
 func (s *AssignmentService) Create(ctx context.Context, in AssignmentCreate, opts ...RequestOption) (*Assignment, error) {
 	var out Assignment
 	if err := s.client.doData(ctx, http.MethodPost, "/tag-assignments", nil, in, &out, opts...); err != nil {
