@@ -102,17 +102,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     byte-identical to `main`'s copies of the server's 3.2.1 output at 61fce9b. The v1 diff adds 53 lines and changes one: `409
     scope_immutable` on tag, vocabulary and alias `PATCH`; a `scope` query parameter on
     `/tag-resolution`; `default: true` on three `is_active` fields; and an `ErrorResponse` schema.
-    None of it needed a type change on the two groups this tree implements — `default: true`
+    None of it needed a type change on the two groups this tree then implemented — `default: true`
     documents a server default, `ErrorResponse` is the shape `APIError` already decodes, `parseError`
-    already preserves `scope_immutable` verbatim, and `/tag-resolution` is not on this tree. Nothing
+    already preserves `scope_immutable` verbatim, and `/tag-resolution` was not yet on this tree
+    (#94 ported it, `scope` included). Nothing
     here sends a request to `/api/v2`; the spec is vendored for
     [#91](https://github.com/octoverse-id/octonomy-go/issues/91), which adds that surface opt-in.
   - **`<!-- contract-version: 3.2.1 -->`** in `docs/versioning.md`, the single recorded value.
   - **`docs/contract-coverage.yaml`**: a row for each of the 29 operations the two specs publish, as
-    version-independent suffixes. Ten name the `TagService` / `VocabularyService` method that
-    implements them; nineteen carry a written `unimplemented:` reason naming the issue that closes
-    the gap — [#94](https://github.com/octoverse-id/octonomy-go/issues/94) for the five resource
-    groups, #91 for the health probes. It carries the `operations` section only: the rest of `main`'s
+    version-independent suffixes. When it landed, ten named the `TagService` / `VocabularyService`
+    method that implements them and nineteen carried a written `unimplemented:` reason naming the
+    issue that would close the gap — [#94](https://github.com/octoverse-id/octonomy-go/issues/94) for
+    the five resource groups, #91 for the health probes. Both have since landed, and every row names
+    a method. It carries the `operations` section only: the rest of `main`'s
     file at 61fce9b states what the client sends and decodes, which only a contract gate can prove,
     and that arrives with [#98](https://github.com/octoverse-id/octonomy-go/issues/98). The rows use
     that file's schema, so the gate #98 ports can read them as they stand: `LoadCoverage` from `main`
@@ -307,9 +309,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A nil `RequestOption` is an error, not a panic.** `v1.0.0` called every option unconditionally.
 - **A path segment is escaped once.** The first release assigned an already-escaped path to
   `url.URL.Path`, so `String()` escaped it again and an id of `a b` reached the server as the literal `a%20b`. Tag and
-  vocabulary ids are server-minted uuids, which never need escaping, so no call this tree could make
-  was affected; the fix lands with the transport port because the resource groups still to come
-  address rows by caller-chosen ids.
+  vocabulary ids are server-minted uuids, which never need escaping, so no call this tree could then
+  make was affected; the fix landed with the transport port because the resource groups #94 later
+  ported address rows by caller-chosen ids.
 - **The `vuln` CI job stopped running govulncheck at all, and took every merge with it.**
   `golang/govulncheck-action` installs `golang.org/x/vuln/cmd/govulncheck@latest` and offers no
   version input, while `actions/setup-go` exports `GOTOOLCHAIN=local` so the pinned Go really is the

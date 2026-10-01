@@ -475,33 +475,44 @@ func TestSmoke_ResourceGroups(t *testing.T) {
 		t.Errorf("Assignments.Remove on an absent assignment: %v", err)
 	}
 
-	// How an inactive tag is refused depends on how it is named, which
-	// AssignmentService.Create documents: inactive_tag by TagID, but a plain
-	// validation_error through an alias, since deactivating the tag cascades to
-	// its aliases and the server refuses the alias before it reaches the tag.
-	retiredSlug := uniqueSlug("smoke-rg-retired")
-	retired, err := client.Tags.Create(ctx, octonomy.TagCreate{Name: "Go 1.13 retired", Slug: retiredSlug, Type: "label"})
+	// A bad target reports the first server check it fails, and the order
+	// depends on how it is named (AssignmentService.Create). The retired tag and
+	// its alias live in app and are assigned from otherApp, so each call fails
+	// two checks at once -- inactive AND another application -- and must report
+	// the inactivity: inactive_tag by TagID, a validation_error through an alias
+	// (deactivating the tag cascades to the alias, which the server refuses
+	// before it ever compares applications).
+	otherApp := app + "-other"
+	retired, err := client.Tags.Create(ctx, octonomy.TagCreate{
+		ApplicationID: octonomy.String(app), Name: "Go 1.13 retired", Slug: uniqueSlug("smoke-rg-retired"), Type: "label",
+	})
 	if err != nil {
 		t.Fatalf("Tags.Create (to retire): %v", err)
 	}
-	retiredAliasSlug := uniqueSlug("smoke-rg-retired-alias")
-	if _, err := client.Aliases.Create(ctx, octonomy.TagAliasCreate{TagID: retired.ID, Name: "Go 1.13 retired alias", Slug: retiredAliasSlug}); err != nil {
+	retiredAlias, err := client.Aliases.Create(ctx, octonomy.TagAliasCreate{
+		ApplicationID: octonomy.String(app), TagID: retired.ID, Name: "Go 1.13 retired alias", Slug: uniqueSlug("smoke-rg-retired-alias"),
+	})
+	if err != nil {
 		t.Fatalf("Aliases.Create (to retire): %v", err)
 	}
-	if err := client.Tags.Delete(ctx, retired.ID); err != nil {
+	if err := client.Tags.Delete(ctx, retired.ID, octonomy.WithApplication(app)); err != nil {
 		t.Fatalf("Tags.Delete (retire): %v", err)
 	}
-	_, err = client.Assignments.Create(ctx, octonomy.AssignmentCreate{
-		ApplicationID: app, TagID: octonomy.String(retired.ID), ResourceType: "order", ResourceID: orderID,
-	})
-	if !octonomy.IsInactiveTag(err) {
-		t.Errorf("assigning an inactive tag by TagID: want inactive_tag, got %v", err)
-	}
-	_, err = client.Assignments.Create(ctx, octonomy.AssignmentCreate{
-		ApplicationID: app, AliasSlug: octonomy.String(retiredAliasSlug), ResourceType: "order", ResourceID: orderID,
-	})
-	if !octonomy.IsValidation(err) || octonomy.IsInactiveTag(err) {
-		t.Errorf("assigning an inactive tag through its alias: want a validation_error, got %v", err)
+	for _, tc := range []struct {
+		name string
+		in   octonomy.AssignmentCreate
+		want func(error) bool
+	}{
+		{"by TagID", octonomy.AssignmentCreate{TagID: octonomy.String(retired.ID)}, octonomy.IsInactiveTag},
+		{"by AliasID", octonomy.AssignmentCreate{AliasID: octonomy.String(retiredAlias.ID)}, octonomy.IsValidation},
+		{"by AliasSlug", octonomy.AssignmentCreate{AliasSlug: octonomy.String(retiredAlias.Slug)}, octonomy.IsValidation},
+	} {
+		in := tc.in
+		in.ApplicationID, in.ResourceType, in.ResourceID = otherApp, "order", orderID
+		_, err := client.Assignments.Create(ctx, in)
+		if !tc.want(err) || octonomy.IsApplicationMismatch(err) {
+			t.Errorf("assigning an inactive, other-application target %s: got %v, want its inactivity reported and not the mismatch", tc.name, err)
+		}
 	}
 
 	// Another application's alias: application_mismatch by AliasID, but by
@@ -517,7 +528,6 @@ func TestSmoke_ResourceGroups(t *testing.T) {
 			t.Errorf("Aliases.Delete (application-scoped): %v", err)
 		}
 	}()
-	otherApp := app + "-other"
 	_, err = client.Assignments.Create(ctx, octonomy.AssignmentCreate{
 		ApplicationID: otherApp, AliasID: octonomy.String(appAlias.ID), ResourceType: "order", ResourceID: orderID,
 	})

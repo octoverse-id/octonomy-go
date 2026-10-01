@@ -247,21 +247,26 @@ type AssignmentService struct {
 // its Created and Existing counts are the same fact, in a form the response body
 // carries.
 //
-// The target tag must be active and assignable in the named application, and
-// how an inactive one is refused depends on how it was named. By TagID it is an
-// inactive_tag error (IsInactiveTag). Through AliasID or AliasSlug it is a plain
-// validation_error (IsValidation) naming that field -- an inactive alias, which
-// is what deactivating its tag leaves behind, or an alias whose tag is inactive
-// -- because the server refuses it while resolving the alias, before the tag
-// check runs (octonomy/tags/alias_services.py).
+// The target tag must exist, be active, and be assignable in the named
+// application. Which error a bad target gets depends on how it was named,
+// because the server runs its checks in a fixed order and reports the FIRST that
+// fails -- so a row that is both inactive and in another application reports
+// its inactivity, never the mismatch:
 //
-// The same split decides how another application's row is refused. By TagID or
-// AliasID, a tag or alias belonging to a different application is an
-// application_mismatch (IsApplicationMismatch). By AliasSlug it is never found:
-// a slug resolves only among the named application's aliases and the
-// tenant-shared ones (octonomy/tags/alias_selectors.py), so another
-// application's alias is the same validation_error, naming alias_slug, that an
-// unknown slug gets.
+//   - By TagID: not visible, a validation_error naming tag_id; then inactive,
+//     an inactive_tag error (IsInactiveTag); then another application's tag, an
+//     application_mismatch (IsApplicationMismatch). See
+//     octonomy/assignments/services.py validate_tag_for_assignment.
+//   - By AliasID: not visible, then an inactive alias (which is what
+//     deactivating its tag leaves behind), then an alias whose tag is inactive
+//     -- each a plain validation_error (IsValidation) naming alias_id; then an
+//     alias in another application, an application_mismatch. See
+//     octonomy/tags/alias_services.py resolve_assignable_alias.
+//   - By AliasSlug: only active aliases of active tags, in the named
+//     application or tenant-shared, are candidates at all
+//     (octonomy/tags/alias_selectors.py), so an inactive alias and another
+//     application's alias both get the validation_error naming alias_slug that
+//     an unknown slug gets.
 func (s *AssignmentService) Create(ctx context.Context, in AssignmentCreate, opts ...RequestOption) (*Assignment, error) {
 	var out Assignment
 	if err := s.client.doData(ctx, http.MethodPost, "/tag-assignments", nil, in, &out, opts...); err != nil {

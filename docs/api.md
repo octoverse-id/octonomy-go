@@ -139,10 +139,20 @@ the body, so `WithApplication` is refused on all of them — each write struct n
 
 | Call | Shape worth knowing |
 | ---- | ------------------- |
-| `Create` | Idempotent. Re-assigning returns the existing row with `200` rather than `201`, and is not an error. Name the tag with **exactly one** of `TagID`, `AliasID`, `AliasSlug`. An inactive tag is `inactive_tag` (`IsInactiveTag`) only when named by `TagID`; through an alias it is a `validation_error`. Another application's tag or alias is `application_mismatch` by `TagID` or `AliasID`, but by `AliasSlug` it is simply not found — a `validation_error`. |
+| `Create` | Idempotent. Re-assigning returns the existing row with `200` rather than `201`, and is not an error. Name the tag with **exactly one** of `TagID`, `AliasID`, `AliasSlug`. How a bad target is refused depends on how it was named — see the note below the table. |
 | `Remove` | A `DELETE` **carrying a JSON body** — the row has no id route, so the four body fields identify it. Removing what is not there is a `204`. |
 | `BulkAssign` | All or nothing; one unknown id fails the whole call. Takes `TagIDs`, `AliasSlugs`, or both. |
 | `BulkRemove` | A **`POST`**, not a `DELETE`. Canonical tag ids only — no alias form. Tolerates ids that match nothing. |
+
+**A bad target reports the first check it fails, in the server's order**, and the order differs by
+how the tag was named — so a row that is both inactive and in another application reports its
+inactivity, never the mismatch:
+
+| Named by | Not visible | Inactive | Another application |
+| -------- | ----------- | -------- | ------------------- |
+| `TagID` | `validation_error` | `inactive_tag` (`IsInactiveTag`) | `application_mismatch` |
+| `AliasID` | `validation_error` | `validation_error` (alias, then its tag) | `application_mismatch` |
+| `AliasSlug` | `validation_error` | `validation_error` — not a candidate | `validation_error` — not a candidate |
 
 `Assignment.ApplicationID` (and `TagResource.ApplicationID`, which reads the same row) is a plain
 `string` rather than the `*string` that `Tag`, `Vocabulary`, `TagAlias` and `AuditLog` carry: an
