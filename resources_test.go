@@ -266,6 +266,16 @@ func TestResources_ReplaceTags_TheSpecsShapeIsAnError(t *testing.T) {
 			name: "composite with no tags array",
 			body: map[string]interface{}{"data": map[string]interface{}{"created": 1, "removed": 0}},
 		},
+		// One count missing at a time: renaming both, above, is caught by either
+		// check alone, so it cannot tell whether the other one is there.
+		{
+			name: "composite with no created count",
+			body: map[string]interface{}{"data": map[string]interface{}{"removed": 0, "tags": []interface{}{}}},
+		},
+		{
+			name: "composite with no removed count",
+			body: map[string]interface{}{"data": map[string]interface{}{"created": 1, "tags": []interface{}{}}},
+		},
 	}
 	for _, tt := range tests {
 		tt := tt

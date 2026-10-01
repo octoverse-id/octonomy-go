@@ -605,6 +605,26 @@ func TestTags_Resolve_CompositeKeysAreRequired(t *testing.T) {
 			},
 			`matched an alias but its "matched_alias" is null`,
 		},
+		{
+			// A type error inside the tag must surface, not leave a half-decoded
+			// Tag behind a nil error.
+			"tag field of the wrong type",
+			map[string]interface{}{
+				"matched_type":  "tag",
+				"matched_alias": nil,
+				"tag":           map[string]interface{}{"id": "tag_1", "usage_count": "7"},
+			},
+			"decode resolution tag",
+		},
+		{
+			"matched_alias field of the wrong type",
+			map[string]interface{}{
+				"matched_type":  "alias",
+				"matched_alias": map[string]interface{}{"id": "alias_1", "is_active": "yes"},
+				"tag":           map[string]interface{}{"id": "tag_1"},
+			},
+			"decode resolution matched_alias",
+		},
 	}
 	for _, tt := range tests {
 		tt := tt

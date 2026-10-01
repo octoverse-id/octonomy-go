@@ -2,7 +2,8 @@ package octonomy
 
 // Tests for the transport this line gained in #91. Most are ported from main's
 // octonomy_test.go at 5e40964 -- the request-id, base-URL, envelope-contents
-// and identity cases -- narrowed to the two resources this tree has. The
+// and identity cases -- narrowed, when #91 ported them, to the two resources
+// this tree then had, and widened by #94 to the resources it ported. The
 // ErrUnreachable cases are new: main asserts the sentinel and its cause only on
 // a health probe, and here the wrap is a hand-written type whose two halves can
 // regress separately on the versioned path too.

@@ -16,7 +16,8 @@ existing resource file and changing the types and paths.
 | `health.go` | `HealthService`, `NewHealthClient`, and the bare `{"status": …}` decoder. |
 | `pagination.go` | `ListOptions` and `Pagination`. The list envelope itself is per-resource on this line (`TagList`, `VocabularyList`, `TagAliasList`, `ResourceTagList`, `TagResourceList`, `AuditLogList`) because `List[T]` needs Go 1.18. |
 | `types.go` | Shared `Metadata` alias and the `String`/`Bool`/`Int` pointer helpers. |
-| `tags.go`, `vocabularies.go` | The two resources, each with a value-receiver `MarshalJSON` on its `*Update` so `Metadata{}` reaches the server as `{}`. |
+| `tags.go`, `vocabularies.go`, `aliases.go` | The three resources with a `*Update`, each with a value-receiver `MarshalJSON` so `Metadata{}` reaches the server as `{}`. |
+| `resolution.go`, `assignments.go`, `resources.go`, `audit.go` | Tag resolution, assignments (with the two bulk composites), resource tags (with the replace composite), and the list-only audit log. |
 | `version.go` | `Version` constant (single source of truth) and the default User-Agent. |
 | `<resource>.go` | One file per resource: the model, `*Create`/`*Update` write structs, `*ListParams`, and the `*Service` with CRUD methods. |
 

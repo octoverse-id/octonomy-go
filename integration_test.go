@@ -319,7 +319,8 @@ func TestSmoke_APIV2Namespace(t *testing.T) {
 	}
 }
 
-// The six resource groups #94 ported, each called once against a real server.
+// The five resource groups #94 ported (health, the sixth, came with #91), each
+// called once against a real server.
 // What a fixture cannot prove and this does: that the three COMPOSITE bodies --
 // bulk-assign, bulk-remove and the resource-tag replace, which both vendored
 // specs describe wrongly -- decode to their real counts rather than to a

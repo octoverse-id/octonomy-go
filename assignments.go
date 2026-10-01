@@ -61,9 +61,12 @@ type AssignmentCreate struct {
 	ResourceType  string  `json:"resource_type"`
 	ResourceID    string  `json:"resource_id"`
 
-	// AssignedBy attributes the assignment in audit logs. It is a field on the
-	// row, distinct from the X-Actor-ID header WithActor sets, which attributes
-	// the REQUEST. Setting this also supplies the actor when the header is absent.
+	// AssignedBy is recorded on the assignment row (Assignment.AssignedBy). It is
+	// distinct from the X-Actor-ID header WithActor sets, which is what attributes
+	// the mutation in the audit log: the server takes the audit actor from that
+	// header, then from the service token's own name, and only then from this
+	// field (octonomy/core/audit.py), so on an authenticated call it never
+	// becomes the audit actor. Set WithActor or Config.ActorID for that.
 	AssignedBy *string `json:"assigned_by,omitempty"`
 }
 
