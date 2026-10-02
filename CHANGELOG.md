@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `TestTheRuntimeIdentityTablesMatchTheSource` holds the runtime check of each list's `rows()` to
     the same set.
     `TestEveryResponseTypeHasASmokeProbe` requires a `TestSmoke_` function to call a method decoding
-    each of those types against a real server, and refuses a smoke test that skips itself;
+    each of those types against a real server, and refuses a smoke test that can skip itself other
+    than through `newSmokeClient`'s gated skip;
     `TestSmokeSelectorRunsEveryTestSmokeFunction` and `TestSmokeFileCarriesTheTagTheRunnersSelect`
     keep `make smoke` and the CI smoke job reaching every `TestSmoke_` function. Both guards fail
     closed on a shape they cannot read.

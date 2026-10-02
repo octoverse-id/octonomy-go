@@ -94,8 +94,10 @@ var smokeProbeExclusions = map[string]string{}
 //     green: a Skip call anywhere in a TestSmoke_ function, a call to a helper
 //     in the smoke file that can skip, and the function's *testing.T handed to
 //     anything the guard cannot see into, which could skip too. The only skip
-//     the smoke run has is newSmokeClient's, which OCTONOMY_SMOKE_REQUIRED=1
-//     turns into a failure in CI.
+//     the smoke run has is newSmokeClient's, and it is exempt only in the shape
+//     checkSmokeGate holds it to -- one skip, straight after an `if required {
+//     t.Fatal(…) }` read from OCTONOMY_SMOKE_REQUIRED -- with
+//     TestSmokeJobRequiresTheSmokeRun holding CI to setting that variable.
 //   - It binds a type to SOME method that decodes it, not to every one. A Tag
 //     probed through Tags.List says nothing about Tags.Get, and both send the
 //     same envelope only because this SDK routes them through the same helper.
@@ -314,6 +316,17 @@ func smokeRunProblems(path, src string) []string {
 				continue
 			}
 			switch {
+			case len(run.unknown) > 0:
+				problems = append(problems, where+" passes "+strings.Join(run.unknown, " ")+" to an "+
+					"integration run. The guard knows which go test flags leave the tests that run alone, and "+
+					"this is not one of them -- -list, -c, -n and -exec all run nothing and exit 0. Add it to "+
+					"runFlags with the reason it is safe, or drop it")
+			case len(run.stopsRun) > 0:
+				problems = append(problems, where+" passes "+strings.Join(run.stopsRun, " ")+", which runs "+
+					"no test at all")
+			case len(run.badPackages) > 0:
+				problems = append(problems, where+" tests "+strings.Join(run.badPackages, " ")+", which may "+
+					"not include the root package the smoke tests live in")
 			case run.variable:
 				problems = append(problems, where+" builds its integration run from a variable, so the "+
 					"guard cannot tell which smoke tests it reaches")
@@ -419,16 +432,43 @@ type goTestCommand struct {
 	selectors   []string
 	skip        bool
 	variable    bool
+	// unknown holds every flag outside runFlags, and stopsRun the flags whose
+	// value stops tests from running; badPackages the package arguments that
+	// may not include this one.
+	unknown     []string
+	stopsRun    []string
+	badPackages []string
 }
 
+// runFlags are the go test flags known to leave WHICH tests run alone, mapped
+// to whether they take a value. It is an allow-list on purpose. Several flags
+// run no test at all and exit 0 -- -list, -c, -n, -exec with a no-op, -count=0
+// -- and a deny-list is one forgotten flag away from crediting a smoke run that
+// ran nothing. A flag missing here is refused until someone adds it, which is
+// the direction that fails closed. -run, -skip and -count are read separately.
+var runFlags = map[string]bool{
+	"tags": true, "timeout": true, "p": true, "parallel": true, "cpu": true, "shuffle": true,
+	"covermode": true, "coverprofile": true, "coverpkg": true, "mod": true, "vet": true,
+	"ldflags": true, "gcflags": true,
+	"v": false, "race": false, "failfast": false, "json": false, "x": false, "a": false,
+	"trimpath": false, "cover": false,
+}
+
+// rootPackages are the package arguments that include this package, where the
+// smoke tests live. No package argument means the current directory, which is
+// the repository root for both runners.
+var rootPackages = map[string]bool{".": true, "./...": true, sdkImportPath: true, sdkImportPath + "/...": true}
+
 // goTestRun reads a command's words for a `go test` invocation and the flags
-// that decide which tests it runs. The go command accepts a flag with one dash
-// or two, as `-flag value` or `-flag=value`, and the test flags under a
-// `test.` prefix as well, so each is normalized before it is matched.
+// and packages that decide which tests it runs. The go command accepts a flag
+// with one dash or two, as `-flag value` or `-flag=value`, and the test flags
+// under a `test.` prefix as well, so each is normalized before it is matched. A
+// redirection (`>log`, `2>&1`) is not an argument and is passed over.
 func goTestRun(words []string) (goTestCommand, bool) {
 	at := -1
 	for i := 0; i+1 < len(words); i++ {
-		if words[i] == "go" && words[i+1] == "test" {
+		// make's recipe prefixes (@ silent, - ignore errors, + always run).
+		if strings.TrimLeft(words[i], "@-+") == "go" && words[i+1] == "test" {
 			at = i + 2
 			break
 		}
@@ -439,10 +479,19 @@ func goTestRun(words []string) (goTestCommand, bool) {
 	var cmd goTestCommand
 	for i := at; i < len(words); i++ {
 		w := words[i]
+		if redirect.MatchString(w) {
+			if redirectOnly.MatchString(w) {
+				i++ // the operator stands alone, so its target is the next word
+			}
+			continue
+		}
 		if variableRef.MatchString(w) {
 			cmd.variable = true
 		}
 		if !strings.HasPrefix(w, "-") {
+			if !rootPackages[w] {
+				cmd.badPackages = append(cmd.badPackages, w)
+			}
 			continue
 		}
 		name := strings.TrimPrefix(strings.TrimLeft(w, "-"), "test.")
@@ -463,22 +512,37 @@ func goTestRun(words []string) (goTestCommand, bool) {
 			}
 			return ""
 		}
-		switch name {
-		case "tags":
+		switch takesValue, known := runFlags[name]; {
+		case name == "run":
+			cmd.selectors = append(cmd.selectors, takeValue())
+		case name == "skip":
+			cmd.skip = true
+			takeValue()
+		case name == "count":
+			if n, err := strconv.Atoi(takeValue()); err != nil || n < 1 {
+				cmd.stopsRun = append(cmd.stopsRun, w)
+			}
+		case name == "tags":
 			for _, tag := range strings.FieldsFunc(takeValue(), func(r rune) bool { return r == ',' || r == ' ' }) {
 				if tag == "integration" {
 					cmd.integration = true
 				}
 			}
-		case "run":
-			cmd.selectors = append(cmd.selectors, takeValue())
-		case "skip":
-			cmd.skip = true
+		case known && takesValue:
 			takeValue()
+		case known:
+			// a boolean, whose =false spelling changes nothing about which tests run
+		default:
+			cmd.unknown = append(cmd.unknown, w)
 		}
 	}
 	return cmd, true
 }
+
+var (
+	redirect     = regexp.MustCompile(`^(\d*|&)>>?|^<`)
+	redirectOnly = regexp.MustCompile(`^(\d*|&)>>?$|^<$`)
+)
 
 // --- what the smoke tests call ------------------------------------------------
 
@@ -743,7 +807,7 @@ func checkSmokeConstructor(file *ast.File, sdk string) string {
 			return "newSmokeClient returns " + strings.Join(got, ", ") + ", not *" + sdk +
 				".Client, so a call on its result is not a call on a client"
 		}
-		return ""
+		return checkSmokeGate(fn)
 	}
 	called := false
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -757,6 +821,157 @@ func checkSmokeConstructor(file *ast.File, sdk string) string {
 			"that what it returns is a client"
 	}
 	return ""
+}
+
+// smokeRequiredEnv is the variable that turns the smoke run's one skip into a
+// failure. CI sets it; a laptop with no harness does not.
+const smokeRequiredEnv = "OCTONOMY_SMOKE_REQUIRED"
+
+// checkSmokeGate holds newSmokeClient's skip to the one shape that makes it
+// safe to exempt from the skip check: a single Skip, reachable only when the
+// required gate is off. That is
+//
+//	required := os.Getenv("OCTONOMY_SMOKE_REQUIRED") == "1"
+//	…
+//	if required {
+//		t.Fatal(…)
+//	}
+//	t.Skip(…)
+//
+// with the gate declared once and the Skip the statement straight after an
+// `if required` whose body fails the test. newSmokeClient is exempt from
+// skipsIn because CI sets the variable, and that exemption was trust: turning
+// its credentials check from t.Fatal into t.Skip would have skipped every smoke
+// test, required or not, with every guard green. A helper that never skips
+// needs no gate.
+func checkSmokeGate(fn *ast.FuncDecl) string {
+	var skips []*ast.CallExpr
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok && skipMethods[sel.Sel.Name] {
+				skips = append(skips, call)
+			}
+		}
+		return true
+	})
+	switch {
+	case len(skips) == 0:
+		return ""
+	case len(skips) > 1:
+		return "newSmokeClient skips in " + strconv.Itoa(len(skips)) + " places; it may skip only once, " +
+			"behind the " + smokeRequiredEnv + " gate, or a run CI requires can still skip"
+	}
+	const shape = "newSmokeClient's skip must be the statement straight after `if required { t.Fatal(…) }`, " +
+		"with required := os.Getenv(\"" + smokeRequiredEnv + "\") == \"1\" declared once, so a run CI " +
+		"requires fails instead of skipping"
+	block, at := enclosingStatement(fn.Body, skips[0])
+	if block == nil || at == 0 {
+		return shape
+	}
+	gate, ok := block.List[at-1].(*ast.IfStmt)
+	if !ok || gate.Init != nil || gate.Else != nil || !failsTest(gate.Body) {
+		return shape
+	}
+	name, ok := unparen(gate.Cond).(*ast.Ident)
+	if !ok {
+		return shape
+	}
+	bindings := bindingsOf(fn.Body, name.Name)
+	if len(bindings) != 1 || !isRequiredGate(bindings[0], name.Name) {
+		return shape
+	}
+	return ""
+}
+
+// enclosingStatement finds the block whose statement list holds call as a
+// statement of its own, and that statement's index.
+func enclosingStatement(body *ast.BlockStmt, call *ast.CallExpr) (*ast.BlockStmt, int) {
+	var found *ast.BlockStmt
+	at := -1
+	ast.Inspect(body, func(n ast.Node) bool {
+		block, ok := n.(*ast.BlockStmt)
+		if !ok || found != nil {
+			return found == nil
+		}
+		for i, stmt := range block.List {
+			if expr, ok := stmt.(*ast.ExprStmt); ok && expr.X == ast.Expr(call) {
+				found, at = block, i
+			}
+		}
+		return true
+	})
+	return found, at
+}
+
+// failsTest reports whether a block, at its own top level, ends the test as
+// failed: t.Fatal, t.Fatalf or t.FailNow.
+func failsTest(block *ast.BlockStmt) bool {
+	for _, stmt := range block.List {
+		expr, ok := stmt.(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		call, ok := expr.X.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok {
+			switch sel.Sel.Name {
+			case "Fatal", "Fatalf", "FailNow":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isRequiredGate reports whether node is `name := os.Getenv("OCTONOMY_SMOKE_REQUIRED") == "1"`.
+func isRequiredGate(node ast.Node, name string) bool {
+	assign, ok := node.(*ast.AssignStmt)
+	if !ok || assign.Tok != token.DEFINE || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 || !isIdent(assign.Lhs[0], name) {
+		return false
+	}
+	cmp, ok := unparen(assign.Rhs[0]).(*ast.BinaryExpr)
+	if !ok || cmp.Op != token.EQL {
+		return false
+	}
+	call, ok := unparen(cmp.X).(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+	if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); !ok || !isIdent(sel.X, "os") || sel.Sel.Name != "Getenv" {
+		return false
+	}
+	return stringLit(call.Args[0]) == smokeRequiredEnv && stringLit(cmp.Y) == "1"
+}
+
+// stringLit returns a string literal's value, or "".
+func stringLit(expr ast.Expr) string {
+	lit, ok := unparen(expr).(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return ""
+	}
+	v, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return ""
+	}
+	return v
+}
+
+// The gate is only a failure where the variable is set, so the CI smoke job
+// must set it. A required run that loses the variable skips every smoke test
+// and passes, which is what newSmokeClient's comment says this line cannot
+// afford.
+func TestSmokeJobRequiresTheSmokeRun(t *testing.T) {
+	raw, err := ioutil.ReadFile(".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatalf("read ci.yml: %v", err)
+	}
+	set := regexp.MustCompile(`(?m)^\s*` + smokeRequiredEnv + `:\s*["']?1["']?\s*$`)
+	if !set.Match(raw) {
+		t.Errorf(".github/workflows/ci.yml does not set %s: \"1\", so newSmokeClient's one skip is a "+
+			"green job there rather than a failure", smokeRequiredEnv)
+	}
 }
 
 // importName returns the name a file imports path under, or "" if it does not.
@@ -1056,6 +1271,71 @@ func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ct
 			problems: 1,
 		},
 		{
+			// The one sanctioned skip, in the shape that makes it one: reachable
+			// only when CI's required gate is off.
+			name: "newSmokeClient's gated skip is allowed",
+			full: smokeGateFixture(`if baseURL == "" {
+				if required {
+					t.Fatal("required")
+				}
+				t.Skip("no harness")
+			}`),
+			want: []string{"Tags.Get"},
+		},
+		{
+			// The change that turned the exemption into a hole: the incomplete-
+			// credentials check skipping instead of failing.
+			name: "a second skip in newSmokeClient is refused",
+			full: smokeGateFixture(`if baseURL == "" {
+				if required {
+					t.Fatal("required")
+				}
+				t.Skip("no harness")
+			}
+			if token == "" {
+				t.Skip("incomplete")
+			}`),
+			want: []string{"Tags.Get"}, problems: 1,
+		},
+		{
+			name: "an ungated skip is refused",
+			full: smokeGateFixture(`if baseURL == "" {
+				t.Skip("no harness")
+			}`),
+			want: []string{"Tags.Get"}, problems: 1,
+		},
+		{
+			name: "a gate that does not fail is refused",
+			full: smokeGateFixture(`if baseURL == "" {
+				if required {
+					t.Log("required")
+				}
+				t.Skip("no harness")
+			}`),
+			want: []string{"Tags.Get"}, problems: 1,
+		},
+		{
+			name: "a gate read from another variable is refused",
+			full: strings.Replace(smokeGateFixture(`if baseURL == "" {
+				if required {
+					t.Fatal("required")
+				}
+				t.Skip("no harness")
+			}`), "OCTONOMY_SMOKE_REQUIRED", "OCTONOMY_SMOKE_STRICT", 1),
+			want: []string{"Tags.Get"}, problems: 1,
+		},
+		{
+			name: "a gate turned off before it is read is refused",
+			full: smokeGateFixture(`required = false
+			if baseURL == "" {
+				if required {
+					t.Fatal("required")
+				}
+				t.Skip("no harness")
+			}`),
+			want: []string{"Tags.Get"}, problems: 1,
+		},
+		{
 			name:     "a file that does not import the SDK is refused",
 			full:     `package octonomy_test` + "\n" + `func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ctx, id) }`,
 			problems: 1,
@@ -1323,6 +1603,23 @@ func TestSmokeRunProblemsReadsTheRunnersLikeTheShellDoes(t *testing.T) {
 		{"the tags flag spelled with a space", "go test -tags integration -run '^TestSmoke_' ./...", 0},
 		{"two dashes and an equals sign", "go test --tags=integration --run=^TestSmoke_ ./...", 0},
 		{"the test. spelling narrowing the run", "go test -tags=integration -test.run=TestSmoke_RealServer ./...", 2},
+		// Flags that run nothing and exit 0. An allow-list refuses them, and
+		// every flag nobody has vouched for, rather than waiting to learn each.
+		{"-list runs no test", "go test -tags=integration -run '^TestSmoke_' -list '^TestSmoke_' -v ./...", 2},
+		{"-c only compiles", "go test -c -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"-n only prints", "go test -n -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"-exec can run nothing", "go test -exec true -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"-count=0 runs nothing", "go test -count=0 -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"-args hands the rest to the binary", "go test -tags=integration -run '^TestSmoke_' ./... -args -test.run=X", 2},
+		{"-short is not vouched for", "go test -short -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"-count=1 is ordinary", "go test -tags=integration -count=1 -race -timeout 10m -run '^TestSmoke_' -v ./...", 0},
+		{"a boolean turned off", "go test -tags=integration -v=false -failfast=true -run '^TestSmoke_' ./...", 0},
+		{"a package that is not the root", "go test -tags=integration -run '^TestSmoke_' ./examples/...", 2},
+		{"the module path", "go test -tags=integration -run '^TestSmoke_' github.com/octoverse-id/octonomy-go/...", 0},
+		{"no package means the root", "go test -tags=integration -run '^TestSmoke_'", 0},
+		{"a redirection is not an argument", `go test -tags=integration -run '^TestSmoke_' -v ./... >"$log" 2>&1`, 0},
+		{"a redirection with a space", `go test -tags=integration -run '^TestSmoke_' ./... > "$log"`, 0},
+		{"a make recipe prefix", "\t@go test -tags=integration -run '^TestSmoke_' ./...", 0},
 		{"a tag list", "go test -tags=foo,integration -run '^TestSmoke_' ./...", 0},
 		{"no integration run at all", "go test -race ./...", 1},
 	} {
@@ -1353,4 +1650,22 @@ func TestSmokeBuildTagProblemsReadsBothConstraintLines(t *testing.T) {
 			}
 		})
 	}
+}
+
+// smokeGateFixture is a smoke file whose newSmokeClient has body after its gate
+// is declared, and one smoke test that probes Tags.Get.
+func smokeGateFixture(body string) string {
+	return `package octonomy_test
+import (
+	"os"
+	octonomy "github.com/octoverse-id/octonomy-go"
+)
+func newSmokeClient(t *testing.T) *octonomy.Client {
+	required := os.Getenv("OCTONOMY_SMOKE_REQUIRED") == "1"
+	baseURL := os.Getenv("OCTONOMY_TEST_BASE_URL")
+	token := os.Getenv("OCTONOMY_TEST_TOKEN")
+	` + body + `
+	return nil
+}
+func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ctx, id) }`
 }

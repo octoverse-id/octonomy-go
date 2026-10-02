@@ -156,10 +156,14 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   registry also gave `main` is a walk that fails an entry which skips itself; with no walk here, the
   guard refuses a smoke test that can skip — a `Skip` call in it, a smoke-file helper it calls that
   can, or its `*testing.T` handed to anything the guard cannot read — since a skipped probe is a
-  green run the guard would still credit. `TestSmokeSelectorRunsEveryTestSmokeFunction` holds `make smoke` and
+  green run the guard would still credit. The one skip allowed is `newSmokeClient`'s, and only in the
+  shape that makes CI fail instead: a single `Skip` straight after `if required { t.Fatal(…) }`, with
+  `required` read from `OCTONOMY_SMOKE_REQUIRED`, which `TestSmokeJobRequiresTheSmokeRun` holds the
+  CI job to setting. `TestSmokeSelectorRunsEveryTestSmokeFunction` holds `make smoke` and
   the go1.13 smoke job to a run that reaches every `TestSmoke_` function — read as shell commands,
-  with continuations joined, and with no narrower `-run`, no `-skip`, no selector in a variable or
-  `GOFLAGS` — and `TestSmokeFileCarriesTheTagTheRunnersSelect` holds the smoke file to the
+  with continuations joined; with no narrower `-run`, no `-skip`, no selector in a variable or
+  `GOFLAGS`; on the root package; and with no flag outside an allow-list of those known to leave the
+  tests that run alone, since `-list`, `-c`, `-n` and `-count=0` all run nothing and exit 0 — and `TestSmokeFileCarriesTheTagTheRunnersSelect` holds the smoke file to the
   `integration` tag those runs build, in both constraint spellings, so the guard cannot credit a probe
   no job runs.
 
