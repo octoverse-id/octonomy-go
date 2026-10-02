@@ -102,7 +102,13 @@
 //
 // List methods return a per-resource envelope holding the Data slice and
 // Pagination metadata (limit, offset, count, next, previous): *TagList from
-// Tags.List and *VocabularyList from Vocabularies.List. Page with ListOptions on
-// each resource's *ListParams. One envelope type per resource, rather than one
-// generic envelope, because type parameters need Go 1.18.
+// Tags.List, *VocabularyList from Vocabularies.List, *TagAliasList,
+// *ResourceTagList, *TagResourceList and *AuditLogList from the routes that
+// return those rows. Page with ListOptions on each resource's *ListParams. One
+// envelope type per resource, rather than one generic envelope, because type
+// parameters need Go 1.18.
+//
+// The bulk assignment calls and Resources.ReplaceTags are not lists: they return
+// a composite of counts and rows (*BulkAssignResult, *BulkRemoveResult,
+// *ResourceReplaceResult), with no pagination block.
 package octonomy

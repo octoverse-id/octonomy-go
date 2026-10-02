@@ -6,8 +6,8 @@ package octonomy
 //   - The envelope-less 404 rule is asserted on BOTH API versions. On main it
 //     was only ever a v2 question; here v1 is the default surface and is where
 //     v1.0.0's codeFromStatus actually ran, so v1 is the case that matters most.
-//   - TestIsScopeImmutable walks the two PATCH routes this tree has, and both
-//     surfaces; main's also covers tag aliases, which are not ported yet.
+//   - TestIsScopeImmutable walks all three PATCH routes (tags, vocabularies and,
+//     since #94, tag aliases) on both surfaces: six call sites.
 
 import (
 	"context"
@@ -505,11 +505,11 @@ func TestDoRaw_Oversized2xxStaysAPlainReadError(t *testing.T) {
 // --- scope_immutable ------------------------------------------------------
 
 // The contract documents 409 scope_immutable on the detail PATCH of tags,
-// vocabularies and tag aliases, on both surfaces. This tree has the first two,
-// so the test walks four call sites, and pins the three properties a caller
-// depends on: the helper matches, the code survives, and the 409 does NOT read
-// as a plain conflict. The server raises scope_immutable as a subclass of its
-// conflict error, so the status alone says "conflict" while the code does not.
+// vocabularies and tag aliases, on both surfaces, so the test walks six call
+// sites, and pins the three properties a caller depends on: the helper matches,
+// the code survives, and the 409 does NOT read as a plain conflict. The server
+// raises scope_immutable as a subclass of its conflict error, so the status
+// alone says "conflict" while the code does not.
 func TestIsScopeImmutable_OnEveryDocumentedPatch(t *testing.T) {
 	patches := []struct {
 		name string
@@ -521,6 +521,10 @@ func TestIsScopeImmutable_OnEveryDocumentedPatch(t *testing.T) {
 		}},
 		{"vocabularies", func(c *Client) error {
 			_, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{ApplicationID: String("other")})
+			return err
+		}},
+		{"tag aliases", func(c *Client) error {
+			_, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{ApplicationID: String("other")})
 			return err
 		}},
 	}

@@ -204,8 +204,10 @@ case errors.Is(err, octonomy.ErrUnreachable):
 
 ## Pagination
 
-List methods return a per-resource envelope — `*octonomy.TagList` and `*octonomy.VocabularyList` —
-each with `Data` and `Pagination` (limit, offset, count, next, previous). Page with `ListOptions`:
+List methods return a per-resource envelope — `*octonomy.TagList`, `*octonomy.VocabularyList`,
+`*octonomy.TagAliasList`, `*octonomy.ResourceTagList`, `*octonomy.TagResourceList` and
+`*octonomy.AuditLogList` — each with `Data` and `Pagination` (limit, offset, count, next, previous).
+Page with `ListOptions`:
 
 ```go
 page, err := client.Tags.List(ctx, &octonomy.TagListParams{
@@ -221,14 +223,19 @@ fmt.Println(len(page.Data), "of", page.Pagination.Count)
 | -------- | ------ |
 | Vocabularies (`client.Vocabularies`) | ✅ Create / Get / List / Update / Delete |
 | Tags (`client.Tags`) | ✅ Create / Get / List / Update / Delete |
-| Tag aliases, resolution, assignments (+bulk), resource tags, audit logs | Not on this tree — [#94](https://github.com/octoverse-id/octonomy-go/issues/94) ports them from [`/v2`](https://pkg.go.dev/github.com/octoverse-id/octonomy-go/v2) |
+| Tag aliases (`client.Aliases`, `Tags.ListAliases`) | ✅ Create / Get / List / Update / Delete |
+| Tag resolution (`Tags.Resolve`) | ✅ one read: a slug to its canonical tag, directly or by alias |
+| Assignments (`client.Assignments`) | ✅ Create / Remove / BulkAssign / BulkRemove |
+| Resource tags (`client.Resources`, `Tags.ListResources`) | ✅ ListTags / ReplaceTags / ListResources |
+| Audit logs (`client.AuditLogs`, `Tags.ListAuditLogs`, `Resources.ListAuditLogs`) | ✅ List — list-only by design, there is no `Get` |
 | Health probes (`client.Health`, `NewHealthClient`) | ✅ Live / Ready |
 | Webhook receiver | ⛔ never on this line, by policy — use [`/v2`](https://pkg.go.dev/github.com/octoverse-id/octonomy-go/v2) |
 
 ### Differences from the `/v2` line you may hit
 
-- **No `List[T]`.** Type parameters need Go 1.18. `TagList` and `VocabularyList` replace it; the
-  fields are identical.
+- **No `List[T]`.** Type parameters need Go 1.18. A per-resource type replaces each instantiation —
+  `TagList`, `VocabularyList`, `TagAliasList`, `ResourceTagList`, `TagResourceList`, `AuditLogList`;
+  the fields are identical.
 - **The default API version is `APIV1`**, not `APIV2` — see
   [API version and namespaces](#api-version-and-namespaces).
 - **A `PATCH` cannot clear a nullable field.** The `*Update` fields are pointers, where nil means
@@ -264,8 +271,9 @@ version from `go.mod` but not the stdlib version, so `io.ReadAll` (Go 1.16) comp
 - [Development](docs/development.md) — setup, quality gates, testing.
 - [Versioning](docs/versioning.md) — SemVer policy and which server contract this SDK targets.
 - [Release](docs/release.md) — the release runbook.
-- [Roadmap](docs/roadmap.md) — what the `/v2` line has that this tree does not, and the epic porting
-  it here.
+- [Roadmap](docs/roadmap.md) — the parity policy and where its remaining work is tracked; it links to
+  [`main`'s API mapping](https://github.com/octoverse-id/octonomy-go/blob/main/docs/api.md#implemented)
+  for what the `/v2` line implements.
 - [Porting checklist](docs/porting-checklist.md) — the rewrites a port from `main` makes, each marked
   by whether a miss fails the go1.13 build or compiles and is wrong.
 - [CHANGELOG](CHANGELOG.md)

@@ -590,8 +590,9 @@ func (c *Client) doUnversioned(ctx context.Context, path string) (int, []byte, e
 // out as "ord%25209" and reached the server as the literal "ord%209". Every id
 // was addressed correctly right up until one contained a character that needed
 // escaping. Tag and vocabulary ids are server-minted uuids, which never do, so
-// this was latent here; the resource groups still to be ported address rows by
-// caller-chosen external identifiers, where it would not be.
+// this was latent while they were the only resources here; the resource routes
+// address rows by caller-chosen external identifiers (resourcePath), where it
+// would not be.
 //
 // Setting both fields consistently makes EscapedPath() return RawPath verbatim
 // -- it does so whenever RawPath is a valid encoding of Path -- so each segment
@@ -777,8 +778,16 @@ func (c *Client) checkScopeCoherence(method string, rc requestConfig, query url.
 	// asymmetry with the header rule above: scope=global is a LEGAL explicit pin
 	// on the same parameter, even though "global" is a reserved namespace TYPE.
 	// A flat "reject global everywhere" rule would break a valid call.
+	//
+	// On a v1 client the remediation has to name the opt-in too. APIV1 is this
+	// line's default, and WithNamespace is refused on it, so "add WithNamespace"
+	// alone sends the caller straight into a second error instead of the fix.
 	if query.Get(scopeParam) == scopeMerchantValue && !rc.namespaceSet {
-		return fmt.Errorf("octonomy: %s=%s resolves within the request's namespace, but this request has none: add WithNamespace(...), or use %s=global to pin the tenant-shared namespace", scopeParam, scopeMerchantValue, scopeParam)
+		optIn := ""
+		if c.apiVersion != APIV2 {
+			optIn = fmt.Sprintf(" on a client with Config.APIVersion = APIV2 (this one targets %s)", c.apiVersion)
+		}
+		return fmt.Errorf("octonomy: %s=%s resolves within the request's namespace, but this request has none: add WithNamespace(...)%s, or use %s=global to pin the tenant-shared namespace", scopeParam, scopeMerchantValue, optIn, scopeParam)
 	}
 
 	// scope=merchant and WithIncludeGlobal ask for opposite things: one pins
@@ -893,8 +902,9 @@ func (c *Client) doData(ctx context.Context, method, path string, query url.Valu
 }
 
 // identifiedList is implemented by every list envelope doList decodes into --
-// TagList and VocabularyList -- and hands back the decoded rows so their
-// identity can be checked.
+// TagList, VocabularyList, TagAliasList, ResourceTagList, TagResourceList and
+// AuditLogList -- and hands back the decoded rows so their identity can be
+// checked.
 //
 // It is the doList half of what a type parameter would have given for free:
 // without one, the transport cannot range over an out it knows only as
@@ -907,7 +917,7 @@ type identifiedList interface {
 
 // doList performs a call whose 2xx body is a list envelope --
 // {"data": [...], "pagination": {...}} -- and decodes the WHOLE body into out,
-// because out (*TagList, *VocabularyList) maps both keys.
+// because out (*TagList, *AuditLogList, ...) maps both keys.
 //
 // The envelope is still asserted first. Decoding straight into a *TagList makes
 // every unexpected shape look like an empty page with a nil error: an empty body,

@@ -2,7 +2,8 @@ package octonomy
 
 // Tests for the transport this line gained in #91. Most are ported from main's
 // octonomy_test.go at 5e40964 -- the request-id, base-URL, envelope-contents
-// and identity cases -- narrowed to the two resources this tree has. The
+// and identity cases -- narrowed, when #91 ported them, to the two resources
+// this tree then had, and widened by #94 to the resources it ported. The
 // ErrUnreachable cases are new: main asserts the sentinel and its cause only on
 // a health probe, and here the wrap is a hand-written type whose two halves can
 // regress separately on the versioned path too.
@@ -315,6 +316,76 @@ func singleResourceRoutes() []struct {
 			_, err := c.Vocabularies.Update(context.Background(), "voc_1", VocabularyUpdate{Name: String("N")})
 			return err
 		}},
+		{"aliases.get", func(c *Client) error {
+			_, err := c.Aliases.Get(context.Background(), "alias_1")
+			return err
+		}},
+		{"aliases.create", func(c *Client) error {
+			_, err := c.Aliases.Create(context.Background(), TagAliasCreate{TagID: "tag_1", Name: "N", Slug: "n"})
+			return err
+		}},
+		{"aliases.update", func(c *Client) error {
+			_, err := c.Aliases.Update(context.Background(), "alias_1", TagAliasUpdate{Name: String("N")})
+			return err
+		}},
+		{"assignments.create", func(c *Client) error {
+			_, err := c.Assignments.Create(context.Background(), AssignmentCreate{
+				ApplicationID: "commerce", TagID: String("tag_1"), ResourceType: "order", ResourceID: "ord_1",
+			})
+			return err
+		}},
+	}
+}
+
+// listRoutes is every list method, each paired with the wire name of the field
+// that identifies its rows -- "id" on most, but a ResourceTag has no id of its
+// own and a TagResource names its resource instead.
+func listRoutes() []struct {
+	name     string
+	identity string
+	call     func(*Client) error
+} {
+	return []struct {
+		name     string
+		identity string
+		call     func(*Client) error
+	}{
+		{"tags", "id", func(c *Client) error {
+			_, err := c.Tags.List(context.Background(), nil)
+			return err
+		}},
+		{"vocabularies", "id", func(c *Client) error {
+			_, err := c.Vocabularies.List(context.Background(), nil)
+			return err
+		}},
+		{"aliases", "id", func(c *Client) error {
+			_, err := c.Aliases.List(context.Background(), nil)
+			return err
+		}},
+		{"tags.aliases", "id", func(c *Client) error {
+			_, err := c.Tags.ListAliases(context.Background(), "tag_1", nil)
+			return err
+		}},
+		{"resources.tags", "assignment_id", func(c *Client) error {
+			_, err := c.Resources.ListTags(context.Background(), "order", "ord_1", &ResourceListTagsParams{ApplicationID: String("commerce")})
+			return err
+		}},
+		{"tags.resources", "resource_id", func(c *Client) error {
+			_, err := c.Tags.ListResources(context.Background(), "tag_1", nil)
+			return err
+		}},
+		{"audit-logs", "id", func(c *Client) error {
+			_, err := c.AuditLogs.List(context.Background(), nil)
+			return err
+		}},
+		{"tags.audit-logs", "id", func(c *Client) error {
+			_, err := c.Tags.ListAuditLogs(context.Background(), "tag_1", nil)
+			return err
+		}},
+		{"resources.audit-logs", "id", func(c *Client) error {
+			_, err := c.Resources.ListAuditLogs(context.Background(), "order", "ord_1", nil)
+			return err
+		}},
 	}
 }
 
@@ -408,48 +479,45 @@ func TestDoData_RefusalReturnsNoResource(t *testing.T) {
 	if err == nil || vocab != nil {
 		t.Errorf("Vocabularies.Get = (%+v, %v), want (nil, error)", vocab, err)
 	}
+	alias, err := c.Aliases.Get(context.Background(), "alias_1")
+	if err == nil || alias != nil {
+		t.Errorf("Aliases.Get = (%+v, %v), want (nil, error)", alias, err)
+	}
 }
 
 // A blank row inside an otherwise good page is worse than a blank single
 // resource, not better: the length is right, the pagination is right, and one
 // row among fifty is not something a caller inspects. The message has to name
 // the index, because nothing else in the response points at the bad row.
+//
+// Each list names its own identity field, so the bodies are built per list: a
+// good row has to carry the right field to be good, and a ResourceTag row is
+// only good with its nested tag's id too.
 func TestDoList_RejectsARowThatWouldBeZeroValued(t *testing.T) {
-	lists := []struct {
-		name string
-		call func(*Client) error
-	}{
-		{"tags", func(c *Client) error {
-			_, err := c.Tags.List(context.Background(), nil)
-			return err
-		}},
-		{"vocabularies", func(c *Client) error {
-			_, err := c.Vocabularies.List(context.Background(), nil)
-			return err
-		}},
-	}
-	bodies := []struct {
-		name string
-		body string
-		want string
-	}{
-		{"null element", `{"data":[null],"pagination":{"limit":50}}`, "element 0 is null"},
-		{"empty object element", `{"data":[{}],"pagination":{"limit":50}}`, "element 0 is an empty object"},
-		{
-			"a good row does not excuse a bad one",
-			`{"data":[{"id":"row_1"},{}],"pagination":{"limit":50}}`,
-			"element 1 is an empty object",
-		},
-		{"nested array element", `{"data":[[{"id":"row_1"}]],"pagination":{"limit":50}}`, "element 0 is an array"},
-		{"scalar element", `{"data":["row_1"],"pagination":{"limit":50}}`, "element 0 is not a resource object"},
-		{"null id", `{"data":[{"id":null}],"pagination":{"limit":50}}`, `element 0 decoded with no "id"`},
-		{
-			"good row then a renamed id",
-			`{"data":[{"id":"row_1"},{"identifier":"row_2"}],"pagination":{"limit":50}}`,
-			`element 1 decoded with no "id"`,
-		},
-	}
-	for _, list := range lists {
+	for _, list := range listRoutes() {
+		good := fmt.Sprintf(`{%q:"row_1","tag":{"id":"tag_1"}}`, list.identity)
+		renamed := `{"identifier":"row_2","tag":{"id":"tag_1"}}`
+		bodies := []struct {
+			name string
+			body string
+			want string
+		}{
+			{"null element", `{"data":[null],"pagination":{"limit":50}}`, "element 0 is null"},
+			{"empty object element", `{"data":[{}],"pagination":{"limit":50}}`, "element 0 is an empty object"},
+			{
+				"a good row does not excuse a bad one",
+				`{"data":[` + good + `,{}],"pagination":{"limit":50}}`,
+				"element 1 is an empty object",
+			},
+			{"nested array element", `{"data":[[` + good + `]],"pagination":{"limit":50}}`, "element 0 is an array"},
+			{"scalar element", `{"data":["row_1"],"pagination":{"limit":50}}`, "element 0 is not a resource object"},
+			{"null identity", fmt.Sprintf(`{"data":[{%q:null,"tag":{"id":"tag_1"}}],"pagination":{"limit":50}}`, list.identity), fmt.Sprintf(`element 0 decoded with no %q`, list.identity)},
+			{
+				"good row then a renamed identity",
+				`{"data":[` + good + `,` + renamed + `],"pagination":{"limit":50}}`,
+				fmt.Sprintf(`element 1 decoded with no %q`, list.identity),
+			},
+		}
 		for _, body := range bodies {
 			list, body := list, body
 			t.Run(list.name+"/"+body.name, func(t *testing.T) {
@@ -508,10 +576,24 @@ func TestDoList_GoodRowsAndANullPageStillDecode(t *testing.T) {
 // would be skipped by requireIdentity in silence, so this asserts the
 // interfaces directly rather than through a decode.
 func TestEveryDecodedModelCarriesAnIdentity(t *testing.T) {
-	models := []interface{}{Tag{}, &Tag{}, Vocabulary{}, &Vocabulary{}}
+	models := []interface{}{
+		Tag{}, &Tag{}, Vocabulary{}, &Vocabulary{}, TagAlias{}, &TagAlias{},
+		Assignment{}, &Assignment{}, ResourceTag{}, &ResourceTag{}, TagResource{}, &TagResource{},
+		AuditLog{}, &AuditLog{}, TagResolution{}, &TagResolution{},
+	}
 	for _, m := range models {
 		if _, ok := m.(identifiedResource); !ok {
 			t.Errorf("%T does not implement identifiedResource, so a blank id would decode with a nil error", m)
+		}
+	}
+	// The composites are the converse: they carry no identity of their own and
+	// require their keys in UnmarshalJSON instead, so requireIdentity must skip
+	// them. One that grew an identityFields() naming a field it does not have
+	// would turn every real answer into an error.
+	composites := []interface{}{&BulkAssignResult{}, &BulkRemoveResult{}, &ResourceReplaceResult{}}
+	for _, m := range composites {
+		if _, ok := m.(identifiedResource); ok {
+			t.Errorf("%T implements identifiedResource; a composite requires its keys in its own decoder", m)
 		}
 	}
 	lists := []struct {
@@ -520,6 +602,10 @@ func TestEveryDecodedModelCarriesAnIdentity(t *testing.T) {
 	}{
 		{&TagList{Data: []Tag{{ID: "a"}, {ID: "b"}}}, []string{"a", "b"}},
 		{&VocabularyList{Data: []Vocabulary{{ID: "c"}}}, []string{"c"}},
+		{&TagAliasList{Data: []TagAlias{{ID: "d"}}}, []string{"d"}},
+		{&ResourceTagList{Data: []ResourceTag{{AssignmentID: "e"}}}, []string{"e"}},
+		{&TagResourceList{Data: []TagResource{{ResourceID: "f"}}}, []string{"f"}},
+		{&AuditLogList{Data: []AuditLog{{ID: "g"}, {ID: "h"}}}, []string{"g", "h"}},
 	}
 	for _, l := range lists {
 		var got []string
@@ -538,19 +624,7 @@ func TestEveryDecodedModelCarriesAnIdentity(t *testing.T) {
 // nothing after it" to a caller paging on Count. Limit is never below 1 in a
 // real response, so it is the field that tells the two apart.
 func TestDoList_RefusesAnUnusablePaginationBlock(t *testing.T) {
-	lists := []struct {
-		name string
-		call func(*Client) error
-	}{
-		{"tags", func(c *Client) error {
-			_, err := c.Tags.List(context.Background(), nil)
-			return err
-		}},
-		{"vocabularies", func(c *Client) error {
-			_, err := c.Vocabularies.List(context.Background(), nil)
-			return err
-		}},
-	}
+	lists := listRoutes()
 	bodies := []struct {
 		name string
 		body string
@@ -592,6 +666,14 @@ func TestDo_RefusesA2xxThatIsNotTheDeleteAnswer(t *testing.T) {
 	}{
 		{"tags", func(c *Client) error { return c.Tags.Delete(context.Background(), "tag_1") }},
 		{"vocabularies", func(c *Client) error { return c.Vocabularies.Delete(context.Background(), "voc_1") }},
+		{"aliases", func(c *Client) error { return c.Aliases.Delete(context.Background(), "alias_1") }},
+		// A DELETE that carries a body, and the one real delete among them: the
+		// 204 assertion has to hold on it as well.
+		{"assignments.remove", func(c *Client) error {
+			return c.Assignments.Remove(context.Background(), AssignmentRemove{
+				ApplicationID: "commerce", TagID: "tag_1", ResourceType: "order", ResourceID: "ord_1",
+			})
+		}},
 	}
 	answers := []struct {
 		name   string

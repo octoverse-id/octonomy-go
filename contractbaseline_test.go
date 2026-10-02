@@ -852,7 +852,9 @@ func TestPackageMethodsSeesTheServiceMethods(t *testing.T) {
 			t.Errorf("packageMethods does not see %s", m)
 		}
 	}
-	if methods["TagService.Resolve"] {
+	// AuditLogService is list-only by design, so its Get stays undeclared for as
+	// long as the server publishes no /audit-logs/{id}.
+	if methods["AuditLogService.Get"] {
 		t.Error("packageMethods reports a method this tree does not declare")
 	}
 }

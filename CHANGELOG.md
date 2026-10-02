@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The six missing resource groups, hand-ported from `main`**
+  ([#94](https://github.com/octoverse-id/octonomy-go/issues/94), for
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). `main`'s `aliases.go`,
+  `resolution.go`, `assignments.go`, `resources.go` and `audit.go` at 5e40964, rewritten into the
+  Go 1.13 dialect under `docs/porting-checklist.md`; the health probes, the sixth group, landed with
+  the compat core below. Every operation in `docs/contract-coverage.yaml` now names a method, and
+  `docs/api.md` maps each one. Nothing published in `v1.0.0` changes type or signature.
+  - **New services on `Client`:** `Aliases` (`AliasService`: Create / Get / List / Update / Delete),
+    `Assignments` (`AssignmentService`: Create / Remove / BulkAssign / BulkRemove), `Resources`
+    (`ResourceService`: ListTags / ReplaceTags / ListAuditLogs) and `AuditLogs` (`AuditLogService`:
+    List — list-only, as on the server). `TagService` gains `ListAliases`, `Resolve`,
+    `ListResources` and `ListAuditLogs`.
+  - **Four list types** where `main` returns `*List[T]`: `TagAliasList`, `ResourceTagList`,
+    `TagResourceList` and `AuditLogList`, each with `rows()` so `doList` checks every row's identity.
+  - **Three composite results**, decoded through `doData`, never `doList`: `BulkAssignResult`,
+    `BulkRemoveResult` and `ResourceReplaceResult`. Both vendored specs describe these bodies
+    wrongly — a bare array for bulk-assign and the replace, no schema at all for bulk-remove — so a
+    decoder written from them returns an empty slice and a nil error. Each requires its own keys,
+    and holds every row to the resource standard; a new smoke test asserts the real counts against a
+    booted server.
+  - **`TagAliasUpdate` has pointer fields and a value-receiver `MarshalJSON`**, as `TagUpdate` and
+    `VocabularyUpdate` do, so `TagAliasUpdate{Metadata: Metadata{}}` sends `{}` and empties the stored
+    object. `main`'s `Optional[T]` is not ported, by design.
+  - **Every new model implements `identityFields()`**: `id` on most, `assignment_id` and the nested
+    `tag.id` on `ResourceTag`, `resource_id` on `TagResource`, and the tag (plus the alias, when one
+    matched) on `TagResolution`.
+  - **The composite and resolution decoders go through `decodeJSON`**, so they are depth-bounded on
+    Go 1.13 like every other response decode.
+  - **`ResolutionScopeMerchant` with no namespace names the opt-in on a v1 client.** The transport's
+    refusal said "add WithNamespace(...)", which on this line's default `APIV1` client leads straight
+    into `WithNamespace`'s own refusal, so there it names `Config.APIVersion = APIV2` too.
+  - `main`'s five test files for these groups are ported alongside, and `TestSmoke_ResourceGroups`
+    and `TestSmoke_APIV2ResourceGroups` call every new method against a real server.
 - **The compat core: `/api/v2` opt-in, the namespace axis, request correlation, the health probes,
   and `main`'s error vocabulary** ([#91](https://github.com/octoverse-id/octonomy-go/issues/91), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). A hand-port of `main`'s
@@ -69,17 +102,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     byte-identical to `main`'s copies of the server's 3.2.1 output at 61fce9b. The v1 diff adds 53 lines and changes one: `409
     scope_immutable` on tag, vocabulary and alias `PATCH`; a `scope` query parameter on
     `/tag-resolution`; `default: true` on three `is_active` fields; and an `ErrorResponse` schema.
-    None of it needed a type change on the two groups this tree implements — `default: true`
+    None of it needed a type change on the two groups this tree then implemented — `default: true`
     documents a server default, `ErrorResponse` is the shape `APIError` already decodes, `parseError`
-    already preserves `scope_immutable` verbatim, and `/tag-resolution` is not on this tree. Nothing
+    already preserves `scope_immutable` verbatim, and `/tag-resolution` was not yet on this tree
+    (#94 ported it, `scope` included). Nothing
     here sends a request to `/api/v2`; the spec is vendored for
     [#91](https://github.com/octoverse-id/octonomy-go/issues/91), which adds that surface opt-in.
   - **`<!-- contract-version: 3.2.1 -->`** in `docs/versioning.md`, the single recorded value.
   - **`docs/contract-coverage.yaml`**: a row for each of the 29 operations the two specs publish, as
-    version-independent suffixes. Ten name the `TagService` / `VocabularyService` method that
-    implements them; nineteen carry a written `unimplemented:` reason naming the issue that closes
-    the gap — [#94](https://github.com/octoverse-id/octonomy-go/issues/94) for the five resource
-    groups, #91 for the health probes. It carries the `operations` section only: the rest of `main`'s
+    version-independent suffixes. When it landed, ten named the `TagService` / `VocabularyService`
+    method that implements them and nineteen carried a written `unimplemented:` reason naming the
+    issue that would close the gap — [#94](https://github.com/octoverse-id/octonomy-go/issues/94) for
+    the five resource groups, #91 for the health probes. Both have since landed, and every row names
+    a method. It carries the `operations` section only: the rest of `main`'s
     file at 61fce9b states what the client sends and decodes, which only a contract gate can prove,
     and that arrives with [#98](https://github.com/octoverse-id/octonomy-go/issues/98). The rows use
     that file's schema, so the gate #98 ports can read them as they stand: `LoadCoverage` from `main`
@@ -274,9 +309,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A nil `RequestOption` is an error, not a panic.** `v1.0.0` called every option unconditionally.
 - **A path segment is escaped once.** The first release assigned an already-escaped path to
   `url.URL.Path`, so `String()` escaped it again and an id of `a b` reached the server as the literal `a%20b`. Tag and
-  vocabulary ids are server-minted uuids, which never need escaping, so no call this tree could make
-  was affected; the fix lands with the transport port because the resource groups still to come
-  address rows by caller-chosen ids.
+  vocabulary ids are server-minted uuids, which never need escaping, so no call this tree could then
+  make was affected; the fix landed with the transport port because the resource groups #94 later
+  ported address rows by caller-chosen ids.
 - **The `vuln` CI job stopped running govulncheck at all, and took every merge with it.**
   `golang/govulncheck-action` installs `golang.org/x/vuln/cmd/govulncheck@latest` and offers no
   version input, while `actions/setup-go` exports `GOTOOLCHAIN=local` so the pinned Go really is the

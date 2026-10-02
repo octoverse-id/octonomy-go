@@ -125,6 +125,14 @@ type Client struct {
 	Vocabularies *VocabularyService
 	// Tags manages the core tagging units.
 	Tags *TagService
+	// Aliases manages the alternate identifiers that resolve to canonical tags.
+	Aliases *AliasService
+	// Assignments links tags to external resources.
+	Assignments *AssignmentService
+	// Resources reads and replaces the tag set on an external resource.
+	Resources *ResourceService
+	// AuditLogs reads the append-only mutation history (needs the audit:read scope).
+	AuditLogs *AuditLogService
 	// Health probes liveness and readiness. Unauthenticated and unversioned, so
 	// it needs no credentials at all -- see NewHealthClient for the entry point
 	// that requires none.
@@ -197,6 +205,10 @@ func New(cfg Config) (*Client, error) {
 	}
 	c.Vocabularies = &VocabularyService{client: c}
 	c.Tags = &TagService{client: c}
+	c.Aliases = &AliasService{client: c}
+	c.Assignments = &AssignmentService{client: c}
+	c.Resources = &ResourceService{client: c}
+	c.AuditLogs = &AuditLogService{client: c}
 	c.Health = &HealthService{client: c}
 	return c, nil
 }
