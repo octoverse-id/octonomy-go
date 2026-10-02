@@ -13,11 +13,13 @@ import (
 )
 
 // Metadata must stay a type ALIAS for map[string]interface{}, and on this line
-// the reason is v1.0.0 itself. That release declared it as an alias, so a
-// caller may pass a Metadata where a map[string]interface{} is expected, put
-// one in a type switch case beside the unnamed map type, or name both in one
-// signature. A defined type would break each of those, and this line can never
-// publish a major to carry a break (AGENTS.md). main pins the same fact for its
+// the reason is v1.0.0 itself. That release declared it as an alias, so to a
+// caller the two are ONE type: a Metadata held in an interface{} matches
+// `case map[string]interface{}` in a type switch, and a []Metadata or a
+// func(Metadata) is a []map[string]interface{} or a func(map[string]interface{}).
+// A defined type would break each of those -- while direct assignment between
+// the two kept compiling, which is the trap described below -- and this line can
+// never publish a major to carry a break (AGENTS.md). main pins the same fact for its
 // own reason: DecodeMetadata is a function rather than a method because
 // Metadata is an alias, and Go allows no methods on one.
 //

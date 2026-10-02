@@ -142,8 +142,9 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   `responseTypes` in `sourceguard_test.go`, fails closed: a destination it cannot name (an
   `interface{}` wrapper passing `out` through, a shadowed name, a method value, a method expression,
   whose explicit receiver moves every argument one place, a type declared inside the function) is
-  reported, not skipped — and so is a call to `doRaw` outside `transport.go`, which decodes beneath
-  both helpers where no destination argument exists to read. One half is new, because one mechanism
+  reported, not skipped — and so is a call to `doRaw` from anything but `Client.do`, `doData` and
+  `doList`, a new helper beside them in `transport.go` included, which decodes beneath the helpers
+  where no destination argument exists to read. One half is new, because one mechanism
   is: a list's `rows()`, which `main`'s `doList[T]` does not need. No source reading can prove
   `rows()` hands back every row, so
   `TestEveryDecodedModelCarriesAnIdentity` proves it by calling it, and

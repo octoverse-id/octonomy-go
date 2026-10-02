@@ -1563,9 +1563,10 @@ func TestMakefileProblemsReadsMakeLikeMakeDoes(t *testing.T) {
 // OCTONOMY_SMOKE_REQUIRED=1 on the go1.13 toolchain. Change a runner, re-check
 // (a)-(e), then update its pin in the same commit.
 
-// smokeRecipePin is the Makefile's `smoke:` rule and recipe: every line that
-// opens with `smoke:` -- a target-specific variable is one, and changes the
-// recipe's environment -- then the recipe's tab-indented lines.
+// smokeRecipePin is the Makefile's `smoke:` rule and recipe, as makeRule reads
+// them: every logical make line that names smoke among its targets -- a
+// target-specific variable is one, alone or beside other targets, and changes
+// the recipe's environment -- each followed by its tab-indented recipe lines.
 const smokeRecipePin = `smoke: ## Run the integration smoke test against a booted harness (see dev-server)
 	@if [ -f .octonomy-harness.env ]; then set -a; . ./.octonomy-harness.env; set +a; fi; \
 	go test -tags=integration -count=1 -run '^TestSmoke_' -v ./...`
