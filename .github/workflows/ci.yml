@@ -242,7 +242,7 @@ jobs:
           # reporting success without running a single assertion. Required mode
           # turns that absence into a failure.
           OCTONOMY_SMOKE_REQUIRED: "1"
-        run: go test -tags=integration -run '^TestSmoke_' -v ./...
+        run: go test -tags=integration -count=1 -run '^TestSmoke_' -v ./...
       - name: Capture container logs
         if: failure()
         run: make dev-server-logs

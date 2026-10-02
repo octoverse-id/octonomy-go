@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`main`'s test suite, accounted for file by file**
+  ([#95](https://github.com/octoverse-id/octonomy-go/issues/95), for
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests and docs, and `-count=1`
+  on `make smoke` and the CI smoke job so a rerun cannot be answered from go test's result cache; no
+  exported symbol changes.
+  - **`docs/compat-test-disposition.md`** gives each of the 27 test files in `main`'s tree at 5e40964 a
+    verdict — ported, rewritten, preserved, owned by another sub-issue, or excluded with its reason —
+    and writes down the `t.Cleanup` replacement model for Go 1.13. `TestDispositionTableNamesEveryTestFile`
+    fails on a test file here that the table does not name.
+  - **Two source-parsing guards, rewritten for this dialect** rather than ported, because `main`'s, at
+    5e40964, read response types off `doData[T]` type arguments this line does not have.
+    `TestEveryResponseTypeCanRefuseAnEmptyDecode` requires every type the transport decodes into —
+    read off its `&out` destination — to carry `identityFields()` on the value receiver or, for a
+    declared composite, a pointer-receiver `UnmarshalJSON`, and refuses a call to `doRaw` outside the
+    three helpers that wrap it, which `AGENTS.md` already forbade with nothing to enforce it;
+    `TestTheRuntimeIdentityTablesMatchTheSource` holds the runtime check of each list's `rows()` to
+    the same set.
+    `TestEveryResponseTypeHasASmokeProbe` requires a `TestSmoke_` function to call a method decoding
+    each of those types, and each list envelope, against a real server, and refuses a smoke test that
+    can skip or return early other than through `newSmokeClient`'s gated skip. The two runners that execute those probes, `make smoke` and the CI smoke job, are pinned to text
+    verified against a real server, with the Makefile-wide and workflow-wide settings that could
+    change them from outside refused. Both guards fail closed on a shape they cannot read.
+  - **`TestNoTestMainHidesAFailure`**, in a test-only package of its own (`internal/testmainguard`):
+    a `TestMain` must be exactly `os.Exit(m.Run())`. Before Go 1.15 one that returns exits 0 over
+    failing tests, which go1.13.15's `vet` does not report, and a guard in the root package would be
+    the first thing an early-exiting `TestMain` there skipped. The porting checklist gains the row.
+  - **`main`'s test cases this line lacked**: `TestTags_Get`, `TestVocabularies_Get`,
+    `TestVocabularies_List_Params` (without its `q` and `slug` cases — see below),
+    `TestDoData_UndecodableBodies`, `TestTransport_ErrorsPropagateFromEveryHelper` and
+    `TestMetadataIsStillAnAlias`. The `Get` fixtures are raw wire JSON, not marshalled structs.
+  - The table records two capability gaps that no sub-issue owns yet: `VocabularyListParams` has no
+    `Query` or `Slug`, although both vendored specs list the filters, and `DecodeMetadata` has no
+    counterpart here.
 - **The six missing resource groups, hand-ported from `main`**
   ([#94](https://github.com/octoverse-id/octonomy-go/issues/94), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). `main`'s `aliases.go`,

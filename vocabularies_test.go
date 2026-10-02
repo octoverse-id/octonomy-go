@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestVocabularies_Create(t *testing.T) {
@@ -121,4 +122,159 @@ func TestVocabularies_Delete(t *testing.T) {
 	if err := c.Vocabularies.Delete(context.Background(), "voc_1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
+}
+
+// Ported from main's vocabularies_test.go at 5e40964 for #95, without two of its
+// cases: main's VocabularyListParams has Query and Slug (the q and slug filters,
+// main's #61), and this line's does not yet, although docs/openapi-v2.yaml and
+// docs/openapi.yaml both list them. docs/compat-test-disposition.md records the
+// gap. Every filter this line does have is asserted, and so is the absence of
+// any other parameter.
+func TestVocabularies_List_Params(t *testing.T) {
+	tests := []struct {
+		name   string
+		params *VocabularyListParams
+		want   map[string]string
+	}{
+		{
+			name: "every filter",
+			params: &VocabularyListParams{
+				ListOptions:   ListOptions{Limit: 25, Offset: 50},
+				ApplicationID: String("commerce"),
+				IncludeShared: Bool(true),
+				IsActive:      Bool(false),
+			},
+			want: map[string]string{
+				"limit":          "25",
+				"offset":         "50",
+				"application_id": "commerce",
+				"include_shared": "true",
+				"is_active":      "false",
+			},
+		},
+		{
+			// nil and &"" are different requests, and which one the caller meant
+			// is not this package's call to make: nil omits the parameter, &""
+			// sends it empty. Dropping the key because the value looks empty
+			// would be the SDK re-implementing server validation, which AGENTS.md
+			// rules out.
+			name:   "an empty string is still sent",
+			params: &VocabularyListParams{ApplicationID: String("")},
+			want:   map[string]string{"application_id": ""},
+		},
+		{
+			name:   "nil params",
+			params: nil,
+			want:   map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/vocabularies" {
+					t.Errorf("got %s %s, want GET /api/v1/vocabularies", r.Method, r.URL.Path)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+					t.Errorf("Authorization = %q, want Bearer test-token", got)
+				}
+				if got := r.Header.Get("X-Tenant-ID"); got != "tenant-1" {
+					t.Errorf("X-Tenant-ID = %q, want tenant-1", got)
+				}
+				q := r.URL.Query()
+				for k, v := range tt.want {
+					got, ok := q[k]
+					if !ok {
+						t.Errorf("query is missing %s (want %q); raw query = %q", k, v, r.URL.RawQuery)
+						continue
+					}
+					if len(got) != 1 || got[0] != v {
+						t.Errorf("query[%s] = %v, want [%q]", k, got, v)
+					}
+				}
+				for k := range q {
+					if _, ok := tt.want[k]; !ok {
+						t.Errorf("unexpected query param %s=%q", k, q.Get(k))
+					}
+				}
+				writeRaw(w, http.StatusOK, `{"data": [{"id": "voc_1"}], "pagination": {"limit": 25, "offset": 50, "count": 1}}`)
+			})
+			defer cleanup()
+
+			page, err := c.Vocabularies.List(context.Background(), tt.params)
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if len(page.Data) != 1 || page.Data[0].ID != "voc_1" {
+				t.Errorf("unexpected page: %+v", page.Data)
+			}
+		})
+	}
+}
+
+// Ported from main's vocabularies_test.go at 5e40964 for #95, with the fixture
+// as raw wire JSON and every field it reads non-zero, for the reasons
+// TestTags_Get gives. main's fixture sent "application_id": null to pin the
+// shared-vocabulary case, and that case is kept as its own subtest -- it pins
+// nil-versus-"" and cannot pin the tag's spelling, which the scoped case does.
+// It was main's other previously untested doData route, and it is this line's
+// too.
+func TestVocabularies_Get(t *testing.T) {
+	created := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	updated := created.Add(24 * time.Hour)
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/vocabularies/voc_1" {
+			t.Errorf("got %s %s, want GET /api/v1/vocabularies/voc_1", r.Method, r.URL.Path)
+		}
+		writeRaw(w, http.StatusOK, `{"data": {
+			"id": "voc_1",
+			"tenant_id": "tenant-1",
+			"application_id": "commerce",
+			"name": "Labels",
+			"slug": "labels",
+			"description": "Commerce label vocabulary",
+			"metadata": {"owner": "platform"},
+			"is_active": true,
+			"created_at": "2026-06-08T12:00:00Z",
+			"updated_at": "2026-06-09T12:00:00Z"
+		}}`)
+	})
+	defer cleanup()
+
+	voc, err := c.Vocabularies.Get(context.Background(), "voc_1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if voc.ID != "voc_1" || voc.TenantID != "tenant-1" || voc.Name != "Labels" || voc.Slug != "labels" {
+		t.Errorf("scalar fields did not round-trip: %+v", voc)
+	}
+	if voc.ApplicationID == nil || *voc.ApplicationID != "commerce" {
+		t.Errorf("ApplicationID = %v, want commerce", voc.ApplicationID)
+	}
+	if voc.Description == nil || *voc.Description != "Commerce label vocabulary" {
+		t.Errorf("Description = %v, want the commerce-vocabulary text", voc.Description)
+	}
+	if voc.Metadata["owner"] != "platform" {
+		t.Errorf("Metadata[owner] = %v, want platform", voc.Metadata["owner"])
+	}
+	if !voc.IsActive || !voc.CreatedAt.Equal(created) || !voc.UpdatedAt.Equal(updated) {
+		t.Errorf("IsActive/timestamps did not round-trip: %+v", voc)
+	}
+
+	// A nil ApplicationID means "shared across the tenant", so the distinction
+	// between null and "" is load-bearing here.
+	t.Run("a shared vocabulary", func(t *testing.T) {
+		c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			writeRaw(w, http.StatusOK, `{"data": {"id": "voc_2", "application_id": null}}`)
+		})
+		defer cleanup()
+		voc, err := c.Vocabularies.Get(context.Background(), "voc_2")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if voc.ApplicationID != nil {
+			t.Errorf("ApplicationID = %v, want nil (shared)", voc.ApplicationID)
+		}
+	})
 }

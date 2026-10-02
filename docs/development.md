@@ -117,8 +117,10 @@ Tests use `net/http/httptest` to stand up a fake Octonomy and assert the wire co
 
 `newTestClient(t, handler)` in `octonomy_test.go` is the shared helper. It returns
 `(*Client, func())` and the caller **must** `defer cleanup()` — `t.Cleanup` needs Go 1.14, and a
-`defer srv.Close()` inside the helper would close the server before the test ever used it. Keep new
-code covered and run with `-race`.
+`defer srv.Close()` inside the helper would close the server before the test ever used it. The full
+replacement model, for a test body and for a teardown that has to outlive its helper, is in
+[`compat-test-disposition.md`](compat-test-disposition.md), with what became of each of `main`'s test
+files. Keep new code covered and run with `-race`.
 
 `newVersionedTestClient(t, version, handler)` (`scope_test.go`) pins the API version, and
 `newUnreachableClient` fails the test if a request is sent at all — use it for any guard that promises
@@ -136,9 +138,17 @@ to send verbatim — list envelopes and error envelopes.
 ### Integration smoke test
 
 `integration_test.go` (build tag `integration`) is the only test that talks to a real server. It is
-five assertions, deliberately: the `{data, pagination}` list envelope, the single-resource `{data}`
-envelope via a create/read round-trip, both list endpoints, and one real error envelope. It gates on
-`OCTONOMY_TEST_BASE_URL` and skips when that is empty, so `go test ./...` stays hermetic.
+a smoke test, not a suite: its `TestSmoke_` functions check that the client still decodes what a real
+server sends — both envelopes, every response type, a real error envelope, the health probes and the
+namespace pair on `/api/v2`. It gates on `OCTONOMY_TEST_BASE_URL` and skips when that is empty, so
+`go test ./...` stays hermetic.
+
+Its coverage is checked without a server. `TestEveryResponseTypeHasASmokeProbe`
+(`smokeprobes_test.go`) reads the smoke file as source and fails when a response type has no
+`TestSmoke_` function calling a method that decodes it; add the call in the change that adds the
+type. The two runners that execute it — `make smoke` and the CI smoke job — are pinned in the same
+file, so a change to either is made deliberately, re-checked against a real server, and recorded in
+the pin.
 
 ```bash
 make dev-server   # boots a real Octonomy, writes .octonomy-harness.env

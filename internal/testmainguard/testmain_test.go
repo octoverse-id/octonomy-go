@@ -1,0 +1,189 @@
+// Package testmainguard holds one check, in a package of its own because of
+// what it checks: a TestMain decides its own test binary's exit status before
+// any test in that binary runs. A guard in the root package would be the first
+// thing an `os.Exit(0)` TestMain there skipped, with `go test` reporting ok.
+// Here it is a separate binary that no TestMain in the root package reaches.
+package testmainguard
+
+// A TestMain on this line can turn a failing test binary green, and nothing in
+// a go1.13 build or vet says so (#95).
+//
+// Before Go 1.15, the test main the go command generates does not call os.Exit
+// after a TestMain returns. So the idiom main may use freely --
+//
+//	func TestMain(m *testing.M) {
+//		setup()
+//		m.Run()
+//	}
+//
+// -- exits 0 on go1.13.15 whatever m.Run returned, and `go test` prints ok over
+// failing tests. Go 1.15 started exiting with m.Run's code itself. The other
+// shape that hides a failure is version-independent: a TestMain that exits 0
+// on its own, `if os.Getenv(…) == "" { os.Exit(0) }`, which in the smoke file
+// would turn a required run with no harness into a pass.
+//
+// staticcheck's SA3000 catches the first shape under this module's `go 1.13`
+// directive, in the lint job; it does not catch the second. So the rule here is
+// the one that covers both: a TestMain in the root package's test files, the
+// integration-tagged ones included, and in this package's, must be exactly
+// `os.Exit(m.Run())`. Setup
+// that has to happen first belongs in a helper called from the tests, or in a
+// TestMain that is rewritten under review with this check updated.
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// guardedDirs are the test binaries a TestMain could take over: the root
+// package, and this one.
+var guardedDirs = []string{filepath.Join("..", ".."), "."}
+
+func TestNoTestMainHidesAFailure(t *testing.T) {
+	var paths []string
+	for _, dir := range guardedDirs {
+		found, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
+		if err != nil {
+			t.Fatalf("glob %s: %v", dir, err)
+		}
+		paths = append(paths, found...)
+	}
+	if len(paths) < 2 {
+		t.Fatalf("found %d test files; the guard is not reading the root package", len(paths))
+	}
+	fset := token.NewFileSet()
+	for _, path := range paths {
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, why := range testMainProblems(file) {
+			t.Errorf("%s: %s", path, why)
+		}
+	}
+}
+
+// testMainProblems reports a TestMain whose body is anything but
+// `os.Exit(m.Run())`.
+func testMainProblems(file *ast.File) []string {
+	var problems []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Name.Name != "TestMain" || fn.Body == nil {
+			continue
+		}
+		if !exitsWithRun(fn) || !importsOS(file) {
+			problems = append(problems, "TestMain must be exactly os.Exit(m.Run()): before Go 1.15 a "+
+				"TestMain that returns exits 0 over failing tests, and one that calls os.Exit itself can "+
+				"exit 0 before they run")
+		}
+	}
+	return problems
+}
+
+// importsOS reports whether the file imports the os package under the name os.
+// The check above reads the spelling `os.Exit`; in a file that does not import
+// os, that name could be a package-level fake whose Exit returns, and on Go
+// 1.13 a TestMain that returns exits 0.
+func importsOS(file *ast.File) bool {
+	for _, imp := range file.Imports {
+		if imp.Path.Value == `"os"` && (imp.Name == nil || imp.Name.Name == "os") {
+			return true
+		}
+	}
+	return false
+}
+
+// exitsWithRun reports whether fn's whole body is `os.Exit(<m>.Run())`, with
+// <m> its *testing.M parameter.
+func exitsWithRun(fn *ast.FuncDecl) bool {
+	if fn.Type.Params == nil || len(fn.Type.Params.List) != 1 || len(fn.Type.Params.List[0].Names) != 1 {
+		return false
+	}
+	m := fn.Type.Params.List[0].Names[0].Name
+	if len(fn.Body.List) != 1 {
+		return false
+	}
+	stmt, ok := fn.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	exit, ok := unparen(stmt.X).(*ast.CallExpr)
+	if !ok || len(exit.Args) != 1 {
+		return false
+	}
+	if sel, ok := unparen(exit.Fun).(*ast.SelectorExpr); !ok || !isIdent(sel.X, "os") || sel.Sel.Name != "Exit" {
+		return false
+	}
+	run, ok := unparen(exit.Args[0]).(*ast.CallExpr)
+	if !ok || len(run.Args) != 0 {
+		return false
+	}
+	sel, ok := unparen(run.Fun).(*ast.SelectorExpr)
+	return ok && isIdent(sel.X, m) && sel.Sel.Name == "Run"
+}
+
+// The guard reads the spelling os.Exit, so it also needs os to BE the os
+// package: a file that does not import it could declare a fake whose Exit
+// returns.
+func TestTestMainProblemsRequiresTheRealOS(t *testing.T) {
+	src := "package octonomy_test\ntype fakeOS struct{}\nfunc (fakeOS) Exit(int) {}\nvar os fakeOS\nfunc TestMain(m *testing.M) {\n\tos.Exit(m.Run())\n}\n"
+	file, err := parser.ParseFile(token.NewFileSet(), "fixture_test.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	if len(testMainProblems(file)) == 0 {
+		t.Error("a TestMain calling a fake os.Exit was accepted")
+	}
+}
+
+func TestTestMainProblemsAcceptsOnlyTheExitingShape(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		ok         bool
+	}{
+		{"the exiting shape", "os.Exit(m.Run())", true},
+		{"no TestMain at all", "", true},
+		{"a TestMain that returns", "setup()\n\tm.Run()", false},
+		{"one that defers and returns", `defer fmt.Println("done")` + "\n\tm.Run()", false},
+		{"one that exits 0 early", `if os.Getenv("OCTONOMY_TEST_BASE_URL") == "" { os.Exit(0) }` + "\n\tos.Exit(m.Run())", false},
+		{"one that exits with a constant", "m.Run()\n\tos.Exit(0)", false},
+		{"one that runs another M", "os.Exit(other.Run())", false},
+		{"parentheses do not hide the shape", "(os.Exit)((m.Run()))", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "package octonomy_test\nimport \"os\"\n"
+			if tc.body != "" {
+				src += "func TestMain(m *testing.M) {\n\t" + tc.body + "\n}\n"
+			}
+			file, err := parser.ParseFile(token.NewFileSet(), "fixture_test.go", src, 0)
+			if err != nil {
+				t.Fatalf("parse fixture: %v", err)
+			}
+			if got := len(testMainProblems(file)) == 0; got != tc.ok {
+				t.Errorf("accepted = %v, want %v for:\n%s", got, tc.ok, strings.TrimSpace(src))
+			}
+		})
+	}
+}
+
+// unparen and isIdent are the root package's sourceguard_test.go helpers,
+// repeated here because this package cannot import a test file.
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
+}
+
+func isIdent(expr ast.Expr, name string) bool {
+	ident, ok := unparen(expr).(*ast.Ident)
+	return ok && ident.Name == name
+}
