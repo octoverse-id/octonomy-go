@@ -1069,6 +1069,13 @@ func stringLit(expr ast.Expr) string {
 // setting OCTONOMY_SMOKE_REQUIRED to "1" in their OWN env -- the gate
 // newSmokeClient's one skip sits behind is only a failure where the variable is
 // set, and one set on another job does not reach this one.
+//
+// WHERE IT ENDS. It reads the smoke step and its job, not the workflow around
+// them: the triggers under `on:`, a `needs:` on a job that fails first, a
+// workflow-level `env` or `defaults`, and above all whether a red smoke job
+// blocks a merge, which is branch-protection state no file in the repository
+// records (ci.yml says so of its own go1.13 job). Those decide whether the smoke
+// run gates a change at all, and they stay a reviewer's to read.
 func TestSmokeJobRequiresTheSmokeRun(t *testing.T) {
 	const path = ".github/workflows/ci.yml"
 	raw, err := ioutil.ReadFile(path)
