@@ -4,8 +4,9 @@ package octonomy
 // (identityfields_test.go) and TestEveryResponseTypeHasASmokeProbe
 // (smokeprobes_test.go), and #97's port of readprobes_test.go after them.
 //
-// main keeps most of these in readprobes_test.go and identityfields_test.go (at
-// 5e40964). They are in a file of their own here so neither guard depends on a
+// Every mention of main in this file means main at 5e40964, which keeps most of
+// these in readprobes_test.go and identityfields_test.go. They are in a file of
+// their own here so neither guard depends on a
 // port that has not landed, and they are REWRITTEN rather than copied (#95), for
 // the one reason a transform would have produced a guard that compiles and
 // asserts about the wrong dialect: main finds a response type in a TYPE
@@ -169,7 +170,7 @@ func responseTypes(files map[string]*ast.File) (found, lists map[string]string, 
 					unresolved = append(unresolved, where+" (refers to "+sel.Sel.Name+" without calling it)")
 					return true
 				}
-				row, list, why := destination(sel.Sel.Name, call, fn, types)
+				row, list, why := destination(sel, call, fn, types)
 				if why != "" {
 					unresolved = append(unresolved, where+" ("+why+")")
 					return true
@@ -208,10 +209,36 @@ func isTransportName(name string) bool {
 	return ok
 }
 
+// isMethodExpression reports whether a transport selector's operand is a TYPE
+// rather than a client value: `(*Client).doData(c, ctx, …)`. A method
+// expression takes its receiver as the first argument, so every argument sits
+// one place later than transportOut says, and reading the usual position would
+// resolve the argument BEFORE the destination -- doData's request body -- as
+// the response type, with nothing reported.
+//
+// A pointer type is unambiguous, since `*x.doData` would parse as a dereference
+// of the selector rather than as a selector on a star. A bare name is a type
+// when the package declares one by that name; that covers an alias such as
+// `type C = *Client` as well.
+func isMethodExpression(sel *ast.SelectorExpr, types typeIndex) bool {
+	switch x := unparen(sel.X).(type) {
+	case *ast.StarExpr:
+		return true
+	case *ast.Ident:
+		_, isType := types[x.Name]
+		return isType
+	}
+	return false
+}
+
 // destination resolves the response type one transport call decodes into. For
 // doData the destination IS the row; for doList it is a list envelope, and the
 // row is that envelope's element type.
-func destination(helper string, call *ast.CallExpr, scope *ast.FuncDecl, types typeIndex) (row, list, why string) {
+func destination(sel *ast.SelectorExpr, call *ast.CallExpr, scope *ast.FuncDecl, types typeIndex) (row, list, why string) {
+	helper := sel.Sel.Name
+	if isMethodExpression(sel, types) {
+		return "", "", helper + " is called as a method expression, which passes the client as argument 0 and moves the destination one place along; call it on the client"
+	}
 	idx := transportOut[helper]
 	if len(call.Args) <= idx {
 		return "", "", helper + " is called with " + strconv.Itoa(len(call.Args)) + " argument(s), so its destination is not argument " + strconv.Itoa(idx)

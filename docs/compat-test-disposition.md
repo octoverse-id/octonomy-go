@@ -123,8 +123,8 @@ also stands on `integration_harness_test.go`'s per-merchant clients, which arriv
 
 `main`'s smoke walk is a registry: `smokeProbes()` returns one entry per response type, each handed a
 client, and `main`'s `smokeprobes_test.go` binds an entry's key to the calls its closure makes. This
-line's walk is five `TestSmoke_` functions on two clients — `/api/v1` by default, and `/api/v2` built
-opt-in for the namespace pair — and it stays that way. The registry is test structure, not
+line's walk is five `TestSmoke_` functions, each building its own clients on one of two API versions —
+`/api/v1` by default, and `/api/v2` opt-in for the namespace pair — and it stays that way. The registry is test structure, not
 capability; restructuring 719 lines verified against a real server to carry it would buy one thing
 the rewritten guard already checks directly. See the second rewrite below.
 
@@ -140,8 +140,8 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   decoded to nothing: `identityFields()` on the **value** receiver, a declared composite's
   `UnmarshalJSON` on the pointer — and `main`'s fixtures, rewritten for `&out`. The derivation,
   `responseTypes` in `sourceguard_test.go`, fails closed: a destination it cannot name (an
-  `interface{}` wrapper passing `out` through, a shadowed name, a method value) is reported, not
-  skipped. One half is new, because one mechanism is: a list's `rows()`, which `main`'s `doList[T]`
+  `interface{}` wrapper passing `out` through, a shadowed name, a method value, a method expression,
+  whose explicit receiver moves every argument one place) is reported, not skipped. One half is new, because one mechanism is: a list's `rows()`, which `main`'s `doList[T]`
   does not need. No source reading can prove `rows()` hands back every row, so
   `TestEveryDecodedModelCarriesAnIdentity` proves it by calling it, and
   `TestTheRuntimeIdentityTablesMatchTheSource` holds that test's hand-written tables to the
@@ -150,9 +150,12 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   server — and binds it to this line's walk: a type is probed when a `TestSmoke_` function calls a
   method that decodes it, on a client that function built (`newSmokeClient`, or the SDK's `New`),
   outside any closure. That is `main`'s checks 1 and 4 taken together. `main`'s separate stale-key
-  and wrong-key checks exist only because a registry has keys, and are not needed without one.
-  `TestSmokeSelectorRunsEveryTestSmokeFunction` holds `make smoke` and the go1.13 smoke job to
-  `-run '^TestSmoke_'`, so the guard cannot credit a probe no job runs.
+  and wrong-key checks exist only because a registry has keys, and are not needed without one. What a
+  registry also gave `main` is a walk that fails an entry which skips itself; with no walk here, the
+  guard refuses a `t.Skip` in a `TestSmoke_` function outright, since a skipped probe is a green run
+  the guard would still credit. `TestSmokeSelectorRunsEveryTestSmokeFunction` holds `make smoke` and
+  the go1.13 smoke job to a run that reaches every `TestSmoke_` function, so the guard cannot credit a
+  probe no job runs.
 
 ## The `t.Cleanup` replacement model
 

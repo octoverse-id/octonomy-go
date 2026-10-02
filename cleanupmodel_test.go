@@ -3,10 +3,10 @@ package octonomy
 // The t.Cleanup replacement model, held to its one claim (#95; the model itself
 // is written down in docs/compat-test-disposition.md).
 //
-// t.Cleanup needs Go 1.14. On main a helper registers its teardown with it, and
-// the teardown runs when the TEST finishes. The tempting rewrite -- `defer
-// srv.Close()` inside the helper -- runs when the HELPER returns, which is
-// before the caller has issued a single request. So on this line a helper that
+// t.Cleanup needs Go 1.14. On main at 5e40964 a helper registers its teardown
+// with it, and the teardown runs when the TEST finishes. The tempting rewrite --
+// `defer srv.Close()` inside the helper -- runs when the HELPER returns, which
+// is before the caller has issued a single request. So on this line a helper that
 // owns a resource RETURNS its teardown, and the caller defers it at the call
 // site, which runs where t.Cleanup would have.
 //

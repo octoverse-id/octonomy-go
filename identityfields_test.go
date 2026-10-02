@@ -1,7 +1,8 @@
 package octonomy
 
 // A REWRITE of main's identityfields_test.go at 5e40964, not a port (#95; the
-// disposition table is docs/compat-test-disposition.md). main's guard derives
+// disposition table is docs/compat-test-disposition.md). Every mention of main
+// in this file means main at that commit. main's guard derives
 // the response types from the TYPE ARGUMENT of doData[T] and doList[T], and a
 // mechanical transform of it would compile here and find nothing to read:
 // this line hands the transport an untyped `&out`. The derivation is
@@ -416,6 +417,25 @@ func TestResponseTypesCollectsWhatTheTransportDecodes(t *testing.T) {
 		{
 			name:       "a method expression at package level",
 			src:        `var decode = (*Client).doList`,
+			unresolved: 1,
+		},
+		{
+			// A method expression CALLED takes the client as argument 0, so the
+			// destination is one place later than transportOut says. Reading the
+			// usual position credited the request body -- &request, a Tag --
+			// while the runtime decoded a Widget, with nothing reported.
+			name: "an invoked method expression is refused",
+			src: `func (s *S) Create(ctx context.Context) error {
+				var request Tag
+				var out Widget
+				return (*Client).doData(s.client, ctx, http.MethodPost, "/w", nil, &request, &out)
+			}`,
+			unresolved: 1,
+		},
+		{
+			name: "a method expression through a type alias is refused",
+			src: `type C = *Client
+			func (s *S) List(ctx context.Context) error { var out TagList; return C.doList(s.client, ctx, "GET", "/t", nil, &out) }`,
 			unresolved: 1,
 		},
 		{

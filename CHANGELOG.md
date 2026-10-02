@@ -16,16 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     verdict — ported, rewritten, preserved, owned by another sub-issue, or excluded with its reason —
     and writes down the `t.Cleanup` replacement model for Go 1.13. `TestDispositionTableNamesEveryTestFile`
     fails on a test file here that the table does not name.
-  - **Two source-parsing guards, rewritten for this dialect** rather than ported, because `main`'s
-    read response types off `doData[T]` type arguments this line does not have.
+  - **Two source-parsing guards, rewritten for this dialect** rather than ported, because `main`'s, at
+    5e40964, read response types off `doData[T]` type arguments this line does not have.
     `TestEveryResponseTypeCanRefuseAnEmptyDecode` requires every type the transport decodes into —
     read off its `&out` destination — to carry `identityFields()` on the value receiver or, for a
     declared composite, a pointer-receiver `UnmarshalJSON`; `TestTheRuntimeIdentityTablesMatchTheSource`
     holds the runtime check of each list's `rows()` to the same set.
     `TestEveryResponseTypeHasASmokeProbe` requires a `TestSmoke_` function to call a method decoding
-    each of those types against a real server, and `TestSmokeSelectorRunsEveryTestSmokeFunction`
-    keeps `make smoke` and the CI smoke job selecting `-run '^TestSmoke_'`. Both fail closed on a
-    shape they cannot read.
+    each of those types against a real server, and refuses a smoke test that skips itself;
+    `TestSmokeSelectorRunsEveryTestSmokeFunction` keeps `make smoke` and the CI smoke job reaching
+    every `TestSmoke_` function. Both fail closed on a shape they cannot read.
   - **`main`'s test cases this line lacked**: `TestTags_Get`, `TestVocabularies_Get`,
     `TestVocabularies_List_Params` (without its `q` and `slug` cases — see below),
     `TestDoData_UndecodableBodies`, `TestTransport_ErrorsPropagateFromEveryHelper` and

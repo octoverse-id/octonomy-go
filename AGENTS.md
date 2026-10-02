@@ -88,8 +88,8 @@ on `main`.
   That table holds every `main` test file at 5e40964 with a verdict — ported, rewritten, preserved,
   owned by another issue, or excluded with a reason — and `TestDispositionTableNamesEveryTestFile`
   fails on a test file here that it does not name. **A test that parses Go source is rewritten, never
-  ported:** `main`'s read response types off `doData[T]` type arguments, which this line does not
-  have, so a transformed one compiles and asserts nothing. `sourceguard_test.go` holds the readers
+  ported:** `main`'s, at 5e40964, read response types off `doData[T]` type arguments, which this line
+  does not have, so a transformed one finds nothing to read. `sourceguard_test.go` holds the readers
   rewritten for this dialect; build on them.
 
 ## Product Rules
@@ -251,7 +251,8 @@ stays a faithful, ergonomic client.
   call a method that decodes it, on a client that function built, or
   `TestEveryResponseTypeHasASmokeProbe` (`smokeprobes_test.go`, no build tag) fails. Only a real
   server sees a fixture-versus-server divergence (#32). A call inside a closure or a helper is not
-  counted, and the smoke runners must keep selecting `-run '^TestSmoke_'`.
+  counted, a smoke test may not skip itself (only `newSmokeClient` skips), and the smoke runners
+  must keep reaching every `TestSmoke_` function.
 - Canned **single-resource** responses go through `writeData`, which adds the server's `{"data": ...}`
   wrapper. `writeJSON` sends the body verbatim — use it for list and error envelopes only. Handlers
   that returned bare objects matched the vendored spec instead of the server and hid a real defect.

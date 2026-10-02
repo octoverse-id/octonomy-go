@@ -1,7 +1,8 @@
 package octonomy
 
 // A REWRITE of main's smokeprobes_test.go at 5e40964 (#95; the disposition
-// table is docs/compat-test-disposition.md). The guard is main's -- every
+// table is docs/compat-test-disposition.md). Every mention of main in this file
+// means main at that commit. The guard is main's -- every
 // response type this SDK decodes is asserted against a real server -- and two
 // things about it are this line's:
 //
@@ -11,9 +12,10 @@ package octonomy
 //   - WHAT COUNTS AS A PROBE. main's smoke walk is a registry, smokeProbes(),
 //     with one entry per response type and a client handed to each entry's
 //     closure, and main's guard binds an entry to the calls its closure makes
-//     on that parameter. This line's walk is five TestSmoke_ functions on two
-//     clients -- /api/v1 by default, /api/v2 built opt-in for the namespace
-//     pair -- so there is no table to read. The guard binds the same thing
+//     on that parameter. This line's walk is five TestSmoke_ functions, each
+//     building its own clients on one of two API versions -- /api/v1 by
+//     default, /api/v2 opt-in for the namespace pair -- so there is no table to
+//     read. The guard binds the same thing
 //     directly: a response type is probed when a TestSmoke_ function calls a
 //     client method that decodes it, on a client that function built. That is
 //     main's check 1 and check 4 taken together (an entry keyed T, whose
@@ -22,7 +24,10 @@ package octonomy
 // What it gives up is main's checks 2 and 4 as SEPARATE failures -- an entry
 // naming a dead type, an entry keyed for one type that calls another -- which
 // exist only because a registry has keys. A key that cannot drift cannot be
-// stale.
+// stale. What it must NOT give up is main's walk failing an entry that skips
+// itself, since a skipped probe is a green run that asserted one shape fewer
+// than it claims; with no walk to fail it at runtime, the guard refuses a skip
+// in a TestSmoke_ function statically instead.
 
 import (
 	"go/ast"
@@ -84,7 +89,10 @@ var smokeProbeExclusions = map[string]string{}
 //     response type no smoke test calls anything for -- which is the failure
 //     that actually happens. The assertions are a reviewer's job.
 //   - It reads presence, not reachability: a call parked under `if false` is
-//     credited, as is one after a t.Fatal that always fires.
+//     credited, as is one after a t.Fatal that always fires. A t.Skip is the one
+//     unreachability it refuses, anywhere in a TestSmoke_ function, because a
+//     skip is green; the only skip the smoke run has is newSmokeClient's, which
+//     OCTONOMY_SMOKE_REQUIRED=1 turns into a failure in CI.
 //   - It binds a type to SOME method that decodes it, not to every one. A Tag
 //     probed through Tags.List says nothing about Tags.Get, and both send the
 //     same envelope only because this SDK routes them through the same helper.
@@ -198,36 +206,59 @@ func probedBy(produced map[string]bool, calls map[string]string) string {
 // ran `-run TestSmoke_RealServer` until #112 widened it, which would have left
 // every other smoke test compiled and never executed -- the guard would credit
 // probes no job runs. So both runners are held to the prefix the guard reads.
+//
+// Each file needs at least one integration run that reaches every TestSmoke_
+// function: `-run '^TestSmoke_'`, or no -run at all, which runs everything. A
+// run whose selector names TestSmoke any other way is refused, since it is a
+// smoke run narrower than the guard assumes. A selector that does not name
+// TestSmoke belongs to another suite -- #97's integration suite will have one --
+// and is left alone, as is a comment.
 func TestSmokeSelectorRunsEveryTestSmokeFunction(t *testing.T) {
-	selector := regexp.MustCompile(`-run\s+(\S+)`)
 	for _, path := range []string{"Makefile", ".github/workflows/ci.yml"} {
 		raw, err := ioutil.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		runs := 0
-		for i, line := range strings.Split(string(raw), "\n") {
-			if !strings.Contains(line, "-tags=integration") {
-				continue
-			}
-			runs++
-			m := selector.FindStringSubmatch(line)
-			if m == nil {
-				t.Errorf("%s:%d runs the integration build with no -run selector; the smoke guard "+
-					"assumes '^%s'", path, i+1, smokeTestPrefix)
-				continue
-			}
-			if got := strings.Trim(m[1], `'"`); got != "^"+smokeTestPrefix {
-				t.Errorf("%s:%d selects -run %s, but the smoke guard counts every %s function as run. "+
-					"A narrower selector leaves probes the guard credits unexecuted",
-					path, i+1, m[1], smokeTestPrefix)
-			}
-		}
-		if runs == 0 {
-			t.Errorf("%s has no `go test -tags=integration` line; the smoke run the guard reads for "+
-				"is not wired here", path)
+		for _, problem := range smokeRunProblems(path, string(raw)) {
+			t.Error(problem)
 		}
 	}
+}
+
+var runSelector = regexp.MustCompile(`(?:^|\s)-run(?:\s+|=)(\S+)`)
+
+// smokeRunProblems reads one runner file for the integration runs that execute
+// the smoke tests, and returns what is wrong with them.
+func smokeRunProblems(path, src string) []string {
+	var problems []string
+	smokeRuns := 0
+	for i, line := range strings.Split(src, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") || !strings.Contains(line, "-tags=integration") {
+			continue
+		}
+		m := runSelector.FindStringSubmatch(line)
+		if m == nil {
+			smokeRuns++ // no selector: every test runs, the smoke tests among them
+			continue
+		}
+		selector := strings.Trim(m[1], `'"`)
+		if !strings.Contains(selector, "TestSmoke") {
+			continue // another suite's run
+		}
+		if selector != "^"+smokeTestPrefix {
+			problems = append(problems, path+":"+strconv.Itoa(i+1)+" selects -run "+m[1]+", but the smoke "+
+				"guard counts every "+smokeTestPrefix+" function as run. A narrower selector leaves probes the "+
+				"guard credits unexecuted; select '^"+smokeTestPrefix+"'")
+			continue
+		}
+		smokeRuns++
+	}
+	if smokeRuns == 0 {
+		problems = append(problems, path+" has no `go test -tags=integration` run that reaches every "+
+			smokeTestPrefix+" function, so the smoke run the guard reads for is not wired here")
+	}
+	return problems
 }
 
 // --- what the smoke tests call ------------------------------------------------
@@ -277,6 +308,21 @@ func smokeCallsIn(file *ast.File) (map[string]string, []string) {
 				delete(clients, name)
 			}
 		}
+		// A skip anywhere in the function -- in its body or in a subtest's
+		// closure -- turns the calls after it into a green run that asserted
+		// nothing, while this guard still credits them.
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok && skipMethods[sel.Sel.Name] {
+				problems = append(problems, fn.Name.Name+" calls "+sel.Sel.Name+"; a smoke test that skips "+
+					"itself is a green run that probed nothing after the skip, and the guard would still credit "+
+					"those calls. Fail instead -- newSmokeClient is the one place the smoke run may skip")
+			}
+			return true
+		})
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			if _, ok := n.(*ast.FuncLit); ok {
 				return false
@@ -306,6 +352,9 @@ func smokeCallsIn(file *ast.File) (map[string]string, []string) {
 	}
 	return calls, problems
 }
+
+// skipMethods are testing.TB's ways to end a test as skipped.
+var skipMethods = map[string]bool{"Skip": true, "Skipf": true, "SkipNow": true}
 
 // smokeClients returns the names a smoke test binds to a client it built:
 // `client := newSmokeClient(t)`, or `client, err := octonomy.New(…)`. Only
@@ -467,9 +516,17 @@ func decodedTypesIn(fn *ast.FuncDecl, index funcIndex, types typeIndex, seen map
 		// doData's own body decodes into an interface{} it was handed, and
 		// following it would say nothing while looking like it had.
 		if sel := transportSelector(call.Fun); sel != nil {
-			if row, _, why := destination(sel.Sel.Name, call, fn, types); why == "" {
+			if row, _, why := destination(sel, call, fn, types); why == "" {
 				out[row] = true
 			}
+			return true
+		}
+		// A local binding shadows the package-level function of the same name:
+		// after `fetch := func(…) error { … }`, a call to fetch runs the closure,
+		// and following the name into the package's fetch would credit the method
+		// with a type it never decodes. Such a call is not followed, so the method
+		// produces nothing through it -- the fail-closed direction.
+		if ident, ok := unparen(call.Fun).(*ast.Ident); ok && len(declarationsOf(ident.Name, fn)) > 0 {
 			return true
 		}
 		if callee := resolveCallee(call.Fun, recv, recvType, index); callee != nil {
@@ -588,6 +645,30 @@ func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ct
 			problems: 1,
 		},
 		{
+			// main's walk fails an entry that skips; with no walk here, the
+			// guard refuses the skip itself, or the calls after it stay credited
+			// while the run is green.
+			name:     "a smoke test that skips itself is refused",
+			src:      `func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); t.Skip("later"); client.Tags.Get(ctx, id) }`,
+			want:     []string{"Tags.Get"},
+			problems: 1,
+		},
+		{
+			name: "so is a skip inside a subtest",
+			src: `func TestSmoke_A(t *testing.T) {
+				client := newSmokeClient(t)
+				t.Run("x", func(t *testing.T) { t.SkipNow() })
+				client.Tags.Get(ctx, id)
+			}`,
+			want:     []string{"Tags.Get"},
+			problems: 1,
+		},
+		{
+			name: "a skip outside the smoke functions is newSmokeClient's business",
+			src:  `func helper(t *testing.T) { t.Skipf("no harness") }` + "\n" + `func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ctx, id) }`,
+			want: []string{"Tags.Get"},
+		},
+		{
 			name:     "a file that does not import the SDK is refused",
 			full:     `package octonomy_test` + "\n" + `func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ctx, id) }`,
 			problems: 1,
@@ -691,6 +772,35 @@ func TestDecodedTypesResolvesWhatAMethodReallyDecodes(t *testing.T) {
 			}`,
 		},
 		{
+			name: "an invoked method expression credits nothing", method: "TagService.Create", want: nil,
+			src: `func (s *TagService) Create(ctx context.Context) error {
+				var request Tag
+				var out Widget
+				return (*Client).doData(s.client, ctx, http.MethodPost, "/w", nil, &request, &out)
+			}`,
+		},
+		{
+			// Go calls the local closure, not the package helper of that name,
+			// and following the name credited the method with the helper's type.
+			name: "a local binding shadowing a package helper is not followed", method: "TagService.Probe", want: nil,
+			src: `func fetch(ctx context.Context, c *Client) error {
+				var out Tag
+				return c.doData(ctx, http.MethodGet, "/tags/1", nil, nil, &out)
+			}
+			func (s *TagService) Probe(ctx context.Context) error {
+				fetch := func(context.Context, *Client) error { return nil }
+				return fetch(ctx, s.client)
+			}`,
+		},
+		{
+			name: "the package helper itself is still followed", method: "TagService.Get", want: []string{"Tag"},
+			src: `func fetch(ctx context.Context, c *Client) error {
+				var out Tag
+				return c.doData(ctx, http.MethodGet, "/tags/1", nil, nil, &out)
+			}
+			func (s *TagService) Get(ctx context.Context) error { return fetch(ctx, s.client) }`,
+		},
+		{
 			// A rebound receiver makes every `s.client.…` in the body ambiguous,
 			// so the method resolves to nothing rather than to whatever the name
 			// now holds.
@@ -776,5 +886,32 @@ func (s *AliasService) decode(ctx context.Context) (*TagAlias, error) {
 				t.Errorf("producers[%s] includes %s, which no caller can reach", typ, m)
 			}
 		}
+	}
+}
+
+// The runner check is only as good as its reader: a comment or another suite's
+// run must not count against it, and a run that reaches every smoke test must
+// count whether it names the prefix or selects nothing at all.
+func TestSmokeRunProblemsReadsTheRunnersLikeTheShellDoes(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		src      string
+		problems int
+	}{
+		{"the prefix", "\tgo test -tags=integration -run '^TestSmoke_' -v ./...", 0},
+		{"a double-quoted prefix", `run: go test -tags=integration -run "^TestSmoke_" ./...`, 0},
+		{"no selector runs everything", "\tgo test -tags=integration -race -count=1 -v ./...", 0},
+		{"another suite beside the smoke run", "go test -tags=integration -run '^TestSmoke_' ./...\ngo test -tags=integration -run '^TestIntegration_' ./...", 0},
+		{"a comment is not a run", "#   `go test -tags=integration` is the acceptance criterion\ngo test -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"one smoke function only", "go test -tags=integration -count=1 -run '^TestSmoke_RealServer$$' -v ./...", 2},
+		{"an unanchored name", "run: go test -tags=integration -run TestSmoke_RealServer -v ./...", 2},
+		{"only another suite", "go test -tags=integration -run '^TestIntegration_' ./...", 1},
+		{"no integration run at all", "go test -race ./...", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := smokeRunProblems("fixture", tc.src); len(got) != tc.problems {
+				t.Errorf("problems = %d, want %d: %v", len(got), tc.problems, got)
+			}
+		})
 	}
 }

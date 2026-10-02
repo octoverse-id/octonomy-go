@@ -1,6 +1,7 @@
 package octonomy
 
-// Ported from main's types_test.go at 5e40964 for #95. Of its seven tests, this
+// Ported from main's types_test.go at 5e40964 for #95, and every mention of main
+// here means main at that commit. Of its seven tests, this
 // is the one that applies to this line as it stands; docs/compat-test-disposition.md
 // has the other six's verdicts -- five wait on a port of DecodeMetadata, and
 // TestUpdateMetadata_OmitClearAndReplaceOnEveryPatchBody is covered by
