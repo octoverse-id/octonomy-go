@@ -101,8 +101,12 @@ var smokeProbeExclusions = map[string]string{}
 //     t.Fatal(…) }` read from OCTONOMY_SMOKE_REQUIRED -- with
 //     TestSmokeJobRequiresTheSmokeRun holding CI to setting that variable.
 //   - It binds a type to SOME method that decodes it, not to every one. A Tag
-//     probed through Tags.List says nothing about Tags.Get, and both send the
-//     same envelope only because this SDK routes them through the same helper.
+//     probed through Tags.Get says nothing about Tags.Update, though both decode
+//     a Tag through doData. A LIST ENVELOPE is a type of its own on this line --
+//     TagList, not main's List[Tag] -- decoded through doList rather than
+//     doData, so each one is in the required set too and needs a list method
+//     probed: a Tag probed through Tags.Get alone says nothing about the
+//     {data, pagination} envelope Tags.List decodes.
 //   - It counts a call only on a client its own TestSmoke_ function built --
 //     from newSmokeClient, or from the SDK's New -- and only outside function
 //     literals, even a deferred one that does run: a closure's body is not
@@ -120,7 +124,10 @@ func TestEveryResponseTypeHasASmokeProbe(t *testing.T) {
 
 	// The required set, derived exactly as TestEveryResponseTypeCanRefuseAnEmptyDecode
 	// derives it.
-	required, _, _ := responseTypes(files)
+	required, lists, _ := responseTypes(files)
+	for list, row := range lists {
+		required[list] = "the list envelope of " + row
+	}
 
 	// And who produces each one, spelled the way a smoke test calls it
 	// ("Tags.Get"): a service reachable from no Client field is not part of the
@@ -192,9 +199,9 @@ func TestEveryResponseTypeHasASmokeProbe(t *testing.T) {
 	// satisfy every loop above by finding nothing at all. It is the count
 	// TestEveryResponseTypeCanRefuseAnEmptyDecode holds, because it is the same
 	// set.
-	if len(required) < knownResponseTypes {
-		t.Errorf("found %d response type(s), want at least the %d that exist -- the guard is not "+
-			"reading the source. Found: %v", len(required), knownResponseTypes, stringKeys(required))
+	if want := knownResponseTypes + knownListTypes; len(required) < want {
+		t.Errorf("found %d response type(s) and list envelope(s), want at least the %d that exist -- the "+
+			"guard is not reading the source. Found: %v", len(required), want, stringKeys(required))
 	}
 }
 
@@ -388,9 +395,12 @@ func smokeRuns(path, src string) ([]int, []string) {
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if strings.Contains(ll.text, "GOFLAGS") && (strings.Contains(ll.text, "run") || strings.Contains(ll.text, "skip")) {
-			problems = append(problems, where+" sets GOFLAGS with a test selector, which applies to every "+
-				"go test the smoke runs make; the guard cannot see what it selects")
+		if strings.Contains(ll.text, "GOFLAGS") {
+			// Any GOFLAGS, not only one naming a selector: -count=0 and -list
+			// run nothing too, and the flags apply to every go test the runner
+			// makes. Put a flag on the command, where the allow-list reads it.
+			problems = append(problems, where+" sets or reads GOFLAGS, whose flags apply to every go test the "+
+				"runner makes and are not read by this guard; put the flag on the command instead")
 		}
 		commands := shellCommands(yamlRunKey.ReplaceAllString(ll.text, ""))
 		// make reads its recipe-line prefixes (@ silent, - ignore errors, +
@@ -400,6 +410,10 @@ func smokeRuns(path, src string) ([]int, []string) {
 		lineIgnored := len(commands) > 0 && strings.Contains(makePrefix(commands[0].words[0]), "-")
 		for _, c := range commands {
 			depth = compoundDepth(c.words, depth)
+			if why := requiredOverride(c.words); why != "" {
+				problems = append(problems, where+" "+why+", so newSmokeClient's one skip is not the failure CI "+
+					"needs it to be")
+			}
 			run, ok := goTestRun(c.words)
 			if !ok || !run.integration {
 				continue
@@ -447,6 +461,9 @@ func smokeRuns(path, src string) ([]int, []string) {
 				why := executionProblem(c, depth)
 				if why == "" && lineIgnored {
 					why = "is on a make recipe line prefixed with -, whose failure make ignores"
+				}
+				if why == "" && !run.countSet {
+					why = "passes no -count, so go test may answer it from its result cache without contacting the server"
 				}
 				if why != "" {
 					if len(run.selectors) == 1 {
@@ -538,8 +555,11 @@ func executionProblem(c shellCommand, depth int) string {
 		return "runs inside a shell if/while/for/case, so whether it runs depends on a condition"
 	case c.before == "||":
 		return "runs only when the command before it fails"
-	case c.after == "||" || c.after == ";" || c.after == "|" || c.after == "&":
-		return "is followed by `" + c.after + "`, which hands the line another command's exit status"
+	case c.after != "":
+		// Not even &&: `go test … && echo done || true` masks the failure
+		// through the operator after the next one, and a smoke run has no
+		// reason to be anything but the last command on its line.
+		return "is followed by `" + c.after + "`, so a later command can decide the line's exit status"
 	}
 	for _, w := range c.words {
 		bare := strings.TrimLeft(w, "@+")
@@ -559,6 +579,25 @@ func executionProblem(c shellCommand, depth int) string {
 }
 
 var envAssignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+
+// requiredOverride reports a shell command that sets OCTONOMY_SMOKE_REQUIRED to
+// anything but "1", or unsets it -- as a command-local assignment before go
+// test, an export, or a bare assignment -- or "".
+func requiredOverride(words []string) string {
+	for i, w := range words {
+		if (w == "unset" || (w == "-u" && i > 0 && words[i-1] == "env")) && i+1 < len(words) {
+			for _, name := range words[i+1:] {
+				if name == smokeRequiredEnv {
+					return "unsets " + smokeRequiredEnv
+				}
+			}
+		}
+		if strings.HasPrefix(w, smokeRequiredEnv+"=") && strings.TrimPrefix(w, smokeRequiredEnv+"=") != "1" {
+			return "sets " + w
+		}
+	}
+	return ""
+}
 
 // makePrefix returns the leading make recipe prefixes of a line's first word.
 func makePrefix(word string) string {
@@ -683,6 +722,11 @@ type goTestCommand struct {
 	unknown     []string
 	stopsRun    []string
 	badPackages []string
+	// countSet says the run passes -count, which is what keeps go test from
+	// answering it out of its result cache: without it, a rerun against an
+	// unchanged binary and environment reports the last result without
+	// contacting the server at all.
+	countSet bool
 }
 
 // runFlags are the go test flags known to leave WHICH tests run alone, mapped
@@ -764,6 +808,7 @@ func goTestRun(words []string) (goTestCommand, bool) {
 			cmd.skip = true
 			takeValue()
 		case name == "count":
+			cmd.countSet = true
 			if n, err := strconv.Atoi(takeValue()); err != nil || n < 1 {
 				cmd.stopsRun = append(cmd.stopsRun, w)
 			}
@@ -814,11 +859,11 @@ func smokeCallsIn(file *ast.File) (map[string]string, []string) {
 	if sdk == "" {
 		return calls, []string{"does not import " + sdkImportPath + ", so no call in it can be on a client"}
 	}
-	if why := checkSmokeConstructor(file, sdk); why != "" {
+	helpers := readSmokeHelpers(file)
+	if why := checkSmokeConstructor(file, sdk, helpers); why != "" {
 		problems = append(problems, why)
 	}
 
-	helpers := readSmokeHelpers(file)
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Recv != nil || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, smokeTestPrefix) {
@@ -1042,7 +1087,7 @@ func isClientConstructor(expr ast.Expr, sdk string) bool {
 // result count, and so would one declared somewhere this guard does not read --
 // another file, or a package-level func variable -- so a smoke file that calls
 // newSmokeClient without declaring it as a function is refused too.
-func checkSmokeConstructor(file *ast.File, sdk string) string {
+func checkSmokeConstructor(file *ast.File, sdk string, helpers smokeHelpers) string {
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Recv != nil || fn.Name.Name != "newSmokeClient" {
@@ -1052,7 +1097,7 @@ func checkSmokeConstructor(file *ast.File, sdk string) string {
 			return "newSmokeClient returns " + strings.Join(got, ", ") + ", not *" + sdk +
 				".Client, so a call on its result is not a call on a client"
 		}
-		return checkSmokeGate(fn)
+		return checkSmokeGate(fn, helpers)
 	}
 	called := false
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -1089,7 +1134,16 @@ const smokeRequiredEnv = "OCTONOMY_SMOKE_REQUIRED"
 // its credentials check from t.Fatal into t.Skip would have skipped every smoke
 // test, required or not, with every guard green. A helper that never skips
 // needs no gate.
-func checkSmokeGate(fn *ast.FuncDecl) string {
+func checkSmokeGate(fn *ast.FuncDecl, helpers smokeHelpers) string {
+	// The gate governs newSmokeClient's own Skip call. Any other way out --
+	// a helper that skips, or its *testing.T handed to something the guard
+	// cannot read -- bypasses the gate exactly as it would in a smoke test.
+	for _, why := range skipsIn(fn, helpers) {
+		if strings.HasPrefix(why, "calls ") && skipMethods[strings.TrimPrefix(why, "calls ")] {
+			continue // its own Skip, which the gate below must govern
+		}
+		return "newSmokeClient " + why + ", which skips past the " + smokeRequiredEnv + " gate"
+	}
 	var skips []*ast.CallExpr
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
@@ -1286,16 +1340,16 @@ func workflowStepProblems(src string, line int) []string {
 		problems = append(problems, jobWhere+" sets a default working-directory, so the smoke step may run "+
 			"from another directory than the root package")
 	}
-	required := regexp.MustCompile(`^\s*` + smokeRequiredEnv + `:\s*["']?1["']?\s*$`)
-	set := false
-	for _, keys := range []map[string]int{stepKeys, jobKeys} {
-		if at, ok := keys["env"]; ok && blockMatches(lines, at, required) {
-			set = true
-		}
-	}
+	// A step's env overrides its job's, so the value that reaches the run is
+	// the step's when the step sets one, and the job's otherwise. A job-level
+	// "1" under a step-level "0" is a run with the gate off.
+	value, set := envValue(lines, stepKeys, smokeRequiredEnv)
 	if !set {
-		problems = append(problems, where+" sets "+smokeRequiredEnv+": \"1\" in neither its own env nor its "+
-			"job's, so newSmokeClient's one skip is a green job there rather than a failure")
+		value, set = envValue(lines, jobKeys, smokeRequiredEnv)
+	}
+	if !set || value != "1" {
+		problems = append(problems, where+" does not run with "+smokeRequiredEnv+"=1 (a step's env, else its "+
+			"job's), so newSmokeClient's one skip is a green job there rather than a failure")
 	}
 	sort.Strings(problems)
 	return problems
@@ -1352,6 +1406,28 @@ func mappingKeys(lines []string, start, indent int) map[string]int {
 		}
 	}
 	return keys
+}
+
+// envValue returns the value a mapping's env block gives name, unquoted.
+func envValue(lines []string, keys map[string]int, name string) (string, bool) {
+	at, ok := keys["env"]
+	if !ok {
+		return "", false
+	}
+	entry := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(name) + `:\s*(.*?)\s*$`)
+	indent := indentOf(lines[at])
+	for j := at + 1; j < len(lines); j++ {
+		if isBlankOrComment(lines[j]) {
+			continue
+		}
+		if indentOf(lines[j]) <= indent {
+			break
+		}
+		if m := entry.FindStringSubmatch(lines[j]); m != nil {
+			return strings.Trim(m[1], `"'`), true
+		}
+	}
+	return "", false
 }
 
 // blockMatches reports whether a line nested under the key at line at matches re.
@@ -1473,8 +1549,11 @@ func decodedTypesIn(fn *ast.FuncDecl, index funcIndex, types typeIndex, seen map
 		// doData's own body decodes into an interface{} it was handed, and
 		// following it would say nothing while looking like it had.
 		if sel := transportSelector(call.Fun); sel != nil {
-			if row, _, why := destination(sel, call, fn, types); why == "" {
+			if row, list, why := destination(sel, call, fn, types); why == "" {
 				out[row] = true
+				if list != "" {
+					out[list] = true // the envelope is a decoded shape of its own
+				}
 			}
 			return true
 		}
@@ -1750,6 +1829,30 @@ func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ct
 			want: []string{"Tags.Get"}, problems: 1,
 		},
 		{
+			// The gate governs newSmokeClient's own Skip. A skip moved into a
+			// helper, or its T handed on, goes around it.
+			name: "newSmokeClient skipping through a helper is refused",
+			full: strings.Replace(smokeGateFixture(`if baseURL == "" {
+				if required {
+					t.Fatal("required")
+				}
+				t.Skip("no harness")
+			}
+			requireToken(t, token)`), "func TestSmoke_A", "func requireToken(t *testing.T, token string) { if token == \"\" { t.Skip(\"no token\") } }\nfunc TestSmoke_A", 1),
+			want: []string{"Tags.Get"}, problems: 1,
+		},
+		{
+			name: "newSmokeClient handing its T to something unread is refused",
+			full: smokeGateFixture(`if baseURL == "" {
+				if required {
+					t.Fatal("required")
+				}
+				t.Skip("no harness")
+			}
+			harness.Require(t)`),
+			want: []string{"Tags.Get"}, problems: 1,
+		},
+		{
 			name:     "a file that does not import the SDK is refused",
 			full:     `package octonomy_test` + "\n" + `func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ctx, id) }`,
 			problems: 1,
@@ -1797,7 +1900,7 @@ func TestDecodedTypesResolvesWhatAMethodReallyDecodes(t *testing.T) {
 			}`,
 		},
 		{
-			name: "a list names its row", method: "TagService.List", want: []string{"Tag"},
+			name: "a list names its row and its envelope", method: "TagService.List", want: []string{"Tag", "TagList"},
 			src: `func (s *TagService) List(ctx context.Context) (*TagList, error) {
 				var out TagList
 				err := s.client.doList(ctx, http.MethodGet, "/tags", nil, &out)
@@ -1991,71 +2094,82 @@ func TestSmokeRunProblemsReadsTheRunnersLikeTheShellDoes(t *testing.T) {
 		src      string
 		problems int
 	}{
-		{"the prefix", "\tgo test -tags=integration -run '^TestSmoke_' -v ./...", 0},
-		{"a double-quoted prefix", `run: go test -tags=integration -run "^TestSmoke_" ./...`, 0},
-		{"no selector runs everything", "\tgo test -tags=integration -race -count=1 -v ./...", 0},
-		{"another suite beside the smoke run", "go test -tags=integration -run '^TestSmoke_' ./...\ngo test -tags=integration -run '^TestIntegration_' ./...", 0},
-		{"a comment is not a run", "#   `go test -tags=integration` is the acceptance criterion\ngo test -tags=integration -run '^TestSmoke_' ./...", 0},
-		{"one smoke function only", "go test -tags=integration -count=1 -run '^TestSmoke_RealServer$$' -v ./...", 2},
-		{"the prefix minus a skipped function", "go test -tags=integration -run '^TestSmoke_' -skip 'TestSmoke_ResourceGroups' ./...", 2},
-		{"a -skip= spelling", "go test -tags=integration -skip=TestSmoke_A ./...", 2},
-		{"an unanchored name", "run: go test -tags=integration -run TestSmoke_RealServer -v ./...", 2},
-		{"only another suite", "go test -tags=integration -run '^TestIntegration_' ./...", 1},
+		{"the prefix", "\tgo test -count=1 -tags=integration -run '^TestSmoke_' -v ./...", 0},
+		{"a double-quoted prefix", `run: go test -count=1 -tags=integration -run "^TestSmoke_" ./...`, 0},
+		{"no selector runs everything", "\tgo test -count=1 -tags=integration -race -count=1 -v ./...", 0},
+		{"another suite beside the smoke run", "go test -count=1 -tags=integration -run '^TestSmoke_' ./...\ngo test -count=1 -tags=integration -run '^TestIntegration_' ./...", 0},
+		{"a comment is not a run", "#   `go test -count=1 -tags=integration` is the acceptance criterion\ngo test -count=1 -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"one smoke function only", "go test -count=1 -tags=integration -count=1 -run '^TestSmoke_RealServer$$' -v ./...", 2},
+		{"the prefix minus a skipped function", "go test -count=1 -tags=integration -run '^TestSmoke_' -skip 'TestSmoke_ResourceGroups' ./...", 2},
+		{"a -skip= spelling", "go test -count=1 -tags=integration -skip=TestSmoke_A ./...", 2},
+		{"an unanchored name", "run: go test -count=1 -tags=integration -run TestSmoke_RealServer -v ./...", 2},
+		{"only another suite", "go test -count=1 -tags=integration -run '^TestIntegration_' ./...", 1},
 		// The shapes a line reader got wrong: a command is what the shell runs.
-		{"a backslash continuation narrowing the run", "go test -tags=integration \\\n  -run '^TestSmoke_RealServer$' ./...", 2},
-		{"the same inside a YAML block", "run: |\n  go test -tags=integration \\\n    -run '^TestSmoke_RealServer$' ./...", 2},
-		{"this repository's Makefile recipe", "\t@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \\\n\tgo test -tags=integration -run '^TestSmoke_' -v ./...", 0},
-		{"a chained command", "make dev-server && go test -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"a backslash continuation narrowing the run", "go test -count=1 -tags=integration \\\n  -run '^TestSmoke_RealServer$' ./...", 2},
+		{"the same inside a YAML block", "run: |\n  go test -count=1 -tags=integration \\\n    -run '^TestSmoke_RealServer$' ./...", 2},
+		{"this repository's Makefile recipe", "\t@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \\\n\tgo test -count=1 -tags=integration -run '^TestSmoke_' -v ./...", 0},
+		{"a chained command", "make dev-server && go test -count=1 -tags=integration -run '^TestSmoke_' ./...", 0},
 		// A run counts only if it runs and its failure fails the runner.
-		{"a failure masked by || true", "make dev-server && go test -tags=integration -run '^TestSmoke_' ./... || true", 2},
-		{"a run behind ||", `test -n "$OCTONOMY_TEST_BASE_URL" || go test -tags=integration -run '^TestSmoke_' ./...`, 2},
-		{"a run followed by another command", "go test -tags=integration -run '^TestSmoke_' ./...; echo done", 2},
-		{"a run piped on", "go test -tags=integration -run '^TestSmoke_' -v ./... | tee smoke.log", 2},
-		{"a run backgrounded", "go test -tags=integration -run '^TestSmoke_' ./... &", 2},
-		{"a run inside a shell if", "if [ -n \"$CI\" ]; then go test -tags=integration -run '^TestSmoke_' ./...; fi", 2},
-		{"the same across a YAML block", "run: |\n  if [ -n \"$CI\" ]; then\n    go test -tags=integration -run '^TestSmoke_' ./...\n  fi", 2},
-		{"a negated run", "! go test -tags=integration -run '^TestSmoke_' ./...", 2},
-		{"a make line whose failure is ignored", "\t-go test -tags=integration -run '^TestSmoke_' ./...", 2},
-		{"the prefix on the line the run continues", "\t-@if [ -f .env ]; then . ./.env; fi; \\\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 2},
-		{"silent and always-run prefixes are fine", "\t+@if [ -f .env ]; then . ./.env; fi; \\\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 0},
-		{"an env assignment and time are fine", "\tOCTONOMY_SMOKE_REQUIRED=1 time go test -tags=integration -run '^TestSmoke_' ./...", 0},
-		{"a masked catch-all is passed over, not refused", "go test -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?\ngo test -tags=integration -run '^TestSmoke_' ./...", 0},
-		{"but it does not count as the smoke run", "go test -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?", 1},
-		{"a chained narrowing", "true; go test -tags=integration -run TestSmoke_RealServer ./...", 2},
-		{"a flag on the next line, as a folded YAML scalar joins it", "run: >\n  go test -tags=integration\n  -run '^TestSmoke_RealServer$' ./...", 2},
+		{"a failure masked by || true", "make dev-server && go test -count=1 -tags=integration -run '^TestSmoke_' ./... || true", 2},
+		{"a run behind ||", `test -n "$OCTONOMY_TEST_BASE_URL" || go test -count=1 -tags=integration -run '^TestSmoke_' ./...`, 2},
+		{"a run followed by another command", "go test -count=1 -tags=integration -run '^TestSmoke_' ./...; echo done", 2},
+		{"a run piped on", "go test -count=1 -tags=integration -run '^TestSmoke_' -v ./... | tee smoke.log", 2},
+		{"a run backgrounded", "go test -count=1 -tags=integration -run '^TestSmoke_' ./... &", 2},
+		{"a run inside a shell if", "if [ -n \"$CI\" ]; then go test -count=1 -tags=integration -run '^TestSmoke_' ./...; fi", 2},
+		{"the same across a YAML block", "run: |\n  if [ -n \"$CI\" ]; then\n    go test -count=1 -tags=integration -run '^TestSmoke_' ./...\n  fi", 2},
+		{"a negated run", "! go test -count=1 -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"a make line whose failure is ignored", "\t-go test -count=1 -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"the prefix on the line the run continues", "\t-@if [ -f .env ]; then . ./.env; fi; \\\n\tgo test -count=1 -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"silent and always-run prefixes are fine", "\t+@if [ -f .env ]; then . ./.env; fi; \\\n\tgo test -count=1 -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"an env assignment and time are fine", "\tOCTONOMY_SMOKE_REQUIRED=1 time go test -count=1 -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"a masked catch-all is passed over, not refused", "go test -count=1 -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?\ngo test -count=1 -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"but it does not count as the smoke run", "go test -count=1 -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?", 1},
+		{"a chained narrowing", "true; go test -count=1 -tags=integration -run TestSmoke_RealServer ./...", 2},
+		{"a flag on the next line, as a folded YAML scalar joins it", "run: >\n  go test -count=1 -tags=integration\n  -run '^TestSmoke_RealServer$' ./...", 2},
 		// YAML folds these into one line before the shell sees them.
-		{"a folded block masking the run", "      run: >\n        go test -tags=integration -run '^TestSmoke_' -v ./...\n        || true", 2},
-		{"a folded block, however innocent", "      run: >-\n        go test -tags=integration -run '^TestSmoke_' -v ./...", 2},
-		{"a plain value continued onto the next line", "      run: go test -tags=integration -run '^TestSmoke_' -v ./...\n        || true", 2},
-		{"a literal block is read line for line", "      run: |\n        go test -tags=integration -run '^TestSmoke_' -v ./...\n      - name: next", 0},
-		{"a single-line value followed by the next key", "        run: go test -tags=integration -run '^TestSmoke_' -v ./...\n      - name: Capture container logs\n        if: failure()", 0},
-		{"a YAML list item is not a flag", "run: go test -tags=integration -run '^TestSmoke_' ./...\n- name: logs", 0},
-		{"two -run flags", "go test -tags=integration -run '^TestSmoke_' -run TestSmoke_RealServer ./...", 2},
-		{"a selector in a make variable", "go test -tags=integration -run $(SMOKE_RUN) ./...", 2},
-		{"a selector in a shell variable", `go test -tags=integration -run "${SMOKE_RUN}" ./...`, 2},
-		{"a make-escaped dollar is not a variable", "go test -tags=integration -run '^TestSmoke_$$' ./...", 2},
-		{"GOFLAGS carrying a selector", "GOFLAGS=-run=TestSmoke_RealServer\ngo test -tags=integration -run '^TestSmoke_' ./...", 1},
-		{"the tags flag spelled with a space", "go test -tags integration -run '^TestSmoke_' ./...", 0},
-		{"two dashes and an equals sign", "go test --tags=integration --run=^TestSmoke_ ./...", 0},
-		{"the test. spelling narrowing the run", "go test -tags=integration -test.run=TestSmoke_RealServer ./...", 2},
+		{"a folded block masking the run", "      run: >\n        go test -count=1 -tags=integration -run '^TestSmoke_' -v ./...\n        || true", 2},
+		{"a folded block, however innocent", "      run: >-\n        go test -count=1 -tags=integration -run '^TestSmoke_' -v ./...", 2},
+		{"a plain value continued onto the next line", "      run: go test -count=1 -tags=integration -run '^TestSmoke_' -v ./...\n        || true", 2},
+		{"a literal block is read line for line", "      run: |\n        go test -count=1 -tags=integration -run '^TestSmoke_' -v ./...\n      - name: next", 0},
+		{"a single-line value followed by the next key", "        run: go test -count=1 -tags=integration -run '^TestSmoke_' -v ./...\n      - name: Capture container logs\n        if: failure()", 0},
+		{"a YAML list item is not a flag", "run: go test -count=1 -tags=integration -run '^TestSmoke_' ./...\n- name: logs", 0},
+		{"two -run flags", "go test -count=1 -tags=integration -run '^TestSmoke_' -run TestSmoke_RealServer ./...", 2},
+		{"a selector in a make variable", "go test -count=1 -tags=integration -run $(SMOKE_RUN) ./...", 2},
+		{"a selector in a shell variable", `go test -count=1 -tags=integration -run "${SMOKE_RUN}" ./...`, 2},
+		{"a make-escaped dollar is not a variable", "go test -count=1 -tags=integration -run '^TestSmoke_$$' ./...", 2},
+		{"GOFLAGS carrying a selector", "GOFLAGS=-run=TestSmoke_RealServer\ngo test -count=1 -tags=integration -run '^TestSmoke_' ./...", 1},
+		{"the tags flag spelled with a space", "go test -count=1 -tags integration -run '^TestSmoke_' ./...", 0},
+		{"two dashes and an equals sign", "go test --count=1 --tags=integration --run=^TestSmoke_ ./...", 0},
+		{"the test. spelling narrowing the run", "go test -count=1 -tags=integration -test.run=TestSmoke_RealServer ./...", 2},
 		// Flags that run nothing and exit 0. An allow-list refuses them, and
 		// every flag nobody has vouched for, rather than waiting to learn each.
-		{"-list runs no test", "go test -tags=integration -run '^TestSmoke_' -list '^TestSmoke_' -v ./...", 2},
+		{"-list runs no test", "go test -count=1 -tags=integration -run '^TestSmoke_' -list '^TestSmoke_' -v ./...", 2},
 		{"-c only compiles", "go test -c -tags=integration -run '^TestSmoke_' ./...", 2},
 		{"-n only prints", "go test -n -tags=integration -run '^TestSmoke_' ./...", 2},
 		{"-exec can run nothing", "go test -exec true -tags=integration -run '^TestSmoke_' ./...", 2},
 		{"-count=0 runs nothing", "go test -count=0 -tags=integration -run '^TestSmoke_' ./...", 2},
-		{"-args hands the rest to the binary", "go test -tags=integration -run '^TestSmoke_' ./... -args -test.run=X", 2},
+		{"-args hands the rest to the binary", "go test -count=1 -tags=integration -run '^TestSmoke_' ./... -args -test.run=X", 2},
 		{"-short is not vouched for", "go test -short -tags=integration -run '^TestSmoke_' ./...", 2},
 		{"-count=1 is ordinary", "go test -tags=integration -count=1 -race -timeout 10m -run '^TestSmoke_' -v ./...", 0},
-		{"a boolean turned off", "go test -tags=integration -v=false -failfast=true -run '^TestSmoke_' ./...", 0},
-		{"a package that is not the root", "go test -tags=integration -run '^TestSmoke_' ./examples/...", 2},
-		{"the module path", "go test -tags=integration -run '^TestSmoke_' github.com/octoverse-id/octonomy-go/...", 0},
-		{"no package means the root", "go test -tags=integration -run '^TestSmoke_'", 0},
-		{"a redirection is not an argument", `go test -tags=integration -run '^TestSmoke_' -v ./... >"$log" 2>&1`, 0},
-		{"a redirection with a space", `go test -tags=integration -run '^TestSmoke_' ./... > "$log"`, 0},
-		{"a make recipe prefix", "\t@go test -tags=integration -run '^TestSmoke_' ./...", 0},
-		{"a tag list", "go test -tags=foo,integration -run '^TestSmoke_' ./...", 0},
+		// A run with no -count may be answered from go test's result cache.
+		{"no -count", "go test -tags=integration -run '^TestSmoke_' -v ./...", 2},
+		{"no -count on a catch-all is passed over, and does not count", "go test -tags=integration -race -v ./...", 1},
+		{"a boolean turned off", "go test -count=1 -tags=integration -v=false -failfast=true -run '^TestSmoke_' ./...", 0},
+		{"a package that is not the root", "go test -count=1 -tags=integration -run '^TestSmoke_' ./examples/...", 2},
+		{"the module path", "go test -count=1 -tags=integration -run '^TestSmoke_' github.com/octoverse-id/octonomy-go/...", 0},
+		{"no package means the root", "go test -count=1 -tags=integration -run '^TestSmoke_'", 0},
+		{"a redirection is not an argument", `go test -count=1 -tags=integration -run '^TestSmoke_' -v ./... >"$log" 2>&1`, 0},
+		{"a redirection with a space", `go test -count=1 -tags=integration -run '^TestSmoke_' ./... > "$log"`, 0},
+		{"a make recipe prefix", "\t@go test -count=1 -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"a tag list", "go test -count=1 -tags=foo,integration -run '^TestSmoke_' ./...", 0},
+		{"a later operator masking an earlier &&", "go test -count=1 -tags=integration -run '^TestSmoke_' ./... && echo done || true", 2},
+		{"even a plain && after the run", "go test -count=1 -tags=integration -run '^TestSmoke_' ./... && echo done", 2},
+		{"the required gate turned off for the run", "OCTONOMY_SMOKE_REQUIRED=0 go test -count=1 -tags=integration -run '^TestSmoke_' ./...", 1},
+		{"the required gate exported off", "export OCTONOMY_SMOKE_REQUIRED=\nmake smoke", 2},
+		{"the required gate unset", "unset OCTONOMY_SMOKE_REQUIRED\ngo test -count=1 -tags=integration -run '^TestSmoke_' ./...", 1},
+		{"the required gate turned on is fine", "OCTONOMY_SMOKE_REQUIRED=1 go test -count=1 -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"GOFLAGS with -count=0", "GOFLAGS=-count=0 go test -count=1 -tags=integration -run '^TestSmoke_' ./...", 1},
+		{"GOFLAGS set in a workflow env", "env:\n  GOFLAGS: -list=.\nrun: go test -count=1 -tags=integration -run '^TestSmoke_' ./...", 1},
 		{"no integration run at all", "go test -race ./...", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2130,7 +2244,7 @@ RUN
         run: make dev-server-logs
 `
 	const required = `OCTONOMY_SMOKE_REQUIRED: "1"`
-	const run = "        run: go test -tags=integration -run '^TestSmoke_' -v ./..."
+	const run = "        run: go test -tags=integration -count=1 -run '^TestSmoke_' -v ./..."
 	for _, tc := range []struct {
 		name, jobKeys, stepKeys, stepEnv, otherEnv, run string
 		problems                                        int
@@ -2147,7 +2261,10 @@ RUN
 		// variable. Set there and not here, it reaches nothing this step runs.
 		{name: "the variable set only on another job", stepEnv: "OTHER: x", otherEnv: required, problems: 1},
 		{name: "the variable set to 0", stepEnv: `OCTONOMY_SMOKE_REQUIRED: "0"`, problems: 1},
-		{name: "a block scalar", stepEnv: required, run: "        run: |\n          go test -tags=integration -run '^TestSmoke_' -v ./...", problems: 0},
+		// A step's env overrides its job's.
+		{name: "a step turning off the job's 1", jobKeys: "    env:\n      " + required + "\n", stepEnv: `OCTONOMY_SMOKE_REQUIRED: "0"`, problems: 1},
+		{name: "a step's 1 over the job's 0", jobKeys: "    env:\n      OCTONOMY_SMOKE_REQUIRED: \"0\"\n", stepEnv: required, problems: 0},
+		{name: "a block scalar", stepEnv: required, run: "        run: |\n          go test -tags=integration -count=1 -run '^TestSmoke_' -v ./...", problems: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := tc.run
@@ -2264,7 +2381,7 @@ var (
 // make smoke is the documented command, so the counted run has to be in that
 // target's recipe and not merely somewhere in the Makefile.
 func TestMakeTargetRunsBindsTheRunToTheSmokeRecipe(t *testing.T) {
-	const run = "\tgo test -tags=integration -run '^TestSmoke_' -v ./..."
+	const run = "\tgo test -tags=integration -count=1 -run '^TestSmoke_' -v ./..."
 	for _, tc := range []struct {
 		name, src string
 		ok        bool

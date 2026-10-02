@@ -44,7 +44,8 @@ Copy `tags.go` and `tags_test.go` as the template, then:
 4. Add table-driven `httptest` tests (assert method/path/headers/query/body server-side; assert decoded
    values client-side; cover the error envelope), and add the model to `identityModels()` and its list
    to `identityLists()` in `transport_test.go`.
-5. Call one of its methods from a `TestSmoke_` function in `integration_test.go`, and run it with
+5. Call a method that decodes it — and, if it has a list type, a list method — from a `TestSmoke_`
+   function in `integration_test.go`, and run it with
    `make dev-server && make smoke`. `TestEveryResponseTypeHasASmokeProbe` fails in a plain `make test`
    until a smoke test decodes the new type.
 6. Add a `## [Unreleased]` CHANGELOG entry and update [`api.md`](api.md).

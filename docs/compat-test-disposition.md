@@ -152,30 +152,35 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
 - **`smokeprobes_test.go`** keeps `main`'s guard — every response type is asserted against a real
   server — and binds it to this line's walk: a type is probed when a `TestSmoke_` function calls a
   method that decodes it, on a client that function built (`newSmokeClient`, or the SDK's `New`),
-  outside any closure. That is `main`'s checks 1 and 4 taken together; `main`'s separate stale-key
+  outside any closure. Each list envelope (`TagList`, …) is a type of its own here, decoded through
+  `doList` rather than `doData`, so it needs a list method probed as well — a guarantee `main`'s
+  row-only derivation does not give. That is `main`'s checks 1 and 4 taken together; `main`'s separate stale-key
   and wrong-key checks exist only because a registry has keys. A credited call is only worth
   something if the smoke run executes it, and with no registry walk to fail at runtime, the rest of
   the file checks that statically:
   - **No skip.** A smoke test that can skip is refused — a `Skip` call in it, a smoke-file helper it
     calls that can, or its `*testing.T` handed to anything the guard cannot read. The one skip allowed
     is `newSmokeClient`'s, and only as a single `Skip` straight after `if required { t.Fatal(…) }`,
-    with `required` read from `OCTONOMY_SMOKE_REQUIRED`.
+    with `required` read from `OCTONOMY_SMOKE_REQUIRED`; `newSmokeClient` itself is held to the same
+    no-helper, no-handed-on-T rule.
   - **The runners reach every `TestSmoke_` function** (`TestSmokeSelectorRunsEveryTestSmokeFunction`).
     The `smoke:` target's own recipe and the go1.13 CI job must each hold a `go test -tags=integration`
     run, read as shell commands, that selects `-run '^TestSmoke_'` or nothing, on the root package,
-    with no `-skip`, no selector in a variable or `GOFLAGS`, and no flag outside an allow-list —
-    `-list`, `-c`, `-n` and `-count=0` all run nothing and exit 0. And the run must execute, with a
-    failure that fails the runner: not behind `||` or inside a shell `if`, not followed by `|| true`,
-    `;` or a pipe, not on a make recipe line prefixed with `-` (its continuation included), and in a
+    with an explicit `-count` (so go test cannot answer it from its result cache), no `-skip`, no
+    selector in a variable, no `GOFLAGS` at all, and no flag outside an allow-list — `-list`, `-c`,
+    `-n` and `-count=0` all run nothing and exit 0. And the run must execute, with a failure that
+    fails the runner: not behind `||` or inside a shell `if`, the last command on its line, not on a
+    make recipe line prefixed with `-` (its continuation included), and in a
     workflow on one line or in a literal `run: |` block — YAML folds a `run: >` block, or a value
     continued onto the next line, into one command the reader would not see. The
     Makefile-wide settings that decide how a recipe runs are read as make reads them: `.IGNORE` for
     every target or for `smoke`, `.ONESHELL`, `SHELL`, `.SHELLFLAGS`, and any `MAKEFLAGS` word outside
     an allow-list (a bare `i` is `-i`) are refused.
   - **The CI step runs and is required** (`TestSmokeJobRequiresTheSmokeRun`). The step holding the
-    run, and its job, carry no `if:`, no `continue-on-error` and no `working-directory`, and set
-    `OCTONOMY_SMOKE_REQUIRED: "1"` in their own `env`. The workflow's triggers, a `needs:`, and branch
-    protection stay a reviewer's to read.
+    run, and its job, carry no `if:`, no `continue-on-error` and no `working-directory`, and the run
+    sees `OCTONOMY_SMOKE_REQUIRED` as `"1"` — the step's `env` if it sets one, else the job's — with no
+    shell assignment, `export` or `unset` turning it off. The workflow's triggers, a `needs:`, and
+    branch protection stay a reviewer's to read.
   - **The smoke file is built by those runs** (`TestSmokeFileCarriesTheTagTheRunnersSelect`): it
     carries the `integration` tag in both constraint spellings.
 

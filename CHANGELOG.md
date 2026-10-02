@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **`main`'s test suite, accounted for file by file**
   ([#95](https://github.com/octoverse-id/octonomy-go/issues/95), for
-  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests and docs only; no
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests and docs, and `-count=1`
+  on `make smoke` and the CI smoke job so a rerun cannot be answered from go test's result cache; no
   exported symbol changes.
   - **`docs/compat-test-disposition.md`** gives each of the 27 test files in `main`'s tree at 5e40964 a
     verdict — ported, rewritten, preserved, owned by another sub-issue, or excluded with its reason —

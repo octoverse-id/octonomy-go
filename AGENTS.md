@@ -249,8 +249,9 @@ stays a faithful, ergonomic client.
   the test runs. That is rule 1 of the `t.Cleanup` replacement model in
   `docs/compat-test-disposition.md`; its other two cover a test body and a teardown that must outlive
   the helper registering it.
-- **Every response type needs a smoke call.** A `TestSmoke_` function in `integration_test.go` must
-  call a method that decodes it, on a client that function built, or
+- **Every response type needs a smoke call**, and so does every list envelope. A `TestSmoke_`
+  function in `integration_test.go` must call a method that decodes it, on a client that function
+  built, or
   `TestEveryResponseTypeHasASmokeProbe` (`smokeprobes_test.go`, no build tag) fails. Only a real
   server sees a fixture-versus-server divergence (#32). A call inside a closure or a helper is not
   counted, a smoke test may not skip itself (only `newSmokeClient` skips), and the smoke runners
