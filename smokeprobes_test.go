@@ -323,6 +323,17 @@ func smokeCallsIn(file *ast.File) (map[string]string, []string) {
 			continue
 		}
 		clients := smokeClients(fn.Body, sdk)
+		// The constructors are trusted by NAME, so a local binding of either
+		// name -- `newSmokeClient := func(…) *fake`, `octonomy := fake{}` --
+		// would hand a fake to every call counted on it. Refuse the function's
+		// clients rather than resolve which one a call reaches.
+		for _, name := range []string{"newSmokeClient", sdk} {
+			if len(declarationsOf(name, fn)) > 0 {
+				problems = append(problems, fn.Name.Name+" declares a local "+name+", which shadows the "+
+					"constructor the guard trusts by name; its calls are not counted")
+				clients = map[string]bool{}
+			}
+		}
 		for _, name := range sortedKeys(clients) {
 			// The client's own binding is one; any other declaration or
 			// assignment of the name means it may hold something else by the
@@ -635,7 +646,7 @@ func checkSmokeGate(fn *ast.FuncDecl, helpers smokeHelpers) string {
 		return shape
 	}
 	gate, ok := block.List[at-1].(*ast.IfStmt)
-	if !ok || gate.Init != nil || gate.Else != nil || !failsTest(gate.Body) {
+	if !ok || gate.Init != nil || gate.Else != nil || !failsTest(gate.Body, testingParam(fn)) {
 		return shape
 	}
 	name, ok := unparen(gate.Cond).(*ast.Ident)
@@ -670,8 +681,13 @@ func enclosingStatement(body *ast.BlockStmt, call *ast.CallExpr) (*ast.BlockStmt
 }
 
 // failsTest reports whether a block, at its own top level, ends the test as
-// failed: t.Fatal, t.Fatalf or t.FailNow.
-func failsTest(block *ast.BlockStmt) bool {
+// failed: t.Fatal, t.Fatalf or t.FailNow on the function's own *testing.T,
+// named tName. A Fatal on anything else -- a reporter, a fake -- need not stop
+// the test, and then the skip after it runs in a required run.
+func failsTest(block *ast.BlockStmt, tName string) bool {
+	if tName == "" {
+		return false
+	}
 	for _, stmt := range block.List {
 		expr, ok := stmt.(*ast.ExprStmt)
 		if !ok {
@@ -681,7 +697,7 @@ func failsTest(block *ast.BlockStmt) bool {
 		if !ok {
 			continue
 		}
-		if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok {
+		if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok && isIdent(sel.X, tName) {
 			switch sel.Sel.Name {
 			case "Fatal", "Fatalf", "FailNow":
 				return true
@@ -1007,6 +1023,24 @@ func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ct
 			want: []string{"Tags.Get"}, problems: 1,
 		},
 		{
+			name: "a local newSmokeClient is refused",
+			src: `func TestSmoke_A(t *testing.T) {
+				newSmokeClient := func(t *testing.T) *fake { return &fake{} }
+				client := newSmokeClient(t)
+				client.Tags.Get(ctx, id)
+			}`,
+			problems: 1,
+		},
+		{
+			name: "so is a local named like the SDK import",
+			src: `func TestSmoke_A(t *testing.T) {
+				octonomy := fakeSDK{}
+				client, _ := octonomy.New(octonomy.Config{})
+				client.Tags.Get(ctx, id)
+			}`,
+			problems: 1,
+		},
+		{
 			name:     "an early return is refused",
 			src:      `func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); if app == "" { t.Log("no app"); return }; client.Tags.Get(ctx, id) }`,
 			want:     []string{"Tags.Get"},
@@ -1078,6 +1112,19 @@ func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ct
 			full: smokeGateFixture(`if baseURL == "" {
 				if required {
 					t.Log("required")
+				}
+				t.Skip("no harness")
+			}`),
+			want: []string{"Tags.Get"}, problems: 1,
+		},
+		{
+			// A Fatal on something other than the test's own T need not stop
+			// it, so a no-op reporter.Fatal lets the skip after it run in a
+			// required run.
+			name: "a gate that fails something other than the test is refused",
+			full: smokeGateFixture(`if baseURL == "" {
+				if required {
+					reporter.Fatal("required")
 				}
 				t.Skip("no harness")
 			}`),
@@ -1564,9 +1611,10 @@ func TestMakefileProblemsReadsMakeLikeMakeDoes(t *testing.T) {
 // (a)-(e), then update its pin in the same commit.
 
 // smokeRecipePin is the Makefile's `smoke:` rule and recipe, as makeRule reads
-// them: every logical make line that names smoke among its targets -- a
-// target-specific variable is one, alone or beside other targets, and changes
-// the recipe's environment -- each followed by its tab-indented recipe lines.
+// them: every logical make line whose targets reach smoke, by name or as a
+// pattern (`%oke:`) -- a target- or pattern-specific variable is one, alone or
+// beside other targets, and changes the recipe's environment -- each followed
+// by its tab-indented recipe lines.
 const smokeRecipePin = `smoke: ## Run the integration smoke test against a booted harness (see dev-server)
 	@if [ -f .octonomy-harness.env ]; then set -a; . ./.octonomy-harness.env; set +a; fi; \
 	go test -tags=integration -count=1 -run '^TestSmoke_' -v ./...`
@@ -1635,9 +1683,10 @@ func TestSmokeJobRequiresTheSmokeRun(t *testing.T) {
 	}
 }
 
-// makeRule returns every make line that names target among its targets -- the
-// rule, a target-specific variable (`smoke: export X := …`), and a line naming
-// several targets at once (`test smoke: SHELL := …`) -- each followed by its
+// makeRule returns every make line whose targets reach target -- the rule, a
+// target-specific variable (`smoke: export X := …`), a line naming several
+// targets at once (`test smoke: SHELL := …`), and a pattern that matches it
+// (`%oke: SHELL := …`) -- each followed by its
 // recipe lines, trimmed of trailing space and joined by newlines.
 // Continuations are joined first, as make joins them. A `target :=` is a
 // variable named target, not a rule, and `.PHONY: … smoke` names smoke as a
@@ -1650,7 +1699,7 @@ func makeRule(src, target string) string {
 			continue
 		}
 		m := makeTargets.FindStringSubmatch(ll.text)
-		if m == nil || !containsWord(strings.Fields(m[1]), target) {
+		if m == nil || !namesTarget(strings.Fields(m[1]), target) {
 			continue
 		}
 		out = append(out, strings.TrimRight(ll.text, " \t"))
@@ -1676,10 +1725,19 @@ func makeRule(src, target string) string {
 // the text before a `:` or `::` that does not open an assignment.
 var makeTargets = regexp.MustCompile(`^([^\t#=:][^#=:]*?)\s*::?([^=]|$)`)
 
-func containsWord(words []string, word string) bool {
+// namesTarget reports whether a list of make targets reaches target: by name,
+// or as a pattern (`%oke`, `sm%`, `%`) -- a pattern-specific variable applies to
+// every target the pattern matches, the smoke target among them.
+func namesTarget(words []string, target string) bool {
 	for _, w := range words {
-		if w == word {
+		if w == target {
 			return true
+		}
+		if i := strings.IndexByte(w, '%'); i >= 0 {
+			prefix, suffix := w[:i], w[i+1:]
+			if len(target) >= len(prefix)+len(suffix) && strings.HasPrefix(target, prefix) && strings.HasSuffix(target, suffix) {
+				return true
+			}
 		}
 	}
 	return false
@@ -1762,6 +1820,16 @@ func TestThePinnedRunnersAreReadWhole(t *testing.T) {
 	t.Run("so is one continued onto the next line", func(t *testing.T) {
 		if got := makeRule("test \\\n  smoke: SHELL := /bin/true\n"+rule, "smoke"); !strings.Contains(got, "/bin/true") {
 			t.Errorf("makeRule dropped the continued assignment: %q", got)
+		}
+	})
+	t.Run("a pattern-specific variable matching smoke is part of it", func(t *testing.T) {
+		if got := makeRule("%oke: SHELL := /bin/true\n"+rule, "smoke"); !strings.Contains(got, "/bin/true") {
+			t.Errorf("makeRule dropped the pattern-specific assignment: %q", got)
+		}
+	})
+	t.Run("a pattern that does not match smoke is not", func(t *testing.T) {
+		if got := makeRule("%.o: %.c\n\tcc $<\n"+rule, "smoke"); got != "smoke: ## run\n\tgo test ./..." {
+			t.Errorf("makeRule = %q", got)
 		}
 	})
 	t.Run("a .PHONY naming smoke is not a rule for it", func(t *testing.T) {

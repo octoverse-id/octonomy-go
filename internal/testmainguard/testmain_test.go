@@ -76,13 +76,26 @@ func testMainProblems(file *ast.File) []string {
 		if !ok || fn.Recv != nil || fn.Name.Name != "TestMain" || fn.Body == nil {
 			continue
 		}
-		if !exitsWithRun(fn) {
+		if !exitsWithRun(fn) || !importsOS(file) {
 			problems = append(problems, "TestMain must be exactly os.Exit(m.Run()): before Go 1.15 a "+
 				"TestMain that returns exits 0 over failing tests, and one that calls os.Exit itself can "+
 				"exit 0 before they run")
 		}
 	}
 	return problems
+}
+
+// importsOS reports whether the file imports the os package under the name os.
+// The check above reads the spelling `os.Exit`; in a file that does not import
+// os, that name could be a package-level fake whose Exit returns, and on Go
+// 1.13 a TestMain that returns exits 0.
+func importsOS(file *ast.File) bool {
+	for _, imp := range file.Imports {
+		if imp.Path.Value == `"os"` && (imp.Name == nil || imp.Name.Name == "os") {
+			return true
+		}
+	}
+	return false
 }
 
 // exitsWithRun reports whether fn's whole body is `os.Exit(<m>.Run())`, with
@@ -114,6 +127,20 @@ func exitsWithRun(fn *ast.FuncDecl) bool {
 	return ok && isIdent(sel.X, m) && sel.Sel.Name == "Run"
 }
 
+// The guard reads the spelling os.Exit, so it also needs os to BE the os
+// package: a file that does not import it could declare a fake whose Exit
+// returns.
+func TestTestMainProblemsRequiresTheRealOS(t *testing.T) {
+	src := "package octonomy_test\ntype fakeOS struct{}\nfunc (fakeOS) Exit(int) {}\nvar os fakeOS\nfunc TestMain(m *testing.M) {\n\tos.Exit(m.Run())\n}\n"
+	file, err := parser.ParseFile(token.NewFileSet(), "fixture_test.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	if len(testMainProblems(file)) == 0 {
+		t.Error("a TestMain calling a fake os.Exit was accepted")
+	}
+}
+
 func TestTestMainProblemsAcceptsOnlyTheExitingShape(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
@@ -129,7 +156,7 @@ func TestTestMainProblemsAcceptsOnlyTheExitingShape(t *testing.T) {
 		{"parentheses do not hide the shape", "(os.Exit)((m.Run()))", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			src := "package octonomy_test\n"
+			src := "package octonomy_test\nimport \"os\"\n"
 			if tc.body != "" {
 				src += "func TestMain(m *testing.M) {\n\t" + tc.body + "\n}\n"
 			}
