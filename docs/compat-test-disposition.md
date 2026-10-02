@@ -177,6 +177,11 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   - **The smoke file is built by those runs** (`TestSmokeFileCarriesTheTagTheRunnersSelect`): it
     carries the `integration` tag in both constraint spellings.
 
+  These readers model the shell, make and YAML of the two runners this repository has, and refuse
+  what they recognize and cannot vouch for — an `include` among it. What they cannot recognize at all
+  (a make function computing a target, a generated makefile, a YAML merge key carrying a step's keys
+  in) stays a reviewer's.
+
 ## The `t.Cleanup` replacement model
 
 `t.Cleanup` needs Go 1.14. A cleanup registered **inside a helper** runs when the *test* finishes;

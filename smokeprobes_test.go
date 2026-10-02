@@ -2111,7 +2111,18 @@ RUN
 // `.ONESHELL` runs a recipe as one script, so a line after the smoke run would
 // decide its exit status. MAKEFLAGS is held to an allow-list, because a word
 // in it need not start with a dash: `MAKEFLAGS += i` is -i, ignore errors. And
-// SHELL or .SHELLFLAGS decide what runs a recipe line at all.
+// SHELL or .SHELLFLAGS decide what runs a recipe line at all. An include
+// brings in settings from a file this reader does not see, so it is refused
+// too.
+//
+// WHERE THE RUNNER READERS END. smokeRuns, makefileProblems and
+// workflowStepProblems model the shell, make and YAML this repository's two
+// smoke runners are written in -- one make target, one workflow step -- and
+// refuse what they recognize and cannot vouch for. What they cannot recognize
+// at all is a reviewer's: a make function computing a target or recipe, a
+// generated makefile, a YAML anchor or merge key (`<<: *defaults`) carrying a
+// step's keys in from elsewhere. Those are not things one writes by accident in
+// a two-runner setup, and modelling them would mean writing make and YAML.
 func makefileProblems(src, target string) []string {
 	var problems []string
 	// Logical lines, as make reads them: a backslash-newline continues a
@@ -2146,6 +2157,11 @@ func makefileProblems(src, target string) []string {
 			}
 			continue
 		}
+		if makeInclude.MatchString(line) {
+			problems = append(problems, where+" includes another makefile, whose settings decide how the smoke "+
+				"recipe runs and which this reader does not see")
+			continue
+		}
 		m := makeAssignment.FindStringSubmatch(line)
 		if m == nil {
 			continue
@@ -2167,6 +2183,7 @@ func makefileProblems(src, target string) []string {
 }
 
 var (
+	makeInclude    = regexp.MustCompile(`^\s*(-include|sinclude|include)\s`)
 	specialTarget  = regexp.MustCompile(`^\.(IGNORE|ONESHELL)\s*:([^=].*|)$`)
 	makeAssignment = regexp.MustCompile(`^\s*(?:(?:export|override)\s+)*(SHELL|\.SHELLFLAGS|MAKEFLAGS)\s*(?:\+|::?|\?|!)?=(.*)$`)
 	// safeMakeflag allows what changes how make reads the Makefile or how
@@ -2227,6 +2244,8 @@ func TestMakefileProblemsReadsMakeLikeMakeDoes(t *testing.T) {
 		{"a declaration continued onto the next line", ".IGNORE: dev-server-down \\\n  smoke\n", 1},
 		{"MAKEFLAGS continued onto the next line", "MAKEFLAGS += --no-print-directory \\\n  i\n", 1},
 		{"a comment continued onto the next line", "# best effort \\\n.IGNORE:\n", 0},
+		{"an include", "include local.mk\n", 1},
+		{"an optional include", "-include .octonomy-harness.mk\n", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := makefileProblems(tc.src, smokeTarget); len(got) != tc.problems {
