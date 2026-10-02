@@ -146,7 +146,9 @@ namespace pair on `/api/v2`. It gates on `OCTONOMY_TEST_BASE_URL` and skips when
 Its coverage is checked without a server. `TestEveryResponseTypeHasASmokeProbe`
 (`smokeprobes_test.go`) reads the smoke file as source and fails when a response type has no
 `TestSmoke_` function calling a method that decodes it; add the call in the change that adds the
-type.
+type. The two runners that execute it — `make smoke` and the CI smoke job — are pinned in the same
+file, so a change to either is made deliberately, re-checked against a real server, and recorded in
+the pin.
 
 ```bash
 make dev-server   # boots a real Octonomy, writes .octonomy-harness.env

@@ -254,8 +254,13 @@ stays a faithful, ergonomic client.
   built, or
   `TestEveryResponseTypeHasASmokeProbe` (`smokeprobes_test.go`, no build tag) fails. Only a real
   server sees a fixture-versus-server divergence (#32). A call inside a closure or a helper is not
-  counted, a smoke test may not skip itself (only `newSmokeClient` skips), and the smoke runners
-  must keep reaching every `TestSmoke_` function.
+  counted, and a smoke test may neither skip (only `newSmokeClient` does, behind the required gate)
+  nor return early. **The two smoke runners are pinned** — the Makefile's `smoke:` rule and the CI
+  smoke job equal `smokeRecipePin` and `smokeJobPin` in `smokeprobes_test.go`. Changing one means
+  re-checking what the pins' comment lists against a real server, then updating the pin in the same
+  commit.
+- **A `TestMain` is exactly `os.Exit(m.Run())`.** Before Go 1.15 a `TestMain` that returns exits 0
+  over failing tests, and `TestNoTestMainHidesAFailure` refuses any other shape.
 - Canned **single-resource** responses go through `writeData`, which adds the server's `{"data": ...}`
   wrapper. `writeJSON` sends the body verbatim — use it for list and error envelopes only. Handlers
   that returned bare objects matched the vendored spec instead of the server and hid a real defect.

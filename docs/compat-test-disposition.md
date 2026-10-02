@@ -152,42 +152,41 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
 - **`smokeprobes_test.go`** keeps `main`'s guard — every response type is asserted against a real
   server — and binds it to this line's walk: a type is probed when a `TestSmoke_` function calls a
   method that decodes it, on a client that function built (`newSmokeClient`, or the SDK's `New`),
-  outside any closure. Each list envelope (`TagList`, …) is a type of its own here, decoded through
-  `doList` rather than `doData`, so it needs a list method probed as well — a guarantee `main`'s
-  row-only derivation does not give. That is `main`'s checks 1 and 4 taken together; `main`'s separate stale-key
-  and wrong-key checks exist only because a registry has keys. A credited call is only worth
-  something if the smoke run executes it, and with no registry walk to fail at runtime, the rest of
-  the file checks that statically:
-  - **No skip.** A smoke test that can skip is refused — a `Skip` call in it, a smoke-file helper it
-    calls that can, or its `*testing.T` handed to anything the guard cannot read. The one skip allowed
+  outside any closure. That is `main`'s checks 1 and 4 taken together; `main`'s separate stale-key
+  and wrong-key checks exist only because a registry has keys. Each list envelope (`TagList`, …) is
+  a type of its own here, decoded through `doList` rather than `doData`, so it needs a list method
+  probed as well — a guarantee `main`'s row-only derivation does not give. A credited call is only
+  worth something if the smoke run executes it, and with no registry walk to fail at runtime, the
+  rest of the file checks that statically:
+  - **No skip, no early return.** A smoke test that can skip is refused — a `Skip` call in it, a
+    smoke-file helper it calls that can, or its `*testing.T` handed to anything the guard cannot
+    read — and so is a `return` in its body, the skip ban's obvious workaround. The one skip allowed
     is `newSmokeClient`'s, and only as a single `Skip` straight after `if required { t.Fatal(…) }`,
     with `required` read from `OCTONOMY_SMOKE_REQUIRED`; `newSmokeClient` itself is held to the same
     no-helper, no-handed-on-T rule.
-  - **The runners reach every `TestSmoke_` function** (`TestSmokeSelectorRunsEveryTestSmokeFunction`).
-    The `smoke:` target's own recipe and the go1.13 CI job must each hold a `go test -tags=integration`
-    run, read as shell commands, that selects `-run '^TestSmoke_'` or nothing, on the root package,
-    with an explicit `-count` (so go test cannot answer it from its result cache), no `-skip`, no
-    selector in a variable, no `GOFLAGS` at all, and no flag outside an allow-list — `-list`, `-c`,
-    `-n` and `-count=0` all run nothing and exit 0. And the run must execute, with a failure that
-    fails the runner: not behind `||` or inside a shell `if`, the last command on its line, not on a
-    make recipe line prefixed with `-` (its continuation included), and in a
-    workflow on one line or in a literal `run: |` block — YAML folds a `run: >` block, or a value
-    continued onto the next line, into one command the reader would not see. The
-    Makefile-wide settings that decide how a recipe runs are read as make reads them: `.IGNORE` for
-    every target or for `smoke`, `.ONESHELL`, `SHELL`, `.SHELLFLAGS`, and any `MAKEFLAGS` word outside
-    an allow-list (a bare `i` is `-i`) are refused.
-  - **The CI step runs and is required** (`TestSmokeJobRequiresTheSmokeRun`). The step holding the
-    run, and its job, carry no `if:`, no `continue-on-error` and no `working-directory`, and the run
-    sees `OCTONOMY_SMOKE_REQUIRED` as `"1"` — the step's `env` if it sets one, else the job's — with no
-    shell assignment, `export` or `unset` turning it off. The workflow's triggers, a `needs:`, and
-    branch protection stay a reviewer's to read.
+  - **The runners are pinned.** The Makefile's `smoke:` rule and recipe
+    (`TestSmokeSelectorRunsEveryTestSmokeFunction`) and the CI smoke job, comments aside
+    (`TestSmokeJobRequiresTheSmokeRun`), must equal the text in `smokeRecipePin` and `smokeJobPin`,
+    which was run against a real server for this change. The pins' comment lists what each runner
+    was checked for — every `TestSmoke_` function selected, `-count=1`, `-tags=integration`, a
+    failure that fails the runner, and in CI `OCTONOMY_SMOKE_REQUIRED=1` on go1.13 — and a change to
+    either runner re-checks those and updates its pin in the same commit. Around the pins, a
+    Makefile-wide setting that changes how a recipe runs (`.IGNORE` for every target or for `smoke`,
+    `.ONESHELL`, `SHELL`, `.SHELLFLAGS`, `MAKEFLAGS` outside an allow-list, `GOFLAGS`, the required
+    variable set to anything but `1`, an `include`) and a workflow-level `env` or `defaults` are
+    refused, since each would change a pinned runner without touching its text.
   - **The smoke file is built by those runs** (`TestSmokeFileCarriesTheTagTheRunnersSelect`): it
     carries the `integration` tag in both constraint spellings.
+  - **No `TestMain` hides a failure** (`TestNoTestMainHidesAFailure`, in `testmain_test.go`). Before
+    Go 1.15 a `TestMain` that returns exits 0 over failing tests, and one that exits 0 early does on
+    any version, so a `TestMain` in this directory must be exactly `os.Exit(m.Run())`.
 
-  These readers model the shell, make and YAML of the two runners this repository has, and refuse
-  what they recognize and cannot vouch for — an `include` among it. What they cannot recognize at all
-  (a make function computing a target, a generated makefile, a YAML merge key carrying a step's keys
-  in) stays a reviewer's.
+  The pins replaced a reader of the runners' shell, make and YAML that ten review rounds grew and
+  that never converged: each round found a construct it got wrong, in both directions — `set +e`
+  and a toolchain move slipped through, while `main`'s capture-and-rethrow recipe and a JavaScript
+  `if` in an unrelated job were refused. A pin refuses nothing outside the two runners and lets
+  nothing inside them change unreviewed. What stays a reviewer's: the workflow's triggers, a
+  `needs:`, the harness action's own steps, and branch protection.
 
 ## The `t.Cleanup` replacement model
 
@@ -254,6 +253,7 @@ test change:
 | `cleanupmodel_test.go` | #95 | Rule 1 of the `t.Cleanup` model |
 | `contractbaseline_test.go` | #109 (#90) | The vendored specs, the contract-version marker and the coverage rows agree |
 | `disposition_test.go` | #95 | Every test file in this package is named in this table |
+| `testmain_test.go` | #95 | A `TestMain` cannot turn a failing test binary green on Go 1.13 |
 | `jsondepth_test.go`, `jsondepth_external_test.go` | #112 (#91) | Go 1.13's `encoding/json` has no depth limit and no cycle detection; `main`'s modern toolchain needs neither guard |
 | `sourceguard_test.go` | #95 | The AST readers the two rewritten guards share, and #97's port after them |
 | `transport_test.go` | #112 (#91) | Holds `main`'s `octonomy_test.go` cases, since this line's own `octonomy_test.go` is kept |

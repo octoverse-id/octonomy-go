@@ -21,17 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     5e40964, read response types off `doData[T]` type arguments this line does not have.
     `TestEveryResponseTypeCanRefuseAnEmptyDecode` requires every type the transport decodes into —
     read off its `&out` destination — to carry `identityFields()` on the value receiver or, for a
-    declared composite, a pointer-receiver `UnmarshalJSON`, and refuses a call to `doRaw` outside
-    `transport.go`, which `AGENTS.md` already forbade with nothing to enforce it;
+    declared composite, a pointer-receiver `UnmarshalJSON`, and refuses a call to `doRaw` outside the
+    three helpers that wrap it, which `AGENTS.md` already forbade with nothing to enforce it;
     `TestTheRuntimeIdentityTablesMatchTheSource` holds the runtime check of each list's `rows()` to
     the same set.
     `TestEveryResponseTypeHasASmokeProbe` requires a `TestSmoke_` function to call a method decoding
-    each of those types against a real server, and refuses a smoke test that can skip itself other
-    than through `newSmokeClient`'s gated skip;
-    `TestSmokeSelectorRunsEveryTestSmokeFunction`, `TestSmokeFileCarriesTheTagTheRunnersSelect` and
-    `TestSmokeJobRequiresTheSmokeRun` keep `make smoke` and the CI smoke job reaching every
-    `TestSmoke_` function, with a failure that fails the job. Both guards fail closed on a shape they
-    cannot read.
+    each of those types, and each list envelope, against a real server, and refuses a smoke test that
+    can skip or return early other than through `newSmokeClient`'s gated skip. The two runners that execute those probes, `make smoke` and the CI smoke job, are pinned to text
+    verified against a real server, with the Makefile-wide and workflow-wide settings that could
+    change them from outside refused. Both guards fail closed on a shape they cannot read.
+  - **`TestNoTestMainHidesAFailure`**: a `TestMain` must be exactly `os.Exit(m.Run())`. Before Go
+    1.15 one that returns exits 0 over failing tests, which go1.13.15's `vet` does not report; the
+    porting checklist gains the row.
   - **`main`'s test cases this line lacked**: `TestTags_Get`, `TestVocabularies_Get`,
     `TestVocabularies_List_Params` (without its `q` and `slug` cases — see below),
     `TestDoData_UndecodableBodies`, `TestTransport_ErrorsPropagateFromEveryHelper` and

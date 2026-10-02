@@ -92,15 +92,19 @@ func unparen(e ast.Expr) ast.Expr {
 var transportOut = map[string]int{"doData": 5, "doList": 4}
 
 // rawTransport names the request paths beneath doData and doList, mapped to the
-// files allowed to call them. A response decoded through one of these anywhere
+// functions allowed to call them. A response decoded through one of these anywhere
 // else is a response neither guard can see: it reaches no destination argument,
 // so its type is neither found nor unresolved -- the one way out of the
 // derivation that is silent. AGENTS.md already says a resource file must not
 // call doRaw; this is where that rule is checked. doUnversioned is the health
 // probes' path, and HealthStatus is decoded by health.go's own helper.
+//
+// The allowance is by FUNCTION, not by file. Allowing all of transport.go let a
+// new helper there -- a `doBare` calling doRaw, and a resource method decoding
+// through it -- take its type out of both guards with the whole suite green.
 var rawTransport = map[string]map[string]bool{
-	"doRaw":         {"transport.go": true},
-	"doUnversioned": {"transport.go": true, "health.go": true},
+	"doRaw":         {"Client.do": true, "Client.doData": true, "Client.doList": true},
+	"doUnversioned": {"HealthService.probe": true},
 }
 
 // typeIndex holds every package-level type declaration, so a list envelope's
@@ -177,7 +181,7 @@ func responseTypes(files map[string]*ast.File) (found, lists map[string]string, 
 				if !ok {
 					return true
 				}
-				if allowed, raw := rawTransport[sel.Sel.Name]; raw && !allowed[filepath.Base(path)] {
+				if allowed, raw := rawTransport[sel.Sel.Name]; raw && (!isFunc || !allowed[funcLabel(fn)]) {
 					unresolved = append(unresolved, where+" (reaches "+sel.Sel.Name+" directly, which "+
 						"decodes outside doData and doList, where neither guard can see the type; use the "+
 						"helper matching the response shape)")

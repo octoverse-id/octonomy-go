@@ -502,6 +502,25 @@ func TestResponseTypesCollectsWhatTheTransportDecodes(t *testing.T) {
 			unresolved: 1,
 		},
 		{
+			// The allowance is the three helpers, not their file: a new helper
+			// in transport.go calling doRaw escapes both guards as surely as a
+			// resource file does.
+			name: "a new helper beside the transport calling doRaw is refused",
+			src: `func (c *Client) doBare(ctx context.Context, path string) ([]byte, error) {
+				_, body, err := c.doRaw(ctx, http.MethodGet, path, nil, nil)
+				return body, err
+			}`,
+			unresolved: 1,
+		},
+		{
+			name: "the three helpers may call it",
+			src: `func (c *Client) doData(ctx context.Context, method, path string, query url.Values, body, out interface{}, opts ...RequestOption) error {
+				_, raw, err := c.doRaw(ctx, method, path, query, body, opts...)
+				_ = raw
+				return err
+			}`,
+		},
+		{
 			name:       "and so is doUnversioned outside the health probes",
 			src:        `func (s *S) Ping(ctx context.Context) error { _, _, err := s.client.doUnversioned(ctx, "/health/live"); return err }`,
 			unresolved: 1,
