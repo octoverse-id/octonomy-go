@@ -154,10 +154,12 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   outside any closure. That is `main`'s checks 1 and 4 taken together. `main`'s separate stale-key
   and wrong-key checks exist only because a registry has keys, and are not needed without one. What a
   registry also gave `main` is a walk that fails an entry which skips itself; with no walk here, the
-  guard refuses a `t.Skip` in a `TestSmoke_` function outright, since a skipped probe is a green run
-  the guard would still credit. `TestSmokeSelectorRunsEveryTestSmokeFunction` holds `make smoke` and
-  the go1.13 smoke job to a run that reaches every `TestSmoke_` function — no narrower `-run`, no
-  `-skip` — and `TestSmokeFileCarriesTheTagTheRunnersSelect` holds the smoke file to the
+  guard refuses a smoke test that can skip — a `Skip` call in it, a smoke-file helper it calls that
+  can, or its `*testing.T` handed to anything the guard cannot read — since a skipped probe is a
+  green run the guard would still credit. `TestSmokeSelectorRunsEveryTestSmokeFunction` holds `make smoke` and
+  the go1.13 smoke job to a run that reaches every `TestSmoke_` function — read as shell commands,
+  with continuations joined, and with no narrower `-run`, no `-skip`, no selector in a variable or
+  `GOFLAGS` — and `TestSmokeFileCarriesTheTagTheRunnersSelect` holds the smoke file to the
   `integration` tag those runs build, in both constraint spellings, so the guard cannot credit a probe
   no job runs.
 

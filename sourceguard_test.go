@@ -239,15 +239,15 @@ func isTransportName(name string) bool {
 //
 // A pointer type is unambiguous, since `*x.doData` would parse as a dereference
 // of the selector rather than as a selector on a star. A bare name is a type
-// when the package declares one by that name; that covers an alias such as
-// `type C = *Client` as well.
-func isMethodExpression(sel *ast.SelectorExpr, types typeIndex) bool {
+// when the package -- or the enclosing function -- declares one by that name;
+// that covers an alias such as `type C = *Client` as well.
+func isMethodExpression(sel *ast.SelectorExpr, types typeIndex, scope *ast.FuncDecl) bool {
 	switch x := unparen(sel.X).(type) {
 	case *ast.StarExpr:
 		return true
 	case *ast.Ident:
 		_, isType := types[x.Name]
-		return isType
+		return isType || declaresType(scope, x.Name)
 	}
 	return false
 }
@@ -257,7 +257,7 @@ func isMethodExpression(sel *ast.SelectorExpr, types typeIndex) bool {
 // row is that envelope's element type.
 func destination(sel *ast.SelectorExpr, call *ast.CallExpr, scope *ast.FuncDecl, types typeIndex) (row, list, why string) {
 	helper := sel.Sel.Name
-	if isMethodExpression(sel, types) {
+	if isMethodExpression(sel, types, scope) {
 		return "", "", helper + " is called as a method expression, which passes the client as argument 0 and moves the destination one place along; call it on the client"
 	}
 	idx := transportOut[helper]

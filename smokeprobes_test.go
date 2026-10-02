@@ -89,10 +89,13 @@ var smokeProbeExclusions = map[string]string{}
 //     response type no smoke test calls anything for -- which is the failure
 //     that actually happens. The assertions are a reviewer's job.
 //   - It reads presence, not reachability: a call parked under `if false` is
-//     credited, as is one after a t.Fatal that always fires. A t.Skip is the one
-//     unreachability it refuses, anywhere in a TestSmoke_ function, because a
-//     skip is green; the only skip the smoke run has is newSmokeClient's, which
-//     OCTONOMY_SMOKE_REQUIRED=1 turns into a failure in CI.
+//     credited, as is one after a t.Fatal that always fires, or after an early
+//     return. A skip is the one unreachability it refuses, because a skip is
+//     green: a Skip call anywhere in a TestSmoke_ function, a call to a helper
+//     in the smoke file that can skip, and the function's *testing.T handed to
+//     anything the guard cannot see into, which could skip too. The only skip
+//     the smoke run has is newSmokeClient's, which OCTONOMY_SMOKE_REQUIRED=1
+//     turns into a failure in CI.
 //   - It binds a type to SOME method that decodes it, not to every one. A Tag
 //     probed through Tags.List says nothing about Tags.Get, and both send the
 //     same envelope only because this SDK routes them through the same helper.
@@ -267,52 +270,214 @@ func smokeBuildTagProblems(src string) []string {
 	return problems
 }
 
-var (
-	runSelector = regexp.MustCompile(`(?:^|\s)-run(?:\s+|=)(\S+)`)
-	skipFlag    = regexp.MustCompile(`(?:^|\s)-skip(?:\s|=)`)
-)
+// variableRef matches a shell or make expansion -- $(X), ${X}, $X -- whose value
+// this reader cannot know. A Makefile's $$ is a literal dollar and is not one.
+var variableRef = regexp.MustCompile(`(^|[^$])\$[({A-Za-z_]`)
+
+// flagLine matches a line that opens with a flag (`-run`, `--skip=x`) rather
+// than with a YAML list item (`- name:`), which also starts with a dash.
+var flagLine = regexp.MustCompile(`^\s*--?[A-Za-z]`)
 
 // smokeRunProblems reads one runner file for the integration runs that execute
 // the smoke tests, and returns what is wrong with them.
+//
+// It reads COMMANDS, not physical lines, because a runner is a shell script: a
+// `\` continues a command onto the next line, `;`, `&&`, `||` and `|` put
+// several on one, and quotes decide what a word is. Reading lines let a run
+// split as `go test -tags=integration \` / `-run '^TestSmoke_RealServer$'`
+// count as running everything, since its first line had no -run. What it still
+// cannot read -- a selector held in a variable, two -run flags, a -skip, GOFLAGS
+// carrying either, a flag on a line of its own that YAML folding may join to the
+// one above -- is refused rather than guessed at.
 func smokeRunProblems(path, src string) []string {
 	var problems []string
 	smokeRuns := 0
-	for i, line := range strings.Split(src, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") || !strings.Contains(line, "-tags=integration") {
+	lines := logicalLines(src)
+	for i, ll := range lines {
+		where := path + ":" + strconv.Itoa(ll.line)
+		trimmed := strings.TrimSpace(ll.text)
+		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		// -skip (Go 1.20) subtracts from whatever -run selects, so a run that
-		// names the prefix and skips one function reaches fewer smoke tests than
-		// the guard credits. Go 1.13 has no -skip, but `make smoke` may run on a
-		// modern toolchain.
-		if skipFlag.MatchString(line) {
-			problems = append(problems, path+":"+strconv.Itoa(i+1)+" passes -skip to an integration run, "+
-				"which leaves smoke tests the guard credits unexecuted")
-			continue
+		if strings.Contains(ll.text, "GOFLAGS") && (strings.Contains(ll.text, "run") || strings.Contains(ll.text, "skip")) {
+			problems = append(problems, where+" sets GOFLAGS with a test selector, which applies to every "+
+				"go test the smoke runs make; the guard cannot see what it selects")
 		}
-		m := runSelector.FindStringSubmatch(line)
-		if m == nil {
-			smokeRuns++ // no selector: every test runs, the smoke tests among them
-			continue
+		for _, words := range shellCommands(ll.text) {
+			run, ok := goTestRun(words)
+			if !ok || !run.integration {
+				continue
+			}
+			if i+1 < len(lines) && flagLine.MatchString(lines[i+1].text) {
+				problems = append(problems, where+" is followed by a line that starts with a flag; if the "+
+					"runner joins the two (a folded YAML scalar does), the smoke run is not the command read here")
+				continue
+			}
+			switch {
+			case run.variable:
+				problems = append(problems, where+" builds its integration run from a variable, so the "+
+					"guard cannot tell which smoke tests it reaches")
+			case run.skip:
+				problems = append(problems, where+" passes -skip to an integration run, which leaves smoke "+
+					"tests the guard credits unexecuted")
+			case len(run.selectors) > 1:
+				problems = append(problems, where+" passes -run "+strconv.Itoa(len(run.selectors))+
+					" times; go test keeps the last, and a smoke run should say once what it runs")
+			case len(run.selectors) == 0:
+				smokeRuns++ // no selector: every test runs, the smoke tests among them
+			case run.selectors[0] == "^"+smokeTestPrefix:
+				smokeRuns++
+			case strings.Contains(run.selectors[0], "TestSmoke"):
+				problems = append(problems, where+" selects -run "+run.selectors[0]+", but the smoke guard "+
+					"counts every "+smokeTestPrefix+" function as run. A narrower selector leaves probes the "+
+					"guard credits unexecuted; select '^"+smokeTestPrefix+"'")
+			default:
+				// another suite's run, which neither helps nor harms the smoke run
+			}
 		}
-		selector := strings.Trim(m[1], `'"`)
-		if !strings.Contains(selector, "TestSmoke") {
-			continue // another suite's run
-		}
-		if selector != "^"+smokeTestPrefix {
-			problems = append(problems, path+":"+strconv.Itoa(i+1)+" selects -run "+m[1]+", but the smoke "+
-				"guard counts every "+smokeTestPrefix+" function as run. A narrower selector leaves probes the "+
-				"guard credits unexecuted; select '^"+smokeTestPrefix+"'")
-			continue
-		}
-		smokeRuns++
 	}
 	if smokeRuns == 0 {
 		problems = append(problems, path+" has no `go test -tags=integration` run that reaches every "+
 			smokeTestPrefix+" function, so the smoke run the guard reads for is not wired here")
 	}
 	return problems
+}
+
+// logicalLine is one shell line after its `\` continuations are joined, with
+// the physical line it starts on.
+type logicalLine struct {
+	line int
+	text string
+}
+
+func logicalLines(src string) []logicalLine {
+	var out []logicalLine
+	physical := strings.Split(src, "\n")
+	for i := 0; i < len(physical); i++ {
+		start, text := i+1, physical[i]
+		for strings.HasSuffix(strings.TrimRight(text, " \t"), "\\") && i+1 < len(physical) {
+			text = strings.TrimSuffix(strings.TrimRight(text, " \t"), "\\") + " " + physical[i+1]
+			i++
+		}
+		out = append(out, logicalLine{line: start, text: text})
+	}
+	return out
+}
+
+// shellCommands splits a logical line into its commands -- on ;, &&, || and |
+// outside quotes -- and each command into words, with the quotes removed.
+func shellCommands(line string) [][]string {
+	var commands [][]string
+	var words []string
+	var word strings.Builder
+	inWord := false
+	var quote byte
+	flushWord := func() {
+		if inWord {
+			words = append(words, word.String())
+			word.Reset()
+			inWord = false
+		}
+	}
+	flushCommand := func() {
+		flushWord()
+		if len(words) > 0 {
+			commands = append(commands, words)
+		}
+		words = nil
+	}
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else {
+				word.WriteByte(c)
+			}
+		case c == '\'' || c == '"':
+			quote, inWord = c, true
+		case c == ';' || c == '|' || c == '&':
+			flushCommand()
+			if i+1 < len(line) && (line[i+1] == '|' || line[i+1] == '&') {
+				i++
+			}
+		case c == ' ' || c == '\t':
+			flushWord()
+		default:
+			word.WriteByte(c)
+			inWord = true
+		}
+	}
+	flushCommand()
+	return commands
+}
+
+// goTestCommand is what one `go test` invocation selects.
+type goTestCommand struct {
+	integration bool
+	selectors   []string
+	skip        bool
+	variable    bool
+}
+
+// goTestRun reads a command's words for a `go test` invocation and the flags
+// that decide which tests it runs. The go command accepts a flag with one dash
+// or two, as `-flag value` or `-flag=value`, and the test flags under a
+// `test.` prefix as well, so each is normalized before it is matched.
+func goTestRun(words []string) (goTestCommand, bool) {
+	at := -1
+	for i := 0; i+1 < len(words); i++ {
+		if words[i] == "go" && words[i+1] == "test" {
+			at = i + 2
+			break
+		}
+	}
+	if at < 0 {
+		return goTestCommand{}, false
+	}
+	var cmd goTestCommand
+	for i := at; i < len(words); i++ {
+		w := words[i]
+		if variableRef.MatchString(w) {
+			cmd.variable = true
+		}
+		if !strings.HasPrefix(w, "-") {
+			continue
+		}
+		name := strings.TrimPrefix(strings.TrimLeft(w, "-"), "test.")
+		value, hasValue := "", false
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name, value, hasValue = name[:eq], name[eq+1:], true
+		}
+		takeValue := func() string {
+			if hasValue {
+				return value
+			}
+			if i+1 < len(words) {
+				i++
+				if variableRef.MatchString(words[i]) {
+					cmd.variable = true
+				}
+				return words[i]
+			}
+			return ""
+		}
+		switch name {
+		case "tags":
+			for _, tag := range strings.FieldsFunc(takeValue(), func(r rune) bool { return r == ',' || r == ' ' }) {
+				if tag == "integration" {
+					cmd.integration = true
+				}
+			}
+		case "run":
+			cmd.selectors = append(cmd.selectors, takeValue())
+		case "skip":
+			cmd.skip = true
+			takeValue()
+		}
+	}
+	return cmd, true
 }
 
 // --- what the smoke tests call ------------------------------------------------
@@ -344,6 +509,7 @@ func smokeCallsIn(file *ast.File) (map[string]string, []string) {
 		problems = append(problems, why)
 	}
 
+	helpers := readSmokeHelpers(file)
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Recv != nil || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, smokeTestPrefix) {
@@ -362,21 +528,15 @@ func smokeCallsIn(file *ast.File) (map[string]string, []string) {
 				delete(clients, name)
 			}
 		}
-		// A skip anywhere in the function -- in its body or in a subtest's
-		// closure -- turns the calls after it into a green run that asserted
-		// nothing, while this guard still credits them.
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok && skipMethods[sel.Sel.Name] {
-				problems = append(problems, fn.Name.Name+" calls "+sel.Sel.Name+"; a smoke test that skips "+
-					"itself is a green run that probed nothing after the skip, and the guard would still credit "+
-					"those calls. Fail instead -- newSmokeClient is the one place the smoke run may skip")
-			}
-			return true
-		})
+		// A skip anywhere in the function -- in its body, in a subtest's
+		// closure, or in a helper it hands its *testing.T to -- turns the calls
+		// after it into a green run that asserted nothing, while this guard
+		// still credits them.
+		for _, why := range skipsIn(fn, helpers) {
+			problems = append(problems, fn.Name.Name+" "+why+"; a smoke test that can skip itself is a green "+
+				"run that probed nothing after the skip, and the guard would still credit those calls. Fail "+
+				"instead -- newSmokeClient is the one place the smoke run may skip")
+		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			if _, ok := n.(*ast.FuncLit); ok {
 				return false
@@ -409,6 +569,106 @@ func smokeCallsIn(file *ast.File) (map[string]string, []string) {
 
 // skipMethods are testing.TB's ways to end a test as skipped.
 var skipMethods = map[string]bool{"Skip": true, "Skipf": true, "SkipNow": true}
+
+// smokeHelpers is what the skip check knows about the smoke file's own
+// functions: which exist, and which can skip the test they are handed.
+type smokeHelpers struct {
+	declared map[string]*ast.FuncDecl
+	skips    map[string]bool
+}
+
+// readSmokeHelpers finds the smoke file's functions that can skip, to a fixed
+// point: one that skips directly, calls one that can, or hands its *testing.T to
+// something this reader cannot see into. newSmokeClient is exempt -- it is the
+// one sanctioned skip, and CI's OCTONOMY_SMOKE_REQUIRED=1 makes it a failure.
+func readSmokeHelpers(file *ast.File) smokeHelpers {
+	h := smokeHelpers{declared: map[string]*ast.FuncDecl{}, skips: map[string]bool{}}
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Body != nil {
+			h.declared[fn.Name.Name] = fn
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for name, fn := range h.declared {
+			if h.skips[name] || name == "newSmokeClient" {
+				continue
+			}
+			if len(skipsIn(fn, h)) > 0 {
+				h.skips[name] = true
+				changed = true
+			}
+		}
+	}
+	return h
+}
+
+// skipsIn returns every way fn can end its test as skipped: a Skip call
+// anywhere in its body, a call to a helper that can skip, or its *testing.T
+// handed to a function this reader cannot see into -- one the smoke file does
+// not declare, or a method on anything but the T itself.
+func skipsIn(fn *ast.FuncDecl, h smokeHelpers) []string {
+	var out []string
+	tName := testingParam(fn)
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch callee := unparen(call.Fun).(type) {
+		case *ast.SelectorExpr:
+			if skipMethods[callee.Sel.Name] {
+				out = append(out, "calls "+callee.Sel.Name)
+				return true
+			}
+			if tName != "" && handsOn(call, tName) && !isIdent(callee.X, tName) {
+				out = append(out, "hands its *testing.T to "+exprString(callee.X)+"."+callee.Sel.Name+
+					", which the guard cannot read for a skip")
+			}
+		case *ast.Ident:
+			if h.skips[callee.Name] {
+				out = append(out, "calls "+callee.Name+", which can skip the test")
+				return true
+			}
+			if _, ok := h.declared[callee.Name]; ok || callee.Name == "newSmokeClient" {
+				return true
+			}
+			if tName != "" && handsOn(call, tName) {
+				out = append(out, "hands its *testing.T to "+callee.Name+", which the smoke file does not "+
+					"declare, so the guard cannot read it for a skip")
+			}
+		default:
+			if tName != "" && handsOn(call, tName) {
+				out = append(out, "hands its *testing.T to a function value the guard cannot read for a skip")
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// testingParam is the name fn gives its *testing.T parameter, or "".
+func testingParam(fn *ast.FuncDecl) string {
+	if fn.Type.Params == nil {
+		return ""
+	}
+	for _, field := range fn.Type.Params.List {
+		if exprString(field.Type) == "*testing.T" && len(field.Names) > 0 {
+			return field.Names[0].Name
+		}
+	}
+	return ""
+}
+
+// handsOn reports whether a call passes the named value as an argument.
+func handsOn(call *ast.CallExpr, name string) bool {
+	for _, arg := range call.Args {
+		if isIdent(arg, name) {
+			return true
+		}
+	}
+	return false
+}
 
 // smokeClients returns the names a smoke test binds to a client it built:
 // `client := newSmokeClient(t)`, or `client, err := octonomy.New(…)`. Only
@@ -592,9 +852,10 @@ func decodedTypesIn(fn *ast.FuncDecl, index funcIndex, types typeIndex, seen map
 		// A local binding shadows the package-level function of the same name:
 		// after `fetch := func(…) error { … }`, a call to fetch runs the closure,
 		// and following the name into the package's fetch would credit the method
-		// with a type it never decodes. Such a call is not followed, so the method
+		// with a type it never decodes. A local `type fetch …` makes fetch(x) a
+		// conversion, the same mistake. Neither is followed, so the method
 		// produces nothing through it -- the fail-closed direction.
-		if ident, ok := unparen(call.Fun).(*ast.Ident); ok && len(declarationsOf(ident.Name, fn)) > 0 {
+		if ident, ok := unparen(call.Fun).(*ast.Ident); ok && (len(declarationsOf(ident.Name, fn)) > 0 || declaresType(fn, ident.Name)) {
 			return true
 		}
 		if callee := resolveCallee(call.Fun, recv, recvType, index); callee != nil {
@@ -730,6 +991,47 @@ func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ct
 			}`,
 			want:     []string{"Tags.Get"},
 			problems: 1,
+		},
+		{
+			// A conditional skip moved into a helper is the realistic shape. The
+			// check follows it, and it follows it down.
+			name: "a skip in a helper the smoke test calls is refused",
+			src: `func requireFeature(t *testing.T) { if unavailable { t.Skip("unavailable") } }
+			func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); requireFeature(t); client.Tags.Get(ctx, id) }`,
+			want:     []string{"Tags.Get"},
+			problems: 1,
+		},
+		{
+			name: "so is one two helpers down",
+			src: `func requireFeature(t *testing.T) { requireFlag(t) }
+			func requireFlag(t *testing.T) { t.SkipNow() }
+			func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); requireFeature(t); client.Tags.Get(ctx, id) }`,
+			want:     []string{"Tags.Get"},
+			problems: 1,
+		},
+		{
+			name: "a helper that cannot skip may be handed the test",
+			src: `func mark(t *testing.T) { t.Helper(); t.Logf("x") }
+			func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); mark(t); t.Run("x", func(t *testing.T) {}); client.Tags.Get(ctx, id) }`,
+			want: []string{"Tags.Get"},
+		},
+		{
+			// A function the smoke file does not declare could do anything with
+			// the T, and the guard cannot see into it.
+			name: "the test handed to a function the file does not declare is refused",
+			src:  `func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); requireHarness(t); client.Tags.Get(ctx, id) }`,
+			want: []string{"Tags.Get"}, problems: 1,
+		},
+		{
+			name: "so is the test handed to a method",
+			src:  `func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); h.require(t); client.Tags.Get(ctx, id) }`,
+			want: []string{"Tags.Get"}, problems: 1,
+		},
+		{
+			name: "and a helper that hands its test on to one counts as able to skip",
+			src: `func requireFeature(t *testing.T) { external(t) }
+			func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); requireFeature(t); client.Tags.Get(ctx, id) }`,
+			want: []string{"Tags.Get"}, problems: 1,
 		},
 		{
 			name: "a skip outside the smoke functions is newSmokeClient's business",
@@ -886,6 +1188,18 @@ func TestDecodedTypesResolvesWhatAMethodReallyDecodes(t *testing.T) {
 			func (s *TagService) Get(ctx context.Context) error { return fetch(ctx, s.client) }`,
 		},
 		{
+			name: "a local type conversion named like a helper is not followed", method: "TagService.Probe", want: nil,
+			src: `func fetch(ctx context.Context, c *Client) error {
+				var out Tag
+				return c.doData(ctx, http.MethodGet, "/tags/1", nil, nil, &out)
+			}
+			func (s *TagService) Probe(ctx context.Context) error {
+				type fetch int
+				_ = fetch(1)
+				return nil
+			}`,
+		},
+		{
 			// A rebound receiver makes every `s.client.…` in the body ambiguous,
 			// so the method resolves to nothing rather than to whatever the name
 			// now holds.
@@ -993,6 +1307,23 @@ func TestSmokeRunProblemsReadsTheRunnersLikeTheShellDoes(t *testing.T) {
 		{"a -skip= spelling", "go test -tags=integration -skip=TestSmoke_A ./...", 2},
 		{"an unanchored name", "run: go test -tags=integration -run TestSmoke_RealServer -v ./...", 2},
 		{"only another suite", "go test -tags=integration -run '^TestIntegration_' ./...", 1},
+		// The shapes a line reader got wrong: a command is what the shell runs.
+		{"a backslash continuation narrowing the run", "go test -tags=integration \\\n  -run '^TestSmoke_RealServer$' ./...", 2},
+		{"the same inside a YAML block", "run: |\n  go test -tags=integration \\\n    -run '^TestSmoke_RealServer$' ./...", 2},
+		{"this repository's Makefile recipe", "\t@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \\\n\tgo test -tags=integration -run '^TestSmoke_' -v ./...", 0},
+		{"a chained command", "make dev-server && go test -tags=integration -run '^TestSmoke_' ./... || true", 0},
+		{"a chained narrowing", "true; go test -tags=integration -run TestSmoke_RealServer ./...", 2},
+		{"a flag on the next line, as a folded YAML scalar joins it", "run: >\n  go test -tags=integration\n  -run '^TestSmoke_RealServer$' ./...", 2},
+		{"a YAML list item is not a flag", "run: go test -tags=integration -run '^TestSmoke_' ./...\n- name: logs", 0},
+		{"two -run flags", "go test -tags=integration -run '^TestSmoke_' -run TestSmoke_RealServer ./...", 2},
+		{"a selector in a make variable", "go test -tags=integration -run $(SMOKE_RUN) ./...", 2},
+		{"a selector in a shell variable", `go test -tags=integration -run "${SMOKE_RUN}" ./...`, 2},
+		{"a make-escaped dollar is not a variable", "go test -tags=integration -run '^TestSmoke_$$' ./...", 2},
+		{"GOFLAGS carrying a selector", "GOFLAGS=-run=TestSmoke_RealServer\ngo test -tags=integration -run '^TestSmoke_' ./...", 1},
+		{"the tags flag spelled with a space", "go test -tags integration -run '^TestSmoke_' ./...", 0},
+		{"two dashes and an equals sign", "go test --tags=integration --run=^TestSmoke_ ./...", 0},
+		{"the test. spelling narrowing the run", "go test -tags=integration -test.run=TestSmoke_RealServer ./...", 2},
+		{"a tag list", "go test -tags=foo,integration -run '^TestSmoke_' ./...", 0},
 		{"no integration run at all", "go test -race ./...", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

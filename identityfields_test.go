@@ -433,6 +433,16 @@ func TestResponseTypesCollectsWhatTheTransportDecodes(t *testing.T) {
 			unresolved: 1,
 		},
 		{
+			name: "a method expression through an alias declared in the function is refused",
+			src: `func (s *S) Create(ctx context.Context) error {
+				type C = *Client
+				var request Tag
+				var out Widget
+				return C.doData(s.client, ctx, http.MethodPost, "/w", nil, &request, &out)
+			}`,
+			unresolved: 1,
+		},
+		{
 			name: "a method expression through a type alias is refused",
 			src: `type C = *Client
 			func (s *S) List(ctx context.Context) error { var out TagList; return C.doList(s.client, ctx, "GET", "/t", nil, &out) }`,
