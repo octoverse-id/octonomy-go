@@ -382,7 +382,17 @@ func smokeRuns(path, src string) ([]int, []string) {
 			problems = append(problems, where+" sets GOFLAGS with a test selector, which applies to every "+
 				"go test the smoke runs make; the guard cannot see what it selects")
 		}
-		for _, c := range shellCommands(yamlRunKey.ReplaceAllString(ll.text, "")) {
+		if ignoresErrors.MatchString(ll.text) {
+			problems = append(problems, where+" tells make to ignore recipe failures, so a failing smoke run "+
+				"would read as green")
+		}
+		commands := shellCommands(yamlRunKey.ReplaceAllString(ll.text, ""))
+		// make reads its recipe-line prefixes (@ silent, - ignore errors, +
+		// always run) off the LINE, continuations included, not off each
+		// command in it: `-@if …; \` before a go test ignores the go test's
+		// failure too.
+		lineIgnored := len(commands) > 0 && strings.Contains(makePrefix(commands[0].words[0]), "-")
+		for _, c := range commands {
 			depth = compoundDepth(c.words, depth)
 			run, ok := goTestRun(c.words)
 			if !ok || !run.integration {
@@ -423,7 +433,11 @@ func smokeRuns(path, src string) ([]int, []string) {
 				// otherwise another suite's run, which neither helps nor harms the smoke run
 			default:
 				// no selector, or the prefix: every smoke test is selected -- if the command runs
-				if why := executionProblem(c, depth); why != "" {
+				why := executionProblem(c, depth)
+				if why == "" && lineIgnored {
+					why = "is on a make recipe line prefixed with -, whose failure make ignores"
+				}
+				if why != "" {
 					if len(run.selectors) == 1 {
 						problems = append(problems, where+" "+why+", so a smoke run that fails or never "+
 							"starts reads as green")
@@ -480,6 +494,15 @@ func executionProblem(c shellCommand, depth int) string {
 }
 
 var envAssignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+
+// ignoresErrors matches the ways a Makefile ignores every recipe failure at
+// once: the .IGNORE special target, and -i or --ignore-errors in MAKEFLAGS.
+var ignoresErrors = regexp.MustCompile(`^\.IGNORE\s*:|^\s*MAKEFLAGS\b.*(\s|=)(-[A-Za-z]*i[A-Za-z]*|--ignore-errors)\b`)
+
+// makePrefix returns the leading make recipe prefixes of a line's first word.
+func makePrefix(word string) string {
+	return word[:len(word)-len(strings.TrimLeft(word, "@-+"))]
+}
 
 // compoundDepth tracks how deep the shell commands read so far nest in
 // if/while/until/for/case, from a command's first word.
@@ -1932,6 +1955,11 @@ func TestSmokeRunProblemsReadsTheRunnersLikeTheShellDoes(t *testing.T) {
 		{"the same across a YAML block", "run: |\n  if [ -n \"$CI\" ]; then\n    go test -tags=integration -run '^TestSmoke_' ./...\n  fi", 2},
 		{"a negated run", "! go test -tags=integration -run '^TestSmoke_' ./...", 2},
 		{"a make line whose failure is ignored", "\t-go test -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"the prefix on the line the run continues", "\t-@if [ -f .env ]; then . ./.env; fi; \\\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"silent and always-run prefixes are fine", "\t+@if [ -f .env ]; then . ./.env; fi; \\\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"a .IGNORE target", ".IGNORE:\nsmoke:\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 1},
+		{"MAKEFLAGS ignoring errors", "MAKEFLAGS += -i\nsmoke:\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 1},
+		{"MAKEFLAGS doing something else", "MAKEFLAGS += --no-print-directory\nsmoke:\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 0},
 		{"an env assignment and time are fine", "\tOCTONOMY_SMOKE_REQUIRED=1 time go test -tags=integration -run '^TestSmoke_' ./...", 0},
 		{"a masked catch-all is passed over, not refused", "go test -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?\ngo test -tags=integration -run '^TestSmoke_' ./...", 0},
 		{"but it does not count as the smoke run", "go test -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?", 1},
