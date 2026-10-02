@@ -2114,15 +2114,18 @@ RUN
 // SHELL or .SHELLFLAGS decide what runs a recipe line at all.
 func makefileProblems(src, target string) []string {
 	var problems []string
-	for i, raw := range strings.Split(src, "\n") {
-		if strings.HasPrefix(raw, "\t") {
+	// Logical lines, as make reads them: a backslash-newline continues a
+	// declaration (`.IGNORE: dev-server-down \` / `smoke`), and a comment too,
+	// which stripping after the # then removes whole.
+	for _, ll := range logicalLines(src) {
+		if strings.HasPrefix(ll.text, "\t") {
 			continue // a recipe line is shell, not make
 		}
-		line := raw
+		line := ll.text
 		if hash := strings.IndexByte(line, '#'); hash >= 0 {
 			line = line[:hash]
 		}
-		where := "line " + strconv.Itoa(i+1)
+		where := "line " + strconv.Itoa(ll.line)
 		if m := specialTarget.FindStringSubmatch(line); m != nil {
 			prereqs := strings.Fields(m[2])
 			switch m[1] {
@@ -2221,6 +2224,9 @@ func TestMakefileProblemsReadsMakeLikeMakeDoes(t *testing.T) {
 		{".SHELLFLAGS", ".SHELLFLAGS := -c\n", 1},
 		{"a recipe line mentioning MAKEFLAGS is shell, not make", "smoke:\n\techo MAKEFLAGS=i\n", 0},
 		{"a comment is not a setting", "# MAKEFLAGS += i\n", 0},
+		{"a declaration continued onto the next line", ".IGNORE: dev-server-down \\\n  smoke\n", 1},
+		{"MAKEFLAGS continued onto the next line", "MAKEFLAGS += --no-print-directory \\\n  i\n", 1},
+		{"a comment continued onto the next line", "# best effort \\\n.IGNORE:\n", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := makefileProblems(tc.src, smokeTarget); len(got) != tc.problems {
