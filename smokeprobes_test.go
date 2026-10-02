@@ -35,6 +35,7 @@ import (
 	"go/token"
 	"io/ioutil"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -281,7 +282,15 @@ var variableRef = regexp.MustCompile(`(^|[^$])\$[({A-Za-z_]`)
 var flagLine = regexp.MustCompile(`^\s*--?[A-Za-z]`)
 
 // smokeRunProblems reads one runner file for the integration runs that execute
-// the smoke tests, and returns what is wrong with them.
+// the smoke tests, and returns what is wrong with them, including having none.
+func smokeRunProblems(path, src string) []string {
+	_, problems := smokeRuns(path, src)
+	return problems
+}
+
+// smokeRuns reads one runner file for the integration runs that execute every
+// smoke test, and returns the physical line each one starts on, with what is
+// wrong with the runs it could not count.
 //
 // It reads COMMANDS, not physical lines, because a runner is a shell script: a
 // `\` continues a command onto the next line, `;`, `&&`, `||` and `|` put
@@ -291,10 +300,20 @@ var flagLine = regexp.MustCompile(`^\s*--?[A-Za-z]`)
 // cannot read -- a selector held in a variable, two -run flags, a -skip, GOFLAGS
 // carrying either, a flag on a line of its own that YAML folding may join to the
 // one above -- is refused rather than guessed at.
-func smokeRunProblems(path, src string) []string {
-	var problems []string
-	smokeRuns := 0
+//
+// And a run counts only if it RUNS, and its failure fails the runner: not
+// behind `||` or inside a shell if/while/for/case, not followed by anything but
+// `&&` -- `|| true`, `; echo done` and a pipe all hand the line someone else's
+// exit status -- and not on a make recipe line prefixed with `-`, whose failure
+// make ignores. A catch-all run (no -run) that fails that test is passed over
+// rather than refused, since it belongs to another suite; a run naming
+// TestSmoke is refused. The CI workflow's own control flow -- a step's if:,
+// continue-on-error -- is TestSmokeJobRequiresTheSmokeRun's to check.
+func smokeRuns(path, src string) ([]int, []string) {
+	var runs []int
+	var problems, uncounted []string
 	lines := logicalLines(src)
+	depth := 0
 	for i, ll := range lines {
 		where := path + ":" + strconv.Itoa(ll.line)
 		trimmed := strings.TrimSpace(ll.text)
@@ -305,8 +324,9 @@ func smokeRunProblems(path, src string) []string {
 			problems = append(problems, where+" sets GOFLAGS with a test selector, which applies to every "+
 				"go test the smoke runs make; the guard cannot see what it selects")
 		}
-		for _, words := range shellCommands(ll.text) {
-			run, ok := goTestRun(words)
+		for _, c := range shellCommands(yamlRunKey.ReplaceAllString(ll.text, "")) {
+			depth = compoundDepth(c.words, depth)
+			run, ok := goTestRun(c.words)
 			if !ok || !run.integration {
 				continue
 			}
@@ -336,24 +356,88 @@ func smokeRunProblems(path, src string) []string {
 			case len(run.selectors) > 1:
 				problems = append(problems, where+" passes -run "+strconv.Itoa(len(run.selectors))+
 					" times; go test keeps the last, and a smoke run should say once what it runs")
-			case len(run.selectors) == 0:
-				smokeRuns++ // no selector: every test runs, the smoke tests among them
-			case run.selectors[0] == "^"+smokeTestPrefix:
-				smokeRuns++
-			case strings.Contains(run.selectors[0], "TestSmoke"):
-				problems = append(problems, where+" selects -run "+run.selectors[0]+", but the smoke guard "+
-					"counts every "+smokeTestPrefix+" function as run. A narrower selector leaves probes the "+
-					"guard credits unexecuted; select '^"+smokeTestPrefix+"'")
+			case len(run.selectors) == 1 && run.selectors[0] != "^"+smokeTestPrefix:
+				if strings.Contains(run.selectors[0], "TestSmoke") {
+					problems = append(problems, where+" selects -run "+run.selectors[0]+", but the smoke guard "+
+						"counts every "+smokeTestPrefix+" function as run. A narrower selector leaves probes the "+
+						"guard credits unexecuted; select '^"+smokeTestPrefix+"'")
+				}
+				// otherwise another suite's run, which neither helps nor harms the smoke run
 			default:
-				// another suite's run, which neither helps nor harms the smoke run
+				// no selector, or the prefix: every smoke test is selected -- if the command runs
+				if why := executionProblem(c, depth); why != "" {
+					if len(run.selectors) == 1 {
+						problems = append(problems, where+" "+why+", so a smoke run that fails or never "+
+							"starts reads as green")
+					} else {
+						uncounted = append(uncounted, where+" "+why)
+					}
+					continue
+				}
+				runs = append(runs, ll.line)
 			}
 		}
 	}
-	if smokeRuns == 0 {
-		problems = append(problems, path+" has no `go test -tags=integration` run that reaches every "+
-			smokeTestPrefix+" function, so the smoke run the guard reads for is not wired here")
+	if len(runs) == 0 {
+		msg := path + " has no `go test -tags=integration` run that reaches every " + smokeTestPrefix +
+			" function, so the smoke run the guard reads for is not wired here"
+		if len(uncounted) > 0 {
+			msg += "; not counted, because their failure would not fail the runner: " + strings.Join(uncounted, "; ")
+		}
+		problems = append(problems, msg)
 	}
-	return problems
+	return runs, problems
+}
+
+// yamlRunKey is a workflow step's `run:` key, which a command line in ci.yml may
+// open with; what follows it is the shell.
+var yamlRunKey = regexp.MustCompile(`^\s*(-\s+)?run:\s*[|>]?[-+]?`)
+
+// executionProblem says why a command might not run, or might fail without
+// failing its runner, or "".
+func executionProblem(c shellCommand, depth int) string {
+	switch {
+	case depth > 0:
+		return "runs inside a shell if/while/for/case, so whether it runs depends on a condition"
+	case c.before == "||":
+		return "runs only when the command before it fails"
+	case c.after == "||" || c.after == ";" || c.after == "|" || c.after == "&":
+		return "is followed by `" + c.after + "`, which hands the line another command's exit status"
+	}
+	for _, w := range c.words {
+		bare := strings.TrimLeft(w, "@+")
+		if strings.HasPrefix(bare, "-") && strings.TrimLeft(bare, "-") == "go" {
+			return "is a make recipe line prefixed with -, whose failure make ignores"
+		}
+		if bare == "go" {
+			return ""
+		}
+		switch {
+		case envAssignment.MatchString(w), w == "time", w == "exec", w == "command", w == "env":
+		default:
+			return "is preceded on its command by " + strconv.Quote(w) + ", which may decide whether it runs"
+		}
+	}
+	return ""
+}
+
+var envAssignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+
+// compoundDepth tracks how deep the shell commands read so far nest in
+// if/while/until/for/case, from a command's first word.
+func compoundDepth(words []string, depth int) int {
+	if len(words) == 0 {
+		return depth
+	}
+	switch strings.TrimLeft(words[0], "@-+") {
+	case "if", "while", "until", "for", "case":
+		depth++
+	case "fi", "done", "esac":
+		if depth > 0 {
+			depth--
+		}
+	}
+	return depth
 }
 
 // logicalLine is one shell line after its `\` continuations are joined, with
@@ -377,14 +461,22 @@ func logicalLines(src string) []logicalLine {
 	return out
 }
 
-// shellCommands splits a logical line into its commands -- on ;, &&, || and |
-// outside quotes -- and each command into words, with the quotes removed.
-func shellCommands(line string) [][]string {
-	var commands [][]string
+// shellCommand is one command of a shell line, its words with quotes removed,
+// and the operators on either side of it ("" at the line's ends).
+type shellCommand struct {
+	words         []string
+	before, after string
+}
+
+// shellCommands splits a logical line into its commands -- on ;, &&, ||, | and
+// & outside quotes -- recording the operator on each side of each.
+func shellCommands(line string) []shellCommand {
+	var commands []shellCommand
 	var words []string
 	var word strings.Builder
 	inWord := false
 	var quote byte
+	before := ""
 	flushWord := func() {
 		if inWord {
 			words = append(words, word.String())
@@ -392,12 +484,12 @@ func shellCommands(line string) [][]string {
 			inWord = false
 		}
 	}
-	flushCommand := func() {
+	flushCommand := func(op string) {
 		flushWord()
 		if len(words) > 0 {
-			commands = append(commands, words)
+			commands = append(commands, shellCommand{words: words, before: before, after: op})
 		}
-		words = nil
+		words, before = nil, op
 	}
 	for i := 0; i < len(line); i++ {
 		c := line[i]
@@ -410,11 +502,22 @@ func shellCommands(line string) [][]string {
 			}
 		case c == '\'' || c == '"':
 			quote, inWord = c, true
-		case c == ';' || c == '|' || c == '&':
-			flushCommand()
-			if i+1 < len(line) && (line[i+1] == '|' || line[i+1] == '&') {
+		case c == '>' || c == '<':
+			// A redirection operator stays in its word (`2>&1`, `>"$log"`), so
+			// its & is not read as a separator.
+			word.WriteByte(c)
+			inWord = true
+			if i+1 < len(line) && line[i+1] == '&' {
+				word.WriteByte('&')
 				i++
 			}
+		case c == ';' || c == '|' || c == '&':
+			op := string(c)
+			if i+1 < len(line) && (line[i+1] == '|' || line[i+1] == '&') && line[i+1] == c {
+				op += string(c)
+				i++
+			}
+			flushCommand(op)
 		case c == ' ' || c == '\t':
 			flushWord()
 		default:
@@ -422,7 +525,7 @@ func shellCommands(line string) [][]string {
 			inWord = true
 		}
 	}
-	flushCommand()
+	flushCommand("")
 	return commands
 }
 
@@ -958,20 +1061,182 @@ func stringLit(expr ast.Expr) string {
 	return v
 }
 
-// The gate is only a failure where the variable is set, so the CI smoke job
-// must set it. A required run that loses the variable skips every smoke test
-// and passes, which is what newSmokeClient's comment says this line cannot
-// afford.
+// The CI workflow decides whether its smoke step runs and whether its failure
+// counts, and none of that is in the command TestSmokeSelectorRunsEveryTestSmokeFunction
+// reads. So the step that holds a counted smoke run, and the job around it, are
+// held to running unconditionally (no if:), failing the workflow when it fails
+// (no continue-on-error), running from the root (no working-directory), and
+// setting OCTONOMY_SMOKE_REQUIRED to "1" in their OWN env -- the gate
+// newSmokeClient's one skip sits behind is only a failure where the variable is
+// set, and one set on another job does not reach this one.
 func TestSmokeJobRequiresTheSmokeRun(t *testing.T) {
-	raw, err := ioutil.ReadFile(".github/workflows/ci.yml")
+	const path = ".github/workflows/ci.yml"
+	raw, err := ioutil.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read ci.yml: %v", err)
+		t.Fatalf("read %s: %v", path, err)
 	}
-	set := regexp.MustCompile(`(?m)^\s*` + smokeRequiredEnv + `:\s*["']?1["']?\s*$`)
-	if !set.Match(raw) {
-		t.Errorf(".github/workflows/ci.yml does not set %s: \"1\", so newSmokeClient's one skip is a "+
-			"green job there rather than a failure", smokeRequiredEnv)
+	runs, _ := smokeRuns(path, string(raw))
+	if len(runs) == 0 {
+		t.Fatalf("%s has no counted smoke run; TestSmokeSelectorRunsEveryTestSmokeFunction says why", path)
 	}
+	var problems []string
+	for _, line := range runs {
+		found := workflowStepProblems(string(raw), line)
+		if len(found) == 0 {
+			return
+		}
+		problems = append(problems, found...)
+	}
+	for _, p := range problems {
+		t.Errorf("%s: %s", path, p)
+	}
+}
+
+// workflowStepProblems reads the workflow step holding the command on the given
+// physical line, and the job around it, for what would keep that command from
+// running, or its failure from failing the workflow.
+//
+// It reads YAML by indentation, which is all a GitHub workflow's step and job
+// mappings need, and refuses what it cannot place.
+func workflowStepProblems(src string, line int) []string {
+	lines := strings.Split(src, "\n")
+	if line < 1 || line > len(lines) {
+		return []string{"line " + strconv.Itoa(line) + " is not in the workflow"}
+	}
+	step := enclosingItem(lines, line-1)
+	if step < 0 {
+		return []string{"line " + strconv.Itoa(line) + " is not inside a workflow step"}
+	}
+	stepKeys := mappingKeys(lines, step, indentOf(lines[step])+2)
+	steps := enclosingKey(lines, step, indentOf(lines[step]))
+	job := -1
+	if steps >= 0 && keyName(lines[steps]) == "steps" {
+		job = enclosingKey(lines, steps, indentOf(lines[steps]))
+	}
+	if job < 0 {
+		return []string{"the step at line " + strconv.Itoa(step+1) + " is not in a job's steps"}
+	}
+	jobKeys := mappingKeys(lines, job, indentOf(lines[job])+2)
+
+	var problems []string
+	where := "the smoke step at line " + strconv.Itoa(step+1)
+	jobWhere := "its job " + strconv.Quote(keyName(lines[job]))
+	for key, why := range map[string]string{
+		"if":                "runs only when its if: holds, so a run it skips reads as green",
+		"continue-on-error": "lets its failure pass the workflow",
+		"working-directory": "runs from another directory than the root package",
+	} {
+		if _, ok := stepKeys[key]; ok {
+			problems = append(problems, where+" "+why)
+		}
+		if _, ok := jobKeys[key]; ok && key != "working-directory" {
+			problems = append(problems, jobWhere+" "+why)
+		}
+	}
+	if at, ok := jobKeys["defaults"]; ok && blockMentions(lines, at, "working-directory") {
+		problems = append(problems, jobWhere+" sets a default working-directory, so the smoke step may run "+
+			"from another directory than the root package")
+	}
+	required := regexp.MustCompile(`^\s*` + smokeRequiredEnv + `:\s*["']?1["']?\s*$`)
+	set := false
+	for _, keys := range []map[string]int{stepKeys, jobKeys} {
+		if at, ok := keys["env"]; ok && blockMatches(lines, at, required) {
+			set = true
+		}
+	}
+	if !set {
+		problems = append(problems, where+" sets "+smokeRequiredEnv+": \"1\" in neither its own env nor its "+
+			"job's, so newSmokeClient's one skip is a green job there rather than a failure")
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// enclosingItem returns the index of the sequence item (`- …`) that holds line
+// i, or -1.
+func enclosingItem(lines []string, i int) int {
+	own := indentOf(lines[i])
+	if strings.HasPrefix(strings.TrimSpace(lines[i]), "- ") {
+		return i
+	}
+	for j := i - 1; j >= 0; j-- {
+		if isBlankOrComment(lines[j]) || indentOf(lines[j]) >= own {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(lines[j]), "- ") {
+			return j
+		}
+		own = indentOf(lines[j])
+	}
+	return -1
+}
+
+// enclosingKey returns the index of the nearest line above i indented less than
+// indent, or -1.
+func enclosingKey(lines []string, i, indent int) int {
+	for j := i - 1; j >= 0; j-- {
+		if !isBlankOrComment(lines[j]) && indentOf(lines[j]) < indent {
+			return j
+		}
+	}
+	return -1
+}
+
+// mappingKeys returns the keys of the mapping that opens at line start, at the
+// given indentation, mapped to the line each is on. A sequence item's first key
+// shares its line with the dash.
+func mappingKeys(lines []string, start, indent int) map[string]int {
+	keys := map[string]int{}
+	if strings.HasPrefix(strings.TrimSpace(lines[start]), "- ") {
+		keys[keyName(strings.TrimPrefix(strings.TrimSpace(lines[start]), "- "))] = start
+	}
+	for j := start + 1; j < len(lines); j++ {
+		if isBlankOrComment(lines[j]) {
+			continue
+		}
+		ind := indentOf(lines[j])
+		if ind < indent {
+			break
+		}
+		if ind == indent {
+			keys[keyName(lines[j])] = j
+		}
+	}
+	return keys
+}
+
+// blockMatches reports whether a line nested under the key at line at matches re.
+func blockMatches(lines []string, at int, re *regexp.Regexp) bool {
+	indent := indentOf(lines[at])
+	for j := at + 1; j < len(lines); j++ {
+		if isBlankOrComment(lines[j]) {
+			continue
+		}
+		if indentOf(lines[j]) <= indent {
+			break
+		}
+		if re.MatchString(lines[j]) {
+			return true
+		}
+	}
+	return false
+}
+
+func blockMentions(lines []string, at int, word string) bool {
+	return blockMatches(lines, at, regexp.MustCompile(regexp.QuoteMeta(word)))
+}
+
+func keyName(line string) string {
+	key := strings.TrimSpace(line)
+	if i := strings.IndexByte(key, ':'); i >= 0 {
+		key = key[:i]
+	}
+	return strings.Trim(key, `"'`)
+}
+
+func isBlankOrComment(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return trimmed == "" || strings.HasPrefix(trimmed, "#")
 }
 
 // importName returns the name a file imports path under, or "" if it does not.
@@ -1591,7 +1856,20 @@ func TestSmokeRunProblemsReadsTheRunnersLikeTheShellDoes(t *testing.T) {
 		{"a backslash continuation narrowing the run", "go test -tags=integration \\\n  -run '^TestSmoke_RealServer$' ./...", 2},
 		{"the same inside a YAML block", "run: |\n  go test -tags=integration \\\n    -run '^TestSmoke_RealServer$' ./...", 2},
 		{"this repository's Makefile recipe", "\t@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \\\n\tgo test -tags=integration -run '^TestSmoke_' -v ./...", 0},
-		{"a chained command", "make dev-server && go test -tags=integration -run '^TestSmoke_' ./... || true", 0},
+		{"a chained command", "make dev-server && go test -tags=integration -run '^TestSmoke_' ./...", 0},
+		// A run counts only if it runs and its failure fails the runner.
+		{"a failure masked by || true", "make dev-server && go test -tags=integration -run '^TestSmoke_' ./... || true", 2},
+		{"a run behind ||", `test -n "$OCTONOMY_TEST_BASE_URL" || go test -tags=integration -run '^TestSmoke_' ./...`, 2},
+		{"a run followed by another command", "go test -tags=integration -run '^TestSmoke_' ./...; echo done", 2},
+		{"a run piped on", "go test -tags=integration -run '^TestSmoke_' -v ./... | tee smoke.log", 2},
+		{"a run backgrounded", "go test -tags=integration -run '^TestSmoke_' ./... &", 2},
+		{"a run inside a shell if", "if [ -n \"$CI\" ]; then go test -tags=integration -run '^TestSmoke_' ./...; fi", 2},
+		{"the same across a YAML block", "run: |\n  if [ -n \"$CI\" ]; then\n    go test -tags=integration -run '^TestSmoke_' ./...\n  fi", 2},
+		{"a negated run", "! go test -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"a make line whose failure is ignored", "\t-go test -tags=integration -run '^TestSmoke_' ./...", 2},
+		{"an env assignment and time are fine", "\tOCTONOMY_SMOKE_REQUIRED=1 time go test -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"a masked catch-all is passed over, not refused", "go test -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?\ngo test -tags=integration -run '^TestSmoke_' ./...", 0},
+		{"but it does not count as the smoke run", "go test -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?", 1},
 		{"a chained narrowing", "true; go test -tags=integration -run TestSmoke_RealServer ./...", 2},
 		{"a flag on the next line, as a folded YAML scalar joins it", "run: >\n  go test -tags=integration\n  -run '^TestSmoke_RealServer$' ./...", 2},
 		{"a YAML list item is not a flag", "run: go test -tags=integration -run '^TestSmoke_' ./...\n- name: logs", 0},
@@ -1668,4 +1946,70 @@ func newSmokeClient(t *testing.T) *octonomy.Client {
 	return nil
 }
 func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ctx, id) }`
+}
+
+// The step reader is only as good as its placement: the keys that decide
+// whether the smoke step runs must be read off the smoke step and its own job,
+// and a neighbouring step's if: or another job's env must not count for or
+// against it.
+func TestWorkflowStepProblemsReadsTheSmokeStepAndItsJob(t *testing.T) {
+	const base = `jobs:
+  other:
+    runs-on: ubuntu-latest
+    env:
+      OTHER_ENV
+    steps:
+      - run: echo other
+  smoke:
+    runs-on: ubuntu-latest
+JOBKEYS    steps:
+      - uses: actions/checkout@v7
+      - name: Smoke test against the real server
+STEPKEYS        env:
+          STEP_ENV
+RUN
+      - name: Capture container logs
+        if: failure()
+        run: make dev-server-logs
+`
+	const required = `OCTONOMY_SMOKE_REQUIRED: "1"`
+	const run = "        run: go test -tags=integration -run '^TestSmoke_' -v ./..."
+	for _, tc := range []struct {
+		name, jobKeys, stepKeys, stepEnv, otherEnv, run string
+		problems                                        int
+	}{
+		{name: "as it stands", stepEnv: required, problems: 0},
+		{name: "a step condition", stepKeys: "        if: github.event_name == 'pull_request'\n", stepEnv: required, problems: 1},
+		{name: "a step allowed to fail", stepKeys: "        continue-on-error: true\n", stepEnv: required, problems: 1},
+		{name: "a step run elsewhere", stepKeys: "        working-directory: examples\n", stepEnv: required, problems: 1},
+		{name: "a job condition", jobKeys: "    if: github.ref == 'refs/heads/main'\n", stepEnv: required, problems: 1},
+		{name: "a job allowed to fail", jobKeys: "    continue-on-error: true\n", stepEnv: required, problems: 1},
+		{name: "a job default directory", jobKeys: "    defaults:\n      run:\n        working-directory: examples\n", stepEnv: required, problems: 1},
+		{name: "the variable on the job", jobKeys: "    env:\n      " + required + "\n", stepEnv: "OTHER: x", problems: 0},
+		// #97 will add an integration job that, as on main, sets the same
+		// variable. Set there and not here, it reaches nothing this step runs.
+		{name: "the variable set only on another job", stepEnv: "OTHER: x", otherEnv: required, problems: 1},
+		{name: "the variable set to 0", stepEnv: `OCTONOMY_SMOKE_REQUIRED: "0"`, problems: 1},
+		{name: "a block scalar", stepEnv: required, run: "        run: |\n          go test -tags=integration -run '^TestSmoke_' -v ./...", problems: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := tc.run
+			if r == "" {
+				r = run
+			}
+			other := tc.otherEnv
+			if other == "" {
+				other = "OTHER: y"
+			}
+			src := strings.NewReplacer("JOBKEYS", tc.jobKeys, "STEPKEYS", tc.stepKeys,
+				"STEP_ENV", tc.stepEnv, "OTHER_ENV", other, "RUN", r).Replace(base)
+			runs, problems := smokeRuns("fixture", src)
+			if len(problems) != 0 || len(runs) != 1 {
+				t.Fatalf("the fixture's smoke command did not read as one run: %v %v", runs, problems)
+			}
+			if got := workflowStepProblems(src, runs[0]); len(got) != tc.problems {
+				t.Errorf("problems = %d, want %d: %v", len(got), tc.problems, got)
+			}
+		})
+	}
 }

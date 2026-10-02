@@ -158,12 +158,16 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   can, or its `*testing.T` handed to anything the guard cannot read — since a skipped probe is a
   green run the guard would still credit. The one skip allowed is `newSmokeClient`'s, and only in the
   shape that makes CI fail instead: a single `Skip` straight after `if required { t.Fatal(…) }`, with
-  `required` read from `OCTONOMY_SMOKE_REQUIRED`, which `TestSmokeJobRequiresTheSmokeRun` holds the
-  CI job to setting. `TestSmokeSelectorRunsEveryTestSmokeFunction` holds `make smoke` and
+  `required` read from `OCTONOMY_SMOKE_REQUIRED`. `TestSmokeJobRequiresTheSmokeRun` holds the CI step
+  that runs the smoke tests, and its job, to setting that variable in their own `env`, and to running
+  unconditionally with a failure that fails the workflow — no `if:`, no `continue-on-error`, no
+  `working-directory`. `TestSmokeSelectorRunsEveryTestSmokeFunction` holds `make smoke` and
   the go1.13 smoke job to a run that reaches every `TestSmoke_` function — read as shell commands,
   with continuations joined; with no narrower `-run`, no `-skip`, no selector in a variable or
   `GOFLAGS`; on the root package; and with no flag outside an allow-list of those known to leave the
-  tests that run alone, since `-list`, `-c`, `-n` and `-count=0` all run nothing and exit 0 — and `TestSmokeFileCarriesTheTagTheRunnersSelect` holds the smoke file to the
+  tests that run alone, since `-list`, `-c`, `-n` and `-count=0` all run nothing and exit 0; and only
+  where the command runs and its failure fails the runner — not behind `||` or inside a shell `if`,
+  not followed by `|| true`, a `;` or a pipe, not on a make line prefixed with `-` — and `TestSmokeFileCarriesTheTagTheRunnersSelect` holds the smoke file to the
   `integration` tag those runs build, in both constraint spellings, so the guard cannot credit a probe
   no job runs.
 
