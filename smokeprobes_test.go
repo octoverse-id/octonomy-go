@@ -233,8 +233,13 @@ func TestSmokeSelectorRunsEveryTestSmokeFunction(t *testing.T) {
 		// command elsewhere in the file -- under a renamed target, say, while
 		// .PHONY keeps `make smoke` exiting 0 with nothing to do -- runs for
 		// nobody who types the documented command.
-		if path == "Makefile" && len(runs) > 0 {
-			if why := makeTargetRuns(string(raw), smokeTarget, runs); why != "" {
+		if path == "Makefile" {
+			if len(runs) > 0 {
+				if why := makeTargetRuns(string(raw), smokeTarget, runs); why != "" {
+					t.Errorf("Makefile: %s", why)
+				}
+			}
+			for _, why := range makefileProblems(string(raw), smokeTarget) {
 				t.Errorf("Makefile: %s", why)
 			}
 		}
@@ -382,10 +387,6 @@ func smokeRuns(path, src string) ([]int, []string) {
 			problems = append(problems, where+" sets GOFLAGS with a test selector, which applies to every "+
 				"go test the smoke runs make; the guard cannot see what it selects")
 		}
-		if ignoresErrors.MatchString(ll.text) {
-			problems = append(problems, where+" tells make to ignore recipe failures, so a failing smoke run "+
-				"would read as green")
-		}
 		commands := shellCommands(yamlRunKey.ReplaceAllString(ll.text, ""))
 		// make reads its recipe-line prefixes (@ silent, - ignore errors, +
 		// always run) off the LINE, continuations included, not off each
@@ -494,10 +495,6 @@ func executionProblem(c shellCommand, depth int) string {
 }
 
 var envAssignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
-
-// ignoresErrors matches the ways a Makefile ignores every recipe failure at
-// once: the .IGNORE special target, and -i or --ignore-errors in MAKEFLAGS.
-var ignoresErrors = regexp.MustCompile(`^\.IGNORE\s*:|^\s*MAKEFLAGS\b.*(\s|=)(-[A-Za-z]*i[A-Za-z]*|--ignore-errors)\b`)
 
 // makePrefix returns the leading make recipe prefixes of a line's first word.
 func makePrefix(word string) string {
@@ -1957,9 +1954,6 @@ func TestSmokeRunProblemsReadsTheRunnersLikeTheShellDoes(t *testing.T) {
 		{"a make line whose failure is ignored", "\t-go test -tags=integration -run '^TestSmoke_' ./...", 2},
 		{"the prefix on the line the run continues", "\t-@if [ -f .env ]; then . ./.env; fi; \\\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 2},
 		{"silent and always-run prefixes are fine", "\t+@if [ -f .env ]; then . ./.env; fi; \\\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 0},
-		{"a .IGNORE target", ".IGNORE:\nsmoke:\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 1},
-		{"MAKEFLAGS ignoring errors", "MAKEFLAGS += -i\nsmoke:\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 1},
-		{"MAKEFLAGS doing something else", "MAKEFLAGS += --no-print-directory\nsmoke:\n\tgo test -tags=integration -run '^TestSmoke_' ./...", 0},
 		{"an env assignment and time are fine", "\tOCTONOMY_SMOKE_REQUIRED=1 time go test -tags=integration -run '^TestSmoke_' ./...", 0},
 		{"a masked catch-all is passed over, not refused", "go test -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?\ngo test -tags=integration -run '^TestSmoke_' ./...", 0},
 		{"but it does not count as the smoke run", "go test -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?", 1},
@@ -2107,6 +2101,76 @@ RUN
 	}
 }
 
+// makefileProblems reports the Makefile-wide settings that decide how the
+// smoke recipe runs, which no recipe line shows.
+//
+// They are read as GNU make reads them, not matched as text. `.IGNORE:` with no
+// prerequisites ignores every recipe's failures and is refused; with
+// prerequisites it ignores only theirs, and is refused only if one is the
+// smoke target -- `.IGNORE: dev-server-down` is a reasonable cleanup policy.
+// `.ONESHELL` runs a recipe as one script, so a line after the smoke run would
+// decide its exit status. MAKEFLAGS is held to an allow-list, because a word
+// in it need not start with a dash: `MAKEFLAGS += i` is -i, ignore errors. And
+// SHELL or .SHELLFLAGS decide what runs a recipe line at all.
+func makefileProblems(src, target string) []string {
+	var problems []string
+	for i, raw := range strings.Split(src, "\n") {
+		if strings.HasPrefix(raw, "\t") {
+			continue // a recipe line is shell, not make
+		}
+		line := raw
+		if hash := strings.IndexByte(line, '#'); hash >= 0 {
+			line = line[:hash]
+		}
+		where := "line " + strconv.Itoa(i+1)
+		if m := specialTarget.FindStringSubmatch(line); m != nil {
+			prereqs := strings.Fields(m[2])
+			switch m[1] {
+			case "IGNORE":
+				if len(prereqs) == 0 {
+					problems = append(problems, where+" declares .IGNORE for every target, so make ignores the "+
+						"smoke recipe's failure")
+				}
+				for _, p := range prereqs {
+					if p == target {
+						problems = append(problems, where+" declares .IGNORE for "+target+", so make ignores its "+
+							"recipe's failure")
+					}
+				}
+			case "ONESHELL":
+				problems = append(problems, where+" declares .ONESHELL, so a recipe runs as one script and a "+
+					"line after the smoke run decides its exit status")
+			}
+			continue
+		}
+		m := makeAssignment.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		switch m[1] {
+		case "SHELL", ".SHELLFLAGS":
+			problems = append(problems, where+" sets "+m[1]+", which decides what runs the smoke recipe; the "+
+				"guard reads that recipe as POSIX sh")
+		case "MAKEFLAGS":
+			for _, word := range strings.Fields(m[2]) {
+				if !safeMakeflag.MatchString(word) {
+					problems = append(problems, where+" puts "+strconv.Quote(word)+" in MAKEFLAGS, which the guard "+
+						"does not know leaves recipe failures alone (a bare `i` is -i)")
+				}
+			}
+		}
+	}
+	return problems
+}
+
+var (
+	specialTarget  = regexp.MustCompile(`^\.(IGNORE|ONESHELL)\s*:([^=].*|)$`)
+	makeAssignment = regexp.MustCompile(`^\s*(?:(?:export|override)\s+)*(SHELL|\.SHELLFLAGS|MAKEFLAGS)\s*(?:\+|::?|\?|!)?=(.*)$`)
+	// safeMakeflag allows what changes how make reads the Makefile or how
+	// loudly it runs, never whether a failure counts.
+	safeMakeflag = regexp.MustCompile(`^(--no-print-directory|-r|--no-builtin-rules|-R|--no-builtin-variables|--warn-undefined-variables|-j\d*|--jobs(=\d+)?)$`)
+)
+
 // make smoke is the documented command, so the counted run has to be in that
 // target's recipe and not merely somewhere in the Makefile.
 func TestMakeTargetRunsBindsTheRunToTheSmokeRecipe(t *testing.T) {
@@ -2129,6 +2193,38 @@ func TestMakeTargetRunsBindsTheRunToTheSmokeRecipe(t *testing.T) {
 			}
 			if got := makeTargetRuns(tc.src, smokeTarget, runs) == ""; got != tc.ok {
 				t.Errorf("bound = %v, want %v (%s)", got, tc.ok, makeTargetRuns(tc.src, smokeTarget, runs))
+			}
+		})
+	}
+}
+
+// GNU make's own reading, not a text match: the settings that ignore the smoke
+// recipe's failure are refused, and the ones that do not are left alone.
+func TestMakefileProblemsReadsMakeLikeMakeDoes(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		src      string
+		problems int
+	}{
+		{"this repository's Makefile shape", ".PHONY: smoke test\nsmoke: ## run it\n\tgo test ./...\n", 0},
+		{".IGNORE for every target", ".IGNORE:\nsmoke:\n\tgo test ./...\n", 1},
+		{".IGNORE for the smoke target", ".IGNORE: smoke dev-server-down\n", 1},
+		{".IGNORE for cleanup only", ".IGNORE: dev-server-down # tearing down is best effort\n", 0},
+		{".ONESHELL", ".ONESHELL:\n", 1},
+		{"MAKEFLAGS with -i", "MAKEFLAGS += -i\n", 1},
+		{"MAKEFLAGS with a bare i", "MAKEFLAGS += i\n", 1},
+		{"MAKEFLAGS with --ignore-errors", "export MAKEFLAGS := --ignore-errors\n", 1},
+		{"MAKEFLAGS with -ik", "MAKEFLAGS = -ik\n", 1},
+		{"MAKEFLAGS quieting directories", "MAKEFLAGS += --no-print-directory -r\n", 0},
+		{"MAKEFLAGS with jobs", "MAKEFLAGS += -j4\n", 0},
+		{"SHELL", "SHELL := /bin/bash\n", 1},
+		{".SHELLFLAGS", ".SHELLFLAGS := -c\n", 1},
+		{"a recipe line mentioning MAKEFLAGS is shell, not make", "smoke:\n\techo MAKEFLAGS=i\n", 0},
+		{"a comment is not a setting", "# MAKEFLAGS += i\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := makefileProblems(tc.src, smokeTarget); len(got) != tc.problems {
+				t.Errorf("problems = %d, want %d: %v", len(got), tc.problems, got)
 			}
 		})
 	}

@@ -166,8 +166,10 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
     with no `-skip`, no selector in a variable or `GOFLAGS`, and no flag outside an allow-list —
     `-list`, `-c`, `-n` and `-count=0` all run nothing and exit 0. And the run must execute, with a
     failure that fails the runner: not behind `||` or inside a shell `if`, not followed by `|| true`,
-    `;` or a pipe, not on a make recipe line prefixed with `-` (its continuation included), and not in
-    a Makefile that ignores errors outright (`.IGNORE`, `MAKEFLAGS` with `-i`).
+    `;` or a pipe, and not on a make recipe line prefixed with `-` (its continuation included). The
+    Makefile-wide settings that decide how a recipe runs are read as make reads them: `.IGNORE` for
+    every target or for `smoke`, `.ONESHELL`, `SHELL`, `.SHELLFLAGS`, and any `MAKEFLAGS` word outside
+    an allow-list (a bare `i` is `-i`) are refused.
   - **The CI step runs and is required** (`TestSmokeJobRequiresTheSmokeRun`). The step holding the
     run, and its job, carry no `if:`, no `continue-on-error` and no `working-directory`, and set
     `OCTONOMY_SMOKE_REQUIRED: "1"` in their own `env`. The workflow's triggers, a `needs:`, and branch
