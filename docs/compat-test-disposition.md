@@ -166,7 +166,9 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
     with no `-skip`, no selector in a variable or `GOFLAGS`, and no flag outside an allow-list —
     `-list`, `-c`, `-n` and `-count=0` all run nothing and exit 0. And the run must execute, with a
     failure that fails the runner: not behind `||` or inside a shell `if`, not followed by `|| true`,
-    `;` or a pipe, and not on a make recipe line prefixed with `-` (its continuation included). The
+    `;` or a pipe, not on a make recipe line prefixed with `-` (its continuation included), and in a
+    workflow on one line or in a literal `run: |` block — YAML folds a `run: >` block, or a value
+    continued onto the next line, into one command the reader would not see. The
     Makefile-wide settings that decide how a recipe runs are read as make reads them: `.IGNORE` for
     every target or for `smoke`, `.ONESHELL`, `SHELL`, `.SHELLFLAGS`, and any `MAKEFLAGS` word outside
     an allow-list (a bare `i` is `-i`) are refused.

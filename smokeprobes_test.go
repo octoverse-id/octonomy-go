@@ -34,6 +34,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/ioutil"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -376,6 +377,10 @@ func smokeRuns(path, src string) ([]int, []string) {
 	var runs []int
 	var problems, uncounted []string
 	lines := logicalLines(src)
+	folded := map[int]string{}
+	if filepath.Base(path) != "Makefile" {
+		folded = foldedYAMLLines(src) // a make target named run: is not YAML
+	}
 	depth := 0
 	for i, ll := range lines {
 		where := path + ":" + strconv.Itoa(ll.line)
@@ -397,6 +402,11 @@ func smokeRuns(path, src string) ([]int, []string) {
 			depth = compoundDepth(c.words, depth)
 			run, ok := goTestRun(c.words)
 			if !ok || !run.integration {
+				continue
+			}
+			if why, ok := folded[ll.line]; ok {
+				problems = append(problems, where+" is "+why+", so YAML joins it with the lines around it and "+
+					"the command the shell runs is not the one read here; write it on one line or in a `run: |` block")
 				continue
 			}
 			if i+1 < len(lines) && flagLine.MatchString(lines[i+1].text) {
@@ -461,6 +471,60 @@ func smokeRuns(path, src string) ([]int, []string) {
 	}
 	return runs, problems
 }
+
+// foldedYAMLLines returns the physical lines (1-based) whose text YAML folds
+// into one line with its neighbours before the shell sees it: the body of a
+// folded block scalar (`run: >`), and a plain or quoted `run:` value continued
+// onto more-indented lines. Only a literal block (`run: |`) and a single-line
+// value reach the shell line for line, which is how smokeRuns reads them --
+// `go test …` with `|| true` on the next folded line runs as one masked
+// command.
+func foldedYAMLLines(src string) map[int]string {
+	out := map[int]string{}
+	lines := strings.Split(src, "\n")
+	for i, line := range lines {
+		m := yamlRunLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		key := len(m[1]) + len(m[2]) // the column the run: key sits at
+		value := strings.TrimSpace(m[3])
+		var why string
+		switch {
+		case strings.HasPrefix(value, ">"):
+			why = "in a folded block scalar (`run: >`)"
+		case value == "" || strings.HasPrefix(value, "|") || strings.HasPrefix(value, "#"):
+			continue // a literal block, read line for line
+		default:
+			why = "a `run:` value continued onto the next line"
+		}
+		var body []int
+		for j := i + 1; j < len(lines); j++ {
+			if strings.TrimSpace(lines[j]) == "" {
+				continue
+			}
+			if indentOf(lines[j]) <= key {
+				break
+			}
+			body = append(body, j+1)
+		}
+		if strings.HasPrefix(value, ">") {
+			for _, n := range body {
+				out[n] = why
+			}
+			continue
+		}
+		if len(body) > 0 {
+			out[i+1] = why
+			for _, n := range body {
+				out[n] = why
+			}
+		}
+	}
+	return out
+}
+
+var yamlRunLine = regexp.MustCompile(`^(\s*)(-\s+)?run:(.*)$`)
 
 // yamlRunKey is a workflow step's `run:` key, which a command line in ci.yml may
 // open with; what follows it is the shell.
@@ -1959,6 +2023,12 @@ func TestSmokeRunProblemsReadsTheRunnersLikeTheShellDoes(t *testing.T) {
 		{"but it does not count as the smoke run", "go test -tags=integration -race -count=1 -v ./... >\"$$log\" 2>&1 || status=$$?", 1},
 		{"a chained narrowing", "true; go test -tags=integration -run TestSmoke_RealServer ./...", 2},
 		{"a flag on the next line, as a folded YAML scalar joins it", "run: >\n  go test -tags=integration\n  -run '^TestSmoke_RealServer$' ./...", 2},
+		// YAML folds these into one line before the shell sees them.
+		{"a folded block masking the run", "      run: >\n        go test -tags=integration -run '^TestSmoke_' -v ./...\n        || true", 2},
+		{"a folded block, however innocent", "      run: >-\n        go test -tags=integration -run '^TestSmoke_' -v ./...", 2},
+		{"a plain value continued onto the next line", "      run: go test -tags=integration -run '^TestSmoke_' -v ./...\n        || true", 2},
+		{"a literal block is read line for line", "      run: |\n        go test -tags=integration -run '^TestSmoke_' -v ./...\n      - name: next", 0},
+		{"a single-line value followed by the next key", "        run: go test -tags=integration -run '^TestSmoke_' -v ./...\n      - name: Capture container logs\n        if: failure()", 0},
 		{"a YAML list item is not a flag", "run: go test -tags=integration -run '^TestSmoke_' ./...\n- name: logs", 0},
 		{"two -run flags", "go test -tags=integration -run '^TestSmoke_' -run TestSmoke_RealServer ./...", 2},
 		{"a selector in a make variable", "go test -tags=integration -run $(SMOKE_RUN) ./...", 2},
