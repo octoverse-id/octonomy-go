@@ -84,6 +84,13 @@ on `main`.
 - **Do not port `main`'s `Optional[T]`.** The `*Update` structs keep their pointer fields, because
   changing a published field's type breaks `v1.0.0` callers (the no-major rule above). A PATCH here
   therefore cannot clear a nullable field; that is a deliberate carve-out, not a porting gap.
+- **A test port moves its row in [`docs/compat-test-disposition.md`](docs/compat-test-disposition.md).**
+  That table holds every `main` test file at 5e40964 with a verdict — ported, rewritten, preserved,
+  owned by another issue, or excluded with a reason — and `TestDispositionTableNamesEveryTestFile`
+  fails on a test file here that it does not name. **A test that parses Go source is rewritten, never
+  ported:** `main`'s read response types off `doData[T]` type arguments, which this line does not
+  have, so a transformed one compiles and asserts nothing. `sourceguard_test.go` holds the readers
+  rewritten for this dialect; build on them.
 
 ## Product Rules
 
@@ -168,6 +175,13 @@ stays a faithful, ergonomic client.
   list type must implement `rows()`, which `doList`'s parameter type requires, so forgetting it does
   not compile. A composite result carries no identity of its own and requires its keys in its own
   decoder instead; `TagResolution` does both, since the tag it exists to deliver is a resource.
+  **`TestEveryResponseTypeCanRefuseAnEmptyDecode` (`identityfields_test.go`) enforces the choice
+  between those two** on every type handed to `doData` or `doList` — read off the `&out` it decodes
+  into — and a destination it cannot name, such as an `out interface{}` passed through a wrapper,
+  fails rather than passing. `rows()` is checked by calling it: add a new model to
+  `identityModels()` and a new list to `identityLists()` (`transport_test.go`), and
+  `TestTheRuntimeIdentityTablesMatchTheSource` fails until you do. Neither checks that the field you
+  named is the right one; that stays with the reader.
 - **Every decode of response bytes goes through `decodeJSON`** (`jsondepth.go`), never a bare
   `json.Unmarshal` or `json.NewDecoder`. Go 1.13's `encoding/json` has no depth limit, so an
   unguarded decode lets a server exhaust the stack — a fatal runtime error, not a panic.
@@ -230,7 +244,14 @@ stays a faithful, ergonomic client.
   on the client side. (Use `t.Errorf` inside handlers — they run on a separate goroutine.)
 - `newTestClient` returns `(*Client, func())`; `defer cleanup()` at every call site. `t.Cleanup`
   needs Go 1.14, and the helper returns, so a `defer srv.Close()` inside it closes the server before
-  the test runs.
+  the test runs. That is rule 1 of the `t.Cleanup` replacement model in
+  `docs/compat-test-disposition.md`; its other two cover a test body and a teardown that must outlive
+  the helper registering it.
+- **Every response type needs a smoke call.** A `TestSmoke_` function in `integration_test.go` must
+  call a method that decodes it, on a client that function built, or
+  `TestEveryResponseTypeHasASmokeProbe` (`smokeprobes_test.go`, no build tag) fails. Only a real
+  server sees a fixture-versus-server divergence (#32). A call inside a closure or a helper is not
+  counted, and the smoke runners must keep selecting `-run '^TestSmoke_'`.
 - Canned **single-resource** responses go through `writeData`, which adds the server's `{"data": ...}`
   wrapper. `writeJSON` sends the body verbatim — use it for list and error envelopes only. Handlers
   that returned bare objects matched the vendored spec instead of the server and hid a real defect.

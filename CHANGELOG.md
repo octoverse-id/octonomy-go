@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`main`'s test suite, accounted for file by file**
+  ([#95](https://github.com/octoverse-id/octonomy-go/issues/95), for
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests and docs only; no
+  exported symbol changes.
+  - **`docs/compat-test-disposition.md`** gives each of the 27 test files in `main`'s tree at 5e40964 a
+    verdict — ported, rewritten, preserved, owned by another sub-issue, or excluded with its reason —
+    and writes down the `t.Cleanup` replacement model for Go 1.13. `TestDispositionTableNamesEveryTestFile`
+    fails on a test file here that the table does not name.
+  - **Two source-parsing guards, rewritten for this dialect** rather than ported, because `main`'s
+    read response types off `doData[T]` type arguments this line does not have.
+    `TestEveryResponseTypeCanRefuseAnEmptyDecode` requires every type the transport decodes into —
+    read off its `&out` destination — to carry `identityFields()` on the value receiver or, for a
+    declared composite, a pointer-receiver `UnmarshalJSON`; `TestTheRuntimeIdentityTablesMatchTheSource`
+    holds the runtime check of each list's `rows()` to the same set.
+    `TestEveryResponseTypeHasASmokeProbe` requires a `TestSmoke_` function to call a method decoding
+    each of those types against a real server, and `TestSmokeSelectorRunsEveryTestSmokeFunction`
+    keeps `make smoke` and the CI smoke job selecting `-run '^TestSmoke_'`. Both fail closed on a
+    shape they cannot read.
+  - **`main`'s test cases this line lacked**: `TestTags_Get`, `TestVocabularies_Get`,
+    `TestVocabularies_List_Params` (without its `q` and `slug` cases — see below),
+    `TestDoData_UndecodableBodies`, `TestTransport_ErrorsPropagateFromEveryHelper` and
+    `TestMetadataIsStillAnAlias`. The `Get` fixtures are raw wire JSON, not marshalled structs.
+  - The table records two capability gaps that no sub-issue owns yet: `VocabularyListParams` has no
+    `Query` or `Slug`, although both vendored specs list the filters, and `DecodeMetadata` has no
+    counterpart here.
 - **The six missing resource groups, hand-ported from `main`**
   ([#94](https://github.com/octoverse-id/octonomy-go/issues/94), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). `main`'s `aliases.go`,

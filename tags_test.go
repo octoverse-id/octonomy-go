@@ -180,3 +180,69 @@ func TestTags_Delete(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 }
+
+// Ported from main's tags_test.go at 5e40964 for #95, with one change: the
+// fixture is the wire spelling as raw JSON rather than a Tag run through
+// writeData. A marshalled Tag round-trips through its own JSON tags, so a
+// misspelled tag on any field this test reads would pass (AGENTS.md, Testing
+// Expectations). Every other test of Tags.Get here is a failure path.
+func TestTags_Get(t *testing.T) {
+	created := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	updated := created.Add(48 * time.Hour)
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/tags/tag_1" {
+			t.Errorf("got %s %s, want GET /api/v1/tags/tag_1", r.Method, r.URL.Path)
+		}
+		writeRaw(w, http.StatusOK, `{"data": {
+			"id": "tag_1",
+			"tenant_id": "tenant-1",
+			"application_id": "commerce",
+			"name": "Featured",
+			"slug": "featured",
+			"type": "label",
+			"description": "Front page picks",
+			"parent_id": null,
+			"vocabulary_id": "voc_1",
+			"metadata": {"source": "import"},
+			"is_active": true,
+			"usage_count": 7,
+			"created_at": "2026-06-08T12:00:00Z",
+			"updated_at": "2026-06-10T12:00:00Z"
+		}}`)
+	})
+	defer cleanup()
+
+	tag, err := c.Tags.Get(context.Background(), "tag_1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tag.ID != "tag_1" || tag.TenantID != "tenant-1" || tag.Name != "Featured" || tag.Slug != "featured" || tag.Type != "label" {
+		t.Errorf("scalar fields did not round-trip: %+v", tag)
+	}
+	if tag.ApplicationID == nil || *tag.ApplicationID != "commerce" {
+		t.Errorf("ApplicationID = %v, want commerce", tag.ApplicationID)
+	}
+	if tag.Description == nil || *tag.Description != "Front page picks" {
+		t.Errorf("Description = %v, want \"Front page picks\"", tag.Description)
+	}
+	if tag.VocabularyID == nil || *tag.VocabularyID != "voc_1" {
+		t.Errorf("VocabularyID = %v, want voc_1", tag.VocabularyID)
+	}
+	// ParentID is null on the wire and must stay nil rather than becoming "".
+	if tag.ParentID != nil {
+		t.Errorf("ParentID = %v, want nil", tag.ParentID)
+	}
+	// A v1 response carries no namespace pair, so it stays nil rather than "".
+	if tag.NamespaceType != nil || tag.NamespaceID != nil {
+		t.Errorf("namespace = (%v, %v), want nil on a v1 response", tag.NamespaceType, tag.NamespaceID)
+	}
+	if tag.Metadata["source"] != "import" {
+		t.Errorf("Metadata[source] = %v, want import", tag.Metadata["source"])
+	}
+	if tag.UsageCount != 7 || !tag.IsActive {
+		t.Errorf("UsageCount/IsActive did not round-trip: %+v", tag)
+	}
+	if !tag.CreatedAt.Equal(created) || !tag.UpdatedAt.Equal(updated) {
+		t.Errorf("timestamps did not round-trip: %+v", tag)
+	}
+}

@@ -7,6 +7,9 @@ It is this branch's own copy of the table in
 on `main` ([#103](https://github.com/octoverse-id/octonomy-go/issues/103)); rows the compat core
 ([#91](https://github.com/octoverse-id/octonomy-go/issues/91)) added are marked as such.
 
+Which of `main`'s test files meet which rows, and what became of each, is
+[`compat-test-disposition.md`](compat-test-disposition.md).
+
 - **LOUD** — a miss fails `go build` or `go vet` under a real go1.13.15, so `make test-go113` (the
   `go1.13` CI job) catches it. A modern toolchain does **not**: it enforces the `go 1.13` directive's
   language version but not its standard library, so `url.Values.Has` compiles there.
@@ -28,7 +31,7 @@ on `main` ([#103](https://github.com/octoverse-id/octonomy-go/issues/103)); rows
 | `strings.Cut` / `CutPrefix`, `errors.Join`, `min` / `max` builtins | spell it out | **LOUD** | go1.13 build |
 | `url.Values.Has` (1.17) | `_, ok := q[key]` | **LOUD** | go1.13 build |
 | `http.Header.Values` (1.14), in tests (#91) | `r.Header[http.CanonicalHeaderKey(name)]` | **LOUD** | go1.13 build |
-| `t.Cleanup` (1.14), `t.TempDir` (1.15), `t.Setenv` (1.17) | return a cleanup func and `defer` it; `ioutil.TempDir` + `defer os.RemoveAll`; save and restore by hand | **LOUD** | go1.13 build |
+| `t.Cleanup` (1.14), `t.TempDir` (1.15), `t.Setenv` (1.17) | in a helper, return a cleanup func and `defer` it at the call site; in a test body, `defer`; a teardown that must outlive its helper, a stack the root test drains (the model: [`compat-test-disposition.md`](compat-test-disposition.md)); `ioutil.TempDir` + `defer os.RemoveAll`; save and restore by hand | **LOUD** | go1.13 build. A `defer` inside the helper instead compiles and vets clean, and fails the test that uses it: the server is closed before the first request (`cleanupmodel_test.go`) |
 | `io.ReadAll`, `os.ReadFile`, `os.WriteFile` (1.16) | `ioutil.ReadAll`, `ioutil.ReadFile`, `ioutil.WriteFile` | **LOUD** | go1.13 build |
 | range-over-int, `for i := range n` (1.22) | a C-style loop, **plus `i := i`** wherever a closure captures `i` | **LOUD** | go1.13 build for the loop; go1.13 `vet`'s `loopclosure` for a missing shadow under `go`/`defer` (`loop variable i captured by func literal`) |
 | `json:"<n>,omitzero"` | `json:"<n>,omitempty"` | **SILENT** | Go 1.13 parses the option and matches nothing, so a nil pointer emits `"<n>":null` — a PATCH that clears every column it did not name. On `TagUpdate` and `VocabularyUpdate`, `update_test.go` catches it under go1.13 (a field set alone then sends more than one key). **Nothing** catches it on any other struct; [#96](https://github.com/octoverse-id/octonomy-go/issues/96) tracks a guard |

@@ -42,8 +42,12 @@ Copy `tags.go` and `tags_test.go` as the template, then:
    Scoping, request ids and the depth guards come from the transport; add nothing for them.
 3. Wire the service onto `Client` in `New()` (`octonomy.go`).
 4. Add table-driven `httptest` tests (assert method/path/headers/query/body server-side; assert decoded
-   values client-side; cover the error envelope).
-5. Add a `## [Unreleased]` CHANGELOG entry and update [`api.md`](api.md).
+   values client-side; cover the error envelope), and add the model to `identityModels()` and its list
+   to `identityLists()` in `transport_test.go`.
+5. Call one of its methods from a `TestSmoke_` function in `integration_test.go`, and run it with
+   `make dev-server && make smoke`. `TestEveryResponseTypeHasASmokeProbe` fails in a plain `make test`
+   until a smoke test decodes the new type.
+6. Add a `## [Unreleased]` CHANGELOG entry and update [`api.md`](api.md).
 
 The recipe is this line's, and it is here to explain the shape of the code you are reading. A resource
 new to *both* lines is work for `main` first, so a new resource issue belongs there, against `main`'s
