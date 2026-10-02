@@ -153,6 +153,8 @@ stays a faithful, ergonomic client.
   at runtime by the envelope, identity, pagination and 204 assertions — keep every one of them, since
   a decoder without them returns a zero-valued struct or an empty-looking page with a nil error.
   `doRaw` is the shared request path; do not call it directly from a resource file.
+  `TestEveryResponseTypeCanRefuseAnEmptyDecode` fails on a call outside `transport.go`: a response
+  decoded beneath the helpers is one no guard can see.
 - **Bulk and replace return a composite object under `data`** — `bulk-assign`, `bulk-remove` and
   the resource-tag replace, e.g. `{"data": {"created": 1, "existing": 0, "skipped": 0,
   "assignments": [...]}}`. Both vendored specs are wrong about them: a bare array for `bulk-assign`

@@ -91,6 +91,18 @@ func unparen(e ast.Expr) ast.Expr {
 // TestTransportOutMatchesTheHelpersSignatures pins both against transport.go.
 var transportOut = map[string]int{"doData": 5, "doList": 4}
 
+// rawTransport names the request paths beneath doData and doList, mapped to the
+// files allowed to call them. A response decoded through one of these anywhere
+// else is a response neither guard can see: it reaches no destination argument,
+// so its type is neither found nor unresolved -- the one way out of the
+// derivation that is silent. AGENTS.md already says a resource file must not
+// call doRaw; this is where that rule is checked. doUnversioned is the health
+// probes' path, and HealthStatus is decoded by health.go's own helper.
+var rawTransport = map[string]map[string]bool{
+	"doRaw":         {"transport.go": true},
+	"doUnversioned": {"transport.go": true, "health.go": true},
+}
+
 // typeIndex holds every package-level type declaration, so a list envelope's
 // row type can be read off its Data field.
 type typeIndex map[string]*ast.TypeSpec
@@ -162,7 +174,16 @@ func responseTypes(files map[string]*ast.File) (found, lists map[string]string, 
 			})
 			ast.Inspect(decl, func(n ast.Node) bool {
 				sel, ok := n.(*ast.SelectorExpr)
-				if !ok || !isTransportName(sel.Sel.Name) {
+				if !ok {
+					return true
+				}
+				if allowed, raw := rawTransport[sel.Sel.Name]; raw && !allowed[filepath.Base(path)] {
+					unresolved = append(unresolved, where+" (reaches "+sel.Sel.Name+" directly, which "+
+						"decodes outside doData and doList, where neither guard can see the type; use the "+
+						"helper matching the response shape)")
+					return true
+				}
+				if !isTransportName(sel.Sel.Name) {
 					return true
 				}
 				call, isCall := called[sel]
@@ -247,6 +268,9 @@ func destination(sel *ast.SelectorExpr, call *ast.CallExpr, scope *ast.FuncDecl,
 	if why != "" {
 		return "", "", helper + "'s destination " + why
 	}
+	if declaresType(scope, name) {
+		return "", "", helper + " decodes into " + name + ", a type declared inside this function, which this guard would confuse with the package's"
+	}
 	if helper == "doData" {
 		return name, "", ""
 	}
@@ -255,6 +279,24 @@ func destination(sel *ast.SelectorExpr, call *ast.CallExpr, scope *ast.FuncDecl,
 		return "", "", "doList decodes into " + name + ", which " + why
 	}
 	return row, name, ""
+}
+
+// declaresType reports whether fn declares a type of the given name in its own
+// body. Such a type shadows the package's type of that name inside the
+// function, and this guard resolves by bare name against the package's, so it
+// is refused rather than credited to the wrong declaration.
+func declaresType(fn *ast.FuncDecl, name string) bool {
+	found := false
+	if fn == nil || fn.Body == nil {
+		return false
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if spec, ok := n.(*ast.TypeSpec); ok && spec.Name.Name == name {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // destinationType names the type of a destination argument, in the two shapes
@@ -337,9 +379,9 @@ func compositeType(name string, value ast.Expr) (string, string) {
 }
 
 // declarationsOf returns every node that declares name anywhere in fn: its
-// receiver, parameters and results, a var spec, a short variable declaration, a
-// range clause, a type switch binding, and the parameters of any closure inside
-// it.
+// receiver, parameters and results, a var spec, a short variable declaration
+// (which is also how a type switch's `x := v.(type)` binds), a range clause,
+// and the parameters of any closure inside it.
 func declarationsOf(name string, fn *ast.FuncDecl) []ast.Node {
 	var out []ast.Node
 	fields := func(list *ast.FieldList) {
@@ -384,14 +426,6 @@ func declarationsOf(name string, fn *ast.FuncDecl) []ast.Node {
 			for _, expr := range []ast.Expr{node.Key, node.Value} {
 				if expr != nil && isIdent(expr, name) {
 					out = append(out, node)
-				}
-			}
-		case *ast.TypeSwitchStmt:
-			if assign, ok := node.Assign.(*ast.AssignStmt); ok {
-				for _, lhs := range assign.Lhs {
-					if isIdent(lhs, name) {
-						out = append(out, node)
-					}
 				}
 			}
 		case *ast.FuncLit:

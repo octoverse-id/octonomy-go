@@ -181,11 +181,17 @@ func TestTags_Delete(t *testing.T) {
 	}
 }
 
-// Ported from main's tags_test.go at 5e40964 for #95, with one change: the
+// Ported from main's tags_test.go at 5e40964 for #95, with two changes. The
 // fixture is the wire spelling as raw JSON rather than a Tag run through
-// writeData. A marshalled Tag round-trips through its own JSON tags, so a
-// misspelled tag on any field this test reads would pass (AGENTS.md, Testing
-// Expectations). Every other test of Tags.Get here is a failure path.
+// writeData: a marshalled Tag round-trips through its own JSON tags, so a
+// misspelled tag would pass (AGENTS.md, Testing Expectations). And every field
+// it expects a value in is sent a NON-ZERO one, parent_id included, because a
+// misspelled tag decodes to the zero value -- main's fixture sent "parent_id":
+// null, which a tag the decoder ignores also turns into nil. The namespace pair
+// is asserted absent, as a v1 response has it; the namespaced tests in
+// scope_test.go are what hold its spelling. The null case, which is what
+// main's assertion was for, is TestTags_Get_NullParentStaysNil below. Every
+// other test of Tags.Get here is a failure path.
 func TestTags_Get(t *testing.T) {
 	created := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
 	updated := created.Add(48 * time.Hour)
@@ -201,7 +207,7 @@ func TestTags_Get(t *testing.T) {
 			"slug": "featured",
 			"type": "label",
 			"description": "Front page picks",
-			"parent_id": null,
+			"parent_id": "tag_0",
 			"vocabulary_id": "voc_1",
 			"metadata": {"source": "import"},
 			"is_active": true,
@@ -228,9 +234,8 @@ func TestTags_Get(t *testing.T) {
 	if tag.VocabularyID == nil || *tag.VocabularyID != "voc_1" {
 		t.Errorf("VocabularyID = %v, want voc_1", tag.VocabularyID)
 	}
-	// ParentID is null on the wire and must stay nil rather than becoming "".
-	if tag.ParentID != nil {
-		t.Errorf("ParentID = %v, want nil", tag.ParentID)
+	if tag.ParentID == nil || *tag.ParentID != "tag_0" {
+		t.Errorf("ParentID = %v, want tag_0", tag.ParentID)
 	}
 	// A v1 response carries no namespace pair, so it stays nil rather than "".
 	if tag.NamespaceType != nil || tag.NamespaceID != nil {
@@ -244,5 +249,24 @@ func TestTags_Get(t *testing.T) {
 	}
 	if !tag.CreatedAt.Equal(created) || !tag.UpdatedAt.Equal(updated) {
 		t.Errorf("timestamps did not round-trip: %+v", tag)
+	}
+}
+
+// A null on the wire stays nil rather than becoming "", which is the distinction
+// a nullable field's pointer exists for. It cannot say anything about the tag's
+// spelling -- an ignored key is nil too -- which is why TestTags_Get sends a
+// value.
+func TestTags_Get_NullParentStaysNil(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeRaw(w, http.StatusOK, `{"data": {"id": "tag_1", "parent_id": null, "description": null}}`)
+	})
+	defer cleanup()
+
+	tag, err := c.Tags.Get(context.Background(), "tag_1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if tag.ParentID != nil || tag.Description != nil {
+		t.Errorf("ParentID = %v, Description = %v, want both nil", tag.ParentID, tag.Description)
 	}
 }

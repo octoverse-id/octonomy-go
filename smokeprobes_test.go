@@ -225,7 +225,52 @@ func TestSmokeSelectorRunsEveryTestSmokeFunction(t *testing.T) {
 	}
 }
 
-var runSelector = regexp.MustCompile(`(?:^|\s)-run(?:\s+|=)(\S+)`)
+// The other half of the same binding: the runners select `-tags=integration`,
+// so the smoke file must be built under that tag -- and under BOTH constraint
+// spellings, since Go 1.13 reads only `// +build`. A file retagged `smoke`
+// still parses, so every probe in it stays credited, while `go test
+// -tags=integration -run '^TestSmoke_'` reports "no tests to run" and passes.
+func TestSmokeFileCarriesTheTagTheRunnersSelect(t *testing.T) {
+	raw, err := ioutil.ReadFile(integrationSmokeFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", integrationSmokeFile, err)
+	}
+	for _, problem := range smokeBuildTagProblems(string(raw)) {
+		t.Errorf("%s: %s", integrationSmokeFile, problem)
+	}
+}
+
+// smokeBuildTagProblems checks the constraint lines above the package clause.
+func smokeBuildTagProblems(src string) []string {
+	want := map[string]bool{"//go:build integration": false, "// +build integration": false}
+	for _, line := range strings.Split(src, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "package ") {
+			break
+		}
+		if _, ok := want[trimmed]; ok {
+			want[trimmed] = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "//go:build") || strings.HasPrefix(trimmed, "// +build") {
+			return []string{"carries the constraint " + strconv.Quote(trimmed) + "; the smoke runners select " +
+				"-tags=integration, and any other constraint builds the file into a different set of runs"}
+		}
+	}
+	var problems []string
+	for _, line := range []string{"//go:build integration", "// +build integration"} {
+		if !want[line] {
+			problems = append(problems, "has no "+strconv.Quote(line)+" line above its package clause, so "+
+				"the -tags=integration runs do not build the smoke tests the guard credits")
+		}
+	}
+	return problems
+}
+
+var (
+	runSelector = regexp.MustCompile(`(?:^|\s)-run(?:\s+|=)(\S+)`)
+	skipFlag    = regexp.MustCompile(`(?:^|\s)-skip(?:\s|=)`)
+)
 
 // smokeRunProblems reads one runner file for the integration runs that execute
 // the smoke tests, and returns what is wrong with them.
@@ -235,6 +280,15 @@ func smokeRunProblems(path, src string) []string {
 	for i, line := range strings.Split(src, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") || !strings.Contains(line, "-tags=integration") {
+			continue
+		}
+		// -skip (Go 1.20) subtracts from whatever -run selects, so a run that
+		// names the prefix and skips one function reaches fewer smoke tests than
+		// the guard credits. Go 1.13 has no -skip, but `make smoke` may run on a
+		// modern toolchain.
+		if skipFlag.MatchString(line) {
+			problems = append(problems, path+":"+strconv.Itoa(i+1)+" passes -skip to an integration run, "+
+				"which leaves smoke tests the guard credits unexecuted")
 			continue
 		}
 		m := runSelector.FindStringSubmatch(line)
@@ -414,8 +468,11 @@ func isClientConstructor(expr ast.Expr, sdk string) bool {
 }
 
 // checkSmokeConstructor holds newSmokeClient to what smokeClients assumes of
-// it: a function in the smoke file returning the SDK's *Client. A helper of that
-// name returning anything else would make every call on its result count.
+// it: a function declared in the smoke file, returning the SDK's *Client. A
+// helper of that name returning anything else would make every call on its
+// result count, and so would one declared somewhere this guard does not read --
+// another file, or a package-level func variable -- so a smoke file that calls
+// newSmokeClient without declaring it as a function is refused too.
 func checkSmokeConstructor(file *ast.File, sdk string) string {
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -427,6 +484,17 @@ func checkSmokeConstructor(file *ast.File, sdk string) string {
 				".Client, so a call on its result is not a call on a client"
 		}
 		return ""
+	}
+	called := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && isIdent(call.Fun, "newSmokeClient") {
+			called = true
+		}
+		return !called
+	})
+	if called {
+		return "calls newSmokeClient but does not declare it as a function, so the guard cannot check " +
+			"that what it returns is a client"
 	}
 	return ""
 }
@@ -669,6 +737,23 @@ func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ct
 			want: []string{"Tags.Get"},
 		},
 		{
+			name: "a newSmokeClient declared elsewhere is refused",
+			full: `package octonomy_test
+import octonomy "github.com/octoverse-id/octonomy-go"
+func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ctx, id) }`,
+			want:     []string{"Tags.Get"},
+			problems: 1,
+		},
+		{
+			name: "so is a newSmokeClient that is a func variable",
+			full: `package octonomy_test
+import octonomy "github.com/octoverse-id/octonomy-go"
+var newSmokeClient = func(t *testing.T) *fake { return nil }
+func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ctx, id) }`,
+			want:     []string{"Tags.Get"},
+			problems: 1,
+		},
+		{
 			name:     "a file that does not import the SDK is refused",
 			full:     `package octonomy_test` + "\n" + `func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ctx, id) }`,
 			problems: 1,
@@ -904,12 +989,35 @@ func TestSmokeRunProblemsReadsTheRunnersLikeTheShellDoes(t *testing.T) {
 		{"another suite beside the smoke run", "go test -tags=integration -run '^TestSmoke_' ./...\ngo test -tags=integration -run '^TestIntegration_' ./...", 0},
 		{"a comment is not a run", "#   `go test -tags=integration` is the acceptance criterion\ngo test -tags=integration -run '^TestSmoke_' ./...", 0},
 		{"one smoke function only", "go test -tags=integration -count=1 -run '^TestSmoke_RealServer$$' -v ./...", 2},
+		{"the prefix minus a skipped function", "go test -tags=integration -run '^TestSmoke_' -skip 'TestSmoke_ResourceGroups' ./...", 2},
+		{"a -skip= spelling", "go test -tags=integration -skip=TestSmoke_A ./...", 2},
 		{"an unanchored name", "run: go test -tags=integration -run TestSmoke_RealServer -v ./...", 2},
 		{"only another suite", "go test -tags=integration -run '^TestIntegration_' ./...", 1},
 		{"no integration run at all", "go test -race ./...", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := smokeRunProblems("fixture", tc.src); len(got) != tc.problems {
+				t.Errorf("problems = %d, want %d: %v", len(got), tc.problems, got)
+			}
+		})
+	}
+}
+
+func TestSmokeBuildTagProblemsReadsBothConstraintLines(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		src      string
+		problems int
+	}{
+		{"both lines", "//go:build integration\n// +build integration\n\npackage octonomy_test\n", 0},
+		{"Go 1.13's line missing", "//go:build integration\n\npackage octonomy_test\n", 1},
+		{"the modern line missing", "// +build integration\n\npackage octonomy_test\n", 1},
+		{"another tag", "//go:build smoke\n// +build smoke\n\npackage octonomy_test\n", 1},
+		{"no constraint at all", "// A smoke test.\npackage octonomy_test\n", 2},
+		{"a constraint after the package clause is not one", "package octonomy_test\n//go:build integration\n// +build integration\n", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := smokeBuildTagProblems(tc.src); len(got) != tc.problems {
 				t.Errorf("problems = %d, want %d: %v", len(got), tc.problems, got)
 			}
 		})

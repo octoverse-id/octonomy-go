@@ -214,10 +214,15 @@ func TestVocabularies_List_Params(t *testing.T) {
 }
 
 // Ported from main's vocabularies_test.go at 5e40964 for #95, with the fixture
-// as raw wire JSON for the reason TestTags_Get gives. It was main's other
-// previously untested doData route, and it is this line's too.
+// as raw wire JSON and every field it reads non-zero, for the reasons
+// TestTags_Get gives. main's fixture sent "application_id": null to pin the
+// shared-vocabulary case, and that case is kept as its own subtest -- it pins
+// nil-versus-"" and cannot pin the tag's spelling, which the scoped case does.
+// It was main's other previously untested doData route, and it is this line's
+// too.
 func TestVocabularies_Get(t *testing.T) {
 	created := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	updated := created.Add(24 * time.Hour)
 	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/vocabularies/voc_1" {
 			t.Errorf("got %s %s, want GET /api/v1/vocabularies/voc_1", r.Method, r.URL.Path)
@@ -225,14 +230,14 @@ func TestVocabularies_Get(t *testing.T) {
 		writeRaw(w, http.StatusOK, `{"data": {
 			"id": "voc_1",
 			"tenant_id": "tenant-1",
-			"application_id": null,
+			"application_id": "commerce",
 			"name": "Labels",
 			"slug": "labels",
-			"description": "Shared label vocabulary",
+			"description": "Commerce label vocabulary",
 			"metadata": {"owner": "platform"},
 			"is_active": true,
 			"created_at": "2026-06-08T12:00:00Z",
-			"updated_at": "2026-06-08T12:00:00Z"
+			"updated_at": "2026-06-09T12:00:00Z"
 		}}`)
 	})
 	defer cleanup()
@@ -244,18 +249,32 @@ func TestVocabularies_Get(t *testing.T) {
 	if voc.ID != "voc_1" || voc.TenantID != "tenant-1" || voc.Name != "Labels" || voc.Slug != "labels" {
 		t.Errorf("scalar fields did not round-trip: %+v", voc)
 	}
-	// A nil ApplicationID means "shared across the tenant", so the distinction
-	// between nil and "" is load-bearing here.
-	if voc.ApplicationID != nil {
-		t.Errorf("ApplicationID = %v, want nil (shared)", voc.ApplicationID)
+	if voc.ApplicationID == nil || *voc.ApplicationID != "commerce" {
+		t.Errorf("ApplicationID = %v, want commerce", voc.ApplicationID)
 	}
-	if voc.Description == nil || *voc.Description != "Shared label vocabulary" {
-		t.Errorf("Description = %v, want the shared-vocabulary text", voc.Description)
+	if voc.Description == nil || *voc.Description != "Commerce label vocabulary" {
+		t.Errorf("Description = %v, want the commerce-vocabulary text", voc.Description)
 	}
 	if voc.Metadata["owner"] != "platform" {
 		t.Errorf("Metadata[owner] = %v, want platform", voc.Metadata["owner"])
 	}
-	if !voc.IsActive || !voc.CreatedAt.Equal(created) || !voc.UpdatedAt.Equal(created) {
+	if !voc.IsActive || !voc.CreatedAt.Equal(created) || !voc.UpdatedAt.Equal(updated) {
 		t.Errorf("IsActive/timestamps did not round-trip: %+v", voc)
 	}
+
+	// A nil ApplicationID means "shared across the tenant", so the distinction
+	// between null and "" is load-bearing here.
+	t.Run("a shared vocabulary", func(t *testing.T) {
+		c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			writeRaw(w, http.StatusOK, `{"data": {"id": "voc_2", "application_id": null}}`)
+		})
+		defer cleanup()
+		voc, err := c.Vocabularies.Get(context.Background(), "voc_2")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if voc.ApplicationID != nil {
+			t.Errorf("ApplicationID = %v, want nil (shared)", voc.ApplicationID)
+		}
+	})
 }

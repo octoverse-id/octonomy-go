@@ -46,7 +46,7 @@ every file also meets `any` → `interface{}`.
 | `health_test.go` | 549 | **PORTED** in #112 (#91) | `health_test.go` | `t.Cleanup` ×5 → `newTestHealthClient` returns its cleanup (see the model below) |
 | `identityfields_test.go` | 637 | **REWRITTEN** here (#95) | `identityfields_test.go`, `sourceguard_test.go` | `doData[T]` / `doList[T]` type-argument resolution; `ast.Unparen` (1.22); `io/fs` (1.16). See *The two rewrites* |
 | `integration_harness_test.go` | 500 | **OWNED BY** [#97](https://github.com/octoverse-id/octonomy-go/issues/97) | — | `t.Cleanup` ×1 in `seed`, a helper whose rows must outlive it (rule 3 of the model); `io.ReadAll`; both build-constraint lines |
-| `integration_suite_test.go` | 2,323 | `readProbes` and the isolation tests: **OWNED BY** #97. The rest: **EXCLUDE** | — | `t.Cleanup` ×10; `Optional` ×24; `List[…]`. Per test in *integration_suite_test.go* below |
+| `integration_suite_test.go` | 2,323 | `readProbes` and the isolation tests: **OWNED BY** #97. The rest: **EXCLUDE** | — | `t.Cleanup` ×10; `Optional` (`Set(…)` / `Null[…]`) on 23 lines; `List[…]`. Per test in *integration_suite_test.go* below |
 | `integration_test.go` | 1,701 | **PRESERVE** this line's own | `integration_test.go` | `t.Cleanup` ×1, on the root test (`smokeState.deleteLater`). The shapes it covers landed in #112 (v2 namespace, health, `Metadata{}`) and #113 (the resource groups). `main`'s `smokeProbes()` registry is **not** ported; see *integration_test.go* below |
 | `octonomy_test.go` | 952 | **PRESERVE** this line's own; `main`'s cases **PORTED** to `transport_test.go` | `octonomy_test.go` (351 lines, this line's), `transport_test.go` | `t.Cleanup` ×4; `Header.Values` (1.14) → `r.Header[http.CanonicalHeaderKey(k)]`; `List[…]`. Per test below |
 | `optional_test.go` | 406 | **EXCLUDE** | — | Everything it asserts is `Optional[T]` and its `omitzero` tags, and neither exists here: `Optional` is deliberately not ported, because the `*Update` structs keep their published pointer fields (`AGENTS.md`, *Porting from `main`*). What it guards is covered for this dialect by `update_test.go` (#112) and, for the source half, by [#96](https://github.com/octoverse-id/octonomy-go/issues/96) |
@@ -56,7 +56,7 @@ every file also meets `any` → `interface{}`.
 | `resources_test.go` | 641 | **PORTED** in #113 (#94) | `resources_test.go` | `url.Values.Has`; `Optional`. The resource-tag replace's composite. `TestResources_OnV1` is `TestResources_OnV2` here |
 | `scope_test.go` | 808 | **PORTED** in #112 (#91) | `scope_test.go` | The only unit coverage of `checkScopeCoherence`. `t.Cleanup` ×1 → `newVersionedTestClient` returns its cleanup. Range-over-int **plus `i := i`** — see *Flagged* |
 | `smokeprobes_test.go` | 720 | **REWRITTEN** here (#95) | `smokeprobes_test.go` | `doData[T]` / `doList[T]` resolution; `List[…]`; and a `smokeProbes()` table this line does not have. See *The two rewrites* |
-| `tags_test.go` | 241 | **PRESERVE** this line's own; `TestTags_Get` **PORTED** here | `tags_test.go` | `io.ReadAll`; `Optional`. The fixture is raw wire JSON rather than a marshalled `Tag`, so a misspelled tag on a field it reads fails |
+| `tags_test.go` | 241 | **PRESERVE** this line's own; `TestTags_Get` **PORTED** here | `tags_test.go` | `io.ReadAll`; `Optional`. The fixture is raw wire JSON rather than a marshalled `Tag`, and every field it expects a value in is sent a non-zero one — `main`'s sent `"parent_id": null`, which a misspelled tag also decodes to — so a misspelled tag on one of them fails. The null case is `TestTags_Get_NullParentStaysNil` |
 | `tagtree_test.go` | 738 | **OWNED BY** #99 | — | `BuildTagTree` arrives with #99. `slices.*` ×13; range-over-int (`for i := range 50`) |
 | `types_test.go` | 369 | Mixed — per test below | `types_test.go` | `Optional` ×11; `io.ReadAll`; `DecodeMetadata[T]` |
 | `vocabularies_test.go` | 278 | **PRESERVE** this line's own; two of `main`'s tests **PORTED** here | `vocabularies_test.go` | `io.ReadAll`; `Optional`. Per test below |
@@ -101,7 +101,7 @@ stays. `main`'s cases went to `transport_test.go`.
 | `main` test | Verdict |
 | ----------- | ------- |
 | `TestVocabularies_Create`, `_List`, `_Update`, `_Delete` | Same names in this line's own file |
-| `TestVocabularies_Get` | **PORTED** here, with a raw wire fixture |
+| `TestVocabularies_Get` | **PORTED** here, with a raw wire fixture whose `application_id` is a value; `main`'s null case is its `a shared vocabulary` subtest |
 | `TestVocabularies_List_Params` | **PORTED** here **without** its `q` and `slug` cases: this line's `VocabularyListParams` has no `Query` or `Slug`. See *Gaps* |
 
 ### `integration_suite_test.go`
@@ -141,7 +141,9 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   `UnmarshalJSON` on the pointer — and `main`'s fixtures, rewritten for `&out`. The derivation,
   `responseTypes` in `sourceguard_test.go`, fails closed: a destination it cannot name (an
   `interface{}` wrapper passing `out` through, a shadowed name, a method value, a method expression,
-  whose explicit receiver moves every argument one place) is reported, not skipped. One half is new, because one mechanism is: a list's `rows()`, which `main`'s `doList[T]`
+  whose explicit receiver moves every argument one place, a type declared inside the function) is
+  reported, not skipped — and so is a call to `doRaw` outside `transport.go`, which decodes beneath
+  both helpers where no destination argument exists to read. One half is new, because one mechanism is: a list's `rows()`, which `main`'s `doList[T]`
   does not need. No source reading can prove `rows()` hands back every row, so
   `TestEveryDecodedModelCarriesAnIdentity` proves it by calling it, and
   `TestTheRuntimeIdentityTablesMatchTheSource` holds that test's hand-written tables to the
@@ -154,8 +156,10 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   registry also gave `main` is a walk that fails an entry which skips itself; with no walk here, the
   guard refuses a `t.Skip` in a `TestSmoke_` function outright, since a skipped probe is a green run
   the guard would still credit. `TestSmokeSelectorRunsEveryTestSmokeFunction` holds `make smoke` and
-  the go1.13 smoke job to a run that reaches every `TestSmoke_` function, so the guard cannot credit a
-  probe no job runs.
+  the go1.13 smoke job to a run that reaches every `TestSmoke_` function — no narrower `-run`, no
+  `-skip` — and `TestSmokeFileCarriesTheTagTheRunnersSelect` holds the smoke file to the
+  `integration` tag those runs build, in both constraint spellings, so the guard cannot credit a probe
+  no job runs.
 
 ## The `t.Cleanup` replacement model
 

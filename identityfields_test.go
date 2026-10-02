@@ -478,6 +478,54 @@ func TestResponseTypesCollectsWhatTheTransportDecodes(t *testing.T) {
 			unresolved: 1,
 		},
 		{
+			// A decode beneath the helpers reaches no destination argument, so
+			// without this it was neither collected nor reported: a new type
+			// decoded through doRaw had no identityFields and no smoke probe,
+			// and every guard stayed green.
+			name: "a response decoded through doRaw is refused",
+			src: `func (s *S) Stats(ctx context.Context) (*Stats, error) {
+				_, body, err := s.client.doRaw(ctx, http.MethodGet, "/stats", nil, nil)
+				if err != nil { return nil, err }
+				var out Stats
+				return &out, decodeJSON(body, &out)
+			}`,
+			unresolved: 1,
+		},
+		{
+			name:       "and so is doUnversioned outside the health probes",
+			src:        `func (s *S) Ping(ctx context.Context) error { _, _, err := s.client.doUnversioned(ctx, "/health/live"); return err }`,
+			unresolved: 1,
+		},
+		{
+			// A type declared inside the function shadows the package's type of
+			// that name, and the guard resolves by bare name against the package.
+			name: "a destination type declared in the function is refused",
+			src: `func (s *S) Get(ctx context.Context) error {
+				type Tag struct{ Name string }
+				var out Tag
+				return s.client.doData(ctx, "GET", "/t", nil, nil, &out)
+			}`,
+			unresolved: 1,
+		},
+		{
+			name: "and so is a list envelope declared in the function",
+			src: `func (s *S) List(ctx context.Context) error {
+				type TagList struct{ Data []Vocabulary }
+				var out TagList
+				return s.client.doList(ctx, "GET", "/t", nil, &out)
+			}`,
+			unresolved: 1,
+		},
+		{
+			name: "a type switch binding is one declaration, not two",
+			src: `func (s *S) Get(ctx context.Context, v interface{}) error {
+				switch x := v.(type) { default: _ = x }
+				var out Tag
+				return s.client.doData(ctx, "GET", "/t", nil, nil, &out)
+			}`,
+			want: []string{"Tag"},
+		},
+		{
 			name: "an unrelated call is not a transport call",
 			src:  `func (s *S) Get(ctx context.Context) error { var out Tag; return decodeJSON(nil, &out) }`,
 		},

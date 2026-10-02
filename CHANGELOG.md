@@ -20,12 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     5e40964, read response types off `doData[T]` type arguments this line does not have.
     `TestEveryResponseTypeCanRefuseAnEmptyDecode` requires every type the transport decodes into —
     read off its `&out` destination — to carry `identityFields()` on the value receiver or, for a
-    declared composite, a pointer-receiver `UnmarshalJSON`; `TestTheRuntimeIdentityTablesMatchTheSource`
-    holds the runtime check of each list's `rows()` to the same set.
+    declared composite, a pointer-receiver `UnmarshalJSON`, and refuses a call to `doRaw` outside
+    `transport.go`, which `AGENTS.md` already forbade with nothing to enforce it;
+    `TestTheRuntimeIdentityTablesMatchTheSource` holds the runtime check of each list's `rows()` to
+    the same set.
     `TestEveryResponseTypeHasASmokeProbe` requires a `TestSmoke_` function to call a method decoding
     each of those types against a real server, and refuses a smoke test that skips itself;
-    `TestSmokeSelectorRunsEveryTestSmokeFunction` keeps `make smoke` and the CI smoke job reaching
-    every `TestSmoke_` function. Both fail closed on a shape they cannot read.
+    `TestSmokeSelectorRunsEveryTestSmokeFunction` and `TestSmokeFileCarriesTheTagTheRunnersSelect`
+    keep `make smoke` and the CI smoke job reaching every `TestSmoke_` function. Both guards fail
+    closed on a shape they cannot read.
   - **`main`'s test cases this line lacked**: `TestTags_Get`, `TestVocabularies_Get`,
     `TestVocabularies_List_Params` (without its `q` and `slug` cases — see below),
     `TestDoData_UndecodableBodies`, `TestTransport_ErrorsPropagateFromEveryHelper` and
