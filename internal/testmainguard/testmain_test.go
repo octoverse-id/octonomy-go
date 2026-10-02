@@ -1,4 +1,9 @@
-package octonomy
+// Package testmainguard holds one check, in a package of its own because of
+// what it checks: a TestMain decides its own test binary's exit status before
+// any test in that binary runs. A guard in the root package would be the first
+// thing an `os.Exit(0)` TestMain there skipped, with `go test` reporting ok.
+// Here it is a separate binary that no TestMain in the root package reaches.
+package testmainguard
 
 // A TestMain on this line can turn a failing test binary green, and nothing in
 // a go1.13 build or vet says so (#95).
@@ -19,8 +24,9 @@ package octonomy
 //
 // staticcheck's SA3000 catches the first shape under this module's `go 1.13`
 // directive, in the lint job; it does not catch the second. So the rule here is
-// the one that covers both: a TestMain in this directory's test files, the
-// integration-tagged ones included, must be exactly `os.Exit(m.Run())`. Setup
+// the one that covers both: a TestMain in the root package's test files, the
+// integration-tagged ones included, and in this package's, must be exactly
+// `os.Exit(m.Run())`. Setup
 // that has to happen first belongs in a helper called from the tests, or in a
 // TestMain that is rewritten under review with this check updated.
 
@@ -33,10 +39,21 @@ import (
 	"testing"
 )
 
+// guardedDirs are the test binaries a TestMain could take over: the root
+// package, and this one.
+var guardedDirs = []string{filepath.Join("..", ".."), "."}
+
 func TestNoTestMainHidesAFailure(t *testing.T) {
-	paths, err := filepath.Glob("*_test.go")
-	if err != nil {
-		t.Fatalf("glob: %v", err)
+	var paths []string
+	for _, dir := range guardedDirs {
+		found, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
+		if err != nil {
+			t.Fatalf("glob %s: %v", dir, err)
+		}
+		paths = append(paths, found...)
+	}
+	if len(paths) < 2 {
+		t.Fatalf("found %d test files; the guard is not reading the root package", len(paths))
 	}
 	fset := token.NewFileSet()
 	for _, path := range paths {
@@ -109,6 +126,7 @@ func TestTestMainProblemsAcceptsOnlyTheExitingShape(t *testing.T) {
 		{"one that exits 0 early", `if os.Getenv("OCTONOMY_TEST_BASE_URL") == "" { os.Exit(0) }` + "\n\tos.Exit(m.Run())", false},
 		{"one that exits with a constant", "m.Run()\n\tos.Exit(0)", false},
 		{"one that runs another M", "os.Exit(other.Run())", false},
+		{"parentheses do not hide the shape", "(os.Exit)((m.Run()))", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := "package octonomy_test\n"
@@ -124,4 +142,21 @@ func TestTestMainProblemsAcceptsOnlyTheExitingShape(t *testing.T) {
 			}
 		})
 	}
+}
+
+// unparen and isIdent are the root package's sourceguard_test.go helpers,
+// repeated here because this package cannot import a test file.
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
+}
+
+func isIdent(expr ast.Expr, name string) bool {
+	ident, ok := unparen(expr).(*ast.Ident)
+	return ok && ident.Name == name
 }

@@ -31,7 +31,8 @@ package octonomy
 //
 // A credited call is worth something only if a runner executes it, so the two
 // runners are pinned at the bottom of this file; TestMain, which can decide a
-// test binary's exit status on its own, is held by testmain_test.go.
+// test binary's exit status on its own, is held by internal/testmainguard, in a
+// test binary of its own.
 
 import (
 	"go/ast"
@@ -1633,19 +1634,30 @@ func TestSmokeJobRequiresTheSmokeRun(t *testing.T) {
 	}
 }
 
-// makeRule returns every line that opens with `target:` -- the rule, and any
-// target-specific variable -- followed by the rule's recipe lines, trimmed of
-// trailing space and joined by newlines. A `target :=` is a variable, not a rule.
+// makeRule returns every make line that names target among its targets -- the
+// rule, a target-specific variable (`smoke: export X := …`), and a line naming
+// several targets at once (`test smoke: SHELL := …`) -- each followed by its
+// recipe lines, trimmed of trailing space and joined by newlines.
+// Continuations are joined first, as make joins them. A `target :=` is a
+// variable named target, not a rule, and `.PHONY: … smoke` names smoke as a
+// prerequisite, not a target.
 func makeRule(src, target string) string {
-	rule := regexp.MustCompile(`^` + regexp.QuoteMeta(target) + `\s*:([^=]|$)`)
 	lines := strings.Split(src, "\n")
 	var out []string
-	for i, line := range lines {
-		if !rule.MatchString(line) {
+	for _, ll := range logicalLines(src) {
+		if strings.HasPrefix(ll.text, "\t") {
 			continue
 		}
-		out = append(out, strings.TrimRight(line, " \t"))
-		for j := i + 1; j < len(lines); j++ {
+		m := makeTargets.FindStringSubmatch(ll.text)
+		if m == nil || !containsWord(strings.Fields(m[1]), target) {
+			continue
+		}
+		out = append(out, strings.TrimRight(ll.text, " \t"))
+		end := ll.line // the logical line may span several physical ones
+		for end < len(lines) && strings.HasSuffix(strings.TrimRight(lines[end-1], " \t"), "\\") {
+			end++
+		}
+		for j := end; j < len(lines); j++ {
 			if strings.HasPrefix(lines[j], "\t") {
 				out = append(out, strings.TrimRight(lines[j], " \t"))
 				continue
@@ -1657,6 +1669,19 @@ func makeRule(src, target string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// makeTargets matches a rule or target-specific line, capturing its targets:
+// the text before a `:` or `::` that does not open an assignment.
+var makeTargets = regexp.MustCompile(`^([^\t#=:][^#=:]*?)\s*::?([^=]|$)`)
+
+func containsWord(words []string, word string) bool {
+	for _, w := range words {
+		if w == word {
+			return true
+		}
+	}
+	return false
 }
 
 // workflowJob returns the job named name under `jobs:`, from its key to the
@@ -1726,6 +1751,21 @@ func TestThePinnedRunnersAreReadWhole(t *testing.T) {
 	t.Run("a variable named smoke is not a rule", func(t *testing.T) {
 		if got := makeRule("smoke := yes\n", "smoke"); got != "" {
 			t.Errorf("makeRule read a variable as a rule: %q", got)
+		}
+	})
+	t.Run("a line naming several targets is part of it", func(t *testing.T) {
+		if got := makeRule("test smoke: SHELL := /bin/true\n"+rule, "smoke"); !strings.Contains(got, "/bin/true") {
+			t.Errorf("makeRule dropped the multi-target assignment: %q", got)
+		}
+	})
+	t.Run("so is one continued onto the next line", func(t *testing.T) {
+		if got := makeRule("test \\\n  smoke: SHELL := /bin/true\n"+rule, "smoke"); !strings.Contains(got, "/bin/true") {
+			t.Errorf("makeRule dropped the continued assignment: %q", got)
+		}
+	})
+	t.Run("a .PHONY naming smoke is not a rule for it", func(t *testing.T) {
+		if got := makeRule(".PHONY: help smoke test\n"+rule, "smoke"); got != "smoke: ## run\n\tgo test ./..." {
+			t.Errorf("makeRule = %q", got)
 		}
 	})
 	t.Run("a renamed target is no rule at all", func(t *testing.T) {

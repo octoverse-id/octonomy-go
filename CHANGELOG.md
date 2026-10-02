@@ -30,9 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     can skip or return early other than through `newSmokeClient`'s gated skip. The two runners that execute those probes, `make smoke` and the CI smoke job, are pinned to text
     verified against a real server, with the Makefile-wide and workflow-wide settings that could
     change them from outside refused. Both guards fail closed on a shape they cannot read.
-  - **`TestNoTestMainHidesAFailure`**: a `TestMain` must be exactly `os.Exit(m.Run())`. Before Go
-    1.15 one that returns exits 0 over failing tests, which go1.13.15's `vet` does not report; the
-    porting checklist gains the row.
+  - **`TestNoTestMainHidesAFailure`**, in a test-only package of its own (`internal/testmainguard`):
+    a `TestMain` must be exactly `os.Exit(m.Run())`. Before Go 1.15 one that returns exits 0 over
+    failing tests, which go1.13.15's `vet` does not report, and a guard in the root package would be
+    the first thing an early-exiting `TestMain` there skipped. The porting checklist gains the row.
   - **`main`'s test cases this line lacked**: `TestTags_Get`, `TestVocabularies_Get`,
     `TestVocabularies_List_Params` (without its `q` and `slug` cases — see below),
     `TestDoData_UndecodableBodies`, `TestTransport_ErrorsPropagateFromEveryHelper` and

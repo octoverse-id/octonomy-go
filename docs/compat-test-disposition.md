@@ -177,9 +177,12 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
     refused, since each would change a pinned runner without touching its text.
   - **The smoke file is built by those runs** (`TestSmokeFileCarriesTheTagTheRunnersSelect`): it
     carries the `integration` tag in both constraint spellings.
-  - **No `TestMain` hides a failure** (`TestNoTestMainHidesAFailure`, in `testmain_test.go`). Before
-    Go 1.15 a `TestMain` that returns exits 0 over failing tests, and one that exits 0 early does on
-    any version, so a `TestMain` in this directory must be exactly `os.Exit(m.Run())`.
+  - **No `TestMain` hides a failure** (`TestNoTestMainHidesAFailure`). Before Go 1.15 a `TestMain`
+    that returns exits 0 over failing tests, and one that exits 0 early does on any version, so a
+    `TestMain` in the root package must be exactly `os.Exit(m.Run())`. The check lives in a package
+    of its own, `internal/testmainguard`, because a `TestMain` decides its own binary's exit status
+    before any test in that binary runs: in the root package it would be the first thing an early
+    exit skipped.
 
   The pins replaced a reader of the runners' shell, make and YAML that ten review rounds grew and
   that never converged: each round found a construct it got wrong, in both directions — `set +e`
@@ -253,7 +256,7 @@ test change:
 | `cleanupmodel_test.go` | #95 | Rule 1 of the `t.Cleanup` model |
 | `contractbaseline_test.go` | #109 (#90) | The vendored specs, the contract-version marker and the coverage rows agree |
 | `disposition_test.go` | #95 | Every test file in this package is named in this table |
-| `testmain_test.go` | #95 | A `TestMain` cannot turn a failing test binary green on Go 1.13 |
+| `internal/testmainguard/testmain_test.go` | #95 | A `TestMain` cannot turn a failing test binary green on Go 1.13; a package of its own, so a root-package `TestMain` cannot skip it |
 | `jsondepth_test.go`, `jsondepth_external_test.go` | #112 (#91) | Go 1.13's `encoding/json` has no depth limit and no cycle detection; `main`'s modern toolchain needs neither guard |
 | `sourceguard_test.go` | #95 | The AST readers the two rewritten guards share, and #97's port after them |
 | `transport_test.go` | #112 (#91) | Holds `main`'s `octonomy_test.go` cases, since this line's own `octonomy_test.go` is kept |

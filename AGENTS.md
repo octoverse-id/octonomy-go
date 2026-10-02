@@ -153,8 +153,9 @@ stays a faithful, ergonomic client.
   at runtime by the envelope, identity, pagination and 204 assertions — keep every one of them, since
   a decoder without them returns a zero-valued struct or an empty-looking page with a nil error.
   `doRaw` is the shared request path; do not call it directly from a resource file.
-  `TestEveryResponseTypeCanRefuseAnEmptyDecode` fails on a call outside `transport.go`: a response
-  decoded beneath the helpers is one no guard can see.
+  `TestEveryResponseTypeCanRefuseAnEmptyDecode` fails on a call from anything but `Client.do`,
+  `doData` and `doList`, a new helper beside them in `transport.go` included: a response decoded
+  beneath them is one no guard can see.
 - **Bulk and replace return a composite object under `data`** — `bulk-assign`, `bulk-remove` and
   the resource-tag replace, e.g. `{"data": {"created": 1, "existing": 0, "skipped": 0,
   "assignments": [...]}}`. Both vendored specs are wrong about them: a bare array for `bulk-assign`
@@ -260,7 +261,9 @@ stays a faithful, ergonomic client.
   re-checking what the pins' comment lists against a real server, then updating the pin in the same
   commit.
 - **A `TestMain` is exactly `os.Exit(m.Run())`.** Before Go 1.15 a `TestMain` that returns exits 0
-  over failing tests, and `TestNoTestMainHidesAFailure` refuses any other shape.
+  over failing tests, and `TestNoTestMainHidesAFailure` refuses any other shape. It lives in
+  `internal/testmainguard`, a test binary of its own, since a root-package `TestMain` that exits
+  early would skip a guard beside it.
 - Canned **single-resource** responses go through `writeData`, which adds the server's `{"data": ...}`
   wrapper. `writeJSON` sends the body verbatim — use it for list and error envelopes only. Handlers
   that returned bare objects matched the vendored spec instead of the server and hid a real defect.
