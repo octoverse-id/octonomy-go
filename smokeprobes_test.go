@@ -225,10 +225,68 @@ func TestSmokeSelectorRunsEveryTestSmokeFunction(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		for _, problem := range smokeRunProblems(path, string(raw)) {
+		runs, problems := smokeRuns(path, string(raw))
+		for _, problem := range problems {
 			t.Error(problem)
 		}
+		// In the Makefile the run has to be what `make smoke` executes. A
+		// command elsewhere in the file -- under a renamed target, say, while
+		// .PHONY keeps `make smoke` exiting 0 with nothing to do -- runs for
+		// nobody who types the documented command.
+		if path == "Makefile" && len(runs) > 0 {
+			if why := makeTargetRuns(string(raw), smokeTarget, runs); why != "" {
+				t.Errorf("Makefile: %s", why)
+			}
+		}
 	}
+}
+
+// smokeTarget is the make target AGENTS.md and docs/development.md tell a
+// contributor to run.
+const smokeTarget = "smoke"
+
+// makeTargetRuns reports why none of the counted runs is in target's recipe, or "".
+func makeTargetRuns(src, target string, runs []int) string {
+	start, end, ok := makeRecipe(src, target)
+	if !ok {
+		return "declares no `" + target + ":` target, so `make " + target + "` runs no smoke test"
+	}
+	for _, line := range runs {
+		if line >= start && line <= end {
+			return ""
+		}
+	}
+	return "the `" + target + ":` recipe (lines " + strconv.Itoa(start) + "-" + strconv.Itoa(end) + ") holds " +
+		"none of the smoke runs the guard counts, so `make " + target + "` runs no smoke test"
+}
+
+// makeRecipe returns the first and last physical lines (1-based) of target's
+// recipe: the tab-indented lines after `target:`, through blank lines, up to
+// the first line that is neither. A `target :=` is a variable, not a rule.
+func makeRecipe(src, target string) (int, int, bool) {
+	rule := regexp.MustCompile(`^` + regexp.QuoteMeta(target) + `\s*:([^=]|$)`)
+	lines := strings.Split(src, "\n")
+	for i, line := range lines {
+		if !rule.MatchString(line) {
+			continue
+		}
+		end := i + 1
+		for j := i + 1; j < len(lines); j++ {
+			if strings.HasPrefix(lines[j], "\t") {
+				end = j + 1
+				continue
+			}
+			if strings.TrimSpace(lines[j]) == "" {
+				continue
+			}
+			break
+		}
+		if end == i+1 {
+			return 0, 0, false
+		}
+		return i + 2, end, true
+	}
+	return 0, 0, false
 }
 
 // The other half of the same binding: the runners select `-tags=integration`,
@@ -2016,6 +2074,33 @@ RUN
 			}
 			if got := workflowStepProblems(src, runs[0]); len(got) != tc.problems {
 				t.Errorf("problems = %d, want %d: %v", len(got), tc.problems, got)
+			}
+		})
+	}
+}
+
+// make smoke is the documented command, so the counted run has to be in that
+// target's recipe and not merely somewhere in the Makefile.
+func TestMakeTargetRunsBindsTheRunToTheSmokeRecipe(t *testing.T) {
+	const run = "\tgo test -tags=integration -run '^TestSmoke_' -v ./..."
+	for _, tc := range []struct {
+		name, src string
+		ok        bool
+	}{
+		{"the smoke recipe", "help:\n\t@echo help\n\nsmoke: ## Run it\n" + run + "\n\ntest:\n\tgo test ./...\n", true},
+		{"a continued recipe", "smoke:\n\t@if [ -f .env ]; then . ./.env; fi; \\\n" + run + "\n", true},
+		{"a renamed target", ".PHONY: smoke\nsmoke-real:\n" + run + "\n", false},
+		{"the run under another target", "smoke:\n\t@echo nothing\n\nother:\n" + run + "\n", false},
+		{"a variable named smoke is not a rule", "smoke := yes\nother:\n" + run + "\n", false},
+		{"a target with no recipe", "smoke: other\nother:\n" + run + "\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runs, _ := smokeRuns("Makefile", tc.src)
+			if len(runs) == 0 {
+				t.Fatalf("the fixture's run did not count: %v", tc.src)
+			}
+			if got := makeTargetRuns(tc.src, smokeTarget, runs) == ""; got != tc.ok {
+				t.Errorf("bound = %v, want %v (%s)", got, tc.ok, makeTargetRuns(tc.src, smokeTarget, runs))
 			}
 		})
 	}

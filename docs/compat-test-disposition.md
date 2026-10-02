@@ -143,33 +143,36 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   `interface{}` wrapper passing `out` through, a shadowed name, a method value, a method expression,
   whose explicit receiver moves every argument one place, a type declared inside the function) is
   reported, not skipped — and so is a call to `doRaw` outside `transport.go`, which decodes beneath
-  both helpers where no destination argument exists to read. One half is new, because one mechanism is: a list's `rows()`, which `main`'s `doList[T]`
-  does not need. No source reading can prove `rows()` hands back every row, so
+  both helpers where no destination argument exists to read. One half is new, because one mechanism
+  is: a list's `rows()`, which `main`'s `doList[T]` does not need. No source reading can prove
+  `rows()` hands back every row, so
   `TestEveryDecodedModelCarriesAnIdentity` proves it by calling it, and
   `TestTheRuntimeIdentityTablesMatchTheSource` holds that test's hand-written tables to the
   source-derived sets in both directions.
 - **`smokeprobes_test.go`** keeps `main`'s guard — every response type is asserted against a real
   server — and binds it to this line's walk: a type is probed when a `TestSmoke_` function calls a
   method that decodes it, on a client that function built (`newSmokeClient`, or the SDK's `New`),
-  outside any closure. That is `main`'s checks 1 and 4 taken together. `main`'s separate stale-key
-  and wrong-key checks exist only because a registry has keys, and are not needed without one. What a
-  registry also gave `main` is a walk that fails an entry which skips itself; with no walk here, the
-  guard refuses a smoke test that can skip — a `Skip` call in it, a smoke-file helper it calls that
-  can, or its `*testing.T` handed to anything the guard cannot read — since a skipped probe is a
-  green run the guard would still credit. The one skip allowed is `newSmokeClient`'s, and only in the
-  shape that makes CI fail instead: a single `Skip` straight after `if required { t.Fatal(…) }`, with
-  `required` read from `OCTONOMY_SMOKE_REQUIRED`. `TestSmokeJobRequiresTheSmokeRun` holds the CI step
-  that runs the smoke tests, and its job, to setting that variable in their own `env`, and to running
-  unconditionally with a failure that fails the workflow — no `if:`, no `continue-on-error`, no
-  `working-directory`. `TestSmokeSelectorRunsEveryTestSmokeFunction` holds `make smoke` and
-  the go1.13 smoke job to a run that reaches every `TestSmoke_` function — read as shell commands,
-  with continuations joined; with no narrower `-run`, no `-skip`, no selector in a variable or
-  `GOFLAGS`; on the root package; and with no flag outside an allow-list of those known to leave the
-  tests that run alone, since `-list`, `-c`, `-n` and `-count=0` all run nothing and exit 0; and only
-  where the command runs and its failure fails the runner — not behind `||` or inside a shell `if`,
-  not followed by `|| true`, a `;` or a pipe, not on a make line prefixed with `-` — and `TestSmokeFileCarriesTheTagTheRunnersSelect` holds the smoke file to the
-  `integration` tag those runs build, in both constraint spellings, so the guard cannot credit a probe
-  no job runs.
+  outside any closure. That is `main`'s checks 1 and 4 taken together; `main`'s separate stale-key
+  and wrong-key checks exist only because a registry has keys. A credited call is only worth
+  something if the smoke run executes it, and with no registry walk to fail at runtime, the rest of
+  the file checks that statically:
+  - **No skip.** A smoke test that can skip is refused — a `Skip` call in it, a smoke-file helper it
+    calls that can, or its `*testing.T` handed to anything the guard cannot read. The one skip allowed
+    is `newSmokeClient`'s, and only as a single `Skip` straight after `if required { t.Fatal(…) }`,
+    with `required` read from `OCTONOMY_SMOKE_REQUIRED`.
+  - **The runners reach every `TestSmoke_` function** (`TestSmokeSelectorRunsEveryTestSmokeFunction`).
+    The `smoke:` target's own recipe and the go1.13 CI job must each hold a `go test -tags=integration`
+    run, read as shell commands, that selects `-run '^TestSmoke_'` or nothing, on the root package,
+    with no `-skip`, no selector in a variable or `GOFLAGS`, and no flag outside an allow-list —
+    `-list`, `-c`, `-n` and `-count=0` all run nothing and exit 0. And the run must execute, with a
+    failure that fails the runner: not behind `||` or inside a shell `if`, not followed by `|| true`,
+    `;` or a pipe, not on a make line prefixed with `-`.
+  - **The CI step runs and is required** (`TestSmokeJobRequiresTheSmokeRun`). The step holding the
+    run, and its job, carry no `if:`, no `continue-on-error` and no `working-directory`, and set
+    `OCTONOMY_SMOKE_REQUIRED: "1"` in their own `env`. The workflow's triggers, a `needs:`, and branch
+    protection stay a reviewer's to read.
+  - **The smoke file is built by those runs** (`TestSmokeFileCarriesTheTagTheRunnersSelect`): it
+    carries the `integration` tag in both constraint spellings.
 
 ## The `t.Cleanup` replacement model
 
