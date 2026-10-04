@@ -571,17 +571,46 @@ func TestDoList_GoodRowsAndANullPageStillDecode(t *testing.T) {
 	})
 }
 
+// identityModels, compositeResults and identityLists are the tables
+// TestEveryDecodedModelCarriesAnIdentity runs. They are functions rather than
+// literals inside it so TestTheRuntimeIdentityTablesMatchTheSource
+// (identityfields_test.go) can hold them to the response types derived from the
+// package source: a table written by hand is otherwise free to miss the next
+// model added.
+func identityModels() []interface{} {
+	return []interface{}{
+		Tag{}, &Tag{}, Vocabulary{}, &Vocabulary{}, TagAlias{}, &TagAlias{},
+		Assignment{}, &Assignment{}, ResourceTag{}, &ResourceTag{}, TagResource{}, &TagResource{},
+		AuditLog{}, &AuditLog{}, TagResolution{}, &TagResolution{},
+	}
+}
+
+func compositeResults() []interface{} {
+	return []interface{}{&BulkAssignResult{}, &BulkRemoveResult{}, &ResourceReplaceResult{}}
+}
+
+type identityListCase struct {
+	list identifiedList
+	want []string
+}
+
+func identityLists() []identityListCase {
+	return []identityListCase{
+		{&TagList{Data: []Tag{{ID: "a"}, {ID: "b"}}}, []string{"a", "b"}},
+		{&VocabularyList{Data: []Vocabulary{{ID: "c"}}}, []string{"c"}},
+		{&TagAliasList{Data: []TagAlias{{ID: "d"}}}, []string{"d"}},
+		{&ResourceTagList{Data: []ResourceTag{{AssignmentID: "e"}}}, []string{"e"}},
+		{&TagResourceList{Data: []TagResource{{ResourceID: "f"}}}, []string{"f"}},
+		{&AuditLogList{Data: []AuditLog{{ID: "g"}, {ID: "h"}}}, []string{"g", "h"}},
+	}
+}
+
 // Every model the transport decodes carries an identity, and every list type
 // hands its rows back. A model that stopped implementing identifiedResource
 // would be skipped by requireIdentity in silence, so this asserts the
 // interfaces directly rather than through a decode.
 func TestEveryDecodedModelCarriesAnIdentity(t *testing.T) {
-	models := []interface{}{
-		Tag{}, &Tag{}, Vocabulary{}, &Vocabulary{}, TagAlias{}, &TagAlias{},
-		Assignment{}, &Assignment{}, ResourceTag{}, &ResourceTag{}, TagResource{}, &TagResource{},
-		AuditLog{}, &AuditLog{}, TagResolution{}, &TagResolution{},
-	}
-	for _, m := range models {
+	for _, m := range identityModels() {
 		if _, ok := m.(identifiedResource); !ok {
 			t.Errorf("%T does not implement identifiedResource, so a blank id would decode with a nil error", m)
 		}
@@ -590,24 +619,12 @@ func TestEveryDecodedModelCarriesAnIdentity(t *testing.T) {
 	// require their keys in UnmarshalJSON instead, so requireIdentity must skip
 	// them. One that grew an identityFields() naming a field it does not have
 	// would turn every real answer into an error.
-	composites := []interface{}{&BulkAssignResult{}, &BulkRemoveResult{}, &ResourceReplaceResult{}}
-	for _, m := range composites {
+	for _, m := range compositeResults() {
 		if _, ok := m.(identifiedResource); ok {
 			t.Errorf("%T implements identifiedResource; a composite requires its keys in its own decoder", m)
 		}
 	}
-	lists := []struct {
-		list identifiedList
-		want []string
-	}{
-		{&TagList{Data: []Tag{{ID: "a"}, {ID: "b"}}}, []string{"a", "b"}},
-		{&VocabularyList{Data: []Vocabulary{{ID: "c"}}}, []string{"c"}},
-		{&TagAliasList{Data: []TagAlias{{ID: "d"}}}, []string{"d"}},
-		{&ResourceTagList{Data: []ResourceTag{{AssignmentID: "e"}}}, []string{"e"}},
-		{&TagResourceList{Data: []TagResource{{ResourceID: "f"}}}, []string{"f"}},
-		{&AuditLogList{Data: []AuditLog{{ID: "g"}, {ID: "h"}}}, []string{"g", "h"}},
-	}
-	for _, l := range lists {
+	for _, l := range identityLists() {
 		var got []string
 		for _, row := range l.list.rows() {
 			got = append(got, row.identityFields()[0].value)
@@ -722,6 +739,76 @@ func TestDo_RefusesA2xxThatIsNotTheDeleteAnswer(t *testing.T) {
 			if err := del.call(c); err != nil {
 				t.Errorf("%s: %v", del.name, err)
 			}
+		}
+	})
+}
+
+// --- Ported from main's octonomy_test.go for #95 -----------------------------
+
+// A 2xx body that is not JSON at all -- a proxy's error page answered with 200 --
+// is a decode failure on every helper that reads one, and never a resource.
+// Ported from main's TestDoData_UndecodableBodies at 5e40964; its other two
+// cases, a "data" that is a number or an array, are the shape cases in
+// TestDoData_ContentsThatWouldDecodeToAZeroValue above.
+func TestDoData_UndecodableBodies(t *testing.T) {
+	const body = `<html>proxy error</html>`
+	t.Run("doData", func(t *testing.T) {
+		c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			writeRaw(w, http.StatusOK, body)
+		})
+		defer cleanup()
+		tag, err := c.Tags.Get(context.Background(), "abc")
+		if err == nil {
+			t.Fatalf("expected an error, got tag %+v", tag)
+		}
+		if tag != nil {
+			t.Errorf("tag = %+v, want nil alongside the error", tag)
+		}
+		if _, ok := AsAPIError(err); ok {
+			t.Errorf("a 2xx that failed to decode is not an *APIError: %v", err)
+		}
+	})
+	t.Run("doList", func(t *testing.T) {
+		c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			writeRaw(w, http.StatusOK, body)
+		})
+		defer cleanup()
+		page, err := c.Tags.List(context.Background(), nil)
+		if err == nil {
+			t.Fatalf("expected an error, got page %+v", page)
+		}
+		if page != nil {
+			t.Errorf("page = %+v, want nil alongside the error", page)
+		}
+	})
+}
+
+// Every helper propagates a non-2xx as *APIError rather than swallowing it into
+// its own decode failure. doData is covered by TestDo_ErrorEnvelope
+// (octonomy_test.go); these are the other two. Ported from main's
+// TestTransport_ErrorsPropagateFromEveryHelper at 5e40964.
+func TestTransport_ErrorsPropagateFromEveryHelper(t *testing.T) {
+	handler := func(w http.ResponseWriter, _ *http.Request) {
+		writeRaw(w, http.StatusForbidden, `{"error": {"code": "forbidden", "message": "insufficient scope"}}`)
+	}
+
+	t.Run("doList", func(t *testing.T) {
+		c, cleanup := newTestClient(t, handler)
+		defer cleanup()
+		page, err := c.Tags.List(context.Background(), nil)
+		if !IsForbidden(err) {
+			t.Fatalf("expected forbidden, got %v", err)
+		}
+		if page != nil {
+			t.Errorf("page = %+v, want nil", page)
+		}
+	})
+
+	t.Run("do", func(t *testing.T) {
+		c, cleanup := newTestClient(t, handler)
+		defer cleanup()
+		if err := c.Tags.Delete(context.Background(), "tag_1"); !IsForbidden(err) {
+			t.Fatalf("expected forbidden, got %v", err)
 		}
 	})
 }

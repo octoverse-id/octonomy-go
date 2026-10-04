@@ -276,6 +276,8 @@ version from `go.mod` but not the stdlib version, so `io.ReadAll` (Go 1.16) comp
   for what the `/v2` line implements.
 - [Porting checklist](docs/porting-checklist.md) — the rewrites a port from `main` makes, each marked
   by whether a miss fails the go1.13 build or compiles and is wrong.
+- [Test disposition](docs/compat-test-disposition.md) — what became of each of `main`'s test files on
+  this line, and how `t.Cleanup` is replaced on Go 1.13.
 - [CHANGELOG](CHANGELOG.md)
 
 ## Contributing & security

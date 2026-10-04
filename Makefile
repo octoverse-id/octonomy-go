@@ -76,7 +76,7 @@ compat-guard-test: ## Run the compat-guard fixture tests (release-PR and tag pat
 
 smoke: ## Run the integration smoke test against a booted harness (see dev-server)
 	@if [ -f .octonomy-harness.env ]; then set -a; . ./.octonomy-harness.env; set +a; fi; \
-	go test -tags=integration -run '^TestSmoke_' -v ./...
+	go test -tags=integration -count=1 -run '^TestSmoke_' -v ./...
 
 test-go113: ## Build, vet and test with a REAL go1.13 toolchain (override GO113=<path>)
 	@command -v $(GO113) >/dev/null 2>&1 || { \
