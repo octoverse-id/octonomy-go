@@ -24,9 +24,8 @@ package testmainguard
 //
 // staticcheck's SA3000 catches the first shape under this module's `go 1.13`
 // directive, in the lint job; it does not catch the second. So the rule here is
-// the one that covers both: a TestMain in the root package's test files, the
-// integration-tagged ones included, and in this package's, must be exactly
-// `os.Exit(m.Run())`. Setup
+// the one that covers both: a TestMain in any test file in the repository, the
+// integration-tagged ones included, must be exactly `os.Exit(m.Run())`. Setup
 // that has to happen first belongs in a helper called from the tests, or in a
 // TestMain that is rewritten under review with this check updated.
 
@@ -34,26 +33,35 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/ioutil"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
 
-// guardedDirs are the test binaries a TestMain could take over: the root
-// package, and this one.
-var guardedDirs = []string{filepath.Join("..", ".."), "."}
+// repoRoot is the repository root, relative to this package's directory, which
+// is where go test runs it.
+var repoRoot = filepath.Join("..", "..")
 
+// The rule is the repository's (AGENTS.md), so the directories are DISCOVERED
+// rather than listed. A list of the two test packages that existed when this
+// was written would leave the next one -- the contract gate #98 ports, say --
+// outside the check with nothing saying so, which is the silent shrinking every
+// other guard here refuses. A nested module is walked too: an early
+// os.Exit(0) hides failures on any Go version, whichever go.mod runs it.
 func TestNoTestMainHidesAFailure(t *testing.T) {
-	var paths []string
-	for _, dir := range guardedDirs {
-		found, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
-		if err != nil {
-			t.Fatalf("glob %s: %v", dir, err)
-		}
-		paths = append(paths, found...)
+	paths, err := testFiles(repoRoot)
+	if err != nil {
+		t.Fatalf("walk %s: %v", repoRoot, err)
 	}
-	if len(paths) < 2 {
-		t.Fatalf("found %d test files; the guard is not reading the root package", len(paths))
+	// The floor: the walk must reach the root package and this one, or it
+	// is not reading the repository at all.
+	for _, want := range []string{"smokeprobes_test.go", filepath.Join("internal", "testmainguard", "testmain_test.go")} {
+		if !containsPath(paths, filepath.Join(repoRoot, want)) {
+			t.Fatalf("the walk did not reach %s; the guard is not reading the repository (found %d files)", want, len(paths))
+		}
 	}
 	fset := token.NewFileSet()
 	for _, path := range paths {
@@ -64,6 +72,84 @@ func TestNoTestMainHidesAFailure(t *testing.T) {
 		for _, why := range testMainProblems(file) {
 			t.Errorf("%s: %s", path, why)
 		}
+	}
+}
+
+// testFiles returns every *_test.go file under root, sorted, skipping what the
+// go command skips -- directories named testdata or vendor, or starting with
+// "." or "_" -- which also keeps out .git and any agent worktree checked out
+// under .claude.
+func testFiles(root string) ([]string, error) {
+	var out []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		name := info.Name()
+		if info.IsDir() {
+			if path != root && (name == "testdata" || name == "vendor" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(name, "_test.go") {
+			out = append(out, path)
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out, err
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, p := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+// The walk is the guard's scope, so it is held to finding a test package
+// wherever one is added, nested module included, and to skipping only what the
+// go command skips.
+func TestTestFilesFindsEveryTestPackage(t *testing.T) {
+	root, err := ioutil.TempDir("", "testmainguard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(root) }()
+	for _, f := range []string{
+		"a_test.go",
+		"internal/x/b_test.go",
+		"tools/contractdrift/drift_test.go", // a nested module on main
+		"tools/contractdrift/go.mod",
+		"pkg/plain.go",
+		".claude/worktrees/agent/c_test.go",
+		"pkg/testdata/d_test.go",
+		"vendor/e_test.go",
+		"_scratch/f_test.go",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := ioutil.WriteFile(path, []byte("package p\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := testFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rel []string
+	for _, p := range got {
+		r, _ := filepath.Rel(root, p)
+		rel = append(rel, filepath.ToSlash(r))
+	}
+	want := "a_test.go internal/x/b_test.go tools/contractdrift/drift_test.go"
+	if strings.Join(rel, " ") != want {
+		t.Errorf("testFiles = %v, want %s", rel, want)
 	}
 }
 

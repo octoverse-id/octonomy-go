@@ -180,7 +180,8 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
     carries the `integration` tag in both constraint spellings.
   - **No `TestMain` hides a failure** (`TestNoTestMainHidesAFailure`). Before Go 1.15 a `TestMain`
     that returns exits 0 over failing tests, and one that exits 0 early does on any version, so a
-    `TestMain` in the root package must be exactly `os.Exit(m.Run())`. The check lives in a package
+    `TestMain` anywhere in the repository must be exactly `os.Exit(m.Run())` — the guard walks for
+    every test file, a nested module's included, rather than listing packages. The check lives in a package
     of its own, `internal/testmainguard`, because a `TestMain` decides its own binary's exit status
     before any test in that binary runs: in the root package it would be the first thing an early
     exit skipped.

@@ -261,9 +261,10 @@ stays a faithful, ergonomic client.
   re-checking what the pins' comment lists against a real server, then updating the pin in the same
   commit.
 - **A `TestMain` is exactly `os.Exit(m.Run())`.** Before Go 1.15 a `TestMain` that returns exits 0
-  over failing tests, and `TestNoTestMainHidesAFailure` refuses any other shape. It lives in
-  `internal/testmainguard`, a test binary of its own, since a root-package `TestMain` that exits
-  early would skip a guard beside it.
+  over failing tests, and `TestNoTestMainHidesAFailure` refuses any other shape anywhere in the
+  repository: it walks for every test file, a nested module's included, rather than listing
+  packages, so a new one is covered by adding it. It lives in `internal/testmainguard`, a test
+  binary of its own, since a root-package `TestMain` that exits early would skip a guard beside it.
 - Canned **single-resource** responses go through `writeData`, which adds the server's `{"data": ...}`
   wrapper. `writeJSON` sends the body verbatim — use it for list and error envelopes only. Handlers
   that returned bare objects matched the vendored spec instead of the server and hid a real defect.
