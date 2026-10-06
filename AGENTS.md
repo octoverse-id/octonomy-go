@@ -227,7 +227,7 @@ stays a faithful, ergonomic client.
   `updateguard_test.go` (#96) reads the source for what marshalling cannot see:
   `TestUpdateBodiesNamesEveryUpdateType` fails until the row exists; `TestEveryUpdateFieldCanBeLeftOut`
   refuses a pointer-receiver `MarshalJSON`, a `Metadata` field with no `MarshalJSON`, and a field that
-  is not `omitempty` or is not a pointer; and `TestEveryPatchBodyIsAnUpdateType` holds every PATCH
+  is not `omitempty` or is neither a pointer nor `Metadata`; and `TestEveryPatchBodyIsAnUpdateType` holds every PATCH
   sent through the transport to the `*Update` name those checks find their types by. A row in
   `updateBodies` also carries its wire body as literal JSON, spelled from the contract's PATCH schema.
 - No new exported surface without doc comments and tests.

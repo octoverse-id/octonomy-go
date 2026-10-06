@@ -195,6 +195,11 @@ func TestRequestBodyNamesEveryHelperThatSendsOne(t *testing.T) {
 // request body: its index, or -1 for nil. It also requires the method doRaw is
 // handed to be the helper's parameter at requestMethodArg, since that is the
 // argument TestEveryPatchBodyIsAnUpdateType reads at the helper's call sites.
+//
+// Both parameters must reach doRaw as they arrived. `body = envelope{Data: body}`
+// before the call would send a type the call sites never name, and a reassigned
+// method a PATCH they never show, so a helper that rebinds either is refused
+// (rebinds, sourceguard_test.go).
 func helperBody(fn *ast.FuncDecl) (int, string) {
 	params := paramNames(fn.Type.Params)
 	indexOf := func(e ast.Expr) int {
@@ -233,6 +238,13 @@ func helperBody(fn *ast.FuncDecl) (int, string) {
 		if indexOf(call.Args[rawMethodArg]) != requestMethodArg {
 			why = "hands doRaw a method that is not its parameter " + strconv.Itoa(requestMethodArg) +
 				", where TestEveryPatchBodyIsAnUpdateType reads it"
+			return false
+		}
+		for _, i := range []int{body, requestMethodArg} {
+			if rebinds(fn.Body, params[i]) {
+				why = "assigns to its parameter " + params[i] + " before handing it to doRaw, so what " +
+					"is sent is not what its call sites pass"
+			}
 		}
 		return false
 	})
@@ -476,6 +488,13 @@ func patchBodies(files map[string]*ast.File) (found map[string]string, problems 
 	types := indexTypes(files)
 	updates := updateTypes(files)
 	for _, path := range sortedFileNames(files) {
+		// A dot import puts another package's exported names into this file
+		// under their bare names, which is what bodyType resolves by: a foreign
+		// TagUpdate would be credited to the SDK's. Refused, as in responseTypes.
+		if dotImported(files[path]) {
+			problems = append(problems, path+" dot-imports a package, so a bare body type name there is ambiguous")
+			continue
+		}
 		for _, decl := range files[path].Decls {
 			fn, isFunc := decl.(*ast.FuncDecl)
 			where := path
@@ -826,10 +845,17 @@ func TestPatchBodiesFindsEveryPatch(t *testing.T) {
 		"type TagCreate struct{}\ntype TagPatch struct{}\n"
 	for _, tc := range []struct {
 		name     string
-		src      string
+		src      string // appended to header
+		full     string // a whole file, for a case the header cannot precede
 		found    []string
 		problems int
 	}{
+		{
+			name: "a dot import",
+			full: "package octonomy\nimport . \"example.com/other\"\n" +
+				`func (s *S) Patch(ctx context.Context, in TagUpdate) error { return s.client.do(ctx, http.MethodPatch, "/t", nil, in) }`,
+			problems: 1,
+		},
 		{
 			name: "doData with an http.MethodPatch and a parameter",
 			src: `func (s *TagService) Update(ctx context.Context, id string, in TagUpdate) error {
@@ -955,7 +981,11 @@ func TestPatchBodiesFindsEveryPatch(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			found, problems := patchBodies(parseFixture(t, header+tc.src))
+			src := header + tc.src
+			if tc.full != "" {
+				src = tc.full
+			}
+			found, problems := patchBodies(parseFixture(t, src))
 			var names []string
 			for name := range found {
 				names = append(names, name)
@@ -989,6 +1019,12 @@ func TestHelperBodyReadsWhatAHelperHandsDoRaw(t *testing.T) {
 			_, _, err := c.doRaw(ctx, method, "/t", nil, TagPatch{}); return err }`, 0, "not one of its parameters"},
 		{"a method that is not the method parameter", `func (c *Client) send(ctx context.Context, body interface{}) error {
 			_, _, err := c.doRaw(ctx, http.MethodPatch, "/t", nil, body); return err }`, 0, "method"},
+		{"a body rewrapped before the call", `func (c *Client) send(ctx context.Context, method string, body interface{}) error {
+			body = envelope{Data: body}
+			_, _, err := c.doRaw(ctx, method, "/t", nil, body); return err }`, 0, "assigns to its parameter body"},
+		{"a method rewritten before the call", `func (c *Client) send(ctx context.Context, method string, body interface{}) error {
+			if method == "PUT" { method = http.MethodPatch }
+			_, _, err := c.doRaw(ctx, method, "/t", nil, body); return err }`, 0, "assigns to its parameter method"},
 		{"no call", `func (c *Client) send(ctx context.Context) error { return nil }`, 0, "0 times"},
 		{"two calls", `func (c *Client) send(ctx context.Context, method string, body interface{}) error {
 			c.doRaw(ctx, method, "/a", nil, body); _, _, err := c.doRaw(ctx, method, "/b", nil, body); return err }`, 0, "2 times"},
