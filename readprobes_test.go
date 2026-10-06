@@ -2705,6 +2705,18 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 			want: []string{"makes no outcomeFiltered run under an exact merchant grant carrying WithIncludeGlobal looking for the global fixture"},
 		},
 		{
+			// Only seed(…, "") is the global namespace; any other literal is a
+			// merchant's.
+			name: "the fail-closed run looking for a merchant seeded by literal id",
+			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(
+				"fixtureGlobal := h.seed(t, &rows, wildcard, \"\")",
+				"fixtureGlobal := h.seed(t, &rows, wildcard, \"harness-merchant-b\")")},
+			want: []string{
+				"makes no outcomeFiltered run under an exact merchant grant carrying WithIncludeGlobal looking for the global fixture",
+				"makes no outcomeVisible run under the wildcard grant carrying WithIncludeGlobal looking for the global fixture",
+			},
+		},
+		{
 			name: "no authorized opt-in beside the fail-closed run",
 			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(
 				"\t\t{name: \"opt-in\", client: wildcard, want: fixtureGlobal, extra: includeGlobal, expect: outcomeVisible},\n", "")},
