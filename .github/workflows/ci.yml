@@ -200,6 +200,10 @@ jobs:
 
   # THE COMPAT LINE'S ONLY CHECK AGAINST A REAL SERVER.
   #
+  # Two suites run here against one booted harness: the smoke test (does the
+  # client decode what the server sends?) and, since #97, the namespace
+  # isolation suite (does the server keep one merchant's rows from another?).
+  #
   # It replaces the bootstrap-only `harness` job this workflow was forked from:
   # on this line the smoke test IS the harness's consumer, so booting a container
   # to assert only that the container booted would be a second Docker job for no
@@ -243,6 +247,23 @@ jobs:
           # turns that absence into a failure.
           OCTONOMY_SMOKE_REQUIRED: "1"
         run: go test -tags=integration -count=1 -run '^TestSmoke_' -v ./...
+      # The namespace isolation suite (#97): every read method, asked whether a
+      # merchant-A client can see a merchant-B row, under the per-merchant exact
+      # grants the harness mints. It is a step of THIS job rather than a job of
+      # its own because this job is already a required check: a new job would
+      # report green on every PR until branch protection named it, and an
+      # isolation test that runs in an advisory job -- or in no job, as a port
+      # whose selector nothing matched would have -- is a test that asserts
+      # nothing. The harness above serves both steps.
+      #
+      # Its own selector, not the smoke step's: `^TestSmoke_` matches no
+      # isolation test. TestTheIsolationSuiteRunsItsProbes holds the suite to
+      # this prefix, and OCTONOMY_SMOKE_REQUIRED turns loadHarness's skip into a
+      # failure exactly as it does newSmokeClient's.
+      - name: Namespace isolation suite against the real server
+        env:
+          OCTONOMY_SMOKE_REQUIRED: "1"
+        run: go test -tags=integration -count=1 -run '^TestIntegration_' -v ./...
       - name: Capture container logs
         if: failure()
         run: make dev-server-logs

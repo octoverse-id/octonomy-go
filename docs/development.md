@@ -33,6 +33,7 @@ make check             # fmt-check + vet + build + guard + guard tests (pre-push
 make release-check     # the full modern-toolchain pre-release gate
 make test-go113     # THE gate: build + vet + test -race on a real go1.13 toolchain
 make smoke          # integration smoke test against a booted server
+make test-integration # namespace isolation suite against a booted server
 ```
 
 ## The Go 1.13 floor (read before touching code)
@@ -137,8 +138,8 @@ to send verbatim — list envelopes and error envelopes.
 
 ### Integration smoke test
 
-`integration_test.go` (build tag `integration`) is the only test that talks to a real server. It is
-a smoke test, not a suite: its `TestSmoke_` functions check that the client still decodes what a real
+`integration_test.go` (build tag `integration`) is one of the two tests that talk to a real server
+(the other is the isolation suite below). It is a smoke test, not a suite: its `TestSmoke_` functions check that the client still decodes what a real
 server sends — both envelopes, every response type, a real error envelope, the health probes and the
 namespace pair on `/api/v2`. It gates on `OCTONOMY_TEST_BASE_URL` and skips when that is empty, so
 `go test ./...` stays hermetic.
@@ -162,6 +163,40 @@ job that asserted nothing. That combination — this line's client, on its own t
 the current server — is the only one that proves this line still works, and it is what caught the
 single-resource envelope defect.
 
+### Namespace isolation suite
+
+`integration_suite_test.go` (build tag `integration`, #97) asks the question `/api/v2` exists to
+answer: can a merchant-A client see a merchant-B row? Every read method is a probe in `readProbes`,
+and two tests ask each probe a matrix of questions against rows seeded in two merchant namespaces and
+the global one — `TestIntegration_NamespaceIsolation` (the namespace filter, under an exact grant and
+under the wildcard, and the 403 a merchant-A token gets asking for merchant B) and
+`TestIntegration_IncludeGlobalFailsClosed` (an exact grant that opts into the global rows still sees
+none). Each probe declares how its endpoint declines a row out of scope — an empty page, a 404, or
+resolution's 400 — and a filtered run must decline exactly that way: "it errored" is not isolation
+when every non-2xx is an `*APIError`.
+
+Which token a run uses is the test. The wildcard grant matches every partition, so under it
+authorization never refuses and `include_global` always succeeds; the harness mints an exact grant
+for each of two merchants (`OCTONOMY_TEST_NAMESPACE_A_*` / `_B_*`), and those are the only way to
+reach the refusal path or the fail-closed branch.
+
+Two guards keep it honest without a server. `TestEveryReadMethodHasANamespaceProbe`
+(`readprobes_test.go`) fails on a read method with no probe or argued exclusion, and on a probe that
+names or calls the wrong method; add the probe in the change that adds the read.
+`TestTheIsolationSuiteRunsItsProbes` holds the suite to what makes it run — the `integration` tag,
+the `TestIntegration_` prefix, one skip behind `OCTONOMY_SMOKE_REQUIRED` — and each isolation test to
+its runs under an exact grant.
+
+```bash
+make dev-server        # boots a real Octonomy, mints the three grants
+make test-integration  # sources the env file and runs the isolation suite
+make dev-server-down
+```
+
+CI runs it as a step of the required go1.13 smoke job, against the same harness and with
+`OCTONOMY_SMOKE_REQUIRED=1`. Both `make test-integration` and that step are pinned
+(`isolationRecipePin`, `smokeJobPin`), like the smoke runners.
+
 ## Running against a real Octonomy
 
 `make dev-server` boots a complete, verified Octonomy in one command. It needs Docker and `curl`,
@@ -174,8 +209,9 @@ make dev-server-down   # tear everything down
 ```
 
 It starts Postgres 16 and the pinned `ghcr.io/octoverse-id/octonomy:3.1.0` image on a private Docker
-network, applies migrations, mints a service token, waits for `/health/ready`, and then **proves the
-environment actually works** before reporting success. Credentials land in `.octonomy-harness.env`
+network, applies migrations, mints three service tokens — a wildcard grant and an exact grant for
+each of two merchant namespaces — waits for `/health/ready`, and then **proves the environment
+actually works** before reporting success. Credentials land in `.octonomy-harness.env`
 (git-ignored, mode 600):
 
 | Variable | Meaning |
@@ -185,6 +221,8 @@ environment actually works** before reporting success. Credentials land in `.oct
 | `OCTONOMY_TEST_TENANT_ID` | `X-Tenant-ID` for every request |
 | `OCTONOMY_TEST_APPLICATION_ID` | Parent application. Required on namespaced requests |
 | `OCTONOMY_TEST_NAMESPACE_TYPE` / `_ID` | The `X-Namespace-*` pair to scope v2 calls with |
+| `OCTONOMY_TEST_NAMESPACE_A_ID` / `_A_TOKEN` | A merchant namespace, and a token with an EXACT grant for it alone |
+| `OCTONOMY_TEST_NAMESPACE_B_ID` / `_B_TOKEN` | A second merchant, likewise. The isolation suite reads both pairs |
 
 ```bash
 make dev-server
@@ -202,7 +240,7 @@ side. See the header of [`scripts/octonomy-harness.sh`](../scripts/octonomy-harn
 
 ### Why it is a script and not `docker run`
 
-`docker run` alone produces an environment that looks healthy and silently fails. Four things the
+`docker run` alone produces an environment that looks healthy and silently fails. Five things the
 harness does that a naive bootstrap does not:
 
 - **Migrations.** The image entrypoint runs `manage.py check`, never `migrate`. Without an explicit
@@ -218,6 +256,9 @@ harness does that a naive bootstrap does not:
   a `201` whose response actually carries `namespace_type`/`namespace_id`. A 201 with null namespace
   fields would mean the row persisted globally, and every downstream namespace assertion would be
   testing global behaviour under a namespaced name.
+- **Exact grants, proved in both directions.** The merchant-A token must write in its own namespace
+  (`201`) and be refused in merchant B's (`403`). A token minted with the wrong grant shape would
+  otherwise surface as dozens of 403s inside Go assertions that read as an SDK defect.
 
 CI reaches it through the `.github/actions/octonomy-harness` composite action. The script on this
 branch is **this line's own copy**: it cannot pick up an edit made on the other line, and the two

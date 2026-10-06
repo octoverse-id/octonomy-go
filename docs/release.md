@@ -25,6 +25,7 @@ may not:
 ```bash
 make test-go113                       # a REAL go1.13 toolchain -- see development.md
 make dev-server && make smoke         # the smoke test against a real container
+make test-integration                 # the namespace isolation suite, same container
 make dev-server-down
 ```
 

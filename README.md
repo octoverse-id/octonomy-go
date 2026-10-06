@@ -256,6 +256,7 @@ make test         # go test -race -cover ./...
 make check        # gofmt check + go vet + build + release-line guard + its tests
 make test-go113   # the same build and tests on a REAL go1.13 toolchain
 make smoke        # integration smoke test against a booted server (see make dev-server)
+make test-integration # namespace isolation suite against a booted server
 make lint         # golangci-lint (if installed)
 make help         # list all targets
 ```

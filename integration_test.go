@@ -15,8 +15,8 @@
 // namespace pair decoding off a real /api/v2 response, and every method of the
 // resource groups #94 ported -- the three composite bodies the vendored specs
 // describe wrongly among them, decoded to their real counts. Assertions about what the
-// server DOES -- isolation, authorization -- belong in a suite of their own;
-// porting one is #97.
+// server DOES -- isolation, authorization -- belong in a suite of their own:
+// integration_suite_test.go (#97), run by `make test-integration`.
 //
 // Run it against the container harness:
 //

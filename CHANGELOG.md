@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Namespace isolation coverage, and a run that executes it**
+  ([#97](https://github.com/octoverse-id/octonomy-go/issues/97), for
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests, CI, the harness and docs
+  only; no exported symbol changes.
+  - **`integration_suite_test.go`** ports `main`'s `readProbes` table — every read method, asked
+    whether a client reading one namespace can see another's row — and the two tests that run it:
+    `TestIntegration_NamespaceIsolation` (the namespace filter under an exact grant and under the
+    wildcard, and the `403` a merchant-A token gets asking for merchant B) and
+    `TestIntegration_IncludeGlobalFailsClosed` (an exact grant that opts into the global rows still
+    sees none). A filtered read must decline the one way its endpoint declines — an empty page, a
+    `404`, or resolution's `400` — not merely fail. `Vocabularies.List` has no slug filter on this
+    line, so its probe walks every page and fails unless it saw every row the server counts.
+  - **`scripts/octonomy-harness.sh`** mints an exact grant for each of two merchant namespaces beside
+    the wildcard token, proves each reaches its own namespace (`201`) and is refused in the other's
+    (`403`), and exports them as `OCTONOMY_TEST_NAMESPACE_A_*` / `_B_*`; the CI action masks every
+    `*_TOKEN` it exports.
+  - **The suite runs in the required go1.13 smoke job**, as a step with its own `^TestIntegration_`
+    selector and `OCTONOMY_SMOKE_REQUIRED=1`, so a missing harness fails rather than skips; locally,
+    `make test-integration`. Both runners are pinned.
+  - **`TestEveryReadMethodHasANamespaceProbe`** (`readprobes_test.go`, no build tag) reads the source
+    and fails on a read method with no probe or argued exclusion, a probe naming a method that does
+    not exist or calling another than its name, a duplicate, a stale or unargued exclusion, and a
+    method whose verb it cannot resolve. Rewritten from `main`'s for this line's transport calls, with
+    a fixture per condition. **`TestTheIsolationSuiteRunsItsProbes`** holds the suite to what makes
+    it run — its build tag, its prefix, one skip behind the required gate, the matrix ranging over
+    `readProbes` — and each isolation test to its runs under an exact grant, since under the wildcard
+    authorization never refuses.
 - **The `*Update` tag guard** ([#96](https://github.com/octoverse-id/octonomy-go/issues/96), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests and docs only; no exported
   symbol changes.

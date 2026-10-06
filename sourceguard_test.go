@@ -1,8 +1,9 @@
 package octonomy
 
 // The AST readers the source-parsing guards share: TestEveryResponseTypeCanRefuseAnEmptyDecode
-// (identityfields_test.go) and TestEveryResponseTypeHasASmokeProbe
-// (smokeprobes_test.go), and #97's port of readprobes_test.go after them.
+// (identityfields_test.go), TestEveryResponseTypeHasASmokeProbe
+// (smokeprobes_test.go), and TestEveryReadMethodHasANamespaceProbe
+// (readprobes_test.go, #97).
 //
 // Every mention of main in this file means main at 5e40964, which keeps most of
 // these in readprobes_test.go and identityfields_test.go. They are in a file of

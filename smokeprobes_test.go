@@ -240,6 +240,8 @@ func TestSmokeFileCarriesTheTagTheRunnersSelect(t *testing.T) {
 }
 
 // smokeBuildTagProblems checks the constraint lines above the package clause.
+// The isolation suite's two files are held to it too
+// (TestTheIsolationSuiteRunsItsProbes), since their runners select the same tag.
 func smokeBuildTagProblems(src string) []string {
 	want := map[string]bool{"//go:build integration": false, "// +build integration": false}
 	for _, line := range strings.Split(src, "\n") {
@@ -252,7 +254,7 @@ func smokeBuildTagProblems(src string) []string {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "//go:build") || strings.HasPrefix(trimmed, "// +build") {
-			return []string{"carries the constraint " + strconv.Quote(trimmed) + "; the smoke runners select " +
+			return []string{"carries the constraint " + strconv.Quote(trimmed) + "; the integration runners select " +
 				"-tags=integration, and any other constraint builds the file into a different set of runs"}
 		}
 	}
@@ -260,7 +262,7 @@ func smokeBuildTagProblems(src string) []string {
 	for _, line := range []string{"//go:build integration", "// +build integration"} {
 		if !want[line] {
 			problems = append(problems, "has no "+strconv.Quote(line)+" line above its package clause, so "+
-				"the -tags=integration runs do not build the smoke tests the guard credits")
+				"the -tags=integration runs do not build the tests the guard credits")
 		}
 	}
 	return problems
@@ -402,11 +404,22 @@ func smokeCallsIn(file *ast.File) (map[string]string, []string) {
 // skipMethods are testing.TB's ways to end a test as skipped.
 var skipMethods = map[string]bool{"Skip": true, "Skipf": true, "SkipNow": true}
 
-// smokeHelpers is what the skip check knows about the smoke file's own
-// functions: which exist, and which can skip the test they are handed.
+// smokeHelpers is what the skip check knows about a test file's own
+// functions: which exist, which can skip the test they are handed, and which
+// one is the gate -- the one sanctioned skip, which checkSmokeGate holds to its
+// shape instead.
+//
+// methods holds the methods the files declare, by method name, so that a test
+// handing its *testing.T to one -- the isolation suite's h.merchantClient(t, …)
+// -- is read rather than refused. A name declared on two receivers is in
+// neither map, and a call to it is then refused as unreadable: this reader
+// matches by name, and two bodies under one name are a guess. The smoke file
+// declares no methods.
 type smokeHelpers struct {
 	declared map[string]*ast.FuncDecl
+	methods  map[string]*ast.FuncDecl
 	skips    map[string]bool
+	gate     string
 }
 
 // readSmokeHelpers finds the smoke file's functions that can skip, to a fixed
@@ -414,20 +427,49 @@ type smokeHelpers struct {
 // something this reader cannot see into. newSmokeClient is exempt -- it is the
 // one sanctioned skip, and CI's OCTONOMY_SMOKE_REQUIRED=1 makes it a failure.
 func readSmokeHelpers(file *ast.File) smokeHelpers {
-	h := smokeHelpers{declared: map[string]*ast.FuncDecl{}, skips: map[string]bool{}}
-	for _, decl := range file.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Body != nil {
-			h.declared[fn.Name.Name] = fn
+	return readGateHelpers(file.Decls, "newSmokeClient")
+}
+
+// readGateHelpers is readSmokeHelpers over any declarations, with any gate. The
+// isolation suite's gate is loadHarness, and its helpers span two files
+// (TestTheIsolationSuiteRunsItsProbes, readprobes_test.go).
+func readGateHelpers(decls []ast.Decl, gate string) smokeHelpers {
+	h := smokeHelpers{declared: map[string]*ast.FuncDecl{}, methods: map[string]*ast.FuncDecl{}, skips: map[string]bool{}, gate: gate}
+	twice := map[string]bool{}
+	for _, decl := range decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
 		}
+		if fn.Recv == nil {
+			h.declared[fn.Name.Name] = fn
+			continue
+		}
+		if _, seen := h.methods[fn.Name.Name]; seen {
+			twice[fn.Name.Name] = true
+		}
+		h.methods[fn.Name.Name] = fn
+	}
+	for name := range twice {
+		delete(h.methods, name)
 	}
 	for changed := true; changed; {
 		changed = false
 		for name, fn := range h.declared {
-			if h.skips[name] || name == "newSmokeClient" {
+			if h.skips[name] || name == h.gate {
 				continue
 			}
 			if len(skipsIn(fn, h)) > 0 {
 				h.skips[name] = true
+				changed = true
+			}
+		}
+		for name, fn := range h.methods {
+			if h.skips["."+name] {
+				continue
+			}
+			if len(skipsIn(fn, h)) > 0 {
+				h.skips["."+name] = true
 				changed = true
 			}
 		}
@@ -453,6 +495,12 @@ func skipsIn(fn *ast.FuncDecl, h smokeHelpers) []string {
 				out = append(out, "calls "+callee.Sel.Name)
 				return true
 			}
+			if _, ok := h.methods[callee.Sel.Name]; ok && !isIdent(callee.X, tName) {
+				if h.skips["."+callee.Sel.Name] {
+					out = append(out, "calls "+exprString(callee.X)+"."+callee.Sel.Name+", which can skip the test")
+				}
+				return true
+			}
 			if tName != "" && handsOn(call, tName) && !isIdent(callee.X, tName) {
 				out = append(out, "hands its *testing.T to "+exprString(callee.X)+"."+callee.Sel.Name+
 					", which the guard cannot read for a skip")
@@ -462,7 +510,7 @@ func skipsIn(fn *ast.FuncDecl, h smokeHelpers) []string {
 				out = append(out, "calls "+callee.Name+", which can skip the test")
 				return true
 			}
-			if _, ok := h.declared[callee.Name]; ok || callee.Name == "newSmokeClient" {
+			if _, ok := h.declared[callee.Name]; ok || callee.Name == h.gate {
 				return true
 			}
 			if tName != "" && handsOn(call, tName) {
@@ -595,9 +643,9 @@ func checkSmokeConstructor(file *ast.File, sdk string, helpers smokeHelpers) str
 // failure. CI sets it; a laptop with no harness does not.
 const smokeRequiredEnv = "OCTONOMY_SMOKE_REQUIRED"
 
-// checkSmokeGate holds newSmokeClient's skip to the one shape that makes it
-// safe to exempt from the skip check: a single Skip, reachable only when the
-// required gate is off. That is
+// checkSmokeGate holds newSmokeClient's skip -- or loadHarness's, the isolation
+// suite's gate -- to the one shape that makes it safe to exempt from the skip
+// check: a single Skip, reachable only when the required gate is off. That is
 //
 //	required := os.Getenv("OCTONOMY_SMOKE_REQUIRED") == "1"
 //	…
@@ -620,7 +668,7 @@ func checkSmokeGate(fn *ast.FuncDecl, helpers smokeHelpers) string {
 		if strings.HasPrefix(why, "calls ") && skipMethods[strings.TrimPrefix(why, "calls ")] {
 			continue // its own Skip, which the gate below must govern
 		}
-		return "newSmokeClient " + why + ", which skips past the " + smokeRequiredEnv + " gate"
+		return fn.Name.Name + " " + why + ", which skips past the " + smokeRequiredEnv + " gate"
 	}
 	var skips []*ast.CallExpr
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -635,10 +683,10 @@ func checkSmokeGate(fn *ast.FuncDecl, helpers smokeHelpers) string {
 	case len(skips) == 0:
 		return ""
 	case len(skips) > 1:
-		return "newSmokeClient skips in " + strconv.Itoa(len(skips)) + " places; it may skip only once, " +
+		return fn.Name.Name + " skips in " + strconv.Itoa(len(skips)) + " places; it may skip only once, " +
 			"behind the " + smokeRequiredEnv + " gate, or a run CI requires can still skip"
 	}
-	const shape = "newSmokeClient's skip must be the statement straight after `if required { t.Fatal(…) }`, " +
+	shape := fn.Name.Name + "'s skip must be the statement straight after `if required { t.Fatal(…) }`, " +
 		"with required := os.Getenv(\"" + smokeRequiredEnv + "\") == \"1\" declared once, so a run CI " +
 		"requires fails instead of skipping"
 	block, at := enclosingStatement(fn.Body, skips[0])
@@ -1609,6 +1657,12 @@ func TestMakefileProblemsReadsMakeLikeMakeDoes(t *testing.T) {
 // status, no condition can skip it -- and (e), in CI, runs with
 // OCTONOMY_SMOKE_REQUIRED=1 on the go1.13 toolchain. Change a runner, re-check
 // (a)-(e), then update its pin in the same commit.
+//
+// The job also runs the namespace isolation suite, as a step of its own since
+// #97, and that step was checked the same way against the same harness: it
+// selects every TestIntegration_ function -- the prefix
+// TestTheIsolationSuiteRunsItsProbes holds the suite to -- and meets (b)-(e) as
+// the smoke step does. Its Makefile twin is pinned in readprobes_test.go.
 
 // smokeRecipePin is the Makefile's `smoke:` rule and recipe, as makeRule reads
 // them: every logical make line whose targets reach smoke, by name or as a
@@ -1639,6 +1693,10 @@ const smokeJobPin = `  smoke:
         env:
           OCTONOMY_SMOKE_REQUIRED: "1"
         run: go test -tags=integration -count=1 -run '^TestSmoke_' -v ./...
+      - name: Namespace isolation suite against the real server
+        env:
+          OCTONOMY_SMOKE_REQUIRED: "1"
+        run: go test -tags=integration -count=1 -run '^TestIntegration_' -v ./...
       - name: Capture container logs
         if: failure()
         run: make dev-server-logs
