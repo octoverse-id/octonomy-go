@@ -101,8 +101,9 @@ var readProbeExclusions = map[string]string{
 // an embedded field in Client or a service, an aliased or non-struct service,
 // an exported Client field of any other type, and an exported field on a
 // service. And whatever way in those miss, the last check closes by what a
-// method does: an exported method anywhere in the package that issues a read
-// must be on Client or a wired service.
+// method does: an exported method anywhere in the package that issues a read,
+// or reaches the transport with a verb the classifier cannot resolve, must be
+// on Client or a wired service.
 func TestEveryReadMethodHasANamespaceProbe(t *testing.T) {
 	files := parsePackageSource(t)
 	suite := parseFileOrFatal(t, integrationSuiteFile)
@@ -209,11 +210,24 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 		if decl.Recv == nil || recv == "" || inventoried[recv] || !ast.IsExported(decl.Name.Name) {
 			continue
 		}
-		if classify(decl, index) == verbRead {
+		switch classify(decl, index) {
+		case verbRead:
 			problems = append(problems, key+" issues a read, and "+recv+" is neither Client nor a service a "+
 				"Client field holds, so the guard inventories no probe for it -- yet an exported method is one a "+
 				"caller can reach, through an embedded field, another exported type or an interface. Declare it "+
 				"on a wired service, or teach the guard the way in")
+		case verbUnknown:
+			// Unknown is fail-closed on the surface (check 2) and must be off it
+			// too, or a read sent through a method value or a closure would pass
+			// here as "sends nothing". Most exported methods off the surface --
+			// Error, String, MarshalJSON -- really do send nothing, so what is
+			// refused is the unknown method that reaches the transport.
+			if reachesTransport(decl, index, map[*ast.FuncDecl]bool{}) {
+				problems = append(problems, key+" reaches the transport and the guard could not resolve its "+
+					"verb, and "+recv+" is neither Client nor a service a Client field holds, so an unresolved "+
+					"read there would be inventoried by nothing. Declare it on a wired service, or fix the "+
+					"classifier so it can see the verb")
+			}
 		}
 	}
 
@@ -389,6 +403,37 @@ func typeDescription(typ ast.Expr) string {
 		return "func"
 	}
 	return exprString(typ)
+}
+
+// reachesTransport reports whether fn's body -- closures included, and the
+// functions and methods it calls, followed as classify follows them -- names a
+// transport helper or a request constructor at all: called, handed on as a
+// value, or reached through a field the classifier does not recognize as the
+// client.
+func reachesTransport(fn *ast.FuncDecl, index funcIndex, seen map[*ast.FuncDecl]bool) bool {
+	if fn == nil || fn.Body == nil || seen[fn] {
+		return false
+	}
+	seen[fn] = true
+	recv, recvType := receiverName(fn), receiverTypeName(fn)
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch node := n.(type) {
+		case *ast.SelectorExpr:
+			if _, ok := transportCalls[node.Sel.Name]; ok {
+				found = true
+			}
+		case *ast.CallExpr:
+			if callee := resolveCallee(node.Fun, recv, recvType, index); callee != nil {
+				found = reachesTransport(callee, index, seen)
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 func funcIndexKeys(index funcIndex) []string {
@@ -1623,6 +1668,28 @@ func (r *tagReads) Peek() string { return "" }
 			exclusions: cleanProbeExclusions,
 		},
 		{
+			// An unresolved read must fail closed off the surface as it does on
+			// it, or "unknown" passes here as "sends nothing".
+			name:       "an indirect read on an uninventoried type",
+			pkg:        "\ntype AdminClient struct{ c *Client }\nfunc (a *AdminClient) Recent(ctx context.Context) error {\n\tsend := a.c.doList\n\treturn send(ctx, http.MethodGet, \"/audit-logs\", nil, nil)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport and the guard could not resolve its verb",
+		},
+		{
+			name:       "an indirect read two calls away on an uninventoried type",
+			pkg:        "\ntype AdminClient struct{ c *Client }\nfunc (a *AdminClient) Recent(ctx context.Context) error { return a.fetch(ctx) }\nfunc (a *AdminClient) fetch(ctx context.Context) error {\n\treturn func() error { return a.c.doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil) }()\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport and the guard could not resolve its verb",
+		},
+		{
+			name:       "an exported method off the surface that sends nothing",
+			pkg:        "\ntype Oops struct{ Code string }\nfunc (o Oops) Error() string { return o.Code }\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+		},
+		{
 			name:       "a write on an uninventoried type is not a read",
 			pkg:        "\ntype AdminClient struct{ Audit AuditService }\ntype AuditService struct{ client *Client }\nfunc (s *AuditService) Purge(ctx context.Context) error {\n\treturn s.client.do(ctx, http.MethodDelete, \"/audit-logs\", nil, nil)\n}\n",
 			entries:    cleanProbeEntries,
@@ -2266,6 +2333,18 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 	_ = h.wildcard(t)
 }`},
 			want: []string{"TestIntegration_Extra hands its *testing.T to h.wildcard, which the guard cannot read"},
+		},
+		{
+			name: "a gate shadowed by a local is not the gate",
+			suite: isolationSuiteFixture{extra: `func TestIntegration_Extra(t *testing.T) {
+	loadHarness := elsewhere
+	h := loadHarness(t)
+	h.wildcard(t)
+}`},
+			want: []string{
+				"TestIntegration_Extra hands its *testing.T to loadHarness, which the files the guard reads do not declare",
+				"TestIntegration_Extra hands its *testing.T to h.wildcard, which the guard cannot read",
+			},
 		},
 		{
 			name:  "a method resolved through var and a composite literal",

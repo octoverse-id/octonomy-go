@@ -505,11 +505,14 @@ func skipsIn(fn *ast.FuncDecl, h smokeHelpers) []string {
 					", which the guard cannot read for a skip")
 			}
 		case *ast.Ident:
-			if h.skips[callee.Name] {
+			// A local of the name -- `requireAPIError := other` -- is not the
+			// declared helper whose body was read, so it vouches for nothing.
+			shadowed := len(declarationsOf(callee.Name, fn)) > 0
+			if h.skips[callee.Name] && !shadowed {
 				out = append(out, "calls "+callee.Name+", which can skip the test")
 				return true
 			}
-			if _, ok := h.declared[callee.Name]; ok || callee.Name == h.gate {
+			if _, ok := h.declared[callee.Name]; (ok || callee.Name == h.gate) && !shadowed {
 				return true
 			}
 			if tName != "" && handsOn(call, tName) {
@@ -529,7 +532,8 @@ func skipsIn(fn *ast.FuncDecl, h smokeHelpers) []string {
 // receiverTypeOf names the type of x, a method call's receiver inside fn, when
 // the reader can be sure of it: an identifier declared once in fn -- the
 // receiver or a parameter, `var x T`, `x := T{}` or `&T{}`, or `x := f(…)` with
-// f a function the files declare -- and never assigned again. Anything else is
+// f a function the files declare and fn does not shadow -- and never assigned
+// again. Anything else is
 // "", which the caller treats as a call it cannot see into.
 func receiverTypeOf(fn *ast.FuncDecl, x ast.Expr, h smokeHelpers) string {
 	ident, ok := unparen(x).(*ast.Ident)
@@ -560,8 +564,8 @@ func receiverTypeOf(fn *ast.FuncDecl, x ast.Expr, h smokeHelpers) string {
 			}
 		case *ast.CallExpr:
 			callee, ok := unparen(v.Fun).(*ast.Ident)
-			if !ok {
-				return ""
+			if !ok || len(declarationsOf(callee.Name, fn)) > 0 {
+				return "" // a local of that name is not the declared function
 			}
 			f, ok := h.declared[callee.Name]
 			if !ok {
@@ -1180,7 +1184,9 @@ func TestSmoke_A(t *testing.T) { client := newSmokeClient(t); client.Tags.Get(ct
 				client := newSmokeClient(t)
 				client.Tags.Get(ctx, id)
 			}`,
-			problems: 1,
+			// The shadow, and the T handed to it: the local is not the gate whose
+			// body checkSmokeGate read, so it vouches for no skip either.
+			problems: 2,
 		},
 		{
 			name: "so is a local named like the SDK import",

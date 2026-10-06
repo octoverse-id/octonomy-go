@@ -283,7 +283,8 @@ stays a faithful, ergonomic client.
   each `*FooService` an exported `Client` field holds. Any shape that would hand a caller a method
   outside it — an embedded field, an aliased service, an exported `Client` field of another type, an
   exported field on a service — fails it, and so does an exported method anywhere else in the
-  package that issues a read, whatever way a caller would reach it. On this line a new transport helper
+  package that issues a read, or reaches the transport with a verb it cannot resolve, whatever way a
+  caller would reach it. On this line a new transport helper
   on `*Client` that takes the verb goes in `transportCalls` with the index of its `method` parameter;
   `TestTransportCallsMatchTheHelpersSignatures` holds the table to `transport.go`.
 - **Which harness token a test uses IS the test.** The wildcard grant matches every partition,

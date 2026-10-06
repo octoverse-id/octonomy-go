@@ -33,7 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     method whose verb it cannot resolve. It reads `Client`'s own exported methods as well as each
     service's, and fails on any other shape that would hand a caller a method it does not read — an
     embedded or aliased service, another exported field on `Client`, an exported field on a service —
-    and on an exported method anywhere else in the package that issues a read. Rewritten from `main`'s for this line's transport calls, with
+    and on an exported method anywhere else in the package that issues a read, or reaches the
+    transport with a verb it cannot resolve. Rewritten from `main`'s for this line's transport calls, with
     a fixture per condition. **`TestTheIsolationSuiteRunsItsProbes`** holds the suite to what makes
     it run — its build tag, its prefix, one skip behind the required gate, the matrix ranging over
     `readProbes` — and each isolation test to its runs under an exact grant, since under the wildcard
