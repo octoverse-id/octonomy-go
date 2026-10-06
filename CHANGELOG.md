@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The `*Update` tag guard** ([#96](https://github.com/octoverse-id/octonomy-go/issues/96), for
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests and docs only; no exported
+  symbol changes.
+  - **`TestNoStructTagCarriesOmitzero`** refuses `omitzero` in every struct tag the module ships. Go
+    1.13's `encoding/json` ignores the option, so a ported `*string` that keeps it is sent as `null`
+    on every PATCH that does not set it, clearing a column the caller never named. A modern toolchain
+    honours the option, so the mistake marshals cleanly there, and in the anonymous struct each
+    `*Update`'s `MarshalJSON` marshals, `update_test.go`'s round-trip caught it only under go1.13.15.
+  - **`TestEveryUpdateFieldCanBeLeftOut`** reads every type named `*Update` from source: each field is
+    tagged `omitempty` under a json key of its own, and is a pointer or `Metadata` behind a
+    value-receiver `MarshalJSON`; a pointer-receiver `MarshalJSON` is refused.
+    **`TestEveryPatchBodyIsAnUpdateType`** holds every PATCH sent through the transport to that name,
+    and fails closed on a call it cannot classify; which helpers send a body is read off their calls
+    to `doRaw`, so a new one cannot go unread.
+  - **`TestUpdateBodiesNamesEveryUpdateType`** holds `update_test.go`'s `updateBodies` table to the
+    source, so its per-field round-trip cannot miss a new `*Update` type. Each row now pins its wire
+    body as literal JSON spelled from the contract's PATCH schema, since every other comparison there
+    reads the tags under test; each pointer field is also sent alone pointing at its zero value
+    (`Bool(false)` deactivates); a `json.Marshaler` is required only of a type carrying `Metadata`;
+    and the `Metadata` three-state check runs over every `Metadata` field in the table, on raw bytes.
 - **`main`'s test suite, accounted for file by file**
   ([#95](https://github.com/octoverse-id/octonomy-go/issues/95), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests and docs, and `-count=1`
