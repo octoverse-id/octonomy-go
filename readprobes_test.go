@@ -1268,6 +1268,13 @@ func (s *TagService) Peek(ctx context.Context) error {
 			want:       `entry "Tags.Get" calls Tags.List, not Tags.Get`,
 		},
 		{
+			name: "a probe whose find calls nothing on its client",
+			entries: probeEntry("Tags.List", "Tags.List") + `		{name: "Tags.Get", filtered: filteredEmpty, find: func(ctx context.Context, c *octonomy.Client) (bool, error) { return true, nil }},
+`,
+			exclusions: cleanProbeExclusions,
+			want:       `entry "Tags.Get" has a find closure that calls no client method`,
+		},
+		{
 			name:       "a duplicate name",
 			entries:    cleanProbeEntries + probeEntry("Tags.List", "Tags.List"),
 			exclusions: cleanProbeExclusions,
@@ -1476,6 +1483,24 @@ func TestClassifyTakesTheVerbFromTheCallThatSendsIt(t *testing.T) {
 			func (c *Client) doBare(ctx context.Context, method, path string) error {
 				_, _, err := c.doRaw(ctx, method, path, nil, nil)
 				return err
+			}`,
+		},
+		{
+			// The request constructors are net/http's. Another package's
+			// NewRequestWithContext builds nothing this guard can vouch for.
+			name: "a NewRequest from another package", method: "Client.peek", want: verbUnknown,
+			src: `func (c *Client) peek(ctx context.Context) error {
+				req, err := fake.NewRequestWithContext(ctx, http.MethodGet, "/tags", nil)
+				_ = req
+				return err
+			}`,
+		},
+		{
+			// And a verb is net/http's constant or a literal: another package's
+			// MethodGet could hold anything.
+			name: "a verb constant from another package", method: "TagService.Odd", want: verbUnknown,
+			src: `func (s *TagService) Odd(ctx context.Context) error {
+				return s.client.doList(ctx, verbs.MethodGet, "/tags", nil, nil)
 			}`,
 		},
 		{
