@@ -256,8 +256,9 @@ harness does that a naive bootstrap does not:
   a `201` whose response actually carries `namespace_type`/`namespace_id`. A 201 with null namespace
   fields would mean the row persisted globally, and every downstream namespace assertion would be
   testing global behaviour under a namespaced name.
-- **Exact grants, proved in both directions.** The merchant-A token must write in its own namespace
-  (`201`) and be refused in merchant B's (`403`). A token minted with the wrong grant shape would
+- **Exact grants, each proved in both directions.** Each merchant token must write in its own
+  namespace (`201`) and be refused in the other merchant's (`403`) — both tokens, since a second
+  wildcard minted as the merchant-B grant would pass a check of A alone. A token minted with the wrong grant shape would
   otherwise surface as dozens of 403s inside Go assertions that read as an SDK defect.
 
 CI reaches it through the `.github/actions/octonomy-harness` composite action. The script on this

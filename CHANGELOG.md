@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `404`, or resolution's `400` — not merely fail. `Vocabularies.List` has no slug filter on this
     line, so its probe walks every page and fails unless it saw every row the server counts.
   - **`scripts/octonomy-harness.sh`** mints an exact grant for each of two merchant namespaces beside
-    the wildcard token, proves each reaches its own namespace (`201`) and is refused in the other's
+    the wildcard token, proves each one reaches its own namespace (`201`) and is refused in the other's
     (`403`), and exports them as `OCTONOMY_TEST_NAMESPACE_A_*` / `_B_*`; the CI action masks every
     `*_TOKEN` it exports.
   - **The suite runs in the required go1.13 smoke job**, as a step with its own `^TestIntegration_`

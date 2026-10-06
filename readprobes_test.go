@@ -135,6 +135,12 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 		problems = append(problems, "no *Service fields found on the Client struct -- the guard is not reading the source")
 	}
 
+	// The read surface is the methods DECLARED on each wired service, and that
+	// is all of it only while nothing is promoted into it: an embedded field
+	// in a service -- or in Client itself -- hands callers methods this guard
+	// never reads, and an alias puts them on another type's name.
+	problems = append(problems, surfaceShapeProblems(pkg, fields)...)
+
 	methods := serviceMethods(pkg)
 	index := indexFuncs(pkg)
 
@@ -256,6 +262,49 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 		}
 	}
 	return reads, problems
+}
+
+// surfaceShapeProblems fails closed on every way a caller can reach a method
+// serviceMethods does not list: a service type that is not a struct declared
+// in this package, an alias, or a struct embedding a field -- and a Client
+// embedding one, whose methods are then promoted onto Client itself.
+func surfaceShapeProblems(pkg map[string]*ast.File, fields map[string]string) []string {
+	var problems []string
+	types := indexTypes(pkg)
+	embedded := func(owner string, st *ast.StructType) {
+		for _, field := range st.Fields.List {
+			if len(field.Names) == 0 {
+				problems = append(problems, owner+" embeds "+exprString(field.Type)+", whose promoted methods are "+
+					"part of the read surface a caller has and are not read by this guard. Declare the methods "+
+					"on the service, or teach the guard the promoted method set")
+			}
+		}
+	}
+	if spec, ok := types["Client"]; ok {
+		if st, ok := unparen(spec.Type).(*ast.StructType); ok {
+			embedded("Client", st)
+		}
+	}
+	for _, service := range stringKeys(fields) {
+		spec, ok := types[service]
+		switch {
+		case !ok:
+			problems = append(problems, "Client."+fields[service]+" is a *"+service+", which this package does "+
+				"not declare, so the guard cannot read its methods")
+		case spec.Assign.IsValid():
+			problems = append(problems, service+" is an alias, so its methods are declared under another type's "+
+				"name and the guard does not read them")
+		default:
+			st, ok := unparen(spec.Type).(*ast.StructType)
+			if !ok {
+				problems = append(problems, service+" is not a struct, so the guard cannot tell which methods a "+
+					"caller reaches through Client."+fields[service])
+				continue
+			}
+			embedded(service, st)
+		}
+	}
+	return problems
 }
 
 // --- classifying a method by the verb it sends ---------------------------------
@@ -803,10 +852,7 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 	if matrix, ok := funcs["runProbeMatrix"]; !ok {
 		problems = append(problems, "the isolation suite declares no runProbeMatrix, so nothing runs readProbes")
 	} else {
-		if why := rangesOverProbes(matrix); why != "" {
-			problems = append(problems, why)
-		}
-		problems = append(problems, matrixExitProblems(matrix, helpers)...)
+		problems = append(problems, matrixProblems(matrix, helpers)...)
 	}
 
 	// Every caller of the matrix is a test the runners select, calling it from
@@ -880,64 +926,135 @@ func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 	return problems
 }
 
-// matrixExitProblems refuses every way runProbeMatrix can stop short of a probe
-// with the run still green: a skip anywhere in it, a subtest's included, and a
-// return, break, continue or goto in its own body. A probe the matrix leaves
-// out is as unrun as one the table leaves out. A `return` inside a subtest's
-// closure ends only that subtest, and what the subtest asserts before it is the
-// reviewer's, as the rest of the matrix's assertions are.
-func matrixExitProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
+// matrixProblems holds runProbeMatrix to the one shape that asks every probe
+// every run:
+//
+//	func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+//		for _, probe := range readProbes(h) {
+//			…
+//				for _, run := range runs {
+//					…
+//						… probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+//
+// -- the probe loop at the top of its body, ranging over readProbes called on
+// its own harness parameter; the run loop inside it, ranging over the runs
+// parameter itself, not a slice of it; and the find call inside that, handed
+// the run's own fields. Neither parameter nor loop variable may be bound again,
+// and nothing in the function -- a subtest's closure included -- may skip,
+// return, break, continue or goto: each is a way to leave a probe or a run out
+// of the matrix while the test stays green, and a run the matrix leaves out is
+// as unrun as one the test never declared. What the matrix asserts about each
+// answer is the reviewer's.
+func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 	var problems []string
 	for _, why := range skipsIn(fn, helpers) {
 		problems = append(problems, "runProbeMatrix "+why+"; a skipped probe is a green run that asserted nothing")
 	}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		switch node := n.(type) {
-		case *ast.FuncLit:
-			return false
 		case *ast.ReturnStmt:
-			problems = append(problems, "runProbeMatrix returns from its own body, which can end the matrix "+
-				"before every probe has run while the test stays green")
+			problems = append(problems, "runProbeMatrix returns, in its body or a subtest's, which can end the "+
+				"matrix before every probe has asked every run while the test stays green")
 		case *ast.BranchStmt:
 			problems = append(problems, "runProbeMatrix uses "+node.Tok.String()+", which can leave a probe or a "+
 				"run out of the matrix while the test stays green")
 		}
 		return true
 	})
-	return problems
-}
 
-// rangesOverProbes requires runProbeMatrix's body to range over readProbes(…)
-// at its top level and to call each probe's find.
-func rangesOverProbes(fn *ast.FuncDecl) string {
+	const shape = "; the matrix must be `for _, probe := range readProbes(h)` at the top of its body, " +
+		"`for _, run := range runs` inside it, and `probe.find(ctx, run.client, run.readNS, run.want, " +
+		"run.extra...)` inside that, so every probe asks every run"
+	var hName, runsName string
+	params, types := paramNames(fn.Type.Params), paramTypes(fn.Type)
+	for i := range params {
+		switch types[i] {
+		case "harness":
+			hName = params[i]
+		case "[]probeRun":
+			runsName = params[i]
+		}
+	}
+	if hName == "" || runsName == "" {
+		return append(problems, "runProbeMatrix takes no harness and []probeRun parameters"+shape)
+	}
+	for _, name := range []string{hName, runsName} {
+		if len(bindingsOf(fn.Body, name)) > 0 {
+			problems = append(problems, "runProbeMatrix binds its parameter "+name+" again, so the matrix may not "+
+				"range over what it was handed")
+		}
+	}
+
+	probeVar := ""
+	var probeLoop *ast.RangeStmt
 	for _, stmt := range fn.Body.List {
 		loop, ok := stmt.(*ast.RangeStmt)
 		if !ok {
 			continue
 		}
 		call, ok := unparen(loop.X).(*ast.CallExpr)
-		if !ok || !isIdent(call.Fun, "readProbes") {
+		if !ok || !isIdent(call.Fun, "readProbes") || len(call.Args) != 1 || !isIdent(call.Args[0], hName) {
 			continue
 		}
-		value, ok := loop.Value.(*ast.Ident)
-		if !ok {
-			continue
-		}
-		found := false
-		ast.Inspect(loop.Body, func(n ast.Node) bool {
-			if c, ok := n.(*ast.CallExpr); ok {
-				if sel, ok := unparen(c.Fun).(*ast.SelectorExpr); ok && sel.Sel.Name == "find" && isIdent(sel.X, value.Name) {
-					found = true
-				}
-			}
-			return !found
-		})
-		if found {
-			return ""
+		if v, ok := loop.Value.(*ast.Ident); ok {
+			probeVar, probeLoop = v.Name, loop
 		}
 	}
-	return "runProbeMatrix does not range over readProbes(…) at its top level and call each probe's find, " +
-		"so the table TestEveryReadMethodHasANamespaceProbe checks is not the one the isolation run executes"
+	if probeLoop == nil {
+		return append(problems, "runProbeMatrix does not range over readProbes("+hName+") at the top of its "+
+			"body, so the table TestEveryReadMethodHasANamespaceProbe checks is not the one the isolation run "+
+			"executes"+shape)
+	}
+
+	runVar := ""
+	var runLoop *ast.RangeStmt
+	ast.Inspect(probeLoop.Body, func(n ast.Node) bool {
+		if loop, ok := n.(*ast.RangeStmt); ok && runLoop == nil && isIdent(loop.X, runsName) {
+			if v, ok := loop.Value.(*ast.Ident); ok {
+				runVar, runLoop = v.Name, loop
+			}
+		}
+		return runLoop == nil
+	})
+	if runLoop == nil {
+		return append(problems, "runProbeMatrix does not range over all of "+runsName+" inside the probe loop, so "+
+			"a run a test declares need not be asked"+shape)
+	}
+
+	found := false
+	ast.Inspect(runLoop.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && isFindOfRun(call, probeVar, runVar) {
+			found = true
+		}
+		return !found
+	})
+	if !found {
+		problems = append(problems, "runProbeMatrix does not call "+probeVar+".find with "+runVar+"'s own client, "+
+			"namespace, fixture and options inside the run loop"+shape)
+	}
+	for _, name := range []string{probeVar, runVar} {
+		if n := len(bindingsOf(fn.Body, name)); n != 1 {
+			problems = append(problems, "runProbeMatrix binds "+name+" "+strconv.Itoa(n)+" times; only its loop "+
+				"may, or the find call need not see the probe and run the loops are on")
+		}
+	}
+	return problems
+}
+
+// isFindOfRun reports whether call is probe.find(<ctx>, run.client,
+// run.readNS, run.want, run.extra...).
+func isFindOfRun(call *ast.CallExpr, probeVar, runVar string) bool {
+	sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "find" || !isIdent(sel.X, probeVar) || len(call.Args) != 5 || !call.Ellipsis.IsValid() {
+		return false
+	}
+	for i, field := range []string{"client", "readNS", "want", "extra"} {
+		arg, ok := unparen(call.Args[i+1]).(*ast.SelectorExpr)
+		if !ok || arg.Sel.Name != field || !isIdent(arg.X, runVar) {
+			return false
+		}
+	}
+	return true
 }
 
 // exactGrantProblems reads the []probeRun literals a test hands runProbeMatrix
@@ -1243,7 +1360,8 @@ func (s *TagService) Peek(ctx context.Context) error {
 `
 	for _, tc := range []struct {
 		name       string
-		pkg        string // appended to probeFixturePackage
+		pkg        string    // appended to probeFixturePackage
+		swap       [2]string // a replacement made in probeFixturePackage first
 		entries    string
 		exclusions map[string]string
 		want       string // a substring of the one problem expected; "" for none
@@ -1273,6 +1391,34 @@ func (s *TagService) Peek(ctx context.Context) error {
 `,
 			exclusions: cleanProbeExclusions,
 			want:       `entry "Tags.Get" has a find closure that calls no client method`,
+		},
+		{
+			name: "a service that embeds another type's methods",
+			pkg: `
+type tagReads struct{ client *Client }
+
+func (r *tagReads) Peek(ctx context.Context) error {
+	return r.client.doList(ctx, http.MethodGet, "/tags", nil, nil)
+}
+`,
+			swap:       [2]string{"type TagService struct{ client *Client }", "type TagService struct {\n\t*tagReads\n\tclient *Client\n}"},
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "TagService embeds *tagReads, whose promoted methods are part of the read surface",
+		},
+		{
+			name:       "a Client that embeds a service",
+			swap:       [2]string{"\tHealth *HealthService\n}", "\tHealth *HealthService\n\t*HealthService\n}"},
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "Client embeds *HealthService",
+		},
+		{
+			name:       "a service that is an alias",
+			swap:       [2]string{"type HealthService struct{ client *Client }", "type HealthService = healthService\ntype healthService struct{ client *Client }"},
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "HealthService is an alias",
 		},
 		{
 			name:       "a duplicate name",
@@ -1338,7 +1484,14 @@ func (s *TagService) Peek(ctx context.Context) error {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			pkg := parseFixture(t, probeFixturePackage+tc.pkg)
+			src := probeFixturePackage
+			if tc.swap[0] != "" {
+				if !strings.Contains(src, tc.swap[0]) {
+					t.Fatalf("the fixture package has no %q to replace", tc.swap[0])
+				}
+				src = strings.Replace(src, tc.swap[0], tc.swap[1], 1)
+			}
+			pkg := parseFixture(t, src+tc.pkg)
 			suite := parseFixture(t, probeFixtureSuite(tc.entries))["fixture.go"]
 			_, problems := readProbeProblems(pkg, suite, "fixture.go", tc.exclusions)
 			if tc.want == "" {
@@ -1889,19 +2042,123 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 			name: "a matrix over a copy of the table",
 			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
 	for _, probe := range otherProbes(h) {
-		_, _ = probe.find(ctx, nil, "", namespaceFixture{})
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+			}
+		})
 	}
 }`},
-			want: []string{"runProbeMatrix does not range over readProbes"},
+			want: []string{
+				"runProbeMatrix does not range over readProbes(h)",
+			},
+		},
+		{
+			name: "a matrix over another harness's table",
+			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+	for _, probe := range readProbes(harness{}) {
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+			}
+		})
+	}
+}`},
+			want: []string{
+				"runProbeMatrix does not range over readProbes(h)",
+			},
 		},
 		{
 			name: "a matrix that never calls find",
 			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
 	for _, probe := range readProbes(h) {
-		t.Log(probe.name)
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				t.Log(probe.name, run.name)
+			}
+		})
 	}
 }`},
-			want: []string{"runProbeMatrix does not range over readProbes"},
+			want: []string{
+				"runProbeMatrix does not call probe.find",
+			},
+		},
+		{
+			name: "a matrix that asks a different run",
+			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+	for _, probe := range readProbes(h) {
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				_, _ = probe.find(ctx, runs[0].client, run.readNS, run.want, run.extra...)
+			}
+		})
+	}
+}`},
+			want: []string{
+				"runProbeMatrix does not call probe.find",
+			},
+		},
+		{
+			name: "a matrix that drops a run's options",
+			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+	for _, probe := range readProbes(h) {
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want)
+			}
+		})
+	}
+}`},
+			want: []string{
+				"runProbeMatrix does not call probe.find",
+			},
+		},
+		{
+			name: "a matrix that asks only the first run",
+			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+	for _, probe := range readProbes(h) {
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs[:1] {
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+			}
+		})
+	}
+}`},
+			want: []string{
+				"runProbeMatrix does not range over all of runs",
+			},
+		},
+		{
+			name: "a matrix that shortens its runs",
+			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+	runs = runs[:1]
+	for _, probe := range readProbes(h) {
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+			}
+		})
+	}
+}`},
+			want: []string{
+				"runProbeMatrix binds its parameter runs again",
+			},
+		},
+		{
+			name: "a matrix that stops after the first run",
+			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+	for _, probe := range readProbes(h) {
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+				break
+			}
+		})
+	}
+}`},
+			want: []string{
+				"runProbeMatrix uses break",
+			},
 		},
 		{
 			name: "a matrix that leaves a probe out",
@@ -1910,10 +2167,16 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 		if probe.name == "Tags.Resolve" {
 			continue
 		}
-		_, _ = probe.find(ctx, nil, "", namespaceFixture{})
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+			}
+		})
 	}
 }`},
-			want: []string{"runProbeMatrix uses continue"},
+			want: []string{
+				"runProbeMatrix uses continue",
+			},
 		},
 		{
 			name: "a matrix that can stop before it starts",
@@ -1922,10 +2185,50 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 		return
 	}
 	for _, probe := range readProbes(h) {
-		_, _ = probe.find(ctx, nil, "", namespaceFixture{})
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+			}
+		})
 	}
 }`},
-			want: []string{"runProbeMatrix returns from its own body"},
+			want: []string{
+				"runProbeMatrix returns",
+			},
+		},
+		{
+			name: "a subtest that returns before asking",
+			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+	for _, probe := range readProbes(h) {
+		t.Run(probe.name, func(t *testing.T) {
+			if probe.name == "Tags.Resolve" {
+				return
+			}
+			for _, run := range runs {
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+			}
+		})
+	}
+}`},
+			want: []string{
+				"runProbeMatrix returns",
+			},
+		},
+		{
+			name: "a matrix that rebinds its run",
+			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+	for _, probe := range readProbes(h) {
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				run := runs[0]
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+			}
+		})
+	}
+}`},
+			want: []string{
+				"runProbeMatrix binds run 2 times",
+			},
 		},
 		{
 			name: "a matrix whose subtests skip",
@@ -1933,7 +2236,9 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 	for _, probe := range readProbes(h) {
 		t.Run(probe.name, func(t *testing.T) {
 			t.Skip("flaky")
-			_, _ = probe.find(ctx, nil, "", namespaceFixture{})
+			for _, run := range runs {
+				_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+			}
 		})
 	}
 }`},

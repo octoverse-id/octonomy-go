@@ -186,8 +186,12 @@ mint_token() {
             "$@"
     )" || fail "could not mint the service token ${_mint_name}"
     _mint_token="$(printf '%s\n' "$_mint_output" | sed -n 's/^Token: //p')"
+    # The output is NOT echoed into the failure. It carries the credential under
+    # whatever label the server prints, and a label this parser no longer
+    # recognizes is exactly when this fires -- in CI, before the composite
+    # action has registered any mask, so the token would land in the job log.
     [ -n "$_mint_token" ] ||
-        fail "could not parse a token out of create_service_token output for ${_mint_name}: ${_mint_output}"
+        fail "could not parse a 'Token: ' line out of create_service_token output for ${_mint_name} ($(printf '%s\n' "$_mint_output" | wc -l | tr -d ' ') lines, withheld: they may carry the credential)"
     printf '%s\n' "$_mint_token"
 }
 
@@ -349,38 +353,49 @@ probe_status() {
         "$@"
 }
 
-# The exact merchant grants, proved in both directions.
+# The exact merchant grants, each proved in both directions.
 #
 # Unlike assert_namespaced_write above, the failure this guards against is not a
 # vacuous pass in the isolation suite -- a token that reached nothing would make
 # every assertion there fail loudly. It is a MISDIAGNOSIS: thirty 403s inside
 # Go assertions read as an SDK defect, and the actual fault is a token minted
-# with the wrong grant shape. Two requests here say so in one line instead.
+# with the wrong grant shape. Four requests here say so in one line instead.
 #
 # The negative direction is the one worth the round trip. A grant that reached
 # every namespace would still satisfy the positive probe, and the whole suite
-# rests on it not doing that.
+# rests on it not doing that. And BOTH grants, not one: the suite uses each, and
+# a merchant-B token minted as a second wildcard would pass a check of A alone.
 assert_exact_grants() {
     log "asserting each exact merchant grant reaches its own namespace and no other"
+    assert_exact_grant "$NAMESPACE_A_TOKEN" "$NAMESPACE_A_ID" "$NAMESPACE_B_ID" harness-probe-a
+    assert_exact_grant "$NAMESPACE_B_TOKEN" "$NAMESPACE_B_ID" "$NAMESPACE_A_ID" harness-probe-b
+    log "exact merchant grants confirmed (201 inside, 403 across, for each)"
+}
+
+# assert_exact_grant TOKEN OWN OTHER SLUG: TOKEN writes in OWN and is refused in
+# OTHER.
+assert_exact_grant() {
+    _eg_token="$1"
+    _eg_own="$2"
+    _eg_other="$3"
+    _eg_slug="$4"
 
     code="$(
         probe_status POST "${BASE_URL}/api/v2/vocabularies" \
-            "$NAMESPACE_A_TOKEN" "$NAMESPACE_A_ID" \
+            "$_eg_token" "$_eg_own" \
             -H "Content-Type: application/json" \
-            -d "{\"application_id\":\"${APPLICATION_ID}\",\"name\":\"Harness Probe A\",\"slug\":\"harness-probe-a\"}"
+            -d "{\"application_id\":\"${APPLICATION_ID}\",\"name\":\"Harness Probe ${_eg_own}\",\"slug\":\"${_eg_slug}\"}"
     )"
-    [ "$code" = "201" ] || fail "the ${NAMESPACE_A_ID} grant could not write in its own namespace (HTTP ${code}, want 201)"
+    [ "$code" = "201" ] || fail "the ${_eg_own} grant could not write in its own namespace (HTTP ${code}, want 201)"
 
     # Refused, not merely filtered: an exact grant that does not match the
     # request's partition never reaches a queryset (BearerTokenPermission,
     # octonomy/core/auth.py:402-408).
     code="$(
         probe_status GET "${BASE_URL}/api/v2/tags?application_id=${APPLICATION_ID}" \
-            "$NAMESPACE_A_TOKEN" "$NAMESPACE_B_ID"
+            "$_eg_token" "$_eg_other"
     )"
-    [ "$code" = "403" ] || fail "the ${NAMESPACE_A_ID} grant was not refused in ${NAMESPACE_B_ID} (HTTP ${code}, want 403): these tokens are not namespace-isolated, so the isolation suite would be asserting nothing"
-
-    log "exact merchant grants confirmed (201 inside, 403 across)"
+    [ "$code" = "403" ] || fail "the ${_eg_own} grant was not refused in ${_eg_other} (HTTP ${code}, want 403): these tokens are not namespace-isolated, so the isolation suite would be asserting nothing"
 }
 
 # --- Commands ------------------------------------------------------------------
