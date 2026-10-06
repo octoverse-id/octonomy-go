@@ -409,12 +409,14 @@ var skipMethods = map[string]bool{"Skip": true, "Skipf": true, "SkipNow": true}
 // one is the gate -- the one sanctioned skip, which checkSmokeGate holds to its
 // shape instead.
 //
-// methods holds the methods the files declare, by method name, so that a test
-// handing its *testing.T to one -- the isolation suite's h.merchantClient(t, …)
-// -- is read rather than refused. A name declared on two receivers is in
-// neither map, and a call to it is then refused as unreadable: this reader
-// matches by name, and two bodies under one name are a guess. The smoke file
-// declares no methods.
+// methods holds the methods the files declare, keyed "Type.method", so that a
+// test handing its *testing.T to one -- the isolation suite's
+// h.merchantClient(t, …) -- is read rather than refused. A call is matched to a
+// body only through its receiver's TYPE, resolved by receiverTypeOf; matching
+// by method name alone let `x.run(t)` borrow an unrelated type's harmless run.
+// A receiver whose type the reader cannot resolve, or a type with no such
+// method in the files read, is a call it cannot see into, and handing it the T
+// is refused. The smoke file declares no methods.
 type smokeHelpers struct {
 	declared map[string]*ast.FuncDecl
 	methods  map[string]*ast.FuncDecl
@@ -435,7 +437,6 @@ func readSmokeHelpers(file *ast.File) smokeHelpers {
 // (TestTheIsolationSuiteRunsItsProbes, readprobes_test.go).
 func readGateHelpers(decls []ast.Decl, gate string) smokeHelpers {
 	h := smokeHelpers{declared: map[string]*ast.FuncDecl{}, methods: map[string]*ast.FuncDecl{}, skips: map[string]bool{}, gate: gate}
-	twice := map[string]bool{}
 	for _, decl := range decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
@@ -445,13 +446,9 @@ func readGateHelpers(decls []ast.Decl, gate string) smokeHelpers {
 			h.declared[fn.Name.Name] = fn
 			continue
 		}
-		if _, seen := h.methods[fn.Name.Name]; seen {
-			twice[fn.Name.Name] = true
+		if recv := receiverTypeName(fn); recv != "" {
+			h.methods[recv+"."+fn.Name.Name] = fn
 		}
-		h.methods[fn.Name.Name] = fn
-	}
-	for name := range twice {
-		delete(h.methods, name)
 	}
 	for changed := true; changed; {
 		changed = false
@@ -464,12 +461,12 @@ func readGateHelpers(decls []ast.Decl, gate string) smokeHelpers {
 				changed = true
 			}
 		}
-		for name, fn := range h.methods {
-			if h.skips["."+name] {
+		for key, fn := range h.methods {
+			if h.skips[key] {
 				continue
 			}
 			if len(skipsIn(fn, h)) > 0 {
-				h.skips["."+name] = true
+				h.skips[key] = true
 				changed = true
 			}
 		}
@@ -479,8 +476,8 @@ func readGateHelpers(decls []ast.Decl, gate string) smokeHelpers {
 
 // skipsIn returns every way fn can end its test as skipped: a Skip call
 // anywhere in its body, a call to a helper that can skip, or its *testing.T
-// handed to a function this reader cannot see into -- one the smoke file does
-// not declare, or a method on anything but the T itself.
+// handed to a function this reader cannot see into -- one the files it reads do
+// not declare, or a method it cannot resolve to a body in them.
 func skipsIn(fn *ast.FuncDecl, h smokeHelpers) []string {
 	var out []string
 	tName := testingParam(fn)
@@ -495,11 +492,13 @@ func skipsIn(fn *ast.FuncDecl, h smokeHelpers) []string {
 				out = append(out, "calls "+callee.Sel.Name)
 				return true
 			}
-			if _, ok := h.methods[callee.Sel.Name]; ok && !isIdent(callee.X, tName) {
-				if h.skips["."+callee.Sel.Name] {
-					out = append(out, "calls "+exprString(callee.X)+"."+callee.Sel.Name+", which can skip the test")
+			if typ := receiverTypeOf(fn, callee.X, h); typ != "" && !isIdent(callee.X, tName) {
+				if _, ok := h.methods[typ+"."+callee.Sel.Name]; ok {
+					if h.skips[typ+"."+callee.Sel.Name] {
+						out = append(out, "calls "+exprString(callee.X)+"."+callee.Sel.Name+", which can skip the test")
+					}
+					return true
 				}
-				return true
 			}
 			if tName != "" && handsOn(call, tName) && !isIdent(callee.X, tName) {
 				out = append(out, "hands its *testing.T to "+exprString(callee.X)+"."+callee.Sel.Name+
@@ -514,8 +513,8 @@ func skipsIn(fn *ast.FuncDecl, h smokeHelpers) []string {
 				return true
 			}
 			if tName != "" && handsOn(call, tName) {
-				out = append(out, "hands its *testing.T to "+callee.Name+", which the smoke file does not "+
-					"declare, so the guard cannot read it for a skip")
+				out = append(out, "hands its *testing.T to "+callee.Name+", which the files the guard reads do "+
+					"not declare, so it cannot read it for a skip")
 			}
 		default:
 			if tName != "" && handsOn(call, tName) {
@@ -524,6 +523,110 @@ func skipsIn(fn *ast.FuncDecl, h smokeHelpers) []string {
 		}
 		return true
 	})
+	return out
+}
+
+// receiverTypeOf names the type of x, a method call's receiver inside fn, when
+// the reader can be sure of it: an identifier declared once in fn -- the
+// receiver or a parameter, `var x T`, `x := T{}` or `&T{}`, or `x := f(…)` with
+// f a function the files declare -- and never assigned again. Anything else is
+// "", which the caller treats as a call it cannot see into.
+func receiverTypeOf(fn *ast.FuncDecl, x ast.Expr, h smokeHelpers) string {
+	ident, ok := unparen(x).(*ast.Ident)
+	if !ok {
+		return ""
+	}
+	decls := declarationsOf(ident.Name, fn)
+	if len(decls) != 1 {
+		return ""
+	}
+	named := func(typ ast.Expr) string {
+		if star, ok := unparen(typ).(*ast.StarExpr); ok {
+			typ = star.X
+		}
+		if id, ok := unparen(typ).(*ast.Ident); ok {
+			return id.Name
+		}
+		return ""
+	}
+	valueType := func(value ast.Expr, i, of int) string {
+		if addr, ok := unparen(value).(*ast.UnaryExpr); ok && addr.Op == token.AND {
+			value = addr.X
+		}
+		switch v := unparen(value).(type) {
+		case *ast.CompositeLit:
+			if of == 1 {
+				return named(v.Type)
+			}
+		case *ast.CallExpr:
+			callee, ok := unparen(v.Fun).(*ast.Ident)
+			if !ok {
+				return ""
+			}
+			f, ok := h.declared[callee.Name]
+			if !ok {
+				return ""
+			}
+			if results := fieldTypeExprs(f.Type.Results); i < len(results) {
+				return named(results[i])
+			}
+		}
+		return ""
+	}
+	switch d := decls[0].(type) {
+	case *ast.Field:
+		if len(bindingsOf(fn.Body, ident.Name)) == 0 {
+			return named(d.Type)
+		}
+	case *ast.ValueSpec:
+		if len(bindingsOf(fn.Body, ident.Name)) != 1 {
+			return ""
+		}
+		if d.Type != nil {
+			return named(d.Type)
+		}
+		for i, name := range d.Names {
+			if name.Name == ident.Name && len(d.Values) == len(d.Names) {
+				return valueType(d.Values[i], 0, 1)
+			}
+			if name.Name == ident.Name && len(d.Values) == 1 {
+				return valueType(d.Values[0], i, len(d.Names))
+			}
+		}
+	case *ast.AssignStmt:
+		if len(bindingsOf(fn.Body, ident.Name)) != 1 {
+			return ""
+		}
+		for i, lhs := range d.Lhs {
+			if !isIdent(lhs, ident.Name) {
+				continue
+			}
+			if len(d.Rhs) == len(d.Lhs) {
+				return valueType(d.Rhs[i], 0, 1)
+			}
+			if len(d.Rhs) == 1 {
+				return valueType(d.Rhs[0], i, len(d.Lhs))
+			}
+		}
+	}
+	return ""
+}
+
+// fieldTypeExprs lists a field list's types, one per name.
+func fieldTypeExprs(fields *ast.FieldList) []ast.Expr {
+	if fields == nil {
+		return nil
+	}
+	var out []ast.Expr
+	for _, field := range fields.List {
+		n := len(field.Names)
+		if n == 0 {
+			n = 1
+		}
+		for i := 0; i < n; i++ {
+			out = append(out, field.Type)
+		}
+	}
 	return out
 }
 

@@ -272,7 +272,7 @@ stays a faithful, ergonomic client.
   what makes "a merchant-A client never sees a merchant-B row" a statement about the whole read
   surface rather than about whichever endpoints someone remembered. A read endpoint nobody probed is
   where a cross-merchant leak lives. **`TestEveryReadMethodHasANamespaceProbe` (`readprobes_test.go`,
-  no build tag) enforces this.** It resolves each exported service method's verb from the source —
+  no build tag) enforces this.** It resolves each surface method's verb from the source —
   following a call into a helper, since `Health.Live` names no verb of its own — and fails on a read
   with no probe, a probe naming a method that no longer exists, **a probe whose `find` closure calls a
   different endpoint than its name claims**, a duplicate name, and a stale or unargued exclusion. A
@@ -280,9 +280,10 @@ stays a faithful, ergonomic client.
   passing as "not a read": treating the unknown case as silence is the defect the guard exists to
   prevent. A read that genuinely cannot leak across namespaces goes in `readProbeExclusions` with its
   reason, never in silence. The surface it reads is the exported methods declared on `Client` and on
-  each `*FooService` an exported `Client` field holds; any other shape that would hand a caller a
-  method — an embedded field, an aliased service, an exported `Client` field of another type, an
-  exported field on a service — fails it rather than going unread. On this line a new transport helper
+  each `*FooService` an exported `Client` field holds. Any shape that would hand a caller a method
+  outside it — an embedded field, an aliased service, an exported `Client` field of another type, an
+  exported field on a service — fails it, and so does an exported method anywhere else in the
+  package that issues a read, whatever way a caller would reach it. On this line a new transport helper
   on `*Client` that takes the verb goes in `transportCalls` with the index of its `method` parameter;
   `TestTransportCallsMatchTheHelpersSignatures` holds the table to `transport.go`.
 - **Which harness token a test uses IS the test.** The wildcard grant matches every partition,

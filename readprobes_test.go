@@ -50,10 +50,12 @@ const integrationHarnessFile = "integration_harness_test.go"
 // `-run '^TestIntegration_'`, and their pins hold them to it.
 const isolationTestPrefix = "TestIntegration_"
 
-// readProbeExclusions names every exported Service method that deliberately
-// carries no probe, with the reason it is not a gap.
+// readProbeExclusions names every method of the inventoried surface -- an
+// exported method on Client or on a service a Client field holds -- that
+// deliberately carries no probe, with the reason it is not a gap: the two
+// unauthenticated health probes, and Client.APIVersion, an accessor.
 //
-// A name listed here must still name an existing exported Service method, and
+// A name listed here must still name an existing method of that surface, and
 // the reason must not be blank. A stale exclusion, or one whose reason nobody
 // wrote, silently shrinks the guard -- which is the exact failure the guard
 // exists to prevent -- so both fail the test rather than being ignored.
@@ -97,8 +99,10 @@ var readProbeExclusions = map[string]string{
 // *FooService an exported Client field holds. Everything else that would put a
 // method in a caller's hands is refused rather than read (surfaceShapeProblems):
 // an embedded field in Client or a service, an aliased or non-struct service,
-// an exported Client field of any other type, an exported field on a service,
-// and a service that another exported type holds and Client does not.
+// an exported Client field of any other type, and an exported field on a
+// service. And whatever way in those miss, the last check closes by what a
+// method does: an exported method anywhere in the package that issues a read
+// must be on Client or a wired service.
 func TestEveryReadMethodHasANamespaceProbe(t *testing.T) {
 	files := parsePackageSource(t)
 	suite := parseFileOrFatal(t, integrationSuiteFile)
@@ -121,15 +125,20 @@ func TestEveryReadMethodHasANamespaceProbe(t *testing.T) {
 // package, suite the file holding readProbes. It returns the read methods it
 // found, for the caller's floor, and every condition the guard fails on:
 //
-//  1. a read method with no probe and no exclusion;
-//  2. an exported method whose verb it cannot resolve, unless probed or excluded;
-//  3. a probe naming a method that is not a read on a service wired to Client;
+//  1. a read method of the surface -- Client's exported methods and those of
+//     each service a Client field holds -- with no probe and no exclusion;
+//  2. a method of the surface whose verb it cannot resolve, unless probed or
+//     excluded;
+//  3. a probe naming a method that is not a read of the surface;
 //  4. a probe whose find closure calls no client method, or not the one its name
 //     claims;
-//  5. an exclusion that names no exported method, has a blank reason, names a
-//     write, or names a probed method;
+//  5. an exclusion that names no method of the surface, has a blank reason,
+//     names a write, or names a probed method;
+//  6. an exported read anywhere else in the package, which a caller could
+//     reach by some way the surface does not account for;
 //
-// and a duplicate probe name, and a table it cannot read at all.
+// and a duplicate probe name, a table it cannot read at all, and a shape of
+// Client or a service the surface cannot be read off (surfaceShapeProblems).
 func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath string, exclusions map[string]string) (map[string]bool, []string) {
 	var problems []string
 
@@ -183,6 +192,31 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 		}
 	}
 
+	// And the inventory is closed by what a method DOES rather than by where
+	// it sits. Shapes that hand a caller a method are many -- an embedded field
+	// in another exported type, a value-held service, an interface a type
+	// satisfies -- and a rule per shape was found short three rounds running.
+	// So every exported method in the package that issues a read must be on
+	// Client or on a service a Client field holds, where the checks above see
+	// it; one anywhere else is a read the isolation suite never asks about.
+	inventoried := map[string]bool{"Client": true}
+	for service := range fields {
+		inventoried[service] = true
+	}
+	for _, key := range funcIndexKeys(index) {
+		decl := index[key]
+		recv := receiverTypeName(decl)
+		if decl.Recv == nil || recv == "" || inventoried[recv] || !ast.IsExported(decl.Name.Name) {
+			continue
+		}
+		if classify(decl, index) == verbRead {
+			problems = append(problems, key+" issues a read, and "+recv+" is neither Client nor a service a "+
+				"Client field holds, so the guard inventories no probe for it -- yet an exported method is one a "+
+				"caller can reach, through an embedded field, another exported type or an interface. Declare it "+
+				"on a wired service, or teach the guard the way in")
+		}
+	}
+
 	probes, shape := probesIn(suite, suitePath)
 	problems = append(problems, shape...)
 	if len(probes) == 0 && len(shape) == 0 {
@@ -231,7 +265,7 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 	for _, probe := range probes {
 		if !reads[probe.name] && !unknown[probe.name] {
 			problems = append(problems, suitePath+":readProbes probes "+strconv.Quote(probe.name)+", which is not "+
-				"a read method on any service wired to Client. A renamed or removed method leaves a probe "+
+				"a read method on Client or a service a Client field holds. A renamed or removed method leaves a probe "+
 				"that asserts nothing")
 		}
 	}
@@ -257,7 +291,7 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 	for _, name := range stringKeys(exclusions) {
 		if !exported[name] {
 			problems = append(problems, "readProbeExclusions lists "+strconv.Quote(name)+", which is not an "+
-				"exported method on a service wired to Client. Drop the entry -- an exclusion for a method "+
+				"exported method on Client or a service a Client field holds. Drop the entry -- an exclusion for a method "+
 				"that does not exist would also excuse a future method that happens to take the name")
 		}
 		if strings.TrimSpace(exclusions[name]) == "" {
@@ -286,9 +320,9 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 // service, whose methods are promoted; an aliased service, whose methods are
 // declared under another name; a service that is not a struct declared here; an
 // exported Client field of any other type -- an interface, a func, another
-// package's service; an exported field on a service, reachable as
-// client.Tags.Search; and a service another exported type -- HealthClient --
-// holds and Client does not.
+// package's service; and an exported field on a service, reachable as
+// client.Tags.Search. Those keep the inventory itself honest; whatever way in
+// they miss, readProbeProblems' last check catches by what a method DOES.
 func surfaceShapeProblems(pkg map[string]*ast.File, fields map[string]string) []string {
 	var problems []string
 	types := indexTypes(pkg)
@@ -342,44 +376,7 @@ func surfaceShapeProblems(pkg map[string]*ast.File, fields map[string]string) []
 			check(service, st, func(ast.Expr) bool { return false })
 		}
 	}
-	// Another exported type holding a service -- HealthClient holds Health --
-	// is another way in. It is read only for services Client also holds; one
-	// reachable through it alone would be a surface no Client field leads to.
-	wired := map[string]bool{}
-	for service := range fields {
-		wired[service] = true
-	}
-	for _, name := range declaredTypeNames(types) {
-		st, ok := unparen(types[name].Type).(*ast.StructType)
-		if !ok || name == "Client" || wired[name] || !ast.IsExported(name) {
-			continue // Client and the wired services are read above
-		}
-		for _, field := range st.Fields.List {
-			star, ok := unparen(field.Type).(*ast.StarExpr)
-			if !ok {
-				continue
-			}
-			ident, ok := unparen(star.X).(*ast.Ident)
-			if !ok || !strings.HasSuffix(ident.Name, "Service") || wired[ident.Name] {
-				continue
-			}
-			for _, fieldName := range field.Names {
-				if ast.IsExported(fieldName.Name) {
-					problems = append(problems, name+"."+fieldName.Name+" holds a *"+ident.Name+" that no Client "+
-						"field holds, so its methods reach callers through a surface this guard does not read")
-				}
-			}
-		}
-	}
 	return problems
-}
-
-func declaredTypeNames(types typeIndex) []string {
-	out := make([]string, 0, len(types))
-	for name := range types {
-		out = append(out, name)
-	}
-	return sortedStrings(out)
 }
 
 // typeDescription names a field's type for a message, where exprString would
@@ -392,6 +389,14 @@ func typeDescription(typ ast.Expr) string {
 		return "func"
 	}
 	return exprString(typ)
+}
+
+func funcIndexKeys(index funcIndex) []string {
+	out := make([]string, 0, len(index))
+	for key := range index {
+		out = append(out, key)
+	}
+	return sortedStrings(out)
 }
 
 // --- classifying a method by the verb it sends ---------------------------------
@@ -1436,6 +1441,14 @@ func probeEntry(name, call string) string {
 `
 }
 
+// auditService is a service with one read, wired to no Client field.
+const auditService = `type AuditService struct{ client *Client }
+
+func (s *AuditService) List(ctx context.Context) error {
+	return s.client.doList(ctx, http.MethodGet, "/audit-logs", nil, nil)
+}
+`
+
 // clientPing is a read declared on Client itself, reached as client.Ping.
 const clientPing = `
 func (c *Client) Ping(ctx context.Context) error {
@@ -1497,9 +1510,9 @@ func (s *TagService) Peek(ctx context.Context) error {
 			pkg: `
 type tagReads struct{ client *Client }
 
-func (r *tagReads) Peek(ctx context.Context) error {
-	return r.client.doList(ctx, http.MethodGet, "/tags", nil, nil)
-}
+// Promoted, and sends nothing: the shape alone is refused. A promoted READ
+// is also refused by what it does, in the fixtures below.
+func (r *tagReads) Peek() string { return "" }
 `,
 			swap:       [2]string{"type TagService struct{ client *Client }", "type TagService struct {\n\t*tagReads\n\tclient *Client\n}"},
 			entries:    cleanProbeEntries,
@@ -1581,11 +1594,31 @@ func (r *tagReads) Peek(ctx context.Context) error {
 			exclusions: cleanProbeExclusions,
 		},
 		{
-			name:       "another client type holding a service Client does not",
-			pkg:        "\ntype AdminClient struct{ Audit *AuditService }\ntype AuditService struct{ client *Client }\n",
+			name:       "a read on a service another type embeds",
+			pkg:        "\ntype AdminClient struct{ *AuditService }\n" + auditService,
 			entries:    cleanProbeEntries,
 			exclusions: cleanProbeExclusions,
-			want:       "AdminClient.Audit holds a *AuditService that no Client field holds",
+			want:       "AuditService.List issues a read, and AuditService is neither Client nor a service",
+		},
+		{
+			name:       "a read on a service another type holds by value",
+			pkg:        "\ntype AdminClient struct{ Audit AuditService }\n" + auditService,
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AuditService.List issues a read, and AuditService is neither Client nor a service",
+		},
+		{
+			name:       "a read on an unexported type, promoted",
+			pkg:        "\ntype AdminClient struct{ *auditReads }\ntype auditReads struct{ client *Client }\nfunc (r *auditReads) Recent(ctx context.Context) error {\n\treturn r.client.doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "auditReads.Recent issues a read, and auditReads is neither Client nor a service",
+		},
+		{
+			name:       "a write on an uninventoried type is not a read",
+			pkg:        "\ntype AdminClient struct{ Audit AuditService }\ntype AuditService struct{ client *Client }\nfunc (s *AuditService) Purge(ctx context.Context) error {\n\treturn s.client.do(ctx, http.MethodDelete, \"/audit-logs\", nil, nil)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
 		},
 		{
 			name:       "an unexported field on Client is not surface",
@@ -2196,10 +2229,50 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 			want: []string{"TestIntegration_Extra calls h.settle, which can skip the test"},
 		},
 		{
-			name:  "a method declared on two receivers is not read",
-			extra: "func (m merchant) wildcard(t *testing.T) {}\n",
+			// Matching by method name let x.run(t) borrow teardown.run's
+			// harmless body, whatever x was.
+			name:  "a method of another type is not borrowed by name",
+			extra: "type teardown struct{}\nfunc (td *teardown) run() {}\n",
+			suite: isolationSuiteFixture{extra: `func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	_ = h
+	x := elsewhere()
+	x.run(t)
+}`},
+			want: []string{"TestIntegration_Extra hands its *testing.T to x.run, which the guard cannot read"},
+		},
+		{
+			name:  "a method another receiver declares is not the harness's",
+			extra: "func (m merchant) settle(t *testing.T) {}\n",
+			suite: isolationSuiteFixture{extra: `func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	h.settle(t)
+}`},
+			want: []string{"TestIntegration_Extra hands its *testing.T to h.settle, which the guard cannot read"},
+		},
+		{
+			name: "a receiver bound twice is not resolved",
+			suite: isolationSuiteFixture{extra: `func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	h = other
+	_ = h.wildcard(t)
+}`},
+			want: []string{"TestIntegration_Extra hands its *testing.T to h.wildcard, which the guard cannot read"},
+		},
+		{
+			name:  "a method resolved through var and a composite literal",
+			extra: "type probeKit struct{}\nfunc (k probeKit) settle(t *testing.T) { t.Skip(\"no\") }\n",
+			suite: isolationSuiteFixture{extra: `func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	_ = h
+	var k probeKit
+	k.settle(t)
+	kit := &probeKit{}
+	kit.settle(t)
+}`},
 			want: []string{
-				"TestIntegration_NamespaceIsolation hands its *testing.T to h.wildcard, which the guard cannot read",
+				"TestIntegration_Extra calls k.settle, which can skip the test",
+				"TestIntegration_Extra calls kit.settle, which can skip the test",
 			},
 		},
 		{

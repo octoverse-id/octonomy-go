@@ -105,10 +105,10 @@ const (
 // reads the source of both halves and fails on a read method with no probe
 // here, on a probe naming a method that does not exist, on a probe whose find
 // closure calls a different endpoint than its name, and on a duplicate. It also
-// holds the one exclusion -- the unauthenticated health probes -- in
-// readProbeExclusions, with the reason. Neither the list nor that reason is
-// repeated here; a second copy of either is how the first one comes to be
-// wrong.
+// holds the exclusions -- the unauthenticated health probes, and an accessor
+// that sends no request -- in readProbeExclusions, each with its reason.
+// Neither the list nor those reasons are repeated here; a second copy of either
+// is how the first one comes to be wrong.
 //
 // TWO CONSTRAINTS THE GUARD PUTS ON THIS TABLE, worth knowing before editing it.
 // It reads the []readProbe literal this function RETURNS -- build the slice with
