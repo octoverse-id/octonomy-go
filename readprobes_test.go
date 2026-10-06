@@ -97,8 +97,8 @@ var readProbeExclusions = map[string]string{
 // *FooService an exported Client field holds. Everything else that would put a
 // method in a caller's hands is refused rather than read (surfaceShapeProblems):
 // an embedded field in Client or a service, an aliased or non-struct service,
-// an exported Client field of any other type, and an exported field on a
-// service.
+// an exported Client field of any other type, an exported field on a service,
+// and a service that another exported type holds and Client does not.
 func TestEveryReadMethodHasANamespaceProbe(t *testing.T) {
 	files := parsePackageSource(t)
 	suite := parseFileOrFatal(t, integrationSuiteFile)
@@ -286,8 +286,9 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 // service, whose methods are promoted; an aliased service, whose methods are
 // declared under another name; a service that is not a struct declared here; an
 // exported Client field of any other type -- an interface, a func, another
-// package's service; and an exported field on a service, reachable as
-// client.Tags.Search.
+// package's service; an exported field on a service, reachable as
+// client.Tags.Search; and a service another exported type -- HealthClient --
+// holds and Client does not.
 func surfaceShapeProblems(pkg map[string]*ast.File, fields map[string]string) []string {
 	var problems []string
 	types := indexTypes(pkg)
@@ -341,7 +342,44 @@ func surfaceShapeProblems(pkg map[string]*ast.File, fields map[string]string) []
 			check(service, st, func(ast.Expr) bool { return false })
 		}
 	}
+	// Another exported type holding a service -- HealthClient holds Health --
+	// is another way in. It is read only for services Client also holds; one
+	// reachable through it alone would be a surface no Client field leads to.
+	wired := map[string]bool{}
+	for service := range fields {
+		wired[service] = true
+	}
+	for _, name := range declaredTypeNames(types) {
+		st, ok := unparen(types[name].Type).(*ast.StructType)
+		if !ok || name == "Client" || wired[name] || !ast.IsExported(name) {
+			continue // Client and the wired services are read above
+		}
+		for _, field := range st.Fields.List {
+			star, ok := unparen(field.Type).(*ast.StarExpr)
+			if !ok {
+				continue
+			}
+			ident, ok := unparen(star.X).(*ast.Ident)
+			if !ok || !strings.HasSuffix(ident.Name, "Service") || wired[ident.Name] {
+				continue
+			}
+			for _, fieldName := range field.Names {
+				if ast.IsExported(fieldName.Name) {
+					problems = append(problems, name+"."+fieldName.Name+" holds a *"+ident.Name+" that no Client "+
+						"field holds, so its methods reach callers through a surface this guard does not read")
+				}
+			}
+		}
+	}
 	return problems
+}
+
+func declaredTypeNames(types typeIndex) []string {
+	out := make([]string, 0, len(types))
+	for name := range types {
+		out = append(out, name)
+	}
+	return sortedStrings(out)
 }
 
 // typeDescription names a field's type for a message, where exprString would
@@ -1535,6 +1573,19 @@ func (r *tagReads) Peek(ctx context.Context) error {
 			entries:    cleanProbeEntries,
 			exclusions: cleanProbeExclusions,
 			want:       "TagService.Search is an exported *SearchService",
+		},
+		{
+			name:       "another client type holding a service Client holds",
+			pkg:        "\ntype HealthClient struct{ Health *HealthService }\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+		},
+		{
+			name:       "another client type holding a service Client does not",
+			pkg:        "\ntype AdminClient struct{ Audit *AuditService }\ntype AuditService struct{ client *Client }\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Audit holds a *AuditService that no Client field holds",
 		},
 		{
 			name:       "an unexported field on Client is not surface",
