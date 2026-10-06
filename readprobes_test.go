@@ -2118,6 +2118,14 @@ func (r *tagReads) Peek() string { return "" }
 			wants:      []string{"AdminClient.Again reaches the transport", "AdminClient.Recent reaches the transport"},
 		},
 		{
+			// A promoted field is read through the embedded type: a do on a
+			// promoted *memo is memo's, not the transport.
+			name:       "a do on a promoted field of another type is not the transport",
+			pkg:        "\ntype memo struct{}\nfunc (m *memo) do(ctx context.Context) error { return nil }\ntype base struct{ cache *memo }\ntype AdminClient struct{ base }\nfunc (a *AdminClient) Warm(ctx context.Context) error { return a.cache.do(ctx) }\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+		},
+		{
 			// A local from a declared constructor has that constructor's type.
 			name:       "a do on a constructed receiver of another type is not the transport",
 			pkg:        "\ntype AdminClient struct{}\ntype memo struct{}\nfunc newMemo() *memo { return &memo{} }\nfunc (m *memo) do(ctx context.Context) error { return nil }\nfunc (a *AdminClient) Warm(ctx context.Context) error {\n\tcache := newMemo()\n\treturn cache.do(ctx)\n}\n",
@@ -3220,6 +3228,19 @@ func TestIntegration_Extra(t *testing.T) {
 			suite: isolationSuiteFixture{extra: `type parallelT interface{ Parallel() }
 
 func runParallel(t parallelT) { t.Parallel() }
+
+func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	_ = h
+	runParallel(t)
+}`},
+			want: []string{"TestIntegration_Extra calls Parallel"},
+		},
+		{
+			// A type the files read do not declare -- one in another test file
+			// -- might be an interface a T satisfies.
+			name: "a T made parallel through a type the guard cannot see",
+			suite: isolationSuiteFixture{extra: `func runParallel(t runner) { t.Parallel() }
 
 func TestIntegration_Extra(t *testing.T) {
 	h := loadHarness(t)
