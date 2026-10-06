@@ -1996,6 +1996,15 @@ func (r *tagReads) Peek() string { return "" }
 			want:       "AdminClient.Recent reaches the transport",
 		},
 		{
+			// An untyped receiver calling a name Client declares is followed into
+			// Client's method: it may be the client.
+			name:       "a Client method on a receiver it cannot type is followed",
+			pkg:        "\ntype AdminClient struct{}\nfunc (a *AdminClient) Recent(ctx context.Context) error { return lookup().fetch(ctx) }\nfunc (c *Client) fetch(ctx context.Context) error {\n\treturn c.doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport",
+		},
+		{
 			name:       "a do on a receiver of another type is not the transport",
 			pkg:        "\ntype AdminClient struct{ cache *memo }\ntype memo struct{}\nfunc (m *memo) do(ctx context.Context, verb, key string) error { return nil }\nfunc (a *AdminClient) Warm(ctx context.Context) error {\n\treturn a.cache.do(ctx, http.MethodDelete, \"tags\")\n}\n",
 			entries:    cleanProbeEntries,
