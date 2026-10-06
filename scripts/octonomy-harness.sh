@@ -139,8 +139,9 @@ container_running() {
     [ -n "$(docker ps --filter "name=^${1}$" --filter status=running --format '{{.Names}}')" ]
 }
 
-# Every Octonomy container -- the two one-shots and the long-running app -- gets
-# the same settings environment. Divergence here is how a `manage.py check` that
+# Every Octonomy container -- each one-shot management command (the migration
+# and every token mint) and the long-running app -- gets the same settings
+# environment. Divergence here is how a `manage.py check` that
 # passes in the mint container fails in the app container.
 octonomy_env_args() {
     printf '%s\n' \

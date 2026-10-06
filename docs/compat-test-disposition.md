@@ -208,7 +208,9 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   `Client` field that is not a `*FooService`, an exported field on a service — and on an exported
   method or package function anywhere else in the package that issues a read, or reaches the
   transport with a verb it cannot resolve, which closes the surface by what a method does rather
-  than by one more shape. And one half is new, because the table has to RUN:
+  than by one more shape. What a selector reaches there is read with `go/types` over the package's
+  own source, every import stubbed empty, because a hand-written resolver was found short of the
+  language — aliases, promotion depth, inferred locals — four review rounds running. And one half is new, because the table has to RUN:
   `TestTheIsolationSuiteRunsItsProbes` holds the isolation suite to the runners' tag and
   `^TestIntegration_` prefix, `loadHarness`'s skip to `newSmokeClient`'s required-gate shape,
   `runProbeMatrix` to asking every probe every run, and each isolation test to every run it must

@@ -32,6 +32,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/ioutil"
 	"strconv"
 	"strings"
@@ -207,7 +208,10 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 	for service := range fields {
 		inventoried[service] = true
 	}
-	types := indexTypes(pkg)
+	src, why := checkSource(pkg, index)
+	if why != "" {
+		problems = append(problems, why)
+	}
 	for _, key := range funcIndexKeys(index) {
 		decl := index[key]
 		recv := receiverTypeName(decl)
@@ -232,7 +236,7 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 			// here as "sends nothing". Most exported methods off the surface --
 			// Error, String, MarshalJSON -- really do send nothing, so what is
 			// refused is the unknown method that reaches the transport.
-			if reachesTransport(decl, index, types, map[*ast.FuncDecl]bool{}) {
+			if reachesTransport(decl, src, map[*ast.FuncDecl]bool{}) {
 				problems = append(problems, key+" reaches the transport and the guard could not resolve its "+
 					"verb, and "+where+", so an unresolved read there would be inventoried by nothing. Declare "+
 					"it on a wired service, or fix the classifier so it can see the verb")
@@ -414,68 +418,99 @@ func typeDescription(typ ast.Expr) string {
 	return exprString(typ)
 }
 
-// reachesTransport reports whether fn's body -- closures included, and every
-// method or function it calls or takes as a value, followed -- names a transport
-// helper or a request constructor at all: called, handed on as a value, or
-// reached through any field that holds the client.
+// typedSource is the package's own source, type-checked: which declaration a
+// selector or a name reaches, exactly as the compiler resolves it -- through
+// embedding at Go's own depth rules, aliases, defined types and inferred
+// locals. A hand-written resolver was found short of the language four rounds
+// running (#97); go/types is the language.
 //
-// A selector is read by its receiver's TYPE where exprType can name it: a
-// transport name on a receiver that is not the Client (`s.cache.do(…)`) is not
-// the transport, and a method on a receiver of type T is T's method -- so a
-// *Client in a field named anything (`a.c.fetch(…)`) is followed into Client's
-// fetch. Where the type cannot be named, the selector is taken at its word: a
-// transport name counts, and a Client method of that name is followed. That
-// is the fail-closed direction. A request constructor is net/http's only.
-func reachesTransport(fn *ast.FuncDecl, index funcIndex, types typeIndex, seen map[*ast.FuncDecl]bool) bool {
+// Only the package itself is checked. Every import is an empty package
+// (emptyImporter), so nothing outside the module is read or required, and a
+// name from an import is an error the checker is told to ignore: what such a
+// name selects is unresolved, and each use below says what it does then.
+type typedSource struct {
+	info   *types.Info
+	declOf map[*types.Func]*ast.FuncDecl
+	index  funcIndex
+}
+
+// checkSource type-checks the files of one package.
+func checkSource(files map[string]*ast.File, index funcIndex) (typedSource, string) {
+	var list []*ast.File
+	for _, name := range sortedFileNames(files) {
+		list = append(list, files[name])
+	}
+	info, why := checkFiles(list)
+	declOf := map[*types.Func]*ast.FuncDecl{}
+	for _, decl := range index {
+		if f, ok := info.Defs[decl.Name].(*types.Func); ok {
+			declOf[f] = decl
+		}
+	}
+	return typedSource{info: info, declOf: declOf, index: index}, why
+}
+
+// checkFiles runs go/types over files with every import empty, and returns
+// what it recorded. The type errors are expected -- every imported name is one
+// -- and are dropped. The files must share the FileSet that parsed them
+// (parsedWith); files from two sets cannot be checked together, and that is
+// reported rather than checked wrongly.
+func checkFiles(files []*ast.File) (*types.Info, string) {
+	info := &types.Info{
+		Types:      map[ast.Expr]types.TypeAndValue{},
+		Defs:       map[*ast.Ident]types.Object{},
+		Uses:       map[*ast.Ident]types.Object{},
+		Selections: map[*ast.SelectorExpr]*types.Selection{},
+	}
+	if len(files) == 0 {
+		return info, ""
+	}
+	var fset *token.FileSet
+	for _, file := range files {
+		set, ok := parsedWith.Load(file)
+		if !ok || (fset != nil && set.(*token.FileSet) != fset) {
+			return info, "the guard was handed files it did not parse into one FileSet, so it cannot type-check them; " +
+				"parse them with parseFilesOrFatal"
+		}
+		fset = set.(*token.FileSet)
+	}
+	conf := types.Config{Importer: emptyImporter{}, Error: func(error) {}}
+	_, _ = conf.Check(files[0].Name.Name, fset, files, info)
+	return info, ""
+}
+
+// emptyImporter imports every path as a complete package with nothing in it.
+type emptyImporter struct{}
+
+func (emptyImporter) Import(path string) (*types.Package, error) {
+	name := path[strings.LastIndex(path, "/")+1:]
+	pkg := types.NewPackage(path, strings.NewReplacer("-", "_", ".", "_").Replace(name))
+	pkg.MarkComplete()
+	return pkg, nil
+}
+
+// reachesTransport reports whether fn's body -- closures included, and every
+// declaration it selects or names, called or taken as a value, followed --
+// reaches the transport: a client transport helper, or net/http's request
+// constructors.
+func reachesTransport(fn *ast.FuncDecl, src typedSource, seen map[*ast.FuncDecl]bool) bool {
 	if fn == nil || fn.Body == nil || seen[fn] {
 		return false
 	}
 	seen[fn] = true
-	recv, recvType := receiverName(fn), receiverTypeName(fn)
 	found := false
-	selNames := map[*ast.Ident]bool{}
-	follow := func(callee *ast.FuncDecl) {
-		if callee != nil {
-			found = reachesTransport(callee, index, types, seen)
-		}
-	}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if found {
 			return false
 		}
 		switch e := n.(type) {
 		case *ast.SelectorExpr:
-			selNames[e.Sel] = true
-			typ, resolved := exprType(fn, e.X, types, index)
-			owner := ""
-			if resolved {
-				// Promotion: a method or field T does not declare may be one
-				// an embedded field of T does -- `struct{ *Client }` hands its
-				// wrapper every Client method.
-				owner = promotedOwner(typ, e.Sel.Name, types, index)
-			}
-			if t, ok := transportCalls[e.Sel.Name]; ok {
-				if (t.shape == "http" && isIdent(e.X, "http")) || (t.shape == "client" && (!resolved || owner == "Client")) {
-					found = true
-					return false
-				}
-			}
-			switch {
-			case resolved:
-				follow(index[owner+"."+e.Sel.Name])
-			default:
-				callee := resolveCallee(e, recv, recvType, index)
-				if callee == nil {
-					callee = index["Client."+e.Sel.Name]
-				}
-				follow(callee)
-			}
+			found = src.selectorReaches(e, seen)
 		case *ast.Ident:
-			// A package function, called or taken as a value -- but not the name
-			// half of a selector, nor a local that shadows the function.
-			if !selNames[e] && len(declarationsOf(e.Name, fn)) == 0 {
-				if f := index[e.Name]; f != nil && f.Recv == nil {
-					follow(f)
+			// A package function, called or taken as a value.
+			if f, ok := src.info.Uses[e].(*types.Func); ok {
+				if sig, ok := f.Type().(*types.Signature); ok && sig.Recv() == nil {
+					found = reachesTransport(src.declOf[f], src, seen)
 				}
 			}
 		}
@@ -484,148 +519,46 @@ func reachesTransport(fn *ast.FuncDecl, index funcIndex, types typeIndex, seen m
 	return found
 }
 
-// exprType names the declared type of x inside fn, stars stripped, when it can
-// be sure of it: an identifier declared once and never reassigned -- a
-// receiver, a parameter, `var x T`, `x := T{}` or `&T{}`, or `x := newT(…)` with
-// newT a package function returning one T -- or a field selected off one, read
-// from the struct's declaration and, for a field it does not declare, its
-// embedded fields'. Anything else is unresolved.
-func exprType(fn *ast.FuncDecl, x ast.Expr, types typeIndex, index funcIndex) (string, bool) {
-	switch e := unparen(x).(type) {
-	case *ast.Ident:
-		decls := declarationsOf(e.Name, fn)
-		if len(decls) != 1 {
-			return "", false
-		}
-		switch d := decls[0].(type) {
-		case *ast.Field:
-			if fn.Body == nil || len(bindingsOf(fn.Body, e.Name)) == 0 {
-				return declaredTypeName(d.Type)
-			}
-		case *ast.ValueSpec:
-			if d.Type != nil && len(bindingsOf(fn.Body, e.Name)) == 1 {
-				return declaredTypeName(d.Type)
-			}
-		case *ast.AssignStmt:
-			if len(bindingsOf(fn.Body, e.Name)) != 1 || len(d.Lhs) != len(d.Rhs) {
-				return "", false
-			}
-			for i, lhs := range d.Lhs {
-				if !isIdent(lhs, e.Name) {
-					continue
-				}
-				value := unparen(d.Rhs[i])
-				if addr, ok := value.(*ast.UnaryExpr); ok && addr.Op == token.AND {
-					value = unparen(addr.X)
-				}
-				if lit, ok := value.(*ast.CompositeLit); ok {
-					return declaredTypeName(lit.Type)
-				}
-				if call, ok := value.(*ast.CallExpr); ok {
-					callee, ok := unparen(call.Fun).(*ast.Ident)
-					if !ok || len(declarationsOf(callee.Name, fn)) > 0 {
-						return "", false
-					}
-					if f := index[callee.Name]; f != nil && f.Recv == nil {
-						if results := fieldTypeExprs(f.Type.Results); len(results) == 1 {
-							return declaredTypeName(results[0])
-						}
-					}
-				}
-			}
-		}
-	case *ast.SelectorExpr:
-		owner, ok := exprType(fn, e.X, types, index)
+// selectorReaches is reachesTransport for one selector.
+//
+//   - A method the checker resolved is the method Go would call. One of the
+//     client's transport helpers is the transport; any other declared here is
+//     followed. A transport helper's name on a method declared nowhere in the
+//     package -- an interface's -- is taken at its word.
+//   - A name off an imported package is the transport only if it is one of
+//     net/http's request constructors.
+//   - A selector the checker could not resolve -- its receiver's type comes
+//     from an import, or does not check -- is taken at its word: a transport
+//     helper's name counts, and a Client method of that name is followed. That
+//     is the fail-closed direction, and a receiver typed in this package never
+//     lands here.
+func (src typedSource) selectorReaches(e *ast.SelectorExpr, seen map[*ast.FuncDecl]bool) bool {
+	name := e.Sel.Name
+	transport, isTransport := transportCalls[name]
+	clientHelper := isTransport && transport.shape == "client"
+	if sel, ok := src.info.Selections[e]; ok {
+		f, ok := sel.Obj().(*types.Func)
 		if !ok {
-			return "", false
+			return false // a field; its own selections are read where they occur
 		}
-		return fieldTypeOf(owner, e.Sel.Name, types, map[string]bool{})
+		decl, declared := src.declOf[f]
+		if !declared {
+			return clientHelper
+		}
+		if clientHelper && receiverTypeName(decl) == "Client" {
+			return true
+		}
+		return reachesTransport(decl, src, seen)
 	}
-	return "", false
-}
-
-// fieldTypeOf names the type of field name on struct type owner, looking
-// through embedded fields as Go's selector does.
-func fieldTypeOf(owner, name string, types typeIndex, seen map[string]bool) (string, bool) {
-	spec, ok := types[owner]
-	if !ok || seen[owner] {
-		return "", false
-	}
-	seen[owner] = true
-	st, ok := unparen(spec.Type).(*ast.StructType)
-	if !ok {
-		return "", false
-	}
-	for _, field := range st.Fields.List {
-		for _, n := range field.Names {
-			if n.Name == name {
-				return declaredTypeName(field.Type)
-			}
+	if id, ok := unparen(e.X).(*ast.Ident); ok {
+		if pkg, ok := src.info.Uses[id].(*types.PkgName); ok {
+			return isTransport && transport.shape == "http" && pkg.Imported().Path() == "net/http"
 		}
 	}
-	for _, field := range st.Fields.List {
-		if len(field.Names) == 0 {
-			if embedded, ok := declaredTypeName(field.Type); ok {
-				if typ, ok := fieldTypeOf(embedded, name, types, seen); ok {
-					return typ, true
-				}
-			}
-		}
+	if clientHelper {
+		return true
 	}
-	return "", false
-}
-
-// promotedOwner names the type whose method name a value of type typ reaches:
-// typ itself if it declares one, else the first embedded type that does,
-// searched as Go promotes -- or Client, when an embedded Client is reached and
-// name is a transport helper, so the caller sees it for what it is. "" when
-// nothing in the package declares it.
-func promotedOwner(typ, name string, types typeIndex, index funcIndex) string {
-	seen := map[string]bool{}
-	var search func(t string) string
-	search = func(t string) string {
-		if seen[t] {
-			return ""
-		}
-		seen[t] = true
-		if _, ok := index[t+"."+name]; ok {
-			return t
-		}
-		if _, ok := transportCalls[name]; ok && t == "Client" {
-			return t
-		}
-		spec, ok := types[t]
-		if !ok {
-			return ""
-		}
-		st, ok := unparen(spec.Type).(*ast.StructType)
-		if !ok {
-			return ""
-		}
-		for _, field := range st.Fields.List {
-			if len(field.Names) != 0 {
-				continue
-			}
-			if embedded, ok := declaredTypeName(field.Type); ok {
-				if owner := search(embedded); owner != "" {
-					return owner
-				}
-			}
-		}
-		return ""
-	}
-	return search(typ)
-}
-
-// declaredTypeName is a type expression's name, one star stripped: *Client is Client.
-func declaredTypeName(typ ast.Expr) (string, bool) {
-	if star, ok := unparen(typ).(*ast.StarExpr); ok {
-		typ = star.X
-	}
-	if ident, ok := unparen(typ).(*ast.Ident); ok {
-		return ident.Name, true
-	}
-	return "", false
+	return reachesTransport(src.index["Client."+name], src, seen)
 }
 
 func funcIndexKeys(index funcIndex) []string {
@@ -888,11 +821,36 @@ type probe struct {
 // parseFileOrFatal parses one source file of this repository.
 func parseFileOrFatal(t *testing.T, path string) *ast.File {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+	return parseFilesOrFatal(t, map[string]string{path: ""})[path]
+}
+
+// parseFilesOrFatal parses files into ONE FileSet, so they can be type-checked
+// together (checkFiles). A source of "" reads the file at the path.
+func parseFilesOrFatal(t *testing.T, sources map[string]string) map[string]*ast.File {
+	t.Helper()
+	fset := token.NewFileSet()
+	out := map[string]*ast.File{}
+	for _, path := range sortedStringKeys(sources) {
+		var src interface{}
+		if sources[path] != "" {
+			src = sources[path]
+		}
+		file, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		parsedWith.Store(file, fset)
+		out[path] = file
 	}
-	return file
+	return out
+}
+
+func sortedStringKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return sortedStrings(out)
 }
 
 // probesIn extracts the entries of the []readProbe literal that readProbes
@@ -1194,7 +1152,6 @@ var isolationTests = map[string][]isolationRun{
 // and it proves which runs a test makes, not that their assertions are right.
 // The assertions are runProbeMatrix's, and a reviewer's.
 func TestTheIsolationSuiteRunsItsProbes(t *testing.T) {
-	parsed := map[string]*ast.File{}
 	for _, path := range []string{integrationSuiteFile, integrationHarnessFile} {
 		raw, err := ioutil.ReadFile(path)
 		if err != nil {
@@ -1203,8 +1160,8 @@ func TestTheIsolationSuiteRunsItsProbes(t *testing.T) {
 		for _, problem := range smokeBuildTagProblems(string(raw)) {
 			t.Errorf("%s: %s", path, problem)
 		}
-		parsed[path] = parseFileOrFatal(t, path)
 	}
+	parsed := parseFilesOrFatal(t, map[string]string{integrationSuiteFile: "", integrationHarnessFile: ""})
 	for _, problem := range isolationSuiteProblems(parsed[integrationSuiteFile], parsed[integrationHarnessFile]) {
 		t.Error(problem)
 	}
@@ -1216,6 +1173,10 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 	var problems []string
 	decls := append(append([]ast.Decl{}, suite.Decls...), harnessFile.Decls...)
 	helpers := readGateHelpers(decls, "loadHarness")
+	info, why := checkFiles([]*ast.File{suite, harnessFile})
+	if why != "" {
+		problems = append(problems, why)
+	}
 	funcs := map[string]*ast.FuncDecl{}
 	for _, decl := range decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Body != nil {
@@ -1238,7 +1199,7 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 	if matrix, ok := funcs["runProbeMatrix"]; !ok {
 		problems = append(problems, "the isolation suite declares no runProbeMatrix, so nothing runs readProbes")
 	} else {
-		problems = append(problems, matrixProblems(matrix, helpers)...)
+		problems = append(problems, matrixProblems(matrix, helpers, info)...)
 	}
 
 	// Every caller of the matrix is a test the runners select, calling it from
@@ -1265,7 +1226,7 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 		if !strings.HasPrefix(name, isolationTestPrefix) {
 			continue
 		}
-		problems = append(problems, isolationTestProblems(funcs[name], helpers)...)
+		problems = append(problems, isolationTestProblems(funcs[name], helpers, info)...)
 	}
 
 	for _, name := range isolationTestNames() {
@@ -1292,13 +1253,13 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 // isolationTestProblems refuses the two ways a selected test can turn green
 // without running what follows: a skip, and an early return. The suite's only
 // skip is loadHarness's, behind the required gate.
-func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
+func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers, info *types.Info) []string {
 	var problems []string
 	// The seeded rows' teardown is this test's own defer (rules 2 and 3 of the
 	// t.Cleanup model), which holds only while its subtests are sequential; and
 	// the Vocabularies.List walk counts a collection another test running at
 	// the same time would change.
-	if callsParallel(fn, helpers, map[*ast.FuncDecl]bool{}) {
+	if callsParallel(fn, helpers, info, map[*ast.FuncDecl]bool{}) {
 		problems = append(problems, fn.Name.Name+" calls Parallel, directly or through a helper. The isolation "+
 			"tests run in sequence: a parallel subtest outlives the deferred teardown of the rows it reads, and "+
 			"two isolation tests at once change the collections the Vocabularies.List walk counts")
@@ -1340,7 +1301,7 @@ func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 // of the matrix while the test stays green, and a run the matrix leaves out is
 // as unrun as one the test never declared. What the matrix asserts about each
 // answer is the reviewer's.
-func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
+func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers, info *types.Info) []string {
 	var problems []string
 	for _, why := range skipsIn(fn, helpers) {
 		problems = append(problems, "runProbeMatrix "+why+"; a skipped probe is a green run that asserted nothing")
@@ -1356,7 +1317,7 @@ func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 		}
 		return true
 	})
-	if callsParallel(fn, helpers, map[*ast.FuncDecl]bool{}) {
+	if callsParallel(fn, helpers, info, map[*ast.FuncDecl]bool{}) {
 		problems = append(problems, "runProbeMatrix calls Parallel, directly or through a helper. Its subtests "+
 			"close over the loops' probe and run, which before Go 1.22 a parallel subtest reads at the loop's "+
 			"last value -- copies of one probe or one run, not the matrix -- and the fixtures' teardown is the "+
@@ -1367,9 +1328,9 @@ func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 		"`for _, run := range runs` inside it, and `probe.find(ctx, run.client, run.readNS, run.want, " +
 		"run.extra...)` inside that, so every probe asks every run"
 	var hName, runsName string
-	params, types := paramNames(fn.Type.Params), paramTypes(fn.Type)
+	params, ptypes := paramNames(fn.Type.Params), paramTypes(fn.Type)
 	for i := range params {
-		switch types[i] {
+		switch ptypes[i] {
 		case "harness":
 			hName = params[i]
 		case "[]probeRun":
@@ -1446,7 +1407,7 @@ func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 // body, closures included, or through a function or method the files read
 // declare, resolved as the skip reader resolves them. A helper the reader
 // cannot resolve is already refused when it is handed the T (skipsIn).
-func callsParallel(fn *ast.FuncDecl, h smokeHelpers, seen map[*ast.FuncDecl]bool) bool {
+func callsParallel(fn *ast.FuncDecl, h smokeHelpers, info *types.Info, seen map[*ast.FuncDecl]bool) bool {
 	if fn == nil || fn.Body == nil || seen[fn] {
 		return false
 	}
@@ -1459,14 +1420,14 @@ func callsParallel(fn *ast.FuncDecl, h smokeHelpers, seen map[*ast.FuncDecl]bool
 		}
 		switch callee := unparen(call.Fun).(type) {
 		case *ast.SelectorExpr:
-			if callee.Sel.Name == "Parallel" && mayBeTestingT(fn, callee.X, h) {
+			if callee.Sel.Name == "Parallel" && mayBeTestingT(callee.X, info) {
 				found = true
 			} else if typ := receiverTypeOf(fn, callee.X, h); typ != "" {
-				found = callsParallel(h.methods[typ+"."+callee.Sel.Name], h, seen)
+				found = callsParallel(h.methods[typ+"."+callee.Sel.Name], h, info, seen)
 			}
 		case *ast.Ident:
 			if len(declarationsOf(callee.Name, fn)) == 0 {
-				found = callsParallel(h.declared[callee.Name], h, seen)
+				found = callsParallel(h.declared[callee.Name], h, info, seen)
 			}
 		}
 		return !found
@@ -1474,60 +1435,28 @@ func callsParallel(fn *ast.FuncDecl, h smokeHelpers, seen map[*ast.FuncDecl]bool
 	return found
 }
 
-// mayBeTestingT reports whether a Parallel call's receiver may be a test's T.
-// Only one thing proves it is not: an identifier declared once with a type the
-// files read declare as something other than an interface -- `var p pool`
-// with pool a struct. An interface may hold a *testing.T (`t parallelT` with
-// parallelT interface{ Parallel() }), and a type the reader cannot see into
-// might, so both are taken to be one: the fail-closed direction.
-func mayBeTestingT(fn *ast.FuncDecl, x ast.Expr, h smokeHelpers) bool {
-	ident, ok := unparen(x).(*ast.Ident)
-	if !ok {
+// mayBeTestingT reports whether a Parallel call's receiver may be a test's T,
+// read off the files' own type-check (checkFiles): anything but a value whose
+// type, under every alias and definition, is concrete and declared in those
+// files -- `var p pool` with pool a struct. An interface may hold a
+// *testing.T, and a type from an import -- testing.T itself, which the checker
+// sees as an empty package's -- or one that does not check is taken to be one:
+// the fail-closed direction.
+func mayBeTestingT(x ast.Expr, info *types.Info) bool {
+	typ := info.TypeOf(x)
+	if typ == nil {
 		return true
 	}
-	decls := declarationsOf(ident.Name, fn)
-	if len(decls) != 1 {
+	if ptr, ok := typ.Underlying().(*types.Pointer); ok {
+		typ = ptr.Elem()
+	}
+	switch under := typ.Underlying().(type) {
+	case *types.Interface:
 		return true
+	case *types.Basic:
+		return under.Kind() == types.Invalid
 	}
-	var typ ast.Expr
-	switch d := decls[0].(type) {
-	case *ast.Field:
-		typ = d.Type
-	case *ast.ValueSpec:
-		typ = d.Type
-	case *ast.AssignStmt:
-		for i, lhs := range d.Lhs {
-			if isIdent(lhs, ident.Name) && len(d.Lhs) == len(d.Rhs) {
-				if lit, ok := unparen(d.Rhs[i]).(*ast.CompositeLit); ok {
-					typ = lit.Type
-				}
-			}
-		}
-	}
-	for seen := 0; typ != nil && seen < 8; seen++ {
-		if star, ok := unparen(typ).(*ast.StarExpr); ok {
-			typ = star.X
-		}
-		ident, ok := unparen(typ).(*ast.Ident)
-		if !ok {
-			// testing.T, testing.TB, an interface literal, another package's
-			// type: not one the files read declare.
-			_, isStruct := unparen(typ).(*ast.StructType)
-			return !isStruct
-		}
-		spec, ok := h.types[ident.Name]
-		if !ok {
-			return true
-		}
-		if _, isInterface := unparen(spec.Type).(*ast.InterfaceType); isInterface {
-			return true
-		}
-		if !spec.Assign.IsValid() {
-			return false
-		}
-		typ = spec.Type
-	}
-	return true
+	return false
 }
 
 // isFindOfRun reports whether call is probe.find(<ctx>, run.client,
@@ -2122,6 +2051,36 @@ func (r *tagReads) Peek() string { return "" }
 			// promoted *memo is memo's, not the transport.
 			name:       "a do on a promoted field of another type is not the transport",
 			pkg:        "\ntype memo struct{}\nfunc (m *memo) do(ctx context.Context) error { return nil }\ntype base struct{ cache *memo }\ntype AdminClient struct{ base }\nfunc (a *AdminClient) Warm(ctx context.Context) error { return a.cache.do(ctx) }\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+		},
+		{
+			// Round 8's constructions, which a hand-written resolver got wrong and
+			// go/types does not: an alias embedded for the client.
+			name:       "a wrapper that embeds the client through an alias",
+			pkg:        "\ntype clientAlias = Client\ntype AdminClient struct{ *clientAlias }\nfunc (c *Client) doList(ctx context.Context, method, path string) error { return nil }\nfunc (a *AdminClient) Recent(ctx context.Context) error {\n\treturn a.doList(ctx, http.MethodGet, \"/audit-logs\")\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport",
+		},
+		{
+			// Go selects the SHALLOWEST promoted method: Client's fetch at depth
+			// one, not the harmless one two embeddings down.
+			name:       "promotion at Go's own depth",
+			pkg:        "\ntype harmless struct{}\nfunc (harmless) fetch(ctx context.Context) error { return nil }\ntype mid struct{ harmless }\ntype AdminClient struct {\n\tmid\n\t*Client\n}\nfunc (c *Client) fetch(ctx context.Context) error {\n\treturn c.doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil)\n}\nfunc (a *AdminClient) Recent(ctx context.Context) error { return a.fetch(ctx) }\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport",
+		},
+		{
+			name:       "a promoted field through an aliased holder is read as itself",
+			pkg:        "\ntype memo struct{}\nfunc (m *memo) do(ctx context.Context) error { return nil }\ntype holder struct{ cache *memo }\ntype holderAlias = holder\ntype AdminClient struct{ holderAlias }\nfunc (a *AdminClient) Warm(ctx context.Context) error { return a.cache.do(ctx) }\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+		},
+		{
+			name:       "a constructor with two results, and an inferred var",
+			pkg:        "\ntype AdminClient struct{}\ntype memo struct{}\nfunc newMemo() (*memo, error) { return &memo{}, nil }\nfunc oneMemo() *memo { return &memo{} }\nfunc (m *memo) do(ctx context.Context) error { return nil }\nfunc (a *AdminClient) Warm(ctx context.Context) error {\n\tcache, err := newMemo()\n\tif err != nil {\n\t\treturn err\n\t}\n\tvar other = oneMemo()\n\t_ = other.do(ctx)\n\treturn cache.do(ctx)\n}\n",
 			entries:    cleanProbeEntries,
 			exclusions: cleanProbeExclusions,
 		},
@@ -2772,10 +2731,29 @@ func (f isolationSuiteFixture) source() string {
 	return "package octonomy_test\n\n" + f.matrix + "\n\n" + f.isolation + "\n\n" + f.includeGlobal + "\n\n" + f.extra + "\n"
 }
 
+// parseIsolationFixture parses a suite fixture and a harness fixture into one
+// FileSet, as the guard needs to type-check them together.
+func parseIsolationFixture(t *testing.T, suite isolationSuiteFixture, gate, extra string) map[string]*ast.File {
+	t.Helper()
+	return parseFilesOrFatal(t, map[string]string{
+		"suite.go":   suite.source(),
+		"harness.go": isolationHarnessFixture(gate, extra),
+	})
+}
+
+// A guard handed files from two FileSets cannot type-check them and says so,
+// rather than checking them wrongly or not at all.
+func TestCheckFilesRefusesFilesFromTwoFileSets(t *testing.T) {
+	a := parseFixture(t, "package octonomy_test\n")["fixture.go"]
+	b := parseFixture(t, "package octonomy_test\n")["fixture.go"]
+	if _, why := checkFiles([]*ast.File{a, b}); !strings.Contains(why, "did not parse into one FileSet") {
+		t.Errorf("checkFiles over two FileSets = %q, want it refused", why)
+	}
+}
+
 // Every run isolationTests lists is required, one at a time: a suite missing
 // any single one of them is refused, naming it.
 func TestIsolationSuiteProblemsRequiresEveryRun(t *testing.T) {
-	harnessFile := parseFixture(t, isolationHarnessFixture("", ""))["fixture.go"]
 	for _, name := range isolationTestNames() {
 		for i, run := range isolationTests[name] {
 			fixture := isolationSuiteFixture{}
@@ -2784,7 +2762,8 @@ func TestIsolationSuiteProblemsRequiresEveryRun(t *testing.T) {
 			} else {
 				fixture.includeGlobal = renderIsolationTest(name, i)
 			}
-			problems := isolationSuiteProblems(parseFixture(t, fixture.source())["fixture.go"], harnessFile)
+			files := parseIsolationFixture(t, fixture, "", "")
+			problems := isolationSuiteProblems(files["suite.go"], files["harness.go"])
 			if len(problems) != 1 || !strings.Contains(problems[0], name+" makes no run of "+run.describe()) {
 				t.Errorf("%s without run %d (%s): problems = %v, want exactly that run reported", name, i, run.describe(), problems)
 			}
@@ -3250,6 +3229,22 @@ func TestIntegration_Extra(t *testing.T) {
 			want: []string{"TestIntegration_Extra calls Parallel"},
 		},
 		{
+			// A defined type whose underlying type is an interface may hold a T.
+			name: "a T made parallel through a type defined over an interface",
+			suite: isolationSuiteFixture{extra: `type parallelT interface{ Parallel() }
+
+type suiteT parallelT
+
+func runParallel(t suiteT) { t.Parallel() }
+
+func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	_ = h
+	runParallel(t)
+}`},
+			want: []string{"TestIntegration_Extra calls Parallel"},
+		},
+		{
 			name: "a T made parallel through an interface literal",
 			suite: isolationSuiteFixture{extra: `func runParallel(t interface{ Parallel() }) { t.Parallel() }
 
@@ -3313,9 +3308,8 @@ func TestIntegration_Extra(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			suite := parseFixture(t, tc.suite.source())["fixture.go"]
-			harnessFile := parseFixture(t, isolationHarnessFixture(tc.gate, tc.extra))["fixture.go"]
-			problems := isolationSuiteProblems(suite, harnessFile)
+			files := parseIsolationFixture(t, tc.suite, tc.gate, tc.extra)
+			problems := isolationSuiteProblems(files["suite.go"], files["harness.go"])
 			if len(problems) != len(tc.want) {
 				t.Fatalf("problems = %v, want exactly %d, containing %q", problems, len(tc.want), tc.want)
 			}

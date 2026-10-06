@@ -29,8 +29,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
+
+var parsedWith sync.Map // *ast.File -> *token.FileSet; see parseFixture
 
 // parsePackageSource parses every non-test .go file of this package, the way
 // TestEveryResponseDecodeIsDepthBounded does, and refuses a tree it cannot have
@@ -51,6 +54,7 @@ func parsePackageSource(t *testing.T) map[string]*ast.File {
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
 		}
+		parsedWith.Store(f, fset)
 		if f.Name.Name != "octonomy" {
 			t.Fatalf("%s is package %s, not octonomy -- the guard would read another package's types", path, f.Name.Name)
 		}
@@ -830,5 +834,11 @@ func parseFixture(t *testing.T, src string) map[string]*ast.File {
 	if err != nil {
 		t.Fatalf("parse fixture: %v", err)
 	}
+	parsedWith.Store(file, fset)
 	return map[string]*ast.File{"fixture.go": file}
 }
+
+// parsedWith records the FileSet each parsed file's positions belong to, for
+// the guards that type-check what they parsed (checkFiles, readprobes_test.go):
+// go/types reads a file's metadata through the set that parsed it. Keyed by
+// *ast.File, filled by the parse helpers above and by parseFilesOrFatal.

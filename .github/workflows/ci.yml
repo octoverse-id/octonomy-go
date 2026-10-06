@@ -205,10 +205,11 @@ jobs:
   # isolation suite (does the server keep one merchant's rows from another?).
   #
   # It replaces the bootstrap-only `harness` job this workflow was forked from:
-  # on this line the smoke test IS the harness's consumer, so booting a container
-  # to assert only that the container booted would be a second Docker job for no
-  # added coverage. The credentials still cross a step boundary (the harness
-  # exports them, the test step reads them), which is what that job was proving.
+  # on this line the two suites below ARE the harness's consumers, so booting a
+  # container to assert only that the container booted would be a second Docker
+  # job for no added coverage. The credentials still cross a step boundary (the
+  # harness exports them, the test steps read them), which is what that job was
+  # proving.
   #
   # Why it is worth blocking a merge on -- the part that does not decay: a flake
   # costs a re-run, while an unverified `v1.x` tag cannot be recalled at all
