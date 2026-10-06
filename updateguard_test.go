@@ -25,14 +25,18 @@ package octonomy
 //     a caller sets can reach -- a pointer, or Metadata behind a value-receiver
 //     MarshalJSON.
 //   - TestEveryPatchBodyIsAnUpdateType: the check above finds its types by
-//     name, so every PATCH the package sends is held to that name.
+//     name, so every PATCH sent through the transport -- do and doData, which
+//     TestRequestBodyNamesEveryHelperThatSendsOne holds to doRaw's callers --
+//     is held to that name.
 //
 // TestUpdateBodiesNamesEveryUpdateType then holds update_test.go's table to
 // the source, so the per-field round-trip there cannot miss a type.
 //
 // WHERE THIS ENDS: it proves each field CAN be left out, never that the server
 // treats the key as the caller meant, and it does not read what a MarshalJSON
-// does -- update_test.go marshals every field of every type for that.
+// does -- update_test.go marshals every field of every type for that, and pins
+// the key names to the contract by hand. A request built outside doRaw, with
+// net/http directly, is outside both, as it is outside every transport guard.
 
 import (
 	"go/ast"
@@ -57,12 +61,20 @@ const knownUpdateTypes = 3
 //	func (c *Client) do(ctx, method, path string, query url.Values, body interface{}, opts ...RequestOption) error
 //	func (c *Client) doData(ctx, method, path string, query url.Values, body, out interface{}, opts ...RequestOption) error
 //
-// doList sends none, and doRaw is reachable only from these (rawTransport in
-// sourceguard_test.go). TestRequestBodyMatchesTheHelpersSignatures pins both
-// indexes against transport.go.
+// doList sends none. The table is closed -- a helper missing from it is not
+// read at all -- so TestRequestBodyNamesEveryHelperThatSendsOne holds it to
+// every function rawTransport (sourceguard_test.go) allows to call doRaw, the
+// one path to the wire: a helper that hands doRaw a body must be listed here,
+// at the index of the parameter it hands on.
 var requestBody = map[string]int{"do": 4, "doData": 4}
 
-const requestMethodArg = 1
+// requestMethodArg is the method's index in each requestBody helper; rawBodyArg
+// and rawMethodArg are the body's and method's in doRaw itself.
+const (
+	requestMethodArg = 1
+	rawMethodArg     = 1
+	rawBodyArg       = 4
+)
 
 // --- the guards, over this tree ---------------------------------------------------
 
@@ -131,25 +143,106 @@ func TestUpdateBodiesNamesEveryUpdateType(t *testing.T) {
 	}
 }
 
-// Both indexes are read by POSITION, so they have to be the ones the helpers
-// declare. Reading the wrong argument as the method would classify no request
-// as a PATCH, and the guard would pass having checked nothing.
-func TestRequestBodyMatchesTheHelpersSignatures(t *testing.T) {
+// Both indexes are read by POSITION, and the table is closed, so each has to be
+// held to the source. Reading the wrong argument as the method would classify
+// no request as a PATCH, and a body-sending helper missing from the table would
+// not be read at all; either way the guard passes having checked nothing.
+//
+// What a helper sends is read off its call to doRaw rather than off a
+// parameter's name: a helper that hands doRaw nil sends no body, and one that
+// hands it a parameter sends that parameter.
+func TestRequestBodyNamesEveryHelperThatSendsOne(t *testing.T) {
 	methods := declaredMethods(parsePackageSource(t))
+	raw, ok := methods["Client.doRaw"]
+	if !ok {
+		t.Fatal("Client.doRaw is not declared; the transport this guard reads has moved")
+	}
+	if names := paramNames(raw.decl.Type.Params); len(names) <= rawBodyArg ||
+		names[rawBodyArg] != "body" || names[rawMethodArg] != "method" {
+		t.Fatalf("doRaw's parameters are %v; rawBodyArg and rawMethodArg must index body and method", names)
+	}
+
+	allowed := rawTransport["doRaw"]
 	for _, helper := range sortedIntKeys(requestBody) {
-		fn, ok := methods["Client."+helper]
-		if !ok {
-			t.Errorf("Client.%s is not declared; requestBody names a helper that no longer exists", helper)
-			continue
-		}
-		names := paramNames(fn.decl.Type.Params)
-		if idx := requestBody[helper]; idx >= len(names) || names[idx] != "body" {
-			t.Errorf("requestBody[%q] = %d, but Client.%s's parameters are %v", helper, idx, helper, names)
-		}
-		if requestMethodArg >= len(names) || names[requestMethodArg] != "method" {
-			t.Errorf("requestMethodArg = %d, but Client.%s's parameters are %v", requestMethodArg, helper, names)
+		if !allowed["Client."+helper] {
+			t.Errorf("requestBody names %s, which rawTransport does not allow to call doRaw", helper)
 		}
 	}
+	for _, label := range sortedKeys(allowed) {
+		fn, ok := methods[label]
+		if !ok {
+			t.Errorf("rawTransport allows %s to call doRaw, and it is not declared", label)
+			continue
+		}
+		helper := fn.decl.Name.Name
+		body, why := helperBody(fn.decl)
+		idx, listed := requestBody[helper]
+		switch {
+		case why != "":
+			t.Errorf("%s: %s", label, why)
+		case body < 0 && listed:
+			t.Errorf("requestBody lists %s, which hands doRaw no body", helper)
+		case body >= 0 && !listed:
+			t.Errorf("%s hands doRaw a body and is not in requestBody, so a PATCH sent through it is "+
+				"checked by nothing. Add it, at index %d", label, body)
+		case body >= 0 && idx != body:
+			t.Errorf("requestBody[%q] = %d, but %s hands doRaw its parameter %d", helper, idx, label, body)
+		}
+	}
+}
+
+// helperBody reads which parameter a transport helper hands doRaw as the
+// request body: its index, or -1 for nil. It also requires the method doRaw is
+// handed to be the helper's parameter at requestMethodArg, since that is the
+// argument TestEveryPatchBodyIsAnUpdateType reads at the helper's call sites.
+func helperBody(fn *ast.FuncDecl) (int, string) {
+	params := paramNames(fn.Type.Params)
+	indexOf := func(e ast.Expr) int {
+		if ident, ok := unparen(e).(*ast.Ident); ok {
+			for i, name := range params {
+				if name == ident.Name {
+					return i
+				}
+			}
+		}
+		return -2
+	}
+	body, calls := -1, 0
+	var why string
+	ast.Inspect(fn, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "doRaw" {
+			return true
+		}
+		calls++
+		if len(call.Args) <= rawBodyArg {
+			why = "calls doRaw with too few arguments to read its body"
+			return false
+		}
+		if isIdent(call.Args[rawBodyArg], "nil") {
+			return true
+		}
+		if body = indexOf(call.Args[rawBodyArg]); body < 0 {
+			why = "hands doRaw a body that is not one of its parameters, so what it sends is decided here"
+			return false
+		}
+		if indexOf(call.Args[rawMethodArg]) != requestMethodArg {
+			why = "hands doRaw a method that is not its parameter " + strconv.Itoa(requestMethodArg) +
+				", where TestEveryPatchBodyIsAnUpdateType reads it"
+		}
+		return false
+	})
+	switch {
+	case why != "":
+		return 0, why
+	case calls != 1:
+		return 0, "calls doRaw " + strconv.Itoa(calls) + " times; this guard reads a helper with exactly one call"
+	}
+	return body, ""
 }
 
 // --- omitzero, in every shipped struct ------------------------------------------
@@ -283,6 +376,11 @@ func updateTypeProblems(name string, spec *ast.TypeSpec, methods methodSet) []st
 			"by value, and a pointer method is not in a value's method set, so encoding/json skips it "+
 			"without an error and sends the tag encoding instead")
 	}
+	if declared && (len(paramTypes(marshal.decl.Type)) != 0 ||
+		strings.Join(resultTypes(marshal.decl.Type), ", ") != "[]byte, error") {
+		out = append(out, name+" declares a MarshalJSON that is not func() ([]byte, error), so it does "+
+			"not satisfy json.Marshaler and encoding/json ignores it")
+	}
 	if len(metadata) > 0 && !declared {
 		out = append(out, name+" carries Metadata ("+strings.Join(metadata, ", ")+") and declares no "+
 			"MarshalJSON. omitempty drops an empty map, so Metadata{} never reaches the server and the "+
@@ -300,6 +398,9 @@ func updateFieldProblems(typeName string, field *ast.Field) (key string, metadat
 			"which this guard does not follow"}
 	}
 	label := typeName + "." + fieldLabel(field)
+	if !field.Names[0].IsExported() {
+		problems = append(problems, label+" is unexported, so encoding/json never sends it")
+	}
 	if len(field.Names) > 1 {
 		problems = append(problems, label+" are declared together, so they share one tag and one "+
 			"json key; encoding/json drops every field of a duplicated key, so none is sent")
@@ -483,7 +584,7 @@ func bodyType(arg ast.Expr, scope *ast.FuncDecl) (string, string) {
 	switch x := expr.(type) {
 	case *ast.CompositeLit:
 		if name := namedType(x.Type); name != "" {
-			return name, ""
+			return checkedBodyType(name, scope)
 		}
 	case *ast.Ident:
 		if x.Name == "nil" {
@@ -494,12 +595,23 @@ func bodyType(arg ast.Expr, scope *ast.FuncDecl) (string, string) {
 			return "", "is " + x.Name + ", declared " + strconv.Itoa(len(decls)) + " times in this function, " +
 				"and only a single declaration is resolved without scope analysis"
 		}
-		if name := declaredType(x.Name, decls[0]); name != "" {
-			return name, ""
+		name := declaredType(x.Name, decls[0])
+		if name == "" {
+			return "", "is " + x.Name + ", declared with a type that is not a plain name"
 		}
-		return "", "is " + x.Name + ", declared with a type that is not a plain name"
+		return checkedBodyType(name, scope)
 	}
 	return "", "is " + exprString(arg) + ", an expression this guard cannot name"
+}
+
+// checkedBodyType refuses a body type declared inside the function. Such a type
+// shadows the package's type of that name, and this guard resolves by bare name
+// against the package's, so it would credit the guarded declaration instead.
+func checkedBodyType(name string, scope *ast.FuncDecl) (string, string) {
+	if declaresType(scope, name) {
+		return "", "is a " + name + ", a type declared inside this function, which this guard would confuse with the package's"
+	}
+	return name, ""
 }
 
 // declaredType reads the named type one declaration gives name: a parameter's,
@@ -684,6 +796,14 @@ func TestUpdateProblemsRefuseAFieldThatCannotBeLeftOut(t *testing.T) {
 		{name: "not a struct", src: "type AUpdate map[string]interface{}", want: 1, mention: "not a struct"},
 		{name: "an unexported *Update is read too", src: "type scopeUpdate struct { Name string `json:\"name,omitempty\"` }",
 			want: 1, mention: "scopeUpdate.Name"},
+		{name: "an unexported field", src: "type AUpdate struct { name *string `json:\"name,omitempty\"` }",
+			want: 1, mention: "unexported"},
+		{name: "a MarshalJSON with no error result", src: "type AUpdate struct { Metadata Metadata `json:\"metadata,omitempty\"` }\n" +
+			"func (u AUpdate) MarshalJSON() []byte { return nil }",
+			want: 1, mention: "json.Marshaler"},
+		{name: "a MarshalJSON taking an argument", src: "type AUpdate struct { Name *string `json:\"name,omitempty\"` }\n" +
+			"func (u AUpdate) MarshalJSON(indent bool) ([]byte, error) { return nil, nil }",
+			want: 1, mention: "json.Marshaler"},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -800,6 +920,14 @@ func TestPatchBodiesFindsEveryPatch(t *testing.T) {
 			problems: 1,
 		},
 		{
+			name: "a local type shadowing the package's",
+			src: `func (s *S) Patch(ctx context.Context) error {
+				type TagUpdate struct { Name string ` + "`json:\"name\"`" + ` }
+				return s.client.do(ctx, http.MethodPatch, "/t", nil, TagUpdate{})
+			}`,
+			problems: 1,
+		},
+		{
 			name:     "a body this guard cannot name",
 			src:      `func (s *S) Patch(ctx context.Context) error { return s.client.do(ctx, http.MethodPatch, "/t", nil, s.body()) }`,
 			problems: 1,
@@ -838,6 +966,51 @@ func TestPatchBodiesFindsEveryPatch(t *testing.T) {
 			}
 			if len(problems) != tc.problems {
 				t.Errorf("got %d problem(s), want %d:\n%s", len(problems), tc.problems, strings.Join(problems, "\n"))
+			}
+		})
+	}
+}
+
+func TestHelperBodyReadsWhatAHelperHandsDoRaw(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want int
+		why  string // a substring of the refusal; "" means none
+	}{
+		{"a body parameter", `func (c *Client) do(ctx context.Context, method, path string, q url.Values, body interface{}) error {
+			_, _, err := c.doRaw(ctx, method, path, q, body); return err }`, 4, ""},
+		// The parameter's NAME is not the rule: what is handed to doRaw is.
+		{"a body under another name", `func (c *Client) send(ctx context.Context, method string, payload interface{}) error {
+			_, _, err := c.doRaw(ctx, method, "/t", nil, payload); return err }`, 2, ""},
+		{"nil", `func (c *Client) doList(ctx context.Context, method, path string, q url.Values, out interface{}) error {
+			_, _, err := c.doRaw(ctx, method, path, q, nil); return err }`, -1, ""},
+		{"a body built inside the helper", `func (c *Client) send(ctx context.Context, method string) error {
+			_, _, err := c.doRaw(ctx, method, "/t", nil, TagPatch{}); return err }`, 0, "not one of its parameters"},
+		{"a method that is not the method parameter", `func (c *Client) send(ctx context.Context, body interface{}) error {
+			_, _, err := c.doRaw(ctx, http.MethodPatch, "/t", nil, body); return err }`, 0, "method"},
+		{"no call", `func (c *Client) send(ctx context.Context) error { return nil }`, 0, "0 times"},
+		{"two calls", `func (c *Client) send(ctx context.Context, method string, body interface{}) error {
+			c.doRaw(ctx, method, "/a", nil, body); _, _, err := c.doRaw(ctx, method, "/b", nil, body); return err }`, 0, "2 times"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			files := parseFixture(t, "package octonomy\n"+tc.src)
+			var fn *ast.FuncDecl
+			for _, decl := range files["fixture.go"].Decls {
+				if d, ok := decl.(*ast.FuncDecl); ok {
+					fn = d
+				}
+			}
+			got, why := helperBody(fn)
+			if tc.why != "" {
+				if !strings.Contains(why, tc.why) {
+					t.Errorf("refusal %q, want one mentioning %q", why, tc.why)
+				}
+				return
+			}
+			if why != "" || got != tc.want {
+				t.Errorf("got %d (%q), want %d", got, why, tc.want)
 			}
 		})
 	}

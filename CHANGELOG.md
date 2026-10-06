@@ -19,11 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`TestEveryUpdateFieldCanBeLeftOut`** reads every type named `*Update` from source: each field is
     tagged `omitempty` under a json key of its own, and is a pointer or `Metadata` behind a
     value-receiver `MarshalJSON`; a pointer-receiver `MarshalJSON` is refused.
-    **`TestEveryPatchBodyIsAnUpdateType`** holds every PATCH the package sends to that name, and
-    fails closed on a call it cannot classify.
+    **`TestEveryPatchBodyIsAnUpdateType`** holds every PATCH sent through the transport to that name,
+    and fails closed on a call it cannot classify; which helpers send a body is read off their calls
+    to `doRaw`, so a new one cannot go unread.
   - **`TestUpdateBodiesNamesEveryUpdateType`** holds `update_test.go`'s `updateBodies` table to the
-    source, so its per-field round-trip cannot miss a new `*Update` type, and the `Metadata`
-    three-state check now runs over every `Metadata` field in that table, on the raw bytes.
+    source, so its per-field round-trip cannot miss a new `*Update` type. Each row now pins its wire
+    body as literal JSON spelled from the contract's PATCH schema, since every other comparison there
+    reads the tags under test; each pointer field is also sent alone pointing at its zero value
+    (`Bool(false)` deactivates); a `json.Marshaler` is required only of a type carrying `Metadata`;
+    and the `Metadata` three-state check runs over every `Metadata` field in the table, on raw bytes.
 - **`main`'s test suite, accounted for file by file**
   ([#95](https://github.com/octoverse-id/octonomy-go/issues/95), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests and docs, and `-count=1`

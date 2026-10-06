@@ -33,21 +33,51 @@ type (
 	plainTagAliasUpdate   TagAliasUpdate
 )
 
-// updateBodies pairs each *Update type with its tag-only encoding.
+// updateBodies pairs each *Update type with its tag-only encoding, and with one
+// value of it, every field set, whose wire body is written out by hand.
+//
+// The hand-written body is the one check here that does not read the struct's
+// own tags. A key misspelled the same way on the struct and in its MarshalJSON
+// passes every comparison against the tag encoding -- both sides agree -- and
+// the server ignores the unknown key, so the PATCH changes nothing and answers
+// 200. wire is spelled from the contract's PATCH schema (PatchedTagPatch,
+// PatchedVocabularyPatch, PatchedTagAliasPatch in docs/openapi-v2.yaml), as
+// writebodies_test.go does for every other request body.
 var updateBodies = []struct {
 	name  string
 	typ   reflect.Type
 	plain func(reflect.Value) interface{}
+	full  interface{}
+	wire  string
 }{
-	{"TagUpdate", reflect.TypeOf(TagUpdate{}), func(v reflect.Value) interface{} {
-		return plainTagUpdate(v.Interface().(TagUpdate))
-	}},
-	{"VocabularyUpdate", reflect.TypeOf(VocabularyUpdate{}), func(v reflect.Value) interface{} {
-		return plainVocabularyUpdate(v.Interface().(VocabularyUpdate))
-	}},
-	{"TagAliasUpdate", reflect.TypeOf(TagAliasUpdate{}), func(v reflect.Value) interface{} {
-		return plainTagAliasUpdate(v.Interface().(TagAliasUpdate))
-	}},
+	{
+		name: "TagUpdate", typ: reflect.TypeOf(TagUpdate{}),
+		plain: func(v reflect.Value) interface{} { return plainTagUpdate(v.Interface().(TagUpdate)) },
+		full: TagUpdate{
+			ApplicationID: String("app"), Name: String("n"), Slug: String("s"), Type: String("label"),
+			Description: String("d"), ParentID: String("p"), VocabularyID: String("v"),
+			Metadata: Metadata{"k": "v"}, IsActive: Bool(false),
+		},
+		wire: `{"application_id":"app","name":"n","slug":"s","type":"label","description":"d","parent_id":"p","vocabulary_id":"v","metadata":{"k":"v"},"is_active":false}`,
+	},
+	{
+		name: "VocabularyUpdate", typ: reflect.TypeOf(VocabularyUpdate{}),
+		plain: func(v reflect.Value) interface{} { return plainVocabularyUpdate(v.Interface().(VocabularyUpdate)) },
+		full: VocabularyUpdate{
+			ApplicationID: String("app"), Name: String("n"), Slug: String("s"), Description: String("d"),
+			Metadata: Metadata{"k": "v"}, IsActive: Bool(false),
+		},
+		wire: `{"application_id":"app","name":"n","slug":"s","description":"d","metadata":{"k":"v"},"is_active":false}`,
+	},
+	{
+		name: "TagAliasUpdate", typ: reflect.TypeOf(TagAliasUpdate{}),
+		plain: func(v reflect.Value) interface{} { return plainTagAliasUpdate(v.Interface().(TagAliasUpdate)) },
+		full: TagAliasUpdate{
+			ApplicationID: String("app"), TagID: String("t"), Name: String("n"), Slug: String("s"),
+			Metadata: Metadata{"k": "v"}, IsActive: Bool(false),
+		},
+		wire: `{"application_id":"app","tag_id":"t","name":"n","slug":"s","metadata":{"k":"v"},"is_active":false}`,
+	},
 }
 
 // sampleFor returns a non-zero value for one *Update field, or fails the test
@@ -67,6 +97,26 @@ func sampleFor(t *testing.T, f reflect.StructField) reflect.Value {
 	return reflect.Value{}
 }
 
+// pointeeSamples returns the values one *Update field is set to on its own: the
+// sample above and, for a pointer, a pointer to the ZERO value. Both must be
+// sent. omitempty tests a pointer for nil only, so String("") and Bool(false)
+// are values a caller sets -- Bool(false) is how IsActive deactivates -- and a
+// MarshalJSON that dereferenced the pointer into an omitempty value would drop
+// them while passing every non-zero sample.
+func pointeeSamples(t *testing.T, f reflect.StructField) []fieldSample {
+	t.Helper()
+	out := []fieldSample{{"set", sampleFor(t, f)}}
+	if f.Type.Kind() == reflect.Ptr {
+		out = append(out, fieldSample{"zero pointee", reflect.New(f.Type.Elem())})
+	}
+	return out
+}
+
+type fieldSample struct {
+	label string
+	value reflect.Value
+}
+
 func jsonKey(f reflect.StructField) string {
 	return strings.Split(f.Tag.Get("json"), ",")[0]
 }
@@ -80,44 +130,77 @@ func marshal(t *testing.T, v interface{}) []byte {
 	return b
 }
 
-// The method is in the VALUE's method set. Update takes the struct by value, so
-// a pointer-receiver MarshalJSON would be skipped by encoding/json with no error
-// and every PATCH would fall back to the omitempty encoding.
+// Any MarshalJSON is in the VALUE's method set. Update takes the struct by
+// value, so a pointer-receiver MarshalJSON would be skipped by encoding/json
+// with no error and every PATCH would fall back to the omitempty encoding. A
+// type carrying Metadata must have one, for #37; a type of pointer fields alone
+// needs none, since the tag encoding already sends exactly what was set.
 func TestUpdateMarshalJSON_IsOnTheValueReceiver(t *testing.T) {
 	marshaler := reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+	metadata := reflect.TypeOf(Metadata(nil))
 	for _, body := range updateBodies {
-		if !body.typ.Implements(marshaler) {
-			t.Errorf("%s (the value type) does not implement json.Marshaler; Update passes it by value", body.name)
+		if reflect.PtrTo(body.typ).Implements(marshaler) && !body.typ.Implements(marshaler) {
+			t.Errorf("%s implements json.Marshaler on the pointer only; Update passes it by value", body.name)
+		}
+		for i := 0; i < body.typ.NumField(); i++ {
+			if body.typ.Field(i).Type == metadata && !body.typ.Implements(marshaler) {
+				t.Errorf("%s carries Metadata in %s and does not implement json.Marshaler on the value, "+
+					"so Metadata{} is dropped by omitempty (#37)", body.name, body.typ.Field(i).Name)
+			}
+		}
+	}
+}
+
+// Every field set, against the body written out by hand: the key names come
+// from the contract, not from the tags under test.
+func TestUpdateBodies_WireSpelling(t *testing.T) {
+	for _, body := range updateBodies {
+		v := reflect.ValueOf(body.full)
+		if v.Type() != body.typ {
+			t.Errorf("updateBodies row %s holds a %s in full", body.name, v.Type())
+			continue
+		}
+		for i := 0; i < v.NumField(); i++ {
+			if v.Field(i).IsZero() {
+				t.Errorf("%s.%s is left unset in full; set it and add its key to wire", body.name, v.Type().Field(i).Name)
+			}
+		}
+		if got := marshal(t, body.full); string(got) != body.wire {
+			t.Errorf("%s wire body\n got %s\nwant %s", body.name, got, body.wire)
 		}
 	}
 }
 
 // Set exactly one field and the body carries exactly that key, with the same
 // bytes the struct tags alone produce -- so the method drops no field, renames
-// none, and changes nothing about the fields it was not written for.
+// none, and changes nothing about the fields it was not written for. A pointer
+// field is set twice, once to a pointer to its zero value (pointeeSamples).
 func TestUpdateMarshalJSON_EachFieldAloneIsOneKey(t *testing.T) {
 	for _, body := range updateBodies {
 		for i := 0; i < body.typ.NumField(); i++ {
 			i, f, body := i, body.typ.Field(i), body
-			t.Run(body.name+"."+f.Name, func(t *testing.T) {
-				v := reflect.New(body.typ).Elem()
-				v.Field(i).Set(sampleFor(t, f))
+			for _, sample := range pointeeSamples(t, f) {
+				sample := sample
+				t.Run(body.name+"."+f.Name+"/"+sample.label, func(t *testing.T) {
+					v := reflect.New(body.typ).Elem()
+					v.Field(i).Set(sample.value)
 
-				got := marshal(t, v.Interface())
-				var keys map[string]json.RawMessage
-				if err := json.Unmarshal(got, &keys); err != nil {
-					t.Fatalf("decode %s: %v", got, err)
-				}
-				if len(keys) != 1 {
-					t.Fatalf("setting only %s sent %d keys: %s", f.Name, len(keys), got)
-				}
-				if _, ok := keys[jsonKey(f)]; !ok {
-					t.Errorf("setting only %s sent %s, want the key %q", f.Name, got, jsonKey(f))
-				}
-				if want := marshal(t, body.plain(v)); !bytes.Equal(got, want) {
-					t.Errorf("%s alone: got %s, want the v1.0.0 encoding %s", f.Name, got, want)
-				}
-			})
+					got := marshal(t, v.Interface())
+					var keys map[string]json.RawMessage
+					if err := json.Unmarshal(got, &keys); err != nil {
+						t.Fatalf("decode %s: %v", got, err)
+					}
+					if len(keys) != 1 {
+						t.Fatalf("setting only %s sent %d keys: %s", f.Name, len(keys), got)
+					}
+					if _, ok := keys[jsonKey(f)]; !ok {
+						t.Errorf("setting only %s sent %s, want the key %q", f.Name, got, jsonKey(f))
+					}
+					if want := marshal(t, body.plain(v)); !bytes.Equal(got, want) {
+						t.Errorf("%s alone: got %s, want the v1.0.0 encoding %s", f.Name, got, want)
+					}
+				})
+			}
 		}
 	}
 }
