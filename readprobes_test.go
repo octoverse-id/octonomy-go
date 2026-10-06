@@ -2098,6 +2098,22 @@ func (r *tagReads) Peek() string { return "" }
 			exclusions: cleanProbeExclusions,
 		},
 		{
+			// net/http's constructor with a verb the classifier cannot read.
+			name:       "net/http's request constructor, verb unresolved",
+			swap:       [2]string{"package octonomy\n", "package octonomy\n\nimport \"net/http\"\n"},
+			pkg:        "\ntype AdminClient struct{}\nfunc (a *AdminClient) Build(method string) error {\n\t_, err := http.NewRequest(method, \"/x\", nil)\n\treturn err\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Build reaches the transport",
+		},
+		{
+			name:       "an imported package's NewRequest is not net/http's",
+			swap:       [2]string{"package octonomy\n", "package octonomy\n\nimport fake \"example.com/fake\"\n"},
+			pkg:        "\ntype AdminClient struct{}\nfunc (a *AdminClient) Build(method string) error {\n\t_, err := fake.NewRequest(method, \"/x\", nil)\n\treturn err\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+		},
+		{
 			name:       "another package's NewRequest is not net/http's",
 			pkg:        "\ntype AdminClient struct{}\nfunc (a *AdminClient) Build() error {\n\t_, err := fake.NewRequest(\"GET\", \"/x\", nil)\n\treturn err\n}\n",
 			entries:    cleanProbeEntries,
