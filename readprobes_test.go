@@ -1447,9 +1447,8 @@ func mayBeTestingT(x ast.Expr, info *types.Info) bool {
 	if typ == nil {
 		return true
 	}
-	if ptr, ok := typ.Underlying().(*types.Pointer); ok {
-		typ = ptr.Elem()
-	}
+	// No pointer to look through: a pointer to an import's type is itself
+	// invalid here, and a pointer to an interface has no Parallel method.
 	switch under := typ.Underlying().(type) {
 	case *types.Interface:
 		return true
@@ -2090,6 +2089,15 @@ func (r *tagReads) Peek() string { return "" }
 			pkg:        "\ntype AdminClient struct{}\ntype memo struct{}\nfunc newMemo() *memo { return &memo{} }\nfunc (m *memo) do(ctx context.Context) error { return nil }\nfunc (a *AdminClient) Warm(ctx context.Context) error {\n\tcache := newMemo()\n\treturn cache.do(ctx)\n}\n",
 			entries:    cleanProbeEntries,
 			exclusions: cleanProbeExclusions,
+		},
+		{
+			// A transport helper's name on an interface's method is taken at its
+			// word: what holds the interface may be the client.
+			name:       "a transport name through an interface",
+			pkg:        "\ntype lister interface{ doList(ctx context.Context, method, path string) error }\ntype AdminClient struct{ l lister }\nfunc (a *AdminClient) Recent(ctx context.Context, method string) error {\n\treturn a.l.doList(ctx, method, \"/audit-logs\")\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport",
 		},
 		{
 			name:       "a do on a receiver of another type is not the transport",
