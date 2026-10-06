@@ -578,6 +578,9 @@ func patchBody(sel *ast.SelectorExpr, call *ast.CallExpr, fn *ast.FuncDecl, type
 
 // isPatch reads a request's method argument: an http.Method constant or a
 // string literal. Anything else -- a variable, a parameter -- could be PATCH.
+// It takes `http` to be net/http by name, without resolving it: a value named
+// http whose MethodPost field holds "PATCH" would read as a POST. That is
+// deliberate evasion, not a mistake, and is left as a known limit.
 func isPatch(arg ast.Expr) (bool, string) {
 	switch a := unparen(arg).(type) {
 	case *ast.SelectorExpr:
