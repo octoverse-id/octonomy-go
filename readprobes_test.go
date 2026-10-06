@@ -62,6 +62,8 @@ var readProbeExclusions = map[string]string{
 		"it sends no X-Namespace-* headers and reads no rows, so \"can merchant A see a " +
 		"merchant B row\" is not a question it can be asked",
 	"Health.Ready": "same as Health.Live -- the other half of the same unauthenticated probe pair",
+	"Client.APIVersion": "an accessor: it returns the API version the client was built with and sends " +
+		"no request, so it has no row to show anyone",
 }
 
 // Every read method this SDK exposes needs a probe in readProbes.
@@ -87,11 +89,16 @@ var readProbeExclusions = map[string]string{
 // credited. An indirect read shape it does not recognize -- a function variable,
 // a method value, a closure invoked in place -- classifies as unknown and fails
 // closed, except in one corner: a method that ALSO issues a recognized write is
-// classified by that write, and the unrecognized read is not reported. And
-// services are found by the concrete `*FooService` spelling this package uses;
-// an aliased one would not be seen. None of these has a path in this repository
-// today, and each is a reason to extend the guard rather than to trust it past
-// its edge.
+// classified by that write, and the unrecognized read is not reported. None of
+// these has a path in this repository today, and each is a reason to extend the
+// guard rather than to trust it past its edge.
+//
+// THE SURFACE IT READS is the exported methods declared on Client and on each
+// *FooService an exported Client field holds. Everything else that would put a
+// method in a caller's hands is refused rather than read (surfaceShapeProblems):
+// an embedded field in Client or a service, an aliased or non-struct service,
+// an exported Client field of any other type, and an exported field on a
+// service.
 func TestEveryReadMethodHasANamespaceProbe(t *testing.T) {
 	files := parsePackageSource(t)
 	suite := parseFileOrFatal(t, integrationSuiteFile)
@@ -150,21 +157,29 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 	writes := map[string]bool{}
 	unknown := map[string]bool{}
 	exported := map[string]bool{}
+	record := func(qualified string, decl *ast.FuncDecl) {
+		exported[qualified] = true
+		switch classify(decl, index) {
+		case verbRead:
+			reads[qualified] = true
+		case verbWrite:
+			writes[qualified] = true
+		case verbUnknown:
+			unknown[qualified] = true
+		}
+	}
 	for service, field := range fields {
 		for name, decl := range methods[service] {
-			if !ast.IsExported(name) {
-				continue
+			if ast.IsExported(name) {
+				record(field+"."+name, decl)
 			}
-			qualified := field + "." + name
-			exported[qualified] = true
-			switch classify(decl, index) {
-			case verbRead:
-				reads[qualified] = true
-			case verbWrite:
-				writes[qualified] = true
-			case verbUnknown:
-				unknown[qualified] = true
-			}
+		}
+	}
+	// Client's own exported methods are surface too: a client.Ping would reach
+	// the server through no service at all. A probe calls one as c.Ping(…).
+	for key, decl := range index {
+		if name := strings.TrimPrefix(key, "Client."); name != key && decl.Recv != nil && ast.IsExported(name) {
+			record(key, decl)
 		}
 	}
 
@@ -204,7 +219,7 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 		if _, excluded := exclusions[name]; probed[name] || excluded {
 			continue
 		}
-		problems = append(problems, name+" is an exported service method the guard could not classify -- it "+
+		problems = append(problems, name+" is an exported method the guard could not classify -- it "+
 			"reaches no HTTP verb through any call this parser follows. Either it issues no request (say so "+
 			"in readProbeExclusions) or the classifier cannot see its verb, in which case fix the classifier "+
 			"rather than the method: an unclassified read needs no probe and says nothing, which is the "+
@@ -265,25 +280,47 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 }
 
 // surfaceShapeProblems fails closed on every way a caller can reach a method
-// serviceMethods does not list: a service type that is not a struct declared
-// in this package, an alias, or a struct embedding a field -- and a Client
-// embedding one, whose methods are then promoted onto Client itself.
+// readProbeProblems does not list. It reads the methods declared on Client and
+// on each *FooService an exported Client field holds, so anything else that
+// would hand a caller a method is refused: an embedded field in Client or in a
+// service, whose methods are promoted; an aliased service, whose methods are
+// declared under another name; a service that is not a struct declared here; an
+// exported Client field of any other type -- an interface, a func, another
+// package's service; and an exported field on a service, reachable as
+// client.Tags.Search.
 func surfaceShapeProblems(pkg map[string]*ast.File, fields map[string]string) []string {
 	var problems []string
 	types := indexTypes(pkg)
-	embedded := func(owner string, st *ast.StructType) {
+	check := func(owner string, st *ast.StructType, reads func(ast.Expr) bool) {
 		for _, field := range st.Fields.List {
 			if len(field.Names) == 0 {
 				problems = append(problems, owner+" embeds "+exprString(field.Type)+", whose promoted methods are "+
 					"part of the read surface a caller has and are not read by this guard. Declare the methods "+
 					"on the service, or teach the guard the promoted method set")
+				continue
+			}
+			for _, name := range field.Names {
+				if ast.IsExported(name.Name) && !reads(field.Type) {
+					problems = append(problems, owner+"."+name.Name+" is an exported "+typeDescription(field.Type)+
+						", and a method a caller reaches through it is part of the read surface this guard does "+
+						"not read. Hold it as a *FooService on Client, or teach the guard the shape")
+				}
 			}
 		}
 	}
-	if spec, ok := types["Client"]; ok {
-		if st, ok := unparen(spec.Type).(*ast.StructType); ok {
-			embedded("Client", st)
-		}
+	if spec, ok := types["Client"]; !ok {
+		problems = append(problems, "the package declares no Client, so the guard has no surface to read")
+	} else if st, ok := unparen(spec.Type).(*ast.StructType); ok && !spec.Assign.IsValid() {
+		check("Client", st, func(typ ast.Expr) bool {
+			star, ok := unparen(typ).(*ast.StarExpr)
+			if !ok {
+				return false
+			}
+			ident, ok := unparen(star.X).(*ast.Ident)
+			return ok && strings.HasSuffix(ident.Name, "Service")
+		})
+	} else {
+		problems = append(problems, "Client is not a struct declared in this package, so the guard cannot read its fields")
 	}
 	for _, service := range stringKeys(fields) {
 		spec, ok := types[service]
@@ -301,10 +338,22 @@ func surfaceShapeProblems(pkg map[string]*ast.File, fields map[string]string) []
 					"caller reaches through Client."+fields[service])
 				continue
 			}
-			embedded(service, st)
+			check(service, st, func(ast.Expr) bool { return false })
 		}
 	}
 	return problems
+}
+
+// typeDescription names a field's type for a message, where exprString would
+// render an interface or a func as "?".
+func typeDescription(typ ast.Expr) string {
+	switch unparen(typ).(type) {
+	case *ast.InterfaceType:
+		return "interface"
+	case *ast.FuncType:
+		return "func"
+	}
+	return exprString(typ)
 }
 
 // --- classifying a method by the verb it sends ---------------------------------
@@ -652,7 +701,8 @@ func probesIn(file *ast.File, path string) ([]probe, []string) {
 }
 
 // closureClientCalls collects the "Field.Method" of every call a probe's find
-// closure makes ON ITS OWN CLIENT PARAMETER -- what the probe actually
+// closure makes ON ITS OWN CLIENT PARAMETER -- "Client.Method" for a method
+// declared on Client itself -- what the probe actually
 // exercises, as opposed to what its name says it does.
 //
 // Binding to the closure's own client PARAMETER matters: matching any
@@ -697,6 +747,11 @@ func closureClientCalls(entry *ast.CompositeLit, field string) map[string]bool {
 			}
 			outer, ok := unparen(call.Fun).(*ast.SelectorExpr)
 			if !ok {
+				return true
+			}
+			// c.Ping(…): a method declared on Client itself.
+			if isIdent(outer.X, client) {
+				out["Client."+outer.Sel.Name] = true
 				return true
 			}
 			inner, ok := unparen(outer.X).(*ast.SelectorExpr)
@@ -1343,6 +1398,13 @@ func probeEntry(name, call string) string {
 `
 }
 
+// clientPing is a read declared on Client itself, reached as client.Ping.
+const clientPing = `
+func (c *Client) Ping(ctx context.Context) error {
+	return c.do(ctx, http.MethodGet, "/ping", nil, nil)
+}
+`
+
 var (
 	cleanProbeEntries    = probeEntry("Tags.List", "Tags.List") + probeEntry("Tags.Get", "Tags.Get")
 	cleanProbeExclusions = map[string]string{"Health.Live": "unauthenticated and outside the namespace axis"}
@@ -1421,6 +1483,66 @@ func (r *tagReads) Peek(ctx context.Context) error {
 			want:       "HealthService is an alias",
 		},
 		{
+			name:       "a read on Client itself",
+			pkg:        clientPing,
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "Client.Ping issues a read and has no probe",
+		},
+		{
+			name:       "a read on Client itself, probed",
+			pkg:        clientPing,
+			entries:    cleanProbeEntries + probeEntry("Client.Ping", "Ping"),
+			exclusions: cleanProbeExclusions,
+		},
+		{
+			name:       "an accessor on Client that sends nothing",
+			pkg:        "\nfunc (c *Client) Version() string { return \"v\" }\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "Client.Version is an exported method the guard could not classify",
+		},
+		{
+			name:       "an accessor on Client, excluded with its reason",
+			pkg:        "\nfunc (c *Client) Version() string { return \"v\" }\n",
+			entries:    cleanProbeEntries,
+			exclusions: map[string]string{"Health.Live": "outside the axis", "Client.Version": "sends no request"},
+		},
+		{
+			name:       "an interface on Client",
+			swap:       [2]string{"\tHealth *HealthService\n}", "\tHealth *HealthService\n\tReader interface{ Get(ctx context.Context) error }\n}"},
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "Client.Reader is an exported interface",
+		},
+		{
+			name:       "a func on Client",
+			swap:       [2]string{"\tHealth *HealthService\n}", "\tHealth *HealthService\n\tFetch  func(ctx context.Context) error\n}"},
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "Client.Fetch is an exported func",
+		},
+		{
+			name:       "another package's service on Client",
+			swap:       [2]string{"\tHealth *HealthService\n}", "\tHealth *HealthService\n\tRemote *remote.TagService\n}"},
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "Client.Remote is an exported *remote.TagService",
+		},
+		{
+			name:       "a service nested in a service",
+			swap:       [2]string{"type TagService struct{ client *Client }", "type TagService struct {\n\tclient *Client\n\tSearch *SearchService\n}\ntype SearchService struct{ client *Client }"},
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "TagService.Search is an exported *SearchService",
+		},
+		{
+			name:       "an unexported field on Client is not surface",
+			swap:       [2]string{"\tHealth *HealthService\n}", "\tHealth *HealthService\n\tcache  map[string]string\n}"},
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+		},
+		{
 			name:       "a duplicate name",
 			entries:    cleanProbeEntries + probeEntry("Tags.List", "Tags.List"),
 			exclusions: cleanProbeExclusions,
@@ -1443,7 +1565,7 @@ func (r *tagReads) Peek(ctx context.Context) error {
 			pkg:        unclassifiable,
 			entries:    cleanProbeEntries,
 			exclusions: cleanProbeExclusions,
-			want:       "Tags.Peek is an exported service method the guard could not classify",
+			want:       "Tags.Peek is an exported method the guard could not classify",
 		},
 		{
 			name:       "the unresolved method, probed, is covered",

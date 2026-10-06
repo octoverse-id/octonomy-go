@@ -279,8 +279,11 @@ stays a faithful, ergonomic client.
   method whose verb it cannot resolve fails too — unless it is probed or excluded — rather than
   passing as "not a read": treating the unknown case as silence is the defect the guard exists to
   prevent. A read that genuinely cannot leak across namespaces goes in `readProbeExclusions` with its
-  reason, never in silence. On this line a new transport helper on `*Client` that takes the verb
-  goes in `transportCalls` with the index of its `method` parameter;
+  reason, never in silence. The surface it reads is the exported methods declared on `Client` and on
+  each `*FooService` an exported `Client` field holds; any other shape that would hand a caller a
+  method — an embedded field, an aliased service, an exported `Client` field of another type, an
+  exported field on a service — fails it rather than going unread. On this line a new transport helper
+  on `*Client` that takes the verb goes in `transportCalls` with the index of its `method` parameter;
   `TestTransportCallsMatchTheHelpersSignatures` holds the table to `transport.go`.
 - **Which harness token a test uses IS the test.** The wildcard grant matches every partition,
   global included, so under it authorization never refuses anything — it can only demonstrate the

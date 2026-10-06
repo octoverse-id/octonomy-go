@@ -30,7 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`TestEveryReadMethodHasANamespaceProbe`** (`readprobes_test.go`, no build tag) reads the source
     and fails on a read method with no probe or argued exclusion, a probe naming a method that does
     not exist or calling another than its name, a duplicate, a stale or unargued exclusion, and a
-    method whose verb it cannot resolve. Rewritten from `main`'s for this line's transport calls, with
+    method whose verb it cannot resolve. It reads `Client`'s own exported methods as well as each
+    service's, and fails on any other shape that would hand a caller a method it does not read — an
+    embedded or aliased service, another exported field on `Client`, an exported field on a service. Rewritten from `main`'s for this line's transport calls, with
     a fixture per condition. **`TestTheIsolationSuiteRunsItsProbes`** holds the suite to what makes
     it run — its build tag, its prefix, one skip behind the required gate, the matrix ranging over
     `readProbes` — and each isolation test to its runs under an exact grant, since under the wildcard

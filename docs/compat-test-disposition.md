@@ -202,7 +202,10 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   parameter `transport.go` names `method`. The guard is a function of the parsed source here, so each
   condition it must fail on — a read with no probe, a probe naming a missing method, a probe whose
   `find` calls another endpoint, a duplicate, a stale or unargued exclusion, an unresolvable verb —
-  has a fixture of its own against a clean one (`TestReadProbeGuardFailsOnEachCondition`). And one
+  has a fixture of its own against a clean one (`TestReadProbeGuardFailsOnEachCondition`). Unlike
+  `main`'s, it reads `Client`'s own exported methods too, and fails closed on any shape that would
+  hand a caller a method it does not read: an embedded field, an aliased service, an exported
+  `Client` field that is not a `*FooService`, an exported field on a service. And one
   half is new, because the table has to RUN: `TestTheIsolationSuiteRunsItsProbes` holds the isolation
   suite to the runners' tag and `^TestIntegration_` prefix, `loadHarness`'s skip to `newSmokeClient`'s
   required-gate shape, `runProbeMatrix` to ranging over `readProbes`, and each isolation test to the

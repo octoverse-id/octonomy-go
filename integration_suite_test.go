@@ -79,12 +79,16 @@ type readProbe struct {
 type filteredOutcome int
 
 const (
-	// filteredEmpty: 200 with the row simply absent. Every list and filter
-	// route, plus the audit routes, which query by id without loading the row.
+	// filteredEmpty: 200 with the row simply absent. A collection or filter
+	// route that does not first load a parent by id -- Tags.List, Aliases.List,
+	// Vocabularies.List, Resources.ListTags -- and the audit routes, which
+	// query by id without loading the row.
 	filteredEmpty filteredOutcome = iota
 
-	// filteredNotFound: 404 not_found. A row addressed by id -- or a route whose
-	// PARENT is addressed by id, which is refused the same way.
+	// filteredNotFound: 404 not_found. A row addressed by id -- or a list route
+	// whose PARENT is addressed by id (a tag's aliases, a tag's resources),
+	// which resolves the parent in the caller's scope first and is refused the
+	// same way.
 	filteredNotFound
 
 	// filteredValidation: 400 validation_error. Resolution only, and
@@ -380,9 +384,10 @@ const (
 	outcomeVisible outcome = iota
 
 	// outcomeFiltered: the request is AUTHORIZED and the row must not be in the
-	// result. The server may answer 200-with-the-row-absent (every list route)
-	// or refuse the row by id (404 not_found, or 400 validation_error on
-	// resolution) -- but nothing else. Accepting "any error" here is how this
+	// result. The server may answer 200-with-the-row-absent (a collection or
+	// filter route) or refuse the row, or its parent, by id (404 not_found, or
+	// 400 validation_error on resolution) -- but only the one answer the probe
+	// declares, and nothing else. Accepting "any error" here is how this
 	// assertion would come to pass against a crashed container; see
 	// requireFilteredOutcome.
 	outcomeFiltered
