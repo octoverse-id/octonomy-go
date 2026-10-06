@@ -424,9 +424,10 @@ type probeRun struct {
 // on, and the thirteenth is where the leak lives.
 //
 // The subtests are sequential -- no t.Parallel -- which is what lets the
-// fixtures' teardown sit in the root test's defer (rule 2 of the t.Cleanup
-// replacement model): a sequential t.Run returns only after its subtest
-// finishes.
+// fixtures' teardown sit in the root test's defer: the stack seed pushes onto
+// is rule 3 of the t.Cleanup replacement model, and its one defer in the root
+// test's body is rule 2, which holds because a sequential t.Run returns only
+// after its subtest finishes.
 func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
 	t.Helper()
 

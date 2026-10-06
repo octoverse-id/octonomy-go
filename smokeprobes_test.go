@@ -422,6 +422,7 @@ var skipMethods = map[string]bool{"Skip": true, "Skipf": true, "SkipNow": true}
 type smokeHelpers struct {
 	declared map[string]*ast.FuncDecl
 	methods  map[string]*ast.FuncDecl
+	types    map[string]*ast.TypeSpec // the type declarations of the files read
 	skips    map[string]bool
 	gate     string
 }
@@ -438,8 +439,17 @@ func readSmokeHelpers(file *ast.File) smokeHelpers {
 // isolation suite's gate is loadHarness, and its helpers span two files
 // (TestTheIsolationSuiteRunsItsProbes, readprobes_test.go).
 func readGateHelpers(decls []ast.Decl, gate string) smokeHelpers {
-	h := smokeHelpers{declared: map[string]*ast.FuncDecl{}, methods: map[string]*ast.FuncDecl{}, skips: map[string]bool{}, gate: gate}
+	h := smokeHelpers{declared: map[string]*ast.FuncDecl{}, methods: map[string]*ast.FuncDecl{},
+		types: map[string]*ast.TypeSpec{}, skips: map[string]bool{}, gate: gate}
 	for _, decl := range decls {
+		if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE {
+			for _, spec := range gen.Specs {
+				if ts, ok := spec.(*ast.TypeSpec); ok {
+					h.types[ts.Name.Name] = ts
+				}
+			}
+			continue
+		}
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
 			continue

@@ -446,16 +446,23 @@ func reachesTransport(fn *ast.FuncDecl, index funcIndex, types typeIndex, seen m
 		switch e := n.(type) {
 		case *ast.SelectorExpr:
 			selNames[e.Sel] = true
-			typ, resolved := exprType(fn, e.X, types)
+			typ, resolved := exprType(fn, e.X, types, index)
+			owner := ""
+			if resolved {
+				// Promotion: a method or field T does not declare may be one
+				// an embedded field of T does -- `struct{ *Client }` hands its
+				// wrapper every Client method.
+				owner = promotedOwner(typ, e.Sel.Name, types, index)
+			}
 			if t, ok := transportCalls[e.Sel.Name]; ok {
-				if (t.shape == "http" && isIdent(e.X, "http")) || (t.shape == "client" && (!resolved || typ == "Client")) {
+				if (t.shape == "http" && isIdent(e.X, "http")) || (t.shape == "client" && (!resolved || owner == "Client")) {
 					found = true
 					return false
 				}
 			}
 			switch {
 			case resolved:
-				follow(index[typ+"."+e.Sel.Name])
+				follow(index[owner+"."+e.Sel.Name])
 			default:
 				callee := resolveCallee(e, recv, recvType, index)
 				if callee == nil {
@@ -479,9 +486,11 @@ func reachesTransport(fn *ast.FuncDecl, index funcIndex, types typeIndex, seen m
 
 // exprType names the declared type of x inside fn, stars stripped, when it can
 // be sure of it: an identifier declared once and never reassigned -- a
-// receiver, a parameter, `var x T`, `x := T{}` or `&T{}` -- or a field selected
-// off one, read from the struct's declaration. Anything else is unresolved.
-func exprType(fn *ast.FuncDecl, x ast.Expr, types typeIndex) (string, bool) {
+// receiver, a parameter, `var x T`, `x := T{}` or `&T{}`, or `x := newT(…)` with
+// newT a package function returning one T -- or a field selected off one, read
+// from the struct's declaration and, for a field it does not declare, its
+// embedded fields'. Anything else is unresolved.
+func exprType(fn *ast.FuncDecl, x ast.Expr, types typeIndex, index funcIndex) (string, bool) {
 	switch e := unparen(x).(type) {
 	case *ast.Ident:
 		decls := declarationsOf(e.Name, fn)
@@ -512,30 +521,100 @@ func exprType(fn *ast.FuncDecl, x ast.Expr, types typeIndex) (string, bool) {
 				if lit, ok := value.(*ast.CompositeLit); ok {
 					return declaredTypeName(lit.Type)
 				}
+				if call, ok := value.(*ast.CallExpr); ok {
+					callee, ok := unparen(call.Fun).(*ast.Ident)
+					if !ok || len(declarationsOf(callee.Name, fn)) > 0 {
+						return "", false
+					}
+					if f := index[callee.Name]; f != nil && f.Recv == nil {
+						if results := fieldTypeExprs(f.Type.Results); len(results) == 1 {
+							return declaredTypeName(results[0])
+						}
+					}
+				}
 			}
 		}
 	case *ast.SelectorExpr:
-		owner, ok := exprType(fn, e.X, types)
+		owner, ok := exprType(fn, e.X, types, index)
 		if !ok {
 			return "", false
 		}
-		spec, ok := types[owner]
-		if !ok {
-			return "", false
+		return fieldTypeOf(owner, e.Sel.Name, types, map[string]bool{})
+	}
+	return "", false
+}
+
+// fieldTypeOf names the type of field name on struct type owner, looking
+// through embedded fields as Go's selector does.
+func fieldTypeOf(owner, name string, types typeIndex, seen map[string]bool) (string, bool) {
+	spec, ok := types[owner]
+	if !ok || seen[owner] {
+		return "", false
+	}
+	seen[owner] = true
+	st, ok := unparen(spec.Type).(*ast.StructType)
+	if !ok {
+		return "", false
+	}
+	for _, field := range st.Fields.List {
+		for _, n := range field.Names {
+			if n.Name == name {
+				return declaredTypeName(field.Type)
+			}
 		}
-		st, ok := unparen(spec.Type).(*ast.StructType)
-		if !ok {
-			return "", false
-		}
-		for _, field := range st.Fields.List {
-			for _, name := range field.Names {
-				if name.Name == e.Sel.Name {
-					return declaredTypeName(field.Type)
+	}
+	for _, field := range st.Fields.List {
+		if len(field.Names) == 0 {
+			if embedded, ok := declaredTypeName(field.Type); ok {
+				if typ, ok := fieldTypeOf(embedded, name, types, seen); ok {
+					return typ, true
 				}
 			}
 		}
 	}
 	return "", false
+}
+
+// promotedOwner names the type whose method name a value of type typ reaches:
+// typ itself if it declares one, else the first embedded type that does,
+// searched as Go promotes -- or Client, when an embedded Client is reached and
+// name is a transport helper, so the caller sees it for what it is. "" when
+// nothing in the package declares it.
+func promotedOwner(typ, name string, types typeIndex, index funcIndex) string {
+	seen := map[string]bool{}
+	var search func(t string) string
+	search = func(t string) string {
+		if seen[t] {
+			return ""
+		}
+		seen[t] = true
+		if _, ok := index[t+"."+name]; ok {
+			return t
+		}
+		if _, ok := transportCalls[name]; ok && t == "Client" {
+			return t
+		}
+		spec, ok := types[t]
+		if !ok {
+			return ""
+		}
+		st, ok := unparen(spec.Type).(*ast.StructType)
+		if !ok {
+			return ""
+		}
+		for _, field := range st.Fields.List {
+			if len(field.Names) != 0 {
+				continue
+			}
+			if embedded, ok := declaredTypeName(field.Type); ok {
+				if owner := search(embedded); owner != "" {
+					return owner
+				}
+			}
+		}
+		return ""
+	}
+	return search(typ)
 }
 
 // declaredTypeName is a type expression's name, one star stripped: *Client is Client.
@@ -1380,7 +1459,7 @@ func callsParallel(fn *ast.FuncDecl, h smokeHelpers, seen map[*ast.FuncDecl]bool
 		}
 		switch callee := unparen(call.Fun).(type) {
 		case *ast.SelectorExpr:
-			if callee.Sel.Name == "Parallel" && mayBeTestingT(fn, callee.X) {
+			if callee.Sel.Name == "Parallel" && mayBeTestingT(fn, callee.X, h) {
 				found = true
 			} else if typ := receiverTypeOf(fn, callee.X, h); typ != "" {
 				found = callsParallel(h.methods[typ+"."+callee.Sel.Name], h, seen)
@@ -1395,11 +1474,13 @@ func callsParallel(fn *ast.FuncDecl, h smokeHelpers, seen map[*ast.FuncDecl]bool
 	return found
 }
 
-// mayBeTestingT reports whether a Parallel call's receiver may be a test's T:
-// anything but an identifier declared once with another explicit type. An
-// unrelated type's Parallel method is not testing's, and a receiver the reader
-// cannot name is taken to be one, which is the fail-closed direction.
-func mayBeTestingT(fn *ast.FuncDecl, x ast.Expr) bool {
+// mayBeTestingT reports whether a Parallel call's receiver may be a test's T.
+// Only one thing proves it is not: an identifier declared once with a type the
+// files read declare as something other than an interface -- `var p pool`
+// with pool a struct. An interface may hold a *testing.T (`t parallelT` with
+// parallelT interface{ Parallel() }), and a type the reader cannot see into
+// might, so both are taken to be one: the fail-closed direction.
+func mayBeTestingT(fn *ast.FuncDecl, x ast.Expr, h smokeHelpers) bool {
 	ident, ok := unparen(x).(*ast.Ident)
 	if !ok {
 		return true
@@ -1423,15 +1504,30 @@ func mayBeTestingT(fn *ast.FuncDecl, x ast.Expr) bool {
 			}
 		}
 	}
-	if typ == nil {
-		return true
+	for seen := 0; typ != nil && seen < 8; seen++ {
+		if star, ok := unparen(typ).(*ast.StarExpr); ok {
+			typ = star.X
+		}
+		ident, ok := unparen(typ).(*ast.Ident)
+		if !ok {
+			// testing.T, testing.TB, an interface literal, another package's
+			// type: not one the files read declare.
+			_, isStruct := unparen(typ).(*ast.StructType)
+			return !isStruct
+		}
+		spec, ok := h.types[ident.Name]
+		if !ok {
+			return true
+		}
+		if _, isInterface := unparen(spec.Type).(*ast.InterfaceType); isInterface {
+			return true
+		}
+		if !spec.Assign.IsValid() {
+			return false
+		}
+		typ = spec.Type
 	}
-	switch name := exprString(typ); name {
-	case "*testing.T", "testing.TB", "?":
-		return true
-	default:
-		return false
-	}
+	return true
 }
 
 // isFindOfRun reports whether call is probe.find(<ctx>, run.client,
@@ -1796,7 +1892,8 @@ func (s *TagService) Peek(ctx context.Context) error {
 		swap       [2]string // a replacement made in probeFixturePackage first
 		entries    string
 		exclusions map[string]string
-		want       string // a substring of the one problem expected; "" for none
+		want       string   // a substring of the one problem expected; "" for none
+		wants      []string // or of each of several, in order of the problems
 	}{
 		{name: "the clean baseline", entries: cleanProbeEntries, exclusions: cleanProbeExclusions},
 		{
@@ -2005,6 +2102,29 @@ func (r *tagReads) Peek() string { return "" }
 			want:       "AdminClient.Recent reaches the transport",
 		},
 		{
+			// Promotion: a wrapper embedding *Client calls Client's helpers as
+			// its own.
+			name:       "a wrapper that embeds the client",
+			pkg:        "\ntype AdminClient struct{ *Client }\nfunc (a *AdminClient) Recent(ctx context.Context) error {\n\treturn a.doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport",
+		},
+		{
+			name:       "a wrapper that embeds a type holding the client",
+			pkg:        "\ntype base struct{ c *Client }\nfunc (b *base) fetch(ctx context.Context) error {\n\treturn b.c.doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil)\n}\ntype AdminClient struct{ base }\nfunc (a *AdminClient) Recent(ctx context.Context) error { return a.fetch(ctx) }\nfunc (a *AdminClient) Again(ctx context.Context) error { return a.c.doList(ctx, http.MethodGet, \"/x\", nil, nil) }\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			wants:      []string{"AdminClient.Again reaches the transport", "AdminClient.Recent reaches the transport"},
+		},
+		{
+			// A local from a declared constructor has that constructor's type.
+			name:       "a do on a constructed receiver of another type is not the transport",
+			pkg:        "\ntype AdminClient struct{}\ntype memo struct{}\nfunc newMemo() *memo { return &memo{} }\nfunc (m *memo) do(ctx context.Context) error { return nil }\nfunc (a *AdminClient) Warm(ctx context.Context) error {\n\tcache := newMemo()\n\treturn cache.do(ctx)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+		},
+		{
 			name:       "a do on a receiver of another type is not the transport",
 			pkg:        "\ntype AdminClient struct{ cache *memo }\ntype memo struct{}\nfunc (m *memo) do(ctx context.Context, verb, key string) error { return nil }\nfunc (a *AdminClient) Warm(ctx context.Context) error {\n\treturn a.cache.do(ctx, http.MethodDelete, \"tags\")\n}\n",
 			entries:    cleanProbeEntries,
@@ -2108,6 +2228,17 @@ func (r *tagReads) Peek() string { return "" }
 			pkg := parseFixture(t, src+tc.pkg)
 			suite := parseFixture(t, probeFixtureSuite(tc.entries))["fixture.go"]
 			_, problems := readProbeProblems(pkg, suite, "fixture.go", tc.exclusions)
+			if len(tc.wants) > 0 {
+				if len(problems) != len(tc.wants) {
+					t.Fatalf("problems = %v, want %d", problems, len(tc.wants))
+				}
+				for i, want := range tc.wants {
+					if !strings.Contains(problems[i], want) {
+						t.Errorf("problem %d = %q, want it to contain %q", i, problems[i], want)
+					}
+				}
+				return
+			}
 			if tc.want == "" {
 				if len(problems) != 0 {
 					t.Fatalf("problems = %v, want none", problems)
@@ -3082,6 +3213,31 @@ func TestIntegration_Extra(t *testing.T) {
 	q := pool{}
 	q.Parallel()
 }`},
+		},
+		{
+			// A *testing.T passed as an interface is still the test's T.
+			name: "a T made parallel through a named interface",
+			suite: isolationSuiteFixture{extra: `type parallelT interface{ Parallel() }
+
+func runParallel(t parallelT) { t.Parallel() }
+
+func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	_ = h
+	runParallel(t)
+}`},
+			want: []string{"TestIntegration_Extra calls Parallel"},
+		},
+		{
+			name: "a T made parallel through an interface literal",
+			suite: isolationSuiteFixture{extra: `func runParallel(t interface{ Parallel() }) { t.Parallel() }
+
+func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	_ = h
+	runParallel(t)
+}`},
+			want: []string{"TestIntegration_Extra calls Parallel"},
 		},
 		{
 			name:  "an isolation test that runs in parallel",
