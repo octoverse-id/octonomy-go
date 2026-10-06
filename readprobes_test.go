@@ -1615,6 +1615,14 @@ func (r *tagReads) Peek() string { return "" }
 			want:       "auditReads.Recent issues a read, and auditReads is neither Client nor a service",
 		},
 		{
+			// Unexported is unreachable: no caller outside the package can name
+			// it, and promotion carries only exported methods.
+			name:       "an unexported read on an uninventoried type is not surface",
+			pkg:        "\ntype warmer struct{ client *Client }\nfunc (w *warmer) refresh(ctx context.Context) error {\n\treturn w.client.doList(ctx, http.MethodGet, \"/tags\", nil, nil)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+		},
+		{
 			name:       "a write on an uninventoried type is not a read",
 			pkg:        "\ntype AdminClient struct{ Audit AuditService }\ntype AuditService struct{ client *Client }\nfunc (s *AuditService) Purge(ctx context.Context) error {\n\treturn s.client.do(ctx, http.MethodDelete, \"/audit-logs\", nil, nil)\n}\n",
 			entries:    cleanProbeEntries,
