@@ -48,8 +48,9 @@ import (
 // OCTONOMY_SMOKE_REQUIRED=1 removes the skip entirely, and CI sets it. Skipping
 // is right on a laptop with no Docker; in the required CI job it is the worst
 // possible outcome, because a credential export that silently broke would leave
-// this line's ONLY real-server check reporting green without running. The
-// release in #29 cannot be recalled, so "green" has to mean "ran".
+// this line's only real-server job -- this smoke run, and the isolation suite
+// beside it -- reporting green without running. The release in #29 cannot be
+// recalled, so "green" has to mean "ran".
 func newSmokeClient(t *testing.T) *octonomy.Client {
 	t.Helper()
 

@@ -293,10 +293,10 @@ stays a faithful, ergonomic client.
   (`OCTONOMY_TEST_NAMESPACE_A_TOKEN`/`_B_TOKEN`, minted by `scripts/octonomy-harness.sh`) are the only
   way to reach the refusal path, and the only way `include_global`'s fail-closed branch runs at all.
   Reaching for the wildcard token because it is the convenient one is how an isolation assertion
-  comes to assert nothing; `TestTheIsolationSuiteRunsItsProbes` refuses an isolation test whose
-  required runs (`isolationTests`) are not under the grant they need — exact for the refusal and the
-  fail-closed read, the wildcard for the authorized opt-in — or whose fail-closed read does not look
-  for the global fixture.
+  comes to assert nothing. `TestTheIsolationSuiteRunsItsProbes` refuses an isolation test missing
+  any run `isolationTests` lists, each read off its `probeRun` literal as a grant, a namespace, a
+  fixture, an option and an outcome — so a run moved to the wildcard, a fail-closed read aimed at a
+  merchant's row, or a deleted control fails it. A new run the suite needs goes in that table.
 - **The isolation suite runs in the required go1.13 smoke job**, as a step with its own
   `^TestIntegration_` selector — a step and not a job, because a new job is advisory until branch
   protection names it, and an isolation test in an advisory job, or matched by no selector, asserts

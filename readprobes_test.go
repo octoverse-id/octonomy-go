@@ -28,6 +28,7 @@ package octonomy
 //     exist.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -406,10 +407,10 @@ func typeDescription(typ ast.Expr) string {
 }
 
 // reachesTransport reports whether fn's body -- closures included, and the
-// functions and methods it calls, followed as classify follows them -- names a
-// transport helper or a request constructor at all: called, handed on as a
-// value, or reached through a field the classifier does not recognize as the
-// client.
+// functions and methods it calls or takes as values, followed through the
+// shapes resolveCallee knows -- names a transport helper or a request
+// constructor at all: called, handed on as a value, or reached through a field
+// the classifier does not recognize as the client.
 func reachesTransport(fn *ast.FuncDecl, index funcIndex, seen map[*ast.FuncDecl]bool) bool {
 	if fn == nil || fn.Body == nil || seen[fn] {
 		return false
@@ -421,13 +422,21 @@ func reachesTransport(fn *ast.FuncDecl, index funcIndex, seen map[*ast.FuncDecl]
 		if found {
 			return false
 		}
-		switch node := n.(type) {
-		case *ast.SelectorExpr:
-			if _, ok := transportCalls[node.Sel.Name]; ok {
+		// A REFERENCE is followed, not only a call: `fetch := a.fetch;
+		// fetch(ctx)` hands the method on as a value, and its body is what
+		// sends the request.
+		expr, ok := n.(ast.Expr)
+		if !ok {
+			return true
+		}
+		if sel, ok := expr.(*ast.SelectorExpr); ok {
+			if _, ok := transportCalls[sel.Sel.Name]; ok {
 				found = true
+				return false
 			}
-		case *ast.CallExpr:
-			if callee := resolveCallee(node.Fun, recv, recvType, index); callee != nil {
+		}
+		if _, ok := expr.(*ast.CallExpr); !ok {
+			if callee := resolveCallee(expr, recv, recvType, index); callee != nil {
 				found = reachesTransport(callee, index, seen)
 			}
 		}
@@ -904,43 +913,83 @@ func stringField(lit *ast.CompositeLit, key string) (string, bool) {
 
 // --- the table must run -------------------------------------------------------
 
-// isolationRequirement is one run an isolation test must make: the outcome it
-// expects, the grant it reads under, and -- where the run means nothing
-// without them -- the option it carries and the row it looks for.
-type isolationRequirement struct {
-	expect        string // the outcome constant the run expects
-	wildcard      bool   // under the wildcard grant (h.wildcard), not an exact one (h.merchantClient)
-	includeGlobal bool   // the run must carry WithIncludeGlobal
-	global        bool   // the run must look for the global fixture, a row from h.seed(…, "")
+// isolationRun is what one run of the matrix MEANS, read off its probeRun
+// literal: who reads, in which namespace, looking for which fixture, with which
+// option, and what it is entitled to.
+//
+//	grant   "A" / "B" -- the exact grant h.merchantClient(t, h.merchantA / h.merchantB);
+//	        "wildcard" -- h.wildcard(t)
+//	readNS  "A" / "B" -- h.merchantA.id / h.merchantB.id
+//	want    "A" / "B" / "global" -- the fixture h.seed(…, h.merchantA.id / h.merchantB.id / "")
+//	option  "include_global" when extra carries WithIncludeGlobal, else ""
+//	expect  the outcome constant
+//
+// Anything the reader cannot name reads as "?", which matches no requirement.
+type isolationRun struct {
+	grant, readNS, want, option, expect string
+	why                                 string // in isolationTests only: what the run proves
 }
 
-// isolationTests names the tests that run the probe table, and the runs each
-// one must make.
+func (r isolationRun) describe() string {
+	who := map[string]string{"A": "the exact merchant-A grant", "B": "the exact merchant-B grant", "wildcard": "the wildcard grant"}
+	where := map[string]string{"A": "merchant A's namespace", "B": "merchant B's namespace"}
+	what := map[string]string{"A": "merchant A's fixture", "B": "merchant B's fixture", "global": "the global fixture"}
+	name := func(m map[string]string, k string) string {
+		if v, ok := m[k]; ok {
+			return v
+		}
+		return "an unreadable " + k
+	}
+	out := name(who, r.grant) + " reading " + name(where, r.readNS) + " for " + name(what, r.want)
+	if r.option != "" {
+		out += " with WithIncludeGlobal"
+	}
+	return out + ", expecting " + r.expect
+}
+
+func (r isolationRun) key() string {
+	return r.grant + "|" + r.readNS + "|" + r.want + "|" + r.option + "|" + r.expect
+}
+
+// isolationTests names the tests that run the probe table, and EVERY run each
+// one must make -- not a sample. Each run asserts one mechanism, and the
+// others pass against a server that has lost it: a suite missing any one row
+// below stays green through exactly the regression that row exists for.
 //
 // WHICH TOKEN A RUN USES IS THE TEST. The wildcard grant matches every
 // partition, global included, so under it authorization never refuses anything
 // and include_global's opt-in always succeeds: it can demonstrate the server's
 // namespace FILTER and nothing else. The refusal path (outcomeForbidden) and
-// the fail-closed branch of include_global run only under an exact grant, and
-// an exact-grant visible run is the control that proves the grant reaches its
-// own rows at all -- without it, a token that reached nothing would pass every
-// negative.
-//
-// AND WHICH ROW IT LOOKS FOR. The fail-closed run means something only when it
-// asks for a GLOBAL row: pointed at merchant B's fixture it passes whether or
-// not include_global fails closed. And it needs the wildcard's opt-in beside it
-// -- the same option and row, visible -- or a route that ignored the option
-// altogether would pass it too.
-var isolationTests = map[string][]isolationRequirement{
+// the fail-closed branch of include_global run only under an exact grant. AND
+// WHICH ROW IT LOOKS FOR: the fail-closed run means something only when it asks
+// for a GLOBAL row -- pointed at merchant B's fixture it passes whether or not
+// include_global fails closed.
+var isolationTests = map[string][]isolationRun{
 	"TestIntegration_NamespaceIsolation": {
-		{expect: "outcomeVisible"},
-		{expect: "outcomeFiltered"},
-		{expect: "outcomeForbidden"},
+		{grant: "wildcard", readNS: "B", want: "B", expect: "outcomeVisible",
+			why: "the wildcard's control: without a visible run, the filtered runs pass when the rows were never written"},
+		{grant: "B", readNS: "B", want: "B", expect: "outcomeVisible",
+			why: "merchant B's grant reaches its own rows, or merchant B's isolation is never shown to hold under a real grant"},
+		{grant: "A", readNS: "A", want: "A", expect: "outcomeVisible",
+			why: "merchant A's grant reaches its own rows, or a token that reached nothing would pass every negative"},
+		{grant: "A", readNS: "A", want: "B", expect: "outcomeFiltered",
+			why: "the namespace filter under an exact grant"},
+		{grant: "wildcard", readNS: "A", want: "B", expect: "outcomeFiltered",
+			why: "the namespace filter where authorization cannot be what hides the row"},
+		{grant: "A", readNS: "B", want: "B", expect: "outcomeForbidden",
+			why: "the refusal: the request an attacker makes, which no filtered run performs"},
 	},
 	"TestIntegration_IncludeGlobalFailsClosed": {
-		{expect: "outcomeFiltered", includeGlobal: true, global: true},
-		{expect: "outcomeVisible", includeGlobal: true},
-		{expect: "outcomeVisible", includeGlobal: true, global: true, wildcard: true},
+		{grant: "wildcard", readNS: "A", want: "global", expect: "outcomeFiltered",
+			why: "a namespaced read excludes global rows by default, or the option means nothing"},
+		{grant: "wildcard", readNS: "A", want: "global", option: "include_global", expect: "outcomeVisible",
+			why: "the authorized opt-in works, or a route ignoring the option would pass the fail-closed run too"},
+		{grant: "A", readNS: "A", want: "global", option: "include_global", expect: "outcomeFiltered",
+			why: "the fail-closed assertion itself: an exact grant asking for global rows gets none"},
+		{grant: "wildcard", readNS: "A", want: "B", option: "include_global", expect: "outcomeFiltered",
+			why: "the option widens to global, never to every namespace"},
+		{grant: "A", readNS: "A", want: "A", option: "include_global", expect: "outcomeVisible",
+			why: "the opted-in read still works, or the negatives pass whenever it failed"},
 	},
 }
 
@@ -953,9 +1002,10 @@ var isolationTests = map[string][]isolationRequirement{
 // suite is read for what makes it RUN -- built by the runners' tag, gated by a
 // skip that the required run turns into a failure, its tests selected by the
 // runners' prefix, each of them running the matrix over readProbes -- and for
-// what makes it MEAN something: the runs listed in isolationTests, each under
-// the grant, option and fixture it needs. The runners themselves are pinned (isolationRecipePin below, and the
-// isolation step in smokeprobes_test.go's smokeJobPin).
+// what makes it MEAN something: every run listed in isolationTests, read as
+// its grant, namespace, fixture, option and outcome. The runners themselves
+// are pinned (isolationRecipePin below, and the isolation step in
+// smokeprobes_test.go's smokeJobPin).
 //
 // WHERE IT ENDS, as with the smoke guard: it reads presence, not reachability,
 // and it proves which runs a test makes, not that their assertions are right.
@@ -1063,15 +1113,10 @@ func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 	var problems []string
 	// The seeded rows' teardown is this test's own defer (rule 2 and 3 of the
 	// t.Cleanup model), which holds only while every subtest is sequential.
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
-			if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok && sel.Sel.Name == "Parallel" {
-				problems = append(problems, fn.Name.Name+" calls Parallel; its seeded rows are torn down by its "+
-					"own defer, which a parallel subtest outlives")
-			}
-		}
-		return true
-	})
+	if callsParallel(fn, helpers, map[*ast.FuncDecl]bool{}) {
+		problems = append(problems, fn.Name.Name+" calls Parallel, directly or through a helper; its seeded "+
+			"rows are torn down by its own defer, which a parallel subtest outlives")
+	}
 	for _, why := range skipsIn(fn, helpers) {
 		problems = append(problems, fn.Name.Name+" "+why+"; an isolation test that can skip itself is a "+
 			"green run that asserted nothing after the skip. Fail instead -- loadHarness is the one place "+
@@ -1122,16 +1167,15 @@ func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 		case *ast.BranchStmt:
 			problems = append(problems, "runProbeMatrix uses "+node.Tok.String()+", which can leave a probe or a "+
 				"run out of the matrix while the test stays green")
-		case *ast.CallExpr:
-			if sel, ok := unparen(node.Fun).(*ast.SelectorExpr); ok && sel.Sel.Name == "Parallel" {
-				problems = append(problems, "runProbeMatrix calls Parallel. Its subtests close over the loops' "+
-					"probe and run, which before Go 1.22 every parallel subtest reads at its last value -- six "+
-					"copies of one run -- and the fixtures' teardown is the root test's defer, which a parallel "+
-					"subtest outlives")
-			}
 		}
 		return true
 	})
+	if callsParallel(fn, helpers, map[*ast.FuncDecl]bool{}) {
+		problems = append(problems, "runProbeMatrix calls Parallel, directly or through a helper. Its subtests "+
+			"close over the loops' probe and run, which before Go 1.22 every parallel subtest reads at its last "+
+			"value -- six copies of one run -- and the fixtures' teardown is the root test's defer, which a "+
+			"parallel subtest outlives")
+	}
 
 	const shape = "; the matrix must be `for _, probe := range readProbes(h)` at the top of its body, " +
 		"`for _, run := range runs` inside it, and `probe.find(ctx, run.client, run.readNS, run.want, " +
@@ -1212,6 +1256,38 @@ func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 	return problems
 }
 
+// callsParallel reports whether fn can call Parallel: directly, anywhere in its
+// body, closures included, or through a function or method the files read
+// declare, resolved as the skip reader resolves them. A helper the reader
+// cannot resolve is already refused when it is handed the T (skipsIn).
+func callsParallel(fn *ast.FuncDecl, h smokeHelpers, seen map[*ast.FuncDecl]bool) bool {
+	if fn == nil || fn.Body == nil || seen[fn] {
+		return false
+	}
+	seen[fn] = true
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || found {
+			return !found
+		}
+		switch callee := unparen(call.Fun).(type) {
+		case *ast.SelectorExpr:
+			if callee.Sel.Name == "Parallel" {
+				found = true
+			} else if typ := receiverTypeOf(fn, callee.X, h); typ != "" {
+				found = callsParallel(h.methods[typ+"."+callee.Sel.Name], h, seen)
+			}
+		case *ast.Ident:
+			if len(declarationsOf(callee.Name, fn)) == 0 {
+				found = callsParallel(h.declared[callee.Name], h, seen)
+			}
+		}
+		return !found
+	})
+	return found
+}
+
 // isFindOfRun reports whether call is probe.find(<ctx>, run.client,
 // run.readNS, run.want, run.extra...).
 func isFindOfRun(call *ast.CallExpr, probeVar, runVar string) bool {
@@ -1229,13 +1305,10 @@ func isFindOfRun(call *ast.CallExpr, probeVar, runVar string) bool {
 }
 
 // runRequirementProblems reads the []probeRun literals a test hands
-// runProbeMatrix and reports each requirement no run meets.
-func runRequirementProblems(fn *ast.FuncDecl, want []isolationRequirement) []string {
-	type run struct {
-		exact, wildcard, includeGlobal, global bool
-		expect                                 string
-	}
-	var runs []run
+// runProbeMatrix, names what each run means, and reports every required run
+// none of them is.
+func runRequirementProblems(fn *ast.FuncDecl, want []isolationRun) []string {
+	have := map[string]bool{}
 	var problems []string
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
@@ -1253,111 +1326,99 @@ func runRequirementProblems(fn *ast.FuncDecl, want []isolationRequirement) []str
 		lit, ok := unparen(call.Args[3]).(*ast.CompositeLit)
 		if !ok {
 			problems = append(problems, fn.Name.Name+" hands runProbeMatrix runs that are not a []probeRun "+
-				"literal, so the guard cannot read which grant each run uses")
+				"literal, so the guard cannot read what each run means")
 			return true
 		}
 		for _, elt := range lit.Elts {
-			entry, ok := unparen(elt).(*ast.CompositeLit)
-			if !ok {
-				continue
+			if entry, ok := unparen(elt).(*ast.CompositeLit); ok {
+				have[readIsolationRun(fn, entry).key()] = true
 			}
-			var r run
-			for _, field := range entry.Elts {
-				kv, ok := field.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
-				key, _ := kv.Key.(*ast.Ident)
-				if key == nil {
-					continue
-				}
-				switch key.Name {
-				case "client":
-					r.exact = boundToCall(fn, kv.Value, "merchantClient")
-					r.wildcard = boundToCall(fn, kv.Value, "wildcard")
-				case "expect":
-					if ident, ok := unparen(kv.Value).(*ast.Ident); ok {
-						r.expect = ident.Name
-					}
-				case "extra":
-					r.includeGlobal = carriesCall(fn, kv.Value, "WithIncludeGlobal")
-				case "want":
-					r.global = boundToGlobalSeed(fn, kv.Value)
-				}
-			}
-			runs = append(runs, r)
 		}
 		return true
 	})
 	for _, req := range want {
-		met := false
-		for _, r := range runs {
-			grant := r.exact
-			if req.wildcard {
-				grant = r.wildcard
-			}
-			if grant && r.expect == req.expect && (!req.includeGlobal || r.includeGlobal) && (!req.global || r.global) {
-				met = true
-			}
+		if !have[req.key()] {
+			problems = append(problems, fn.Name.Name+" makes no run of "+req.describe()+" -- "+req.why+
+				". Every run in isolationTests asserts a mechanism the others cannot, so a suite without it "+
+				"stays green through exactly the regression it exists for")
 		}
-		if met {
-			continue
-		}
-		what, why := " run under an exact merchant grant", "a client from h.merchantClient. The wildcard grant "+
-			"matches every partition, so under it authorization never refuses and include_global never fails "+
-			"closed; a run on it cannot stand in for this one"
-		if req.wildcard {
-			what, why = " run under the wildcard grant", "a client from h.wildcard. It is the control that the "+
-				"option works at all: without it, a route that ignored include_global would pass the fail-closed "+
-				"run too"
-		}
-		if req.includeGlobal {
-			what += " carrying WithIncludeGlobal"
-		}
-		if req.global {
-			what += " looking for the global fixture"
-			why = "the row from h.seed(…, \"\"); " + why
-		}
-		problems = append(problems, fn.Name.Name+" makes no "+req.expect+what+" ("+why+")")
 	}
 	return problems
 }
 
-// boundToGlobalSeed reports whether expr is an identifier bound exactly once
-// in fn to `h.seed(…, "")` -- a fixture seeded in the global namespace.
-func boundToGlobalSeed(fn *ast.FuncDecl, expr ast.Expr) bool {
-	if !boundToCall(fn, expr, "seed") {
-		return false
-	}
-	assign := bindingsOf(fn.Body, unparen(expr).(*ast.Ident).Name)[0].(*ast.AssignStmt)
-	for i, lhs := range assign.Lhs {
-		if !isIdent(lhs, unparen(expr).(*ast.Ident).Name) {
+// readIsolationRun names what one probeRun literal means.
+func readIsolationRun(fn *ast.FuncDecl, entry *ast.CompositeLit) isolationRun {
+	r := isolationRun{grant: "?", readNS: "?", want: "?", expect: "?"}
+	for _, field := range entry.Elts {
+		kv, ok := field.(*ast.KeyValueExpr)
+		if !ok {
 			continue
 		}
-		call := unparen(assign.Rhs[i]).(*ast.CallExpr)
-		if len(call.Args) == 0 {
-			return false
+		key, _ := kv.Key.(*ast.Ident)
+		if key == nil {
+			continue
 		}
-		last, ok := unparen(call.Args[len(call.Args)-1]).(*ast.BasicLit)
-		return ok && last.Kind == token.STRING && last.Value == `""`
+		switch key.Name {
+		case "client":
+			if call, method := boundCall(fn, kv.Value); method == "wildcard" {
+				r.grant = "wildcard"
+			} else if method == "merchantClient" && len(call.Args) == 2 {
+				r.grant = merchantOf(call.Args[1])
+			}
+		case "readNS":
+			r.readNS = merchantOf(kv.Value)
+		case "want":
+			if call, method := boundCall(fn, kv.Value); method == "seed" && len(call.Args) > 0 {
+				r.want = merchantOf(call.Args[len(call.Args)-1])
+			}
+		case "extra":
+			if carriesCall(fn, kv.Value, "WithIncludeGlobal") {
+				r.option = "include_global"
+			}
+		case "expect":
+			if ident, ok := unparen(kv.Value).(*ast.Ident); ok {
+				r.expect = ident.Name
+			}
+		}
 	}
-	return false
+	return r
 }
 
-// boundToCall reports whether expr is an identifier bound exactly once in fn,
-// to a call of a method named method: `clientA := h.merchantClient(t, …)`.
-func boundToCall(fn *ast.FuncDecl, expr ast.Expr, method string) bool {
+// merchantOf names the namespace an expression denotes: "A" for h.merchantA or
+// h.merchantA.id, "B" likewise, "global" for the literal "", and "?" otherwise.
+func merchantOf(expr ast.Expr) string {
+	switch e := unparen(expr).(type) {
+	case *ast.BasicLit:
+		if e.Kind == token.STRING && e.Value == `""` {
+			return "global"
+		}
+	case *ast.SelectorExpr:
+		switch e.Sel.Name {
+		case "id":
+			return merchantOf(e.X)
+		case "merchantA":
+			return "A"
+		case "merchantB":
+			return "B"
+		}
+	}
+	return "?"
+}
+
+// boundCall returns the call an identifier is bound to -- exactly once in fn,
+// by `x := recv.method(…)` -- and that method's name, or (nil, "").
+func boundCall(fn *ast.FuncDecl, expr ast.Expr) (*ast.CallExpr, string) {
 	ident, ok := unparen(expr).(*ast.Ident)
 	if !ok {
-		return false
+		return nil, ""
 	}
 	bindings := bindingsOf(fn.Body, ident.Name)
 	if len(bindings) != 1 {
-		return false
+		return nil, ""
 	}
 	assign, ok := bindings[0].(*ast.AssignStmt)
 	if !ok || assign.Tok != token.DEFINE || len(assign.Lhs) != len(assign.Rhs) {
-		return false
+		return nil, ""
 	}
 	for i, lhs := range assign.Lhs {
 		if !isIdent(lhs, ident.Name) {
@@ -1365,12 +1426,13 @@ func boundToCall(fn *ast.FuncDecl, expr ast.Expr, method string) bool {
 		}
 		call, ok := unparen(assign.Rhs[i]).(*ast.CallExpr)
 		if !ok {
-			return false
+			return nil, ""
 		}
-		sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
-		return ok && sel.Sel.Name == method
+		if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok {
+			return call, sel.Sel.Name
+		}
 	}
-	return false
+	return nil, ""
 }
 
 // carriesCall reports whether expr -- inline, or through an identifier bound
@@ -1745,6 +1807,21 @@ func (r *tagReads) Peek() string { return "" }
 		{
 			name:       "an indirect read two calls away on an uninventoried type",
 			pkg:        "\ntype AdminClient struct{ c *Client }\nfunc (a *AdminClient) Recent(ctx context.Context) error { return a.fetch(ctx) }\nfunc (a *AdminClient) fetch(ctx context.Context) error {\n\treturn func() error { return a.c.doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil) }()\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport and the guard could not resolve its verb",
+		},
+		{
+			// A method value of an unexported method: the reference is followed.
+			name:       "an indirect read through a method value of a helper",
+			pkg:        "\ntype AdminClient struct{ c *Client }\nfunc (a *AdminClient) Recent(ctx context.Context) error {\n\tfetch := a.fetch\n\treturn fetch(ctx)\n}\nfunc (a *AdminClient) fetch(ctx context.Context) error {\n\treturn a.c.doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport and the guard could not resolve its verb",
+		},
+		{
+			name:       "an indirect read through a function value",
+			pkg:        "\ntype AdminClient struct{ c *Client }\nfunc (a *AdminClient) Recent(ctx context.Context) error {\n\tload := loadRecent\n\treturn load(ctx, a.c)\n}\nfunc loadRecent(ctx context.Context, c *Client) error {\n\treturn c.doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil)\n}\n",
 			entries:    cleanProbeEntries,
 			exclusions: cleanProbeExclusions,
 			want:       "AdminClient.Recent reaches the transport and the guard could not resolve its verb",
@@ -2280,29 +2357,58 @@ func (h harness) client(t *testing.T, token string) *octonomy.Client {
 ` + extra
 }
 
-// includeGlobalFixture is the include_global test in the required shape: the
-// fail-closed run, the exact grant's own-rows control, and the wildcard's
-// authorized opt-in.
-const includeGlobalFixture = `func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
+// renderIsolationTest renders name as a test making exactly the runs
+// isolationTests requires of it, skipping the run at index skip (-1 for none).
+// The clean fixtures are rendered from the table they are checked against, so
+// a requirement added to the table is a fixture added here.
+func renderIsolationTest(name string, skip int) string {
+	clients := map[string]string{"A": "clientA", "B": "clientB", "wildcard": "wildcard"}
+	fixtures := map[string]string{"A": "fixtureA", "B": "fixtureB", "global": "fixtureGlobal"}
+	var b strings.Builder
+	b.WriteString("func " + name + `(t *testing.T) {
 	h := loadHarness(t)
+	var rows teardown
+	defer rows.run()
 	wildcard := h.wildcard(t)
 	clientA := h.merchantClient(t, h.merchantA)
+	clientB := h.merchantClient(t, h.merchantB)
+	fixtureA := h.seed(t, &rows, wildcard, h.merchantA.id)
+	fixtureB := h.seed(t, &rows, wildcard, h.merchantB.id)
 	fixtureGlobal := h.seed(t, &rows, wildcard, "")
 	includeGlobal := []octonomy.RequestOption{octonomy.WithIncludeGlobal()}
 	runProbeMatrix(ctx, t, h, []probeRun{
-		{name: "fails closed", client: clientA, want: fixtureGlobal, extra: includeGlobal, expect: outcomeFiltered},
-		{name: "own rows", client: clientA, extra: includeGlobal, expect: outcomeVisible},
-		{name: "opt-in", client: wildcard, want: fixtureGlobal, extra: includeGlobal, expect: outcomeVisible},
-	})
-}`
-
-// includeGlobalWith is includeGlobalFixture with one edit, which must apply:
-// a fixture whose edit silently missed would test the clean shape.
-func includeGlobalWith(from, to string) string {
-	if !strings.Contains(includeGlobalFixture, from) {
-		panic("includeGlobalWith: the fixture has no " + strconv.Quote(from))
+`)
+	for i, r := range isolationTests[name] {
+		if i == skip {
+			continue
+		}
+		extra := ""
+		if r.option == "include_global" {
+			extra = " extra: includeGlobal,"
+		}
+		fmt.Fprintf(&b, "\t\t{name: \"run %d\", client: %s, readNS: h.merchant%s.id, want: %s,%s expect: %s},\n",
+			i, clients[r.grant], r.readNS, fixtures[r.want], extra, r.expect)
 	}
-	return strings.Replace(includeGlobalFixture, from, to, 1)
+	b.WriteString("\t})\n}")
+	return b.String()
+}
+
+// isolationWith and includeGlobalWith are the two clean tests with one edit,
+// which must apply: a fixture whose edit silently missed would test the clean
+// shape.
+func isolationWith(from, to string) string {
+	return mustEdit(renderIsolationTest("TestIntegration_NamespaceIsolation", -1), from, to)
+}
+
+func includeGlobalWith(from, to string) string {
+	return mustEdit(renderIsolationTest("TestIntegration_IncludeGlobalFailsClosed", -1), from, to)
+}
+
+func mustEdit(src, from, to string) string {
+	if !strings.Contains(src, from) {
+		panic("fixture edit: the source has no " + strconv.Quote(from))
+	}
+	return strings.Replace(src, from, to, 1)
 }
 
 // isolationSuiteFixture is a suite whose runProbeMatrix and two isolation
@@ -2311,9 +2417,9 @@ type isolationSuiteFixture struct {
 	matrix, isolation, includeGlobal, extra string
 }
 
-func (f isolationSuiteFixture) source() string {
-	if f.matrix == "" {
-		f.matrix = `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+// defaultMatrix is runProbeMatrix in the required shape.
+func (isolationSuiteFixture) defaultMatrix() string {
+	return `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
 	for _, probe := range readProbes(h) {
 		t.Run(probe.name, func(t *testing.T) {
 			for _, run := range runs {
@@ -2322,24 +2428,39 @@ func (f isolationSuiteFixture) source() string {
 		})
 	}
 }`
+}
+
+func (f isolationSuiteFixture) source() string {
+	if f.matrix == "" {
+		f.matrix = f.defaultMatrix()
 	}
 	if f.isolation == "" {
-		f.isolation = `func TestIntegration_NamespaceIsolation(t *testing.T) {
-	h := loadHarness(t)
-	wildcard := h.wildcard(t)
-	clientA := h.merchantClient(t, h.merchantA)
-	runProbeMatrix(ctx, t, h, []probeRun{
-		{name: "sees", client: clientA, expect: outcomeVisible},
-		{name: "filtered", client: clientA, expect: outcomeFiltered},
-		{name: "wildcard filtered", client: wildcard, expect: outcomeFiltered},
-		{name: "refused", client: clientA, expect: outcomeForbidden},
-	})
-}`
+		f.isolation = renderIsolationTest("TestIntegration_NamespaceIsolation", -1)
 	}
 	if f.includeGlobal == "" {
-		f.includeGlobal = includeGlobalFixture
+		f.includeGlobal = renderIsolationTest("TestIntegration_IncludeGlobalFailsClosed", -1)
 	}
 	return "package octonomy_test\n\n" + f.matrix + "\n\n" + f.isolation + "\n\n" + f.includeGlobal + "\n\n" + f.extra + "\n"
+}
+
+// Every run isolationTests lists is required, one at a time: a suite missing
+// any single one of them is refused, naming it.
+func TestIsolationSuiteProblemsRequiresEveryRun(t *testing.T) {
+	harnessFile := parseFixture(t, isolationHarnessFixture("", ""))["fixture.go"]
+	for _, name := range isolationTestNames() {
+		for i, run := range isolationTests[name] {
+			fixture := isolationSuiteFixture{}
+			if name == "TestIntegration_NamespaceIsolation" {
+				fixture.isolation = renderIsolationTest(name, i)
+			} else {
+				fixture.includeGlobal = renderIsolationTest(name, i)
+			}
+			problems := isolationSuiteProblems(parseFixture(t, fixture.source())["fixture.go"], harnessFile)
+			if len(problems) != 1 || !strings.Contains(problems[0], name+" makes no run of "+run.describe()) {
+				t.Errorf("%s without run %d (%s): problems = %v, want exactly that run reported", name, i, run.describe(), problems)
+			}
+		}
+	}
 }
 
 // TestTheIsolationSuiteRunsItsProbes, driven over fixtures: the suite that runs
@@ -2674,59 +2795,48 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 			want: []string{"runs the probe matrix from inside a function literal"},
 		},
 		{
-			name: "the refusal run on the wildcard",
-			suite: isolationSuiteFixture{isolation: `func TestIntegration_NamespaceIsolation(t *testing.T) {
-	h := loadHarness(t)
-	wildcard := h.wildcard(t)
-	clientA := h.merchantClient(t, h.merchantA)
-	runProbeMatrix(ctx, t, h, []probeRun{
-		{client: clientA, expect: outcomeVisible},
-		{client: clientA, expect: outcomeFiltered},
-		{client: wildcard, expect: outcomeForbidden},
-	})
-}`},
-			want: []string{"TestIntegration_NamespaceIsolation makes no outcomeForbidden run under an exact merchant grant"},
+			name:  "the refusal run on the wildcard",
+			suite: isolationSuiteFixture{isolation: isolationWith(`{name: "run 5", client: clientA,`, `{name: "run 5", client: wildcard,`)},
+			want:  []string{"TestIntegration_NamespaceIsolation makes no run of the exact merchant-A grant reading merchant B's namespace for merchant B's fixture, expecting outcomeForbidden"},
 		},
 		{
 			name: "the fail-closed run without include_global",
 			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(
-				"want: fixtureGlobal, extra: includeGlobal, expect: outcomeFiltered",
-				"want: fixtureGlobal, expect: outcomeFiltered")},
-			want: []string{"makes no outcomeFiltered run under an exact merchant grant carrying WithIncludeGlobal looking for the global fixture"},
+				`{name: "run 2", client: clientA, readNS: h.merchantA.id, want: fixtureGlobal, extra: includeGlobal,`,
+				`{name: "run 2", client: clientA, readNS: h.merchantA.id, want: fixtureGlobal,`)},
+			want: []string{"makes no run of the exact merchant-A grant reading merchant A's namespace for the global fixture with WithIncludeGlobal, expecting outcomeFiltered"},
 		},
 		{
 			// One edited identifier: aimed at merchant B's row, the run passes
 			// whether or not include_global fails closed.
 			name: "the fail-closed run looking for merchant B",
-			suite: isolationSuiteFixture{includeGlobal: strings.Replace(includeGlobalWith(
-				"\tincludeGlobal := ",
-				"\tfixtureB := h.seed(t, &rows, wildcard, h.merchantB.id)\n\tincludeGlobal := "),
-				"client: clientA, want: fixtureGlobal", "client: clientA, want: fixtureB", 1)},
-			want: []string{"makes no outcomeFiltered run under an exact merchant grant carrying WithIncludeGlobal looking for the global fixture"},
+			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(
+				`{name: "run 2", client: clientA, readNS: h.merchantA.id, want: fixtureGlobal,`,
+				`{name: "run 2", client: clientA, readNS: h.merchantA.id, want: fixtureB,`)},
+			want: []string{"makes no run of the exact merchant-A grant reading merchant A's namespace for the global fixture with WithIncludeGlobal, expecting outcomeFiltered"},
 		},
 		{
 			// Only seed(…, "") is the global namespace; any other literal is a
 			// merchant's.
-			name: "the fail-closed run looking for a merchant seeded by literal id",
+			name: "the global fixture seeded by a literal merchant id",
 			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(
-				"fixtureGlobal := h.seed(t, &rows, wildcard, \"\")",
-				"fixtureGlobal := h.seed(t, &rows, wildcard, \"harness-merchant-b\")")},
+				`fixtureGlobal := h.seed(t, &rows, wildcard, "")`,
+				`fixtureGlobal := h.seed(t, &rows, wildcard, "harness-merchant-b")`)},
 			want: []string{
-				"makes no outcomeFiltered run under an exact merchant grant carrying WithIncludeGlobal looking for the global fixture",
-				"makes no outcomeVisible run under the wildcard grant carrying WithIncludeGlobal looking for the global fixture",
+				"makes no run of the wildcard grant reading merchant A's namespace for the global fixture, expecting outcomeFiltered",
+				"makes no run of the wildcard grant reading merchant A's namespace for the global fixture with WithIncludeGlobal",
+				"makes no run of the exact merchant-A grant reading merchant A's namespace for the global fixture",
 			},
 		},
 		{
-			name: "no authorized opt-in beside the fail-closed run",
-			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(
-				"\t\t{name: \"opt-in\", client: wildcard, want: fixtureGlobal, extra: includeGlobal, expect: outcomeVisible},\n", "")},
-			want: []string{"makes no outcomeVisible run under the wildcard grant carrying WithIncludeGlobal looking for the global fixture"},
+			name:  "the opt-in on an exact grant is no control",
+			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(`{name: "run 1", client: wildcard,`, `{name: "run 1", client: clientA,`)},
+			want:  []string{"makes no run of the wildcard grant reading merchant A's namespace for the global fixture with WithIncludeGlobal, expecting outcomeVisible"},
 		},
 		{
-			name: "the opt-in on an exact grant is no control",
-			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(
-				"{name: \"opt-in\", client: wildcard,", "{name: \"opt-in\", client: clientA,")},
-			want: []string{"makes no outcomeVisible run under the wildcard grant"},
+			name:  "the refusal run reading its own namespace",
+			suite: isolationSuiteFixture{isolation: isolationWith(`{name: "run 5", client: clientA, readNS: h.merchantB.id,`, `{name: "run 5", client: clientA, readNS: h.merchantA.id,`)},
+			want:  []string{"makes no run of the exact merchant-A grant reading merchant B's namespace"},
 		},
 		{
 			name: "a matrix that runs its subtests in parallel",
@@ -2742,7 +2852,30 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 		})
 	}
 }`},
-			want: []string{"runProbeMatrix calls Parallel"},
+			want: []string{
+				"runProbeMatrix calls Parallel",
+				"TestIntegration_IncludeGlobalFailsClosed calls Parallel, directly or through a helper",
+				"TestIntegration_NamespaceIsolation calls Parallel, directly or through a helper",
+			},
+		},
+		{
+			name: "a matrix that goes parallel through a helper",
+			suite: isolationSuiteFixture{
+				matrix: strings.Replace(isolationSuiteFixture{}.defaultMatrix(), "\t\t\tfor _, run := range runs {\n",
+					"\t\t\trunParallel(t)\n\t\t\tfor _, run := range runs {\n", 1),
+				extra: "func runParallel(t *testing.T) { t.Parallel() }",
+			},
+			want: []string{
+				"runProbeMatrix calls Parallel",
+				"TestIntegration_IncludeGlobalFailsClosed calls Parallel, directly or through a helper",
+				"TestIntegration_NamespaceIsolation calls Parallel, directly or through a helper",
+			},
+		},
+		{
+			name:  "an isolation test that goes parallel through a harness method",
+			extra: "func (h harness) settle(t *testing.T) { t.Parallel() }\n",
+			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith("\th := loadHarness(t)\n", "\th := loadHarness(t)\n\th.settle(t)\n")},
+			want:  []string{"TestIntegration_IncludeGlobalFailsClosed calls Parallel"},
 		},
 		{
 			name:  "an isolation test that runs in parallel",
@@ -2750,21 +2883,12 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 			want:  []string{"TestIntegration_IncludeGlobalFailsClosed calls Parallel"},
 		},
 		{
-			name: "an exact-grant client rebound to the wildcard",
-			suite: isolationSuiteFixture{isolation: `func TestIntegration_NamespaceIsolation(t *testing.T) {
-	h := loadHarness(t)
-	clientA := h.merchantClient(t, h.merchantA)
-	clientA = h.wildcard(t)
-	runProbeMatrix(ctx, t, h, []probeRun{
-		{client: clientA, expect: outcomeVisible},
-		{client: clientA, expect: outcomeFiltered},
-		{client: clientA, expect: outcomeForbidden},
-	})
-}`},
+			name:  "an exact-grant client rebound to the wildcard",
+			suite: isolationSuiteFixture{isolation: isolationWith("\tclientB := ", "\tclientA = h.wildcard(t)\n\tclientB := ")},
 			want: []string{
-				"makes no outcomeVisible run under an exact merchant grant",
-				"makes no outcomeFiltered run under an exact merchant grant",
-				"makes no outcomeForbidden run under an exact merchant grant",
+				"makes no run of the exact merchant-A grant reading merchant A's namespace for merchant A's fixture",
+				"makes no run of the exact merchant-A grant reading merchant A's namespace for merchant B's fixture",
+				"makes no run of the exact merchant-A grant reading merchant B's namespace",
 			},
 		},
 		{
@@ -2775,9 +2899,12 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 }`},
 			want: []string{
 				"hands runProbeMatrix runs that are not a []probeRun literal",
-				"makes no outcomeVisible run",
-				"makes no outcomeFiltered run",
-				"makes no outcomeForbidden run",
+				"makes no run of the wildcard grant reading merchant B's namespace",
+				"makes no run of the exact merchant-B grant",
+				"makes no run of the exact merchant-A grant reading merchant A's namespace for merchant A's fixture",
+				"makes no run of the exact merchant-A grant reading merchant A's namespace for merchant B's fixture",
+				"makes no run of the wildcard grant reading merchant A's namespace for merchant B's fixture",
+				"makes no run of the exact merchant-A grant reading merchant B's namespace",
 			},
 		},
 		{

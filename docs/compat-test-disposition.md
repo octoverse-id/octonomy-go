@@ -211,10 +211,11 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   half is new, because the table has to RUN: `TestTheIsolationSuiteRunsItsProbes` holds the isolation
   suite to the runners' tag and `^TestIntegration_` prefix, `loadHarness`'s skip to `newSmokeClient`'s
   required-gate shape, `runProbeMatrix` to asking every probe every run, and each isolation test to
-  the runs it must make under an **exact** merchant grant — a refusal, a filtered read, a visible
-  control, and for `include_global` the fail-closed read, which must look for the global fixture —
-  since under the wildcard grant authorization never refuses; plus the wildcard's authorized
-  opt-in beside the fail-closed read, without which a route ignoring the option would pass it too. `make test-integration` is pinned beside it, and the CI step is part
+  every run it must make (`isolationTests`), each read off its literal as a grant, a namespace, a
+  fixture, an option and an outcome: the refusal and the fail-closed read under an **exact**
+  merchant grant, since under the wildcard authorization never refuses; the fail-closed read aimed
+  at the global fixture; and every control beside them, without which a server that lost one
+  mechanism would pass the rest. `make test-integration` is pinned beside it, and the CI step is part
   of `smokeJobPin`.
 
 ## The `t.Cleanup` replacement model
@@ -245,9 +246,13 @@ caller uses it. So the rewrite is not mechanical, and this is the model, in thre
    `t.Fatalf` inside `seed` too, which ends the test goroutine with `runtime.Goexit`, running the root
    test's defers.
 
-A miss is loud in the direction that matters. A teardown that runs too early fails the test — a
-refused connection, a 404 on a row — rather than passing; a forgotten `defer` leaks a test server
-until the binary exits.
+For rules 1 and 2 a miss is loud in the direction that matters: a test server torn down too early
+refuses the connection and fails the test rather than passing, and a forgotten `defer` leaks a test
+server until the binary exits. Rule 3 is not loud. Its rows are a real server's, and deleting one
+deactivates it: a deactivated row is still served by id (`200`, `is_active` false), so a teardown
+that ran too early would leave most of the isolation matrix passing against rows no list shows. That
+is why the stack belongs to the root test, and why `TestTheIsolationSuiteRunsItsProbes` refuses a
+parallel subtest, which would outlive it.
 
 `main`'s sites, by rule: `octonomy_test.go` ×4 (1 helper, 3 test bodies), `health_test.go` ×5
 (1 helper, 4 bodies), `scope_test.go` ×1 (helper) — all ported; `pagination_test.go` ×1 (body, #99);

@@ -72,8 +72,10 @@ var smokeProbeExclusions = map[string]string{}
 
 // Every response type this SDK decodes needs a smoke probe.
 //
-// `make smoke` is the only check that sees the server's real response shapes. A
-// unit suite asserts the client against fixtures this repository wrote, so it
+// `make smoke` is the only check that holds EVERY response type against a real
+// server. The isolation suite beside it decodes the read responses too, but
+// asserts which rows come back rather than each type's shape. A unit suite
+// asserts the client against fixtures this repository wrote, so it
 // cannot see a fixture-versus-server divergence -- which is #32, where every
 // single-resource read decoded to an empty struct and a complete unit suite
 // stayed green. The smoke run closed that class, and it closed it only for the
