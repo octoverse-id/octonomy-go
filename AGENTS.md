@@ -63,7 +63,9 @@ on `main`.
   - **A leftover `omitzero`.** Go 1.13's `encoding/json` does not know the option and ignores it, so
     a ported `*string` tagged `,omitzero` emits `"field": null` on every PATCH that does not touch
     it — a PATCH that clears columns the caller never named. Optional write fields are `omitempty`
-    here. [#96](https://github.com/octoverse-id/octonomy-go/issues/96) tracks a guard for it.
+    here. `TestNoStructTagCarriesOmitzero` (`updateguard_test.go`, #96) refuses the option in every
+    struct tag the module ships, on any toolchain — the anonymous struct inside each `MarshalJSON`
+    included, which `update_test.go`'s round-trip sees only under go1.13.15.
   - **More than one `%w`.** Before Go 1.20, `fmt.Errorf` with two `%w` verbs returns an error with
     no `Unwrap` at all, so `errors.Is` finds neither. `%w` plus `%v` keeps one and loses the other.
     Where a sentinel and a cause must both survive, write a wrapper type whose `Unwrap()` returns the
@@ -222,6 +224,11 @@ stays a faithful, ergonomic client.
   (#37). A pointer receiver is skipped by `encoding/json` without a word, because `Update` takes the
   struct by value. Keep the method's field list in declaration order and add the type to
   `updateBodies` in `update_test.go`, which checks every field against the struct-tag encoding.
+  `updateguard_test.go` (#96) reads the source for what marshalling cannot see:
+  `TestUpdateBodiesNamesEveryUpdateType` fails until the row exists; `TestEveryUpdateFieldCanBeLeftOut`
+  refuses a pointer-receiver `MarshalJSON`, a `Metadata` field with no `MarshalJSON`, and a field that
+  is not `omitempty` or is not a pointer; and `TestEveryPatchBodyIsAnUpdateType` holds every PATCH
+  body to the `*Update` name those checks find their types by.
 - No new exported surface without doc comments and tests.
 
 ## Go Conventions

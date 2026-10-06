@@ -49,7 +49,7 @@ every file also meets `any` → `interface{}`.
 | `integration_suite_test.go` | 2,323 | `readProbes` and the isolation tests: **OWNED BY** #97. The rest: **EXCLUDE** | — | `t.Cleanup` ×10; `Optional` (`Set(…)` / `Null[…]`) on 23 lines; `List[…]`. Per test in *integration_suite_test.go* below |
 | `integration_test.go` | 1,701 | **PRESERVE** this line's own | `integration_test.go` | `t.Cleanup` ×1, on the root test (`smokeState.deleteLater`). The shapes it covers landed in #112 (v2 namespace, health, `Metadata{}`) and #113 (the resource groups). `main`'s `smokeProbes()` registry is **not** ported; see *integration_test.go* below |
 | `octonomy_test.go` | 952 | **PRESERVE** this line's own; `main`'s cases **PORTED** to `transport_test.go` | `octonomy_test.go` (351 lines, this line's), `transport_test.go` | `t.Cleanup` ×4; `Header.Values` (1.14) → `r.Header[http.CanonicalHeaderKey(k)]`; `List[…]`. Per test below |
-| `optional_test.go` | 406 | **EXCLUDE** | — | Everything it asserts is `Optional[T]` and its `omitzero` tags, and neither exists here: `Optional` is deliberately not ported, because the `*Update` structs keep their published pointer fields (`AGENTS.md`, *Porting from `main`*). What it guards is covered for this dialect by `update_test.go` (#112) and, for the source half, by [#96](https://github.com/octoverse-id/octonomy-go/issues/96) |
+| `optional_test.go` | 406 | **EXCLUDE** | — | Everything it asserts is `Optional[T]` and its `omitzero` tags, and neither exists here: `Optional` is deliberately not ported, because the `*Update` structs keep their published pointer fields (`AGENTS.md`, *Porting from `main`*). What it guards is covered for this dialect by `update_test.go` (#112) and, for the source half, by `updateguard_test.go` ([#96](https://github.com/octoverse-id/octonomy-go/issues/96)) |
 | `pagination_test.go` | 536 | **OWNED BY** [#99](https://github.com/octoverse-id/octonomy-go/issues/99) | — | All 14 tests are `TestEach_*`, and `Each` arrives with #99. `t.Cleanup` ×1, in a test body (rule 2); `List[…]` ×8 → the per-resource lists |
 | `readprobes_test.go` | 1,223 | **OWNED BY** #97, as a rewrite | — | A source-parsing guard with `doData[T]` / `doList[T]` resolution, like the two rewritten here. `sourceguard_test.go` holds the readers it shares with them, rewritten already |
 | `resolution_test.go` | 613 | **PORTED** in #113 (#94) | `resolution_test.go` | `url.Values.Has` ×2 |
@@ -93,7 +93,7 @@ stays. `main`'s cases went to `transport_test.go`.
 | `main` test | Verdict |
 | ----------- | ------- |
 | `TestMetadataIsStillAnAlias` | **PORTED** here. On this line the reason is this line's first release: it declared `Metadata` an alias, and a defined type would break a caller's type switch, which no major can carry |
-| `TestUpdateMetadata_OmitClearAndReplaceOnEveryPatchBody` | Covered by `update_test.go` (#112): the absent, `{}` and populated states on all three `*Update` bodies. `main`'s fourth state, an explicit `null`, needs `Optional` and does not exist here |
+| `TestUpdateMetadata_OmitClearAndReplaceOnEveryPatchBody` | Covered by `update_test.go` (#112): the absent, `{}` and populated states on every `Metadata` field of every `*Update` body in `updateBodies` (#96). `main`'s fourth state, an explicit `null`, needs `Optional` and does not exist here |
 | `TestDecodeMetadata`, `…_AbsentMetadataIsTheZeroValueForEveryT`, `…_MismatchIsAnErrorNotAPanic`, `…_UnmarshalableValue`, `…_LargeIntegerPrecision` | **Wait on a port of `DecodeMetadata`**, which this line lacks. No issue owns that port yet — see *Gaps* |
 
 ### `vocabularies_test.go`
@@ -262,7 +262,8 @@ test change:
 | `jsondepth_test.go`, `jsondepth_external_test.go` | #112 (#91) | Go 1.13's `encoding/json` has no depth limit and no cycle detection; `main`'s modern toolchain needs neither guard |
 | `sourceguard_test.go` | #95 | The AST readers the two rewritten guards share, and #97's port after them |
 | `transport_test.go` | #112 (#91) | Holds `main`'s `octonomy_test.go` cases, since this line's own `octonomy_test.go` is kept |
-| `update_test.go` | #112 (#91) | The `*Update` value-receiver `MarshalJSON` (#37) |
+| `update_test.go` | #112 (#91) | The `*Update` value-receiver `MarshalJSON` (#37), and the per-field wire round-trip of every `*Update` type |
+| `updateguard_test.go` | #96 | The source half of the `*Update` checks: no shipped struct tag names `omitzero`, which Go 1.13's `encoding/json` ignores; every `*Update` field can be left out; every PATCH body is a `*Update`; `updateBodies` names every `*Update` type |
 | `writebodies_test.go` | #113 (#94) | Every non-`*Update` request body against literal JSON |
 
 ## Keeping this table true

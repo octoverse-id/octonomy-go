@@ -8,7 +8,11 @@ package octonomy
 // The tests are driven by reflection over the struct, not by a list of fields,
 // so a field added to TagUpdate, VocabularyUpdate or TagAliasUpdate later is
 // covered the day it is added -- and one the hand-written MarshalJSON forgets to carry fails here
-// instead of being silently dropped from every PATCH.
+// instead of being silently dropped from every PATCH. A new *Update TYPE is
+// covered once it has a row in updateBodies, and TestUpdateBodiesNamesEveryUpdateType
+// (updateguard_test.go, #96) fails until it does. That file also reads the tags
+// from source, which catches what marshalling here cannot on a modern
+// toolchain: a leftover omitzero, which only Go 1.13's encoding/json ignores.
 
 import (
 	"bytes"
@@ -144,7 +148,52 @@ func TestUpdateMarshalJSON_AllFieldsMatchTheTagEncodingInOrder(t *testing.T) {
 	}
 }
 
-// The fix itself, #37: the three states of Metadata, on each *Update type.
+// The fix itself, #37: the three states of Metadata, on every Metadata field of
+// every *Update type in updateBodies -- which TestUpdateBodiesNamesEveryUpdateType
+// holds to the source -- asserted on the raw bytes, since a decoded map would
+// flatten absent and {} into the same nil. Each other field is left nil, so the
+// bytes are the Metadata key alone.
+func TestUpdateMetadataHasThreeStates(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata Metadata
+		want     string // the key's encoding; "" means the key is absent
+	}{
+		{"nil omits the key", nil, ""},
+		{"empty map sends {} and empties the object", Metadata{}, `{}`},
+		{"populated map replaces the object", Metadata{"team": "growth"}, `{"team":"growth"}`},
+	}
+	metadata := reflect.TypeOf(Metadata(nil))
+	fields := 0
+	for _, body := range updateBodies {
+		for i := 0; i < body.typ.NumField(); i++ {
+			i, f, body := i, body.typ.Field(i), body
+			if f.Type != metadata {
+				continue
+			}
+			fields++
+			for _, tt := range tests {
+				tt := tt
+				t.Run(body.name+"."+f.Name+"/"+tt.name, func(t *testing.T) {
+					v := reflect.New(body.typ).Elem()
+					v.Field(i).Set(reflect.ValueOf(tt.metadata))
+					want := `{}`
+					if tt.want != "" {
+						want = `{"` + jsonKey(f) + `":` + tt.want + `}`
+					}
+					if got := marshal(t, v.Interface()); string(got) != want {
+						t.Errorf("got %s, want %s", got, want)
+					}
+				})
+			}
+		}
+	}
+	if fields < knownUpdateTypes {
+		t.Errorf("found %d Metadata fields across updateBodies, want at least %d", fields, knownUpdateTypes)
+	}
+}
+
+// ...and beside the other fields, which the method must leave as they were.
 func TestUpdateMarshalJSON_MetadataHasThreeStates(t *testing.T) {
 	tests := []struct {
 		name     string
