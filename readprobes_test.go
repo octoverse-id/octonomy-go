@@ -102,9 +102,9 @@ var readProbeExclusions = map[string]string{
 // an embedded field in Client or a service, an aliased or non-struct service,
 // an exported Client field of any other type, and an exported field on a
 // service. And whatever way in those miss, the last check closes by what a
-// method does: an exported method anywhere in the package that issues a read,
-// or reaches the transport with a verb the classifier cannot resolve, must be
-// on Client or a wired service.
+// method does: an exported method or function anywhere in the package that
+// issues a read, or reaches the transport with a verb the classifier cannot
+// resolve, must be on Client or a wired service.
 func TestEveryReadMethodHasANamespaceProbe(t *testing.T) {
 	files := parsePackageSource(t)
 	suite := parseFileOrFatal(t, integrationSuiteFile)
@@ -136,8 +136,9 @@ func TestEveryReadMethodHasANamespaceProbe(t *testing.T) {
 //     claims;
 //  5. an exclusion that names no method of the surface, has a blank reason,
 //     names a write, or names a probed method;
-//  6. an exported read anywhere else in the package, which a caller could
-//     reach by some way the surface does not account for;
+//  6. an exported read -- method or package function -- anywhere else in the
+//     package, which a caller could reach by some way the surface does not
+//     account for;
 //
 // and a duplicate probe name, a table it cannot read at all, and a shape of
 // Client or a service the surface cannot be read off (surfaceShapeProblems).
@@ -198,36 +199,43 @@ func readProbeProblems(pkg map[string]*ast.File, suite *ast.File, suitePath stri
 	// it sits. Shapes that hand a caller a method are many -- an embedded field
 	// in another exported type, a value-held service, an interface a type
 	// satisfies -- and a rule per shape was found short three rounds running.
-	// So every exported method in the package that issues a read must be on
-	// Client or on a service a Client field holds, where the checks above see
-	// it; one anywhere else is a read the isolation suite never asks about.
+	// So every exported method or function in the package that issues a read
+	// must be on Client or on a service a Client field holds, where the checks
+	// above see it; one anywhere else is a read the isolation suite never asks
+	// about.
 	inventoried := map[string]bool{"Client": true}
 	for service := range fields {
 		inventoried[service] = true
 	}
+	types := indexTypes(pkg)
 	for _, key := range funcIndexKeys(index) {
 		decl := index[key]
 		recv := receiverTypeName(decl)
-		if decl.Recv == nil || recv == "" || inventoried[recv] || !ast.IsExported(decl.Name.Name) {
+		if !ast.IsExported(decl.Name.Name) || inventoried[recv] || (decl.Recv != nil && recv == "") {
 			continue
+		}
+		// A package function is off the surface by definition: no Client field
+		// leads to it, yet a caller names it directly.
+		where := recv + " is neither Client nor a service a Client field holds"
+		if decl.Recv == nil {
+			where = key + " is a package function, on no service a Client field holds"
 		}
 		switch classify(decl, index) {
 		case verbRead:
-			problems = append(problems, key+" issues a read, and "+recv+" is neither Client nor a service a "+
-				"Client field holds, so the guard inventories no probe for it -- yet an exported method is one a "+
-				"caller can reach, through an embedded field, another exported type or an interface. Declare it "+
-				"on a wired service, or teach the guard the way in")
+			problems = append(problems, key+" issues a read, and "+where+", so the guard inventories no probe "+
+				"for it -- yet an exported method or function is one a caller can reach, directly, through an "+
+				"embedded field, another exported type or an interface. Declare it on a wired service, or teach "+
+				"the guard the way in")
 		case verbUnknown:
 			// Unknown is fail-closed on the surface (check 2) and must be off it
 			// too, or a read sent through a method value or a closure would pass
 			// here as "sends nothing". Most exported methods off the surface --
 			// Error, String, MarshalJSON -- really do send nothing, so what is
 			// refused is the unknown method that reaches the transport.
-			if reachesTransport(decl, index, map[*ast.FuncDecl]bool{}) {
+			if reachesTransport(decl, index, types, map[*ast.FuncDecl]bool{}) {
 				problems = append(problems, key+" reaches the transport and the guard could not resolve its "+
-					"verb, and "+recv+" is neither Client nor a service a Client field holds, so an unresolved "+
-					"read there would be inventoried by nothing. Declare it on a wired service, or fix the "+
-					"classifier so it can see the verb")
+					"verb, and "+where+", so an unresolved read there would be inventoried by nothing. Declare "+
+					"it on a wired service, or fix the classifier so it can see the verb")
 			}
 		}
 	}
@@ -406,43 +414,139 @@ func typeDescription(typ ast.Expr) string {
 	return exprString(typ)
 }
 
-// reachesTransport reports whether fn's body -- closures included, and the
-// functions and methods it calls or takes as values, followed through the
-// shapes resolveCallee knows -- names a transport helper or a request
-// constructor at all: called, handed on as a value, or reached through a field
-// the classifier does not recognize as the client.
-func reachesTransport(fn *ast.FuncDecl, index funcIndex, seen map[*ast.FuncDecl]bool) bool {
+// reachesTransport reports whether fn's body -- closures included, and every
+// method or function it calls or takes as a value, followed -- names a transport
+// helper or a request constructor at all: called, handed on as a value, or
+// reached through any field that holds the client.
+//
+// A selector is read by its receiver's TYPE where exprType can name it: a
+// transport name on a receiver that is not the Client (`s.cache.do(…)`) is not
+// the transport, and a method on a receiver of type T is T's method -- so a
+// *Client in a field named anything (`a.c.fetch(…)`) is followed into Client's
+// fetch. Where the type cannot be named, the selector is taken at its word: a
+// transport name counts, and a Client method of that name is followed. That
+// is the fail-closed direction. A request constructor is net/http's only.
+func reachesTransport(fn *ast.FuncDecl, index funcIndex, types typeIndex, seen map[*ast.FuncDecl]bool) bool {
 	if fn == nil || fn.Body == nil || seen[fn] {
 		return false
 	}
 	seen[fn] = true
 	recv, recvType := receiverName(fn), receiverTypeName(fn)
 	found := false
+	selNames := map[*ast.Ident]bool{}
+	follow := func(callee *ast.FuncDecl) {
+		if callee != nil {
+			found = reachesTransport(callee, index, types, seen)
+		}
+	}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		// A REFERENCE is followed, not only a call: `fetch := a.fetch;
-		// fetch(ctx)` hands the method on as a value, and its body is what
-		// sends the request.
-		expr, ok := n.(ast.Expr)
-		if !ok {
-			return true
-		}
-		if sel, ok := expr.(*ast.SelectorExpr); ok {
-			if _, ok := transportCalls[sel.Sel.Name]; ok {
-				found = true
-				return false
+		switch e := n.(type) {
+		case *ast.SelectorExpr:
+			selNames[e.Sel] = true
+			typ, resolved := exprType(fn, e.X, types)
+			if t, ok := transportCalls[e.Sel.Name]; ok {
+				if (t.shape == "http" && isIdent(e.X, "http")) || (t.shape == "client" && (!resolved || typ == "Client")) {
+					found = true
+					return false
+				}
 			}
-		}
-		if _, ok := expr.(*ast.CallExpr); !ok {
-			if callee := resolveCallee(expr, recv, recvType, index); callee != nil {
-				found = reachesTransport(callee, index, seen)
+			switch {
+			case resolved:
+				follow(index[typ+"."+e.Sel.Name])
+			default:
+				callee := resolveCallee(e, recv, recvType, index)
+				if callee == nil {
+					callee = index["Client."+e.Sel.Name]
+				}
+				follow(callee)
+			}
+		case *ast.Ident:
+			// A package function, called or taken as a value -- but not the name
+			// half of a selector, nor a local that shadows the function.
+			if !selNames[e] && len(declarationsOf(e.Name, fn)) == 0 {
+				if f := index[e.Name]; f != nil && f.Recv == nil {
+					follow(f)
+				}
 			}
 		}
 		return !found
 	})
 	return found
+}
+
+// exprType names the declared type of x inside fn, stars stripped, when it can
+// be sure of it: an identifier declared once and never reassigned -- a
+// receiver, a parameter, `var x T`, `x := T{}` or `&T{}` -- or a field selected
+// off one, read from the struct's declaration. Anything else is unresolved.
+func exprType(fn *ast.FuncDecl, x ast.Expr, types typeIndex) (string, bool) {
+	switch e := unparen(x).(type) {
+	case *ast.Ident:
+		decls := declarationsOf(e.Name, fn)
+		if len(decls) != 1 {
+			return "", false
+		}
+		switch d := decls[0].(type) {
+		case *ast.Field:
+			if fn.Body == nil || len(bindingsOf(fn.Body, e.Name)) == 0 {
+				return declaredTypeName(d.Type)
+			}
+		case *ast.ValueSpec:
+			if d.Type != nil && len(bindingsOf(fn.Body, e.Name)) == 1 {
+				return declaredTypeName(d.Type)
+			}
+		case *ast.AssignStmt:
+			if len(bindingsOf(fn.Body, e.Name)) != 1 || len(d.Lhs) != len(d.Rhs) {
+				return "", false
+			}
+			for i, lhs := range d.Lhs {
+				if !isIdent(lhs, e.Name) {
+					continue
+				}
+				value := unparen(d.Rhs[i])
+				if addr, ok := value.(*ast.UnaryExpr); ok && addr.Op == token.AND {
+					value = unparen(addr.X)
+				}
+				if lit, ok := value.(*ast.CompositeLit); ok {
+					return declaredTypeName(lit.Type)
+				}
+			}
+		}
+	case *ast.SelectorExpr:
+		owner, ok := exprType(fn, e.X, types)
+		if !ok {
+			return "", false
+		}
+		spec, ok := types[owner]
+		if !ok {
+			return "", false
+		}
+		st, ok := unparen(spec.Type).(*ast.StructType)
+		if !ok {
+			return "", false
+		}
+		for _, field := range st.Fields.List {
+			for _, name := range field.Names {
+				if name.Name == e.Sel.Name {
+					return declaredTypeName(field.Type)
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// declaredTypeName is a type expression's name, one star stripped: *Client is Client.
+func declaredTypeName(typ ast.Expr) (string, bool) {
+	if star, ok := unparen(typ).(*ast.StarExpr); ok {
+		typ = star.X
+	}
+	if ident, ok := unparen(typ).(*ast.Ident); ok {
+		return ident.Name, true
+	}
+	return "", false
 }
 
 func funcIndexKeys(index funcIndex) []string {
@@ -1111,11 +1215,14 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 // skip is loadHarness's, behind the required gate.
 func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 	var problems []string
-	// The seeded rows' teardown is this test's own defer (rule 2 and 3 of the
-	// t.Cleanup model), which holds only while every subtest is sequential.
+	// The seeded rows' teardown is this test's own defer (rules 2 and 3 of the
+	// t.Cleanup model), which holds only while its subtests are sequential; and
+	// the Vocabularies.List walk counts a collection another test running at
+	// the same time would change.
 	if callsParallel(fn, helpers, map[*ast.FuncDecl]bool{}) {
-		problems = append(problems, fn.Name.Name+" calls Parallel, directly or through a helper; its seeded "+
-			"rows are torn down by its own defer, which a parallel subtest outlives")
+		problems = append(problems, fn.Name.Name+" calls Parallel, directly or through a helper. The isolation "+
+			"tests run in sequence: a parallel subtest outlives the deferred teardown of the rows it reads, and "+
+			"two isolation tests at once change the collections the Vocabularies.List walk counts")
 	}
 	for _, why := range skipsIn(fn, helpers) {
 		problems = append(problems, fn.Name.Name+" "+why+"; an isolation test that can skip itself is a "+
@@ -1172,9 +1279,9 @@ func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 	})
 	if callsParallel(fn, helpers, map[*ast.FuncDecl]bool{}) {
 		problems = append(problems, "runProbeMatrix calls Parallel, directly or through a helper. Its subtests "+
-			"close over the loops' probe and run, which before Go 1.22 every parallel subtest reads at its last "+
-			"value -- six copies of one run -- and the fixtures' teardown is the root test's defer, which a "+
-			"parallel subtest outlives")
+			"close over the loops' probe and run, which before Go 1.22 a parallel subtest reads at the loop's "+
+			"last value -- copies of one probe or one run, not the matrix -- and the fixtures' teardown is the "+
+			"root test's defer, which a parallel subtest outlives")
 	}
 
 	const shape = "; the matrix must be `for _, probe := range readProbes(h)` at the top of its body, " +
@@ -1273,7 +1380,7 @@ func callsParallel(fn *ast.FuncDecl, h smokeHelpers, seen map[*ast.FuncDecl]bool
 		}
 		switch callee := unparen(call.Fun).(type) {
 		case *ast.SelectorExpr:
-			if callee.Sel.Name == "Parallel" {
+			if callee.Sel.Name == "Parallel" && mayBeTestingT(fn, callee.X) {
 				found = true
 			} else if typ := receiverTypeOf(fn, callee.X, h); typ != "" {
 				found = callsParallel(h.methods[typ+"."+callee.Sel.Name], h, seen)
@@ -1286,6 +1393,45 @@ func callsParallel(fn *ast.FuncDecl, h smokeHelpers, seen map[*ast.FuncDecl]bool
 		return !found
 	})
 	return found
+}
+
+// mayBeTestingT reports whether a Parallel call's receiver may be a test's T:
+// anything but an identifier declared once with another explicit type. An
+// unrelated type's Parallel method is not testing's, and a receiver the reader
+// cannot name is taken to be one, which is the fail-closed direction.
+func mayBeTestingT(fn *ast.FuncDecl, x ast.Expr) bool {
+	ident, ok := unparen(x).(*ast.Ident)
+	if !ok {
+		return true
+	}
+	decls := declarationsOf(ident.Name, fn)
+	if len(decls) != 1 {
+		return true
+	}
+	var typ ast.Expr
+	switch d := decls[0].(type) {
+	case *ast.Field:
+		typ = d.Type
+	case *ast.ValueSpec:
+		typ = d.Type
+	case *ast.AssignStmt:
+		for i, lhs := range d.Lhs {
+			if isIdent(lhs, ident.Name) && len(d.Lhs) == len(d.Rhs) {
+				if lit, ok := unparen(d.Rhs[i]).(*ast.CompositeLit); ok {
+					typ = lit.Type
+				}
+			}
+		}
+	}
+	if typ == nil {
+		return true
+	}
+	switch name := exprString(typ); name {
+	case "*testing.T", "testing.TB", "?":
+		return true
+	default:
+		return false
+	}
 }
 
 // isFindOfRun reports whether call is probe.find(<ctx>, run.client,
@@ -1825,6 +1971,41 @@ func (r *tagReads) Peek() string { return "" }
 			entries:    cleanProbeEntries,
 			exclusions: cleanProbeExclusions,
 			want:       "AdminClient.Recent reaches the transport and the guard could not resolve its verb",
+		},
+		{
+			name:       "an exported package function that reads",
+			pkg:        "\nfunc Fetch(ctx context.Context, c *Client) error {\n\treturn c.doList(ctx, http.MethodGet, \"/tags\", nil, nil)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "Fetch reaches the transport and the guard could not resolve its verb, and Fetch is a package function",
+		},
+		{
+			// The receiver's TYPE decides, not the field's name: a *Client in a
+			// field called c is the client.
+			name:       "a client held in a field of another name",
+			pkg:        "\ntype AdminClient struct{ c *Client }\nfunc (a *AdminClient) Recent(ctx context.Context) error { return a.c.fetch(ctx) }\nfunc (c *Client) fetch(ctx context.Context) error {\n\treturn c.doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport",
+		},
+		{
+			name:       "a transport name on a receiver it cannot type is taken at its word",
+			pkg:        "\ntype AdminClient struct{}\nfunc (a *AdminClient) Recent(ctx context.Context) error {\n\treturn lookup().doList(ctx, http.MethodGet, \"/audit-logs\", nil, nil)\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+			want:       "AdminClient.Recent reaches the transport",
+		},
+		{
+			name:       "a do on a receiver of another type is not the transport",
+			pkg:        "\ntype AdminClient struct{ cache *memo }\ntype memo struct{}\nfunc (m *memo) do(ctx context.Context, verb, key string) error { return nil }\nfunc (a *AdminClient) Warm(ctx context.Context) error {\n\treturn a.cache.do(ctx, http.MethodDelete, \"tags\")\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
+		},
+		{
+			name:       "another package's NewRequest is not net/http's",
+			pkg:        "\ntype AdminClient struct{}\nfunc (a *AdminClient) Build() error {\n\t_, err := fake.NewRequest(\"GET\", \"/x\", nil)\n\treturn err\n}\n",
+			entries:    cleanProbeEntries,
+			exclusions: cleanProbeExclusions,
 		},
 		{
 			name:       "an exported method off the surface that sends nothing",
@@ -2876,6 +3057,22 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 			extra: "func (h harness) settle(t *testing.T) { t.Parallel() }\n",
 			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith("\th := loadHarness(t)\n", "\th := loadHarness(t)\n\th.settle(t)\n")},
 			want:  []string{"TestIntegration_IncludeGlobalFailsClosed calls Parallel"},
+		},
+		{
+			// Parallel on a type that is not a test's T is not testing's.
+			name: "an unrelated type's Parallel",
+			suite: isolationSuiteFixture{extra: `type pool struct{}
+
+func (p pool) Parallel() {}
+
+func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	_ = h
+	var p pool
+	p.Parallel()
+	q := pool{}
+	q.Parallel()
+}`},
 		},
 		{
 			name:  "an isolation test that runs in parallel",

@@ -206,17 +206,17 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   `main`'s, it reads `Client`'s own exported methods too, and fails closed on any shape that would
   hand a caller a method it does not read: an embedded field, an aliased service, an exported
   `Client` field that is not a `*FooService`, an exported field on a service — and on an exported
-  method anywhere else in the package that issues a read, or reaches the transport with a verb it
-  cannot resolve, which closes the surface by what a method does rather than by one more shape. And one
-  half is new, because the table has to RUN: `TestTheIsolationSuiteRunsItsProbes` holds the isolation
-  suite to the runners' tag and `^TestIntegration_` prefix, `loadHarness`'s skip to `newSmokeClient`'s
-  required-gate shape, `runProbeMatrix` to asking every probe every run, and each isolation test to
-  every run it must make (`isolationTests`), each read off its literal as a grant, a namespace, a
-  fixture, an option and an outcome: the refusal and the fail-closed read under an **exact**
-  merchant grant, since under the wildcard authorization never refuses; the fail-closed read aimed
-  at the global fixture; and every control beside them, without which a server that lost one
-  mechanism would pass the rest. `make test-integration` is pinned beside it, and the CI step is part
-  of `smokeJobPin`.
+  method or package function anywhere else in the package that issues a read, or reaches the
+  transport with a verb it cannot resolve, which closes the surface by what a method does rather
+  than by one more shape. And one half is new, because the table has to RUN:
+  `TestTheIsolationSuiteRunsItsProbes` holds the isolation suite to the runners' tag and
+  `^TestIntegration_` prefix, `loadHarness`'s skip to `newSmokeClient`'s required-gate shape,
+  `runProbeMatrix` to asking every probe every run, and each isolation test to every run it must
+  make (`isolationTests`), each read off its literal as a grant, a namespace, a fixture, an option
+  and an outcome: the refusal and the fail-closed read under an **exact** merchant grant, since
+  under the wildcard authorization never refuses; the fail-closed read aimed at the global fixture;
+  and every control beside them, without which a server that lost one mechanism would pass the rest.
+  `make test-integration` is pinned beside it, and the CI step is part of `smokeJobPin`.
 
 ## The `t.Cleanup` replacement model
 

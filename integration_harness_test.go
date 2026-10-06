@@ -45,9 +45,11 @@ import (
 	octonomy "github.com/octoverse-id/octonomy-go"
 )
 
-// suiteTimeout bounds one top-level test. Generous: a single test can make
-// close to a hundred round trips against a container that is also writing
-// audit rows and outbox events for every one of them.
+// suiteTimeout bounds each phase of a top-level test that talks to the server:
+// every seed's writes get a context of this length, and so do all of the
+// matrix's reads together. Generous: the matrix alone is close to a hundred
+// round trips against a container that is also writing audit rows and outbox
+// events for every one of them. Teardown steps get cleanupTimeout each.
 const suiteTimeout = 120 * time.Second
 
 // cleanupTimeout bounds one seeded row's teardown. It is a context of its own

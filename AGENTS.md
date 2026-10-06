@@ -282,8 +282,8 @@ stays a faithful, ergonomic client.
   reason, never in silence. The surface it reads is the exported methods declared on `Client` and on
   each `*FooService` an exported `Client` field holds. Any shape that would hand a caller a method
   outside it — an embedded field, an aliased service, an exported `Client` field of another type, an
-  exported field on a service — fails it, and so does an exported method anywhere else in the
-  package that issues a read, or reaches the transport with a verb it cannot resolve, whatever way a
+  exported field on a service — fails it, and so does an exported method or package function
+  anywhere else in the package that issues a read, or reaches the transport with a verb it cannot resolve, whatever way a
   caller would reach it. On this line a new transport helper
   on `*Client` that takes the verb goes in `transportCalls` with the index of its `method` parameter;
   `TestTransportCallsMatchTheHelpersSignatures` holds the table to `transport.go`.
