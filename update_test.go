@@ -233,9 +233,10 @@ func TestUpdateMarshalJSON_AllFieldsMatchTheTagEncodingInOrder(t *testing.T) {
 
 // The fix itself, #37: the three states of Metadata, on every Metadata field of
 // every *Update type in updateBodies -- which TestUpdateBodiesNamesEveryUpdateType
-// holds to the source -- asserted on the raw bytes, since a decoded map would
-// flatten absent and {} into the same nil. Each other field is left nil, so the
-// bytes are the Metadata key alone.
+// holds to the source -- asserted on the raw bytes. Decoded back into a struct,
+// "metadata":null and an absent key both leave a nil map, and a null is not what
+// any of the three states asks the server for. Each other field is left nil, so
+// the bytes are the Metadata key alone.
 func TestUpdateMetadataHasThreeStates(t *testing.T) {
 	tests := []struct {
 		name     string

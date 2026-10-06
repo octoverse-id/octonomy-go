@@ -192,9 +192,10 @@ func TestRequestBodyNamesEveryHelperThatSendsOne(t *testing.T) {
 }
 
 // helperBody reads which parameter a transport helper hands doRaw as the
-// request body: its index, or -1 for nil. It also requires the method doRaw is
-// handed to be the helper's parameter at requestMethodArg, since that is the
-// argument TestEveryPatchBodyIsAnUpdateType reads at the helper's call sites.
+// request body: its index, or -1 for nil. It also requires every helper, a
+// bodyless one too, to hand doRaw its parameter at requestMethodArg as the
+// method, since that is the argument TestEveryPatchBodyIsAnUpdateType reads at
+// the helper's call sites.
 //
 // Both parameters must reach doRaw as they arrived. `body = envelope{Data: body}`
 // before the call would send a type the call sites never name, and a reassigned
@@ -228,19 +229,20 @@ func helperBody(fn *ast.FuncDecl) (int, string) {
 			why = "calls doRaw with too few arguments to read its body"
 			return false
 		}
-		if isIdent(call.Args[rawBodyArg], "nil") {
-			return true
-		}
-		if body = indexOf(call.Args[rawBodyArg]); body < 0 {
-			why = "hands doRaw a body that is not one of its parameters, so what it sends is decided here"
-			return false
-		}
 		if indexOf(call.Args[rawMethodArg]) != requestMethodArg {
 			why = "hands doRaw a method that is not its parameter " + strconv.Itoa(requestMethodArg) +
 				", where TestEveryPatchBodyIsAnUpdateType reads it"
 			return false
 		}
-		for _, i := range []int{body, requestMethodArg} {
+		handedOn := []int{requestMethodArg}
+		if !isIdent(call.Args[rawBodyArg], "nil") {
+			if body = indexOf(call.Args[rawBodyArg]); body < 0 {
+				why = "hands doRaw a body that is not one of its parameters, so what it sends is decided here"
+				return false
+			}
+			handedOn = append(handedOn, body)
+		}
+		for _, i := range handedOn {
 			if rebinds(fn.Body, params[i]) {
 				why = "assigns to its parameter " + params[i] + " before handing it to doRaw, so what " +
 					"is sent is not what its call sites pass"
@@ -1025,6 +1027,11 @@ func TestHelperBodyReadsWhatAHelperHandsDoRaw(t *testing.T) {
 		{"a method rewritten before the call", `func (c *Client) send(ctx context.Context, method string, body interface{}) error {
 			if method == "PUT" { method = http.MethodPatch }
 			_, _, err := c.doRaw(ctx, method, "/t", nil, body); return err }`, 0, "assigns to its parameter method"},
+		{"a bodyless helper rewriting its method", `func (c *Client) doList(ctx context.Context, method, path string) error {
+			method = http.MethodPatch
+			_, _, err := c.doRaw(ctx, method, path, nil, nil); return err }`, 0, "assigns to its parameter method"},
+		{"a bodyless helper with a method of its own", `func (c *Client) doList(ctx context.Context, method, path string) error {
+			_, _, err := c.doRaw(ctx, http.MethodPatch, path, nil, nil); return err }`, 0, "method"},
 		{"no call", `func (c *Client) send(ctx context.Context) error { return nil }`, 0, "0 times"},
 		{"two calls", `func (c *Client) send(ctx context.Context, method string, body interface{}) error {
 			c.doRaw(ctx, method, "/a", nil, body); _, _, err := c.doRaw(ctx, method, "/b", nil, body); return err }`, 0, "2 times"},
