@@ -226,8 +226,11 @@ func (h harness) scoped(namespaceID string, extra ...octonomy.RequestOption) []o
 // registering it belongs to the ROOT test. main's seed registers each row's
 // delete with t.Cleanup, which runs when the test finishes; t.Cleanup needs Go
 // 1.14, and a defer inside seed would delete the rows before the probes read
-// them -- every visible run would then fail on a 404, which is loud, but the
-// filtered runs would pass against rows that no longer exist.
+// them. Deletion is deactivation here, and a deactivated row is still served by
+// id -- 200, is_active false -- so most of the matrix would go on passing
+// against rows no list shows: only the list and resolution probes, which leave
+// inactive rows out, would fail. That is quiet in the wrong direction, which is
+// why the teardown waits for the root test.
 //
 // So the root test owns the stack and drains it with one defer at its top:
 //

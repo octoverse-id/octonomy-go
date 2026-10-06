@@ -294,7 +294,9 @@ stays a faithful, ergonomic client.
   way to reach the refusal path, and the only way `include_global`'s fail-closed branch runs at all.
   Reaching for the wildcard token because it is the convenient one is how an isolation assertion
   comes to assert nothing; `TestTheIsolationSuiteRunsItsProbes` refuses an isolation test whose
-  required runs (`isolationTests`) are not under an exact grant.
+  required runs (`isolationTests`) are not under the grant they need — exact for the refusal and the
+  fail-closed read, the wildcard for the authorized opt-in — or whose fail-closed read does not look
+  for the global fixture.
 - **The isolation suite runs in the required go1.13 smoke job**, as a step with its own
   `^TestIntegration_` selector — a step and not a job, because a new job is advisory until branch
   protection names it, and an isolation test in an advisory job, or matched by no selector, asserts
@@ -302,8 +304,9 @@ stays a faithful, ergonomic client.
   `TestIntegration_` prefix, `loadHarness`'s single skip behind `OCTONOMY_SMOKE_REQUIRED` (the
   smoke run's knob, reused), and `runProbeMatrix` ranging over `readProbes`. The CI step is part of
   `smokeJobPin`, and `make test-integration` equals `isolationRecipePin` (`readprobes_test.go`).
-  The client builder there sets `APIVersion: octonomy.APIV2` — `main`'s relies on its own default,
-  and on this line's `/api/v1` default every namespaced read is refused client-side.
+  The client builder there sets `APIVersion: octonomy.APIV2` — `main`'s, at 5e40964, relies on its
+  `/api/v2` default there, and on this line's `/api/v1` default every namespaced read is refused
+  client-side.
 - **A `TestMain` is exactly `os.Exit(m.Run())`.** Before Go 1.15 a `TestMain` that returns exits 0
   over failing tests, and `TestNoTestMainHidesAFailure` refuses any other shape anywhere in the
   repository: it walks for every test file, a nested module's included, rather than listing

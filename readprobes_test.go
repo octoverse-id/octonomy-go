@@ -904,15 +904,18 @@ func stringField(lit *ast.CompositeLit, key string) (string, bool) {
 
 // --- the table must run -------------------------------------------------------
 
-// isolationRequirement is one run an isolation test must make under an EXACT
-// merchant grant -- a client from h.merchantClient, never the wildcard.
+// isolationRequirement is one run an isolation test must make: the outcome it
+// expects, the grant it reads under, and -- where the run means nothing
+// without them -- the option it carries and the row it looks for.
 type isolationRequirement struct {
 	expect        string // the outcome constant the run expects
+	wildcard      bool   // under the wildcard grant (h.wildcard), not an exact one (h.merchantClient)
 	includeGlobal bool   // the run must carry WithIncludeGlobal
+	global        bool   // the run must look for the global fixture, a row from h.seed(…, "")
 }
 
-// isolationTests names the tests that run the probe table, and the runs under
-// an exact grant each one must make.
+// isolationTests names the tests that run the probe table, and the runs each
+// one must make.
 //
 // WHICH TOKEN A RUN USES IS THE TEST. The wildcard grant matches every
 // partition, global included, so under it authorization never refuses anything
@@ -922,6 +925,12 @@ type isolationRequirement struct {
 // an exact-grant visible run is the control that proves the grant reaches its
 // own rows at all -- without it, a token that reached nothing would pass every
 // negative.
+//
+// AND WHICH ROW IT LOOKS FOR. The fail-closed run means something only when it
+// asks for a GLOBAL row: pointed at merchant B's fixture it passes whether or
+// not include_global fails closed. And it needs the wildcard's opt-in beside it
+// -- the same option and row, visible -- or a route that ignored the option
+// altogether would pass it too.
 var isolationTests = map[string][]isolationRequirement{
 	"TestIntegration_NamespaceIsolation": {
 		{expect: "outcomeVisible"},
@@ -929,8 +938,9 @@ var isolationTests = map[string][]isolationRequirement{
 		{expect: "outcomeForbidden"},
 	},
 	"TestIntegration_IncludeGlobalFailsClosed": {
+		{expect: "outcomeFiltered", includeGlobal: true, global: true},
 		{expect: "outcomeVisible", includeGlobal: true},
-		{expect: "outcomeFiltered", includeGlobal: true},
+		{expect: "outcomeVisible", includeGlobal: true, global: true, wildcard: true},
 	},
 }
 
@@ -943,8 +953,8 @@ var isolationTests = map[string][]isolationRequirement{
 // suite is read for what makes it RUN -- built by the runners' tag, gated by a
 // skip that the required run turns into a failure, its tests selected by the
 // runners' prefix, each of them running the matrix over readProbes -- and for
-// what makes it MEAN something: the runs listed in isolationTests, under exact
-// grants. The runners themselves are pinned (isolationRecipePin below, and the
+// what makes it MEAN something: the runs listed in isolationTests, each under
+// the grant, option and fixture it needs. The runners themselves are pinned (isolationRecipePin below, and the
 // isolation step in smokeprobes_test.go's smokeJobPin).
 //
 // WHERE IT ENDS, as with the smoke guard: it reads presence, not reachability,
@@ -1041,7 +1051,7 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 				"never executed")
 			continue
 		}
-		problems = append(problems, exactGrantProblems(fn, isolationTests[name])...)
+		problems = append(problems, runRequirementProblems(fn, isolationTests[name])...)
 	}
 	return problems
 }
@@ -1051,6 +1061,17 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 // skip is loadHarness's, behind the required gate.
 func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 	var problems []string
+	// The seeded rows' teardown is this test's own defer (rule 2 and 3 of the
+	// t.Cleanup model), which holds only while every subtest is sequential.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := unparen(call.Fun).(*ast.SelectorExpr); ok && sel.Sel.Name == "Parallel" {
+				problems = append(problems, fn.Name.Name+" calls Parallel; its seeded rows are torn down by its "+
+					"own defer, which a parallel subtest outlives")
+			}
+		}
+		return true
+	})
 	for _, why := range skipsIn(fn, helpers) {
 		problems = append(problems, fn.Name.Name+" "+why+"; an isolation test that can skip itself is a "+
 			"green run that asserted nothing after the skip. Fail instead -- loadHarness is the one place "+
@@ -1101,6 +1122,13 @@ func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers) []string {
 		case *ast.BranchStmt:
 			problems = append(problems, "runProbeMatrix uses "+node.Tok.String()+", which can leave a probe or a "+
 				"run out of the matrix while the test stays green")
+		case *ast.CallExpr:
+			if sel, ok := unparen(node.Fun).(*ast.SelectorExpr); ok && sel.Sel.Name == "Parallel" {
+				problems = append(problems, "runProbeMatrix calls Parallel. Its subtests close over the loops' "+
+					"probe and run, which before Go 1.22 every parallel subtest reads at its last value -- six "+
+					"copies of one run -- and the fixtures' teardown is the root test's defer, which a parallel "+
+					"subtest outlives")
+			}
 		}
 		return true
 	})
@@ -1200,12 +1228,12 @@ func isFindOfRun(call *ast.CallExpr, probeVar, runVar string) bool {
 	return true
 }
 
-// exactGrantProblems reads the []probeRun literals a test hands runProbeMatrix
-// and reports each requirement no run meets under an exact merchant grant.
-func exactGrantProblems(fn *ast.FuncDecl, want []isolationRequirement) []string {
+// runRequirementProblems reads the []probeRun literals a test hands
+// runProbeMatrix and reports each requirement no run meets.
+func runRequirementProblems(fn *ast.FuncDecl, want []isolationRequirement) []string {
 	type run struct {
-		exact, includeGlobal bool
-		expect               string
+		exact, wildcard, includeGlobal, global bool
+		expect                                 string
 	}
 	var runs []run
 	var problems []string
@@ -1246,12 +1274,15 @@ func exactGrantProblems(fn *ast.FuncDecl, want []isolationRequirement) []string 
 				switch key.Name {
 				case "client":
 					r.exact = boundToCall(fn, kv.Value, "merchantClient")
+					r.wildcard = boundToCall(fn, kv.Value, "wildcard")
 				case "expect":
 					if ident, ok := unparen(kv.Value).(*ast.Ident); ok {
 						r.expect = ident.Name
 					}
 				case "extra":
 					r.includeGlobal = carriesCall(fn, kv.Value, "WithIncludeGlobal")
+				case "want":
+					r.global = boundToGlobalSeed(fn, kv.Value)
 				}
 			}
 			runs = append(runs, r)
@@ -1261,21 +1292,56 @@ func exactGrantProblems(fn *ast.FuncDecl, want []isolationRequirement) []string 
 	for _, req := range want {
 		met := false
 		for _, r := range runs {
-			if r.exact && r.expect == req.expect && (!req.includeGlobal || r.includeGlobal) {
+			grant := r.exact
+			if req.wildcard {
+				grant = r.wildcard
+			}
+			if grant && r.expect == req.expect && (!req.includeGlobal || r.includeGlobal) && (!req.global || r.global) {
 				met = true
 			}
 		}
-		if !met {
-			what := req.expect + " run under an exact merchant grant"
-			if req.includeGlobal {
-				what += " carrying WithIncludeGlobal"
-			}
-			problems = append(problems, fn.Name.Name+" makes no "+what+" (a client from h.merchantClient). "+
-				"The wildcard grant matches every partition, so under it authorization never refuses and "+
-				"include_global never fails closed; a run on it cannot stand in for this one")
+		if met {
+			continue
 		}
+		what, why := " run under an exact merchant grant", "a client from h.merchantClient. The wildcard grant "+
+			"matches every partition, so under it authorization never refuses and include_global never fails "+
+			"closed; a run on it cannot stand in for this one"
+		if req.wildcard {
+			what, why = " run under the wildcard grant", "a client from h.wildcard. It is the control that the "+
+				"option works at all: without it, a route that ignored include_global would pass the fail-closed "+
+				"run too"
+		}
+		if req.includeGlobal {
+			what += " carrying WithIncludeGlobal"
+		}
+		if req.global {
+			what += " looking for the global fixture"
+			why = "the row from h.seed(…, \"\"); " + why
+		}
+		problems = append(problems, fn.Name.Name+" makes no "+req.expect+what+" ("+why+")")
 	}
 	return problems
+}
+
+// boundToGlobalSeed reports whether expr is an identifier bound exactly once
+// in fn to `h.seed(…, "")` -- a fixture seeded in the global namespace.
+func boundToGlobalSeed(fn *ast.FuncDecl, expr ast.Expr) bool {
+	if !boundToCall(fn, expr, "seed") {
+		return false
+	}
+	assign := bindingsOf(fn.Body, unparen(expr).(*ast.Ident).Name)[0].(*ast.AssignStmt)
+	for i, lhs := range assign.Lhs {
+		if !isIdent(lhs, unparen(expr).(*ast.Ident).Name) {
+			continue
+		}
+		call := unparen(assign.Rhs[i]).(*ast.CallExpr)
+		if len(call.Args) == 0 {
+			return false
+		}
+		last, ok := unparen(call.Args[len(call.Args)-1]).(*ast.BasicLit)
+		return ok && last.Kind == token.STRING && last.Value == `""`
+	}
+	return false
 }
 
 // boundToCall reports whether expr is an identifier bound exactly once in fn,
@@ -2200,6 +2266,9 @@ func loadHarness(t *testing.T) harness {
 }
 
 func (h harness) wildcard(t *testing.T) *octonomy.Client { return h.client(t, "wildcard") }
+func (h harness) seed(t *testing.T, td *teardown, c *octonomy.Client, ns string) namespaceFixture {
+	return namespaceFixture{}
+}
 func (h harness) merchantClient(t *testing.T, m merchant) *octonomy.Client { return h.client(t, m.token) }
 func (h harness) client(t *testing.T, token string) *octonomy.Client {
 	c, err := octonomy.New(octonomy.Config{Token: token})
@@ -2209,6 +2278,31 @@ func (h harness) client(t *testing.T, token string) *octonomy.Client {
 	return c
 }
 ` + extra
+}
+
+// includeGlobalFixture is the include_global test in the required shape: the
+// fail-closed run, the exact grant's own-rows control, and the wildcard's
+// authorized opt-in.
+const includeGlobalFixture = `func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
+	h := loadHarness(t)
+	wildcard := h.wildcard(t)
+	clientA := h.merchantClient(t, h.merchantA)
+	fixtureGlobal := h.seed(t, &rows, wildcard, "")
+	includeGlobal := []octonomy.RequestOption{octonomy.WithIncludeGlobal()}
+	runProbeMatrix(ctx, t, h, []probeRun{
+		{name: "fails closed", client: clientA, want: fixtureGlobal, extra: includeGlobal, expect: outcomeFiltered},
+		{name: "own rows", client: clientA, extra: includeGlobal, expect: outcomeVisible},
+		{name: "opt-in", client: wildcard, want: fixtureGlobal, extra: includeGlobal, expect: outcomeVisible},
+	})
+}`
+
+// includeGlobalWith is includeGlobalFixture with one edit, which must apply:
+// a fixture whose edit silently missed would test the clean shape.
+func includeGlobalWith(from, to string) string {
+	if !strings.Contains(includeGlobalFixture, from) {
+		panic("includeGlobalWith: the fixture has no " + strconv.Quote(from))
+	}
+	return strings.Replace(includeGlobalFixture, from, to, 1)
 }
 
 // isolationSuiteFixture is a suite whose runProbeMatrix and two isolation
@@ -2243,15 +2337,7 @@ func (f isolationSuiteFixture) source() string {
 }`
 	}
 	if f.includeGlobal == "" {
-		f.includeGlobal = `func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
-	h := loadHarness(t)
-	clientA := h.merchantClient(t, h.merchantA)
-	includeGlobal := []octonomy.RequestOption{octonomy.WithIncludeGlobal()}
-	runProbeMatrix(ctx, t, h, []probeRun{
-		{name: "fails closed", client: clientA, extra: includeGlobal, expect: outcomeFiltered},
-		{name: "own rows", client: clientA, extra: includeGlobal, expect: outcomeVisible},
-	})
-}`
+		f.includeGlobal = includeGlobalFixture
 	}
 	return "package octonomy_test\n\n" + f.matrix + "\n\n" + f.isolation + "\n\n" + f.includeGlobal + "\n\n" + f.extra + "\n"
 }
@@ -2583,19 +2669,8 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 		},
 		{
 			name: "the matrix run from a closure",
-			suite: isolationSuiteFixture{includeGlobal: `func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
-	h := loadHarness(t)
-	clientA := h.merchantClient(t, h.merchantA)
-	includeGlobal := []octonomy.RequestOption{octonomy.WithIncludeGlobal()}
-	runs := func() {
-		runProbeMatrix(ctx, t, h, []probeRun{{client: clientA, extra: includeGlobal, expect: outcomeVisible}})
-	}
-	_ = runs
-	runProbeMatrix(ctx, t, h, []probeRun{
-		{client: clientA, extra: includeGlobal, expect: outcomeFiltered},
-		{client: clientA, extra: includeGlobal, expect: outcomeVisible},
-	})
-}`},
+			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith("\trunProbeMatrix(ctx, t, h, []probeRun{\n",
+				"\tlater := func() { runProbeMatrix(ctx, t, h, nil) }\n\t_ = later\n\trunProbeMatrix(ctx, t, h, []probeRun{\n")},
 			want: []string{"runs the probe matrix from inside a function literal"},
 		},
 		{
@@ -2614,16 +2689,53 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 		},
 		{
 			name: "the fail-closed run without include_global",
-			suite: isolationSuiteFixture{includeGlobal: `func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
-	h := loadHarness(t)
-	clientA := h.merchantClient(t, h.merchantA)
-	includeGlobal := []octonomy.RequestOption{octonomy.WithIncludeGlobal()}
-	runProbeMatrix(ctx, t, h, []probeRun{
-		{client: clientA, expect: outcomeFiltered},
-		{client: clientA, extra: includeGlobal, expect: outcomeVisible},
-	})
+			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(
+				"want: fixtureGlobal, extra: includeGlobal, expect: outcomeFiltered",
+				"want: fixtureGlobal, expect: outcomeFiltered")},
+			want: []string{"makes no outcomeFiltered run under an exact merchant grant carrying WithIncludeGlobal looking for the global fixture"},
+		},
+		{
+			// One edited identifier: aimed at merchant B's row, the run passes
+			// whether or not include_global fails closed.
+			name: "the fail-closed run looking for merchant B",
+			suite: isolationSuiteFixture{includeGlobal: strings.Replace(includeGlobalWith(
+				"\tincludeGlobal := ",
+				"\tfixtureB := h.seed(t, &rows, wildcard, h.merchantB.id)\n\tincludeGlobal := "),
+				"client: clientA, want: fixtureGlobal", "client: clientA, want: fixtureB", 1)},
+			want: []string{"makes no outcomeFiltered run under an exact merchant grant carrying WithIncludeGlobal looking for the global fixture"},
+		},
+		{
+			name: "no authorized opt-in beside the fail-closed run",
+			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(
+				"\t\t{name: \"opt-in\", client: wildcard, want: fixtureGlobal, extra: includeGlobal, expect: outcomeVisible},\n", "")},
+			want: []string{"makes no outcomeVisible run under the wildcard grant carrying WithIncludeGlobal looking for the global fixture"},
+		},
+		{
+			name: "the opt-in on an exact grant is no control",
+			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith(
+				"{name: \"opt-in\", client: wildcard,", "{name: \"opt-in\", client: clientA,")},
+			want: []string{"makes no outcomeVisible run under the wildcard grant"},
+		},
+		{
+			name: "a matrix that runs its subtests in parallel",
+			suite: isolationSuiteFixture{matrix: `func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRun) {
+	for _, probe := range readProbes(h) {
+		t.Run(probe.name, func(t *testing.T) {
+			for _, run := range runs {
+				t.Run(run.name, func(t *testing.T) {
+					t.Parallel()
+					_, _ = probe.find(ctx, run.client, run.readNS, run.want, run.extra...)
+				})
+			}
+		})
+	}
 }`},
-			want: []string{"makes no outcomeFiltered run under an exact merchant grant carrying WithIncludeGlobal"},
+			want: []string{"runProbeMatrix calls Parallel"},
+		},
+		{
+			name:  "an isolation test that runs in parallel",
+			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith("\th := loadHarness(t)\n", "\th := loadHarness(t)\n\tt.Parallel()\n")},
+			want:  []string{"TestIntegration_IncludeGlobalFailsClosed calls Parallel"},
 		},
 		{
 			name: "an exact-grant client rebound to the wildcard",
@@ -2673,17 +2785,9 @@ func TestIsolationSuiteProblemsRefusesACeremonialSuite(t *testing.T) {
 			want: []string{"TestIntegration_IncludeGlobalFailsClosed does not run the probe matrix"},
 		},
 		{
-			name: "a required isolation test with no gate",
-			suite: isolationSuiteFixture{includeGlobal: `func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
-	h := harness{}
-	clientA := h.merchantClient(t, h.merchantA)
-	includeGlobal := []octonomy.RequestOption{octonomy.WithIncludeGlobal()}
-	runProbeMatrix(ctx, t, h, []probeRun{
-		{client: clientA, extra: includeGlobal, expect: outcomeFiltered},
-		{client: clientA, extra: includeGlobal, expect: outcomeVisible},
-	})
-}`},
-			want: []string{"TestIntegration_IncludeGlobalFailsClosed does not call loadHarness"},
+			name:  "a required isolation test with no gate",
+			suite: isolationSuiteFixture{includeGlobal: includeGlobalWith("\th := loadHarness(t)\n", "\th := harness{}\n")},
+			want:  []string{"TestIntegration_IncludeGlobalFailsClosed does not call loadHarness"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

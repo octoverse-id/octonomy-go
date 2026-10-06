@@ -37,7 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     transport with a verb it cannot resolve. Rewritten from `main`'s for this line's transport calls, with
     a fixture per condition. **`TestTheIsolationSuiteRunsItsProbes`** holds the suite to what makes
     it run — its build tag, its prefix, one skip behind the required gate, the matrix ranging over
-    `readProbes` — and each isolation test to its runs under an exact grant, since under the wildcard
+    `readProbes` — and each isolation test to its runs under the grant each needs, the fail-closed
+    read against the global fixture with the wildcard's opt-in beside it, since under the wildcard
     authorization never refuses.
 - **The `*Update` tag guard** ([#96](https://github.com/octoverse-id/octonomy-go/issues/96), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests and docs only; no exported

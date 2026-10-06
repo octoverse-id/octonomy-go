@@ -185,7 +185,8 @@ Two guards keep it honest without a server. `TestEveryReadMethodHasANamespacePro
 names or calls the wrong method; add the probe in the change that adds the read.
 `TestTheIsolationSuiteRunsItsProbes` holds the suite to what makes it run — the `integration` tag,
 the `TestIntegration_` prefix, one skip behind `OCTONOMY_SMOKE_REQUIRED` — and each isolation test to
-its runs under an exact grant.
+the runs it needs, under the grant each needs and, for the fail-closed read, against the global
+fixture.
 
 ```bash
 make dev-server        # boots a real Octonomy, mints the three grants

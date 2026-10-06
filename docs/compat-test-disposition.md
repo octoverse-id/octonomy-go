@@ -210,10 +210,11 @@ to read here: their floors would fail them, and only a rewrite makes them pass f
   cannot resolve, which closes the surface by what a method does rather than by one more shape. And one
   half is new, because the table has to RUN: `TestTheIsolationSuiteRunsItsProbes` holds the isolation
   suite to the runners' tag and `^TestIntegration_` prefix, `loadHarness`'s skip to `newSmokeClient`'s
-  required-gate shape, `runProbeMatrix` to ranging over `readProbes`, and each isolation test to the
-  runs it must make under an **exact** merchant grant — a refusal, a filtered read, a visible
-  control, and for `include_global` the fail-closed read — since under the wildcard grant
-  authorization never refuses. `make test-integration` is pinned beside it, and the CI step is part
+  required-gate shape, `runProbeMatrix` to asking every probe every run, and each isolation test to
+  the runs it must make under an **exact** merchant grant — a refusal, a filtered read, a visible
+  control, and for `include_global` the fail-closed read, which must look for the global fixture —
+  since under the wildcard grant authorization never refuses; plus the wildcard's authorized
+  opt-in beside the fail-closed read, without which a route ignoring the option would pass it too. `make test-integration` is pinned beside it, and the CI step is part
   of `smokeJobPin`.
 
 ## The `t.Cleanup` replacement model
