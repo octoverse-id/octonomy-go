@@ -1447,8 +1447,18 @@ func mayBeTestingT(x ast.Expr, info *types.Info) bool {
 	if typ == nil {
 		return true
 	}
-	// No pointer to look through: a pointer to an import's type is itself
-	// invalid here, and a pointer to an interface has no Parallel method.
+	// Look through pointers. The toolchains differ here, and this line's real
+	// one is the reason: go1.13.15's go/types types `*testing.T`, with testing
+	// stubbed empty, as a pointer to an invalid type, where a modern go/types
+	// makes the whole type invalid. Without this, a direct t.Parallel() passes
+	// the guard on go1.13 alone -- which a modern-toolchain run cannot see.
+	for {
+		ptr, ok := typ.Underlying().(*types.Pointer)
+		if !ok {
+			break
+		}
+		typ = ptr.Elem()
+	}
 	switch under := typ.Underlying().(type) {
 	case *types.Interface:
 		return true
