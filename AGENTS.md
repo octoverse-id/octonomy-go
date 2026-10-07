@@ -268,6 +268,45 @@ stays a faithful, ergonomic client.
   smoke job equal `smokeRecipePin` and `smokeJobPin` in `smokeprobes_test.go`. Changing one means
   re-checking what the pins' comment lists against a real server, then updating the pin in the same
   commit.
+- **A new read method needs a probe in `readProbes`** (`integration_suite_test.go`, #97). That table is
+  what makes "a merchant-A client never sees a merchant-B row" a statement about the whole authenticated
+  read surface rather than about whichever endpoints someone remembered. A read endpoint nobody probed is
+  where a cross-merchant leak lives. **`TestEveryReadMethodHasANamespaceProbe` (`readprobes_test.go`,
+  no build tag) enforces this.** It resolves each surface method's verb from the source —
+  following a call into a helper, since `Health.Live` names no verb of its own — and fails on a read
+  with no probe, a probe naming a method that no longer exists, **a probe whose `find` closure calls a
+  different endpoint than its name claims**, a duplicate name, and a stale or unargued exclusion. A
+  method whose verb it cannot resolve fails too — unless it is probed or excluded — rather than
+  passing as "not a read": treating the unknown case as silence is the defect the guard exists to
+  prevent. A read that genuinely cannot leak across namespaces goes in `readProbeExclusions` with its
+  reason, never in silence. The surface it reads is the exported methods declared on `Client` and on
+  each `*FooService` an exported `Client` field holds. Any shape that would hand a caller a method
+  outside it — an embedded field, an aliased service, an exported `Client` field of another type, an
+  exported field on a service — fails it, and so does an exported method or package function
+  anywhere else in the package that issues a read, or reaches the transport with a verb it cannot
+  resolve, whatever way a caller would reach it. On this line a new transport helper on `*Client`
+  that takes the verb goes in `transportCalls` with the index of its `method` parameter;
+  `TestTransportCallsMatchTheHelpersSignatures` holds the table to `transport.go`.
+- **Which harness token a test uses IS the test.** The wildcard grant matches every partition,
+  global included, so under it authorization never refuses anything — it can only demonstrate the
+  server's namespace FILTER. The per-merchant exact grants
+  (`OCTONOMY_TEST_NAMESPACE_A_TOKEN`/`_B_TOKEN`, minted by `scripts/octonomy-harness.sh`) are the only
+  way to reach the refusal path, and the only way `include_global`'s fail-closed branch runs at all.
+  Reaching for the wildcard token because it is the convenient one is how an isolation assertion
+  comes to assert nothing. `TestTheIsolationSuiteRunsItsProbes` refuses an isolation test missing
+  any run `isolationTests` lists, each read off its `probeRun` literal as a grant, a namespace, a
+  fixture, an option and an outcome — so a run moved to the wildcard, a fail-closed read aimed at a
+  merchant's row, or a deleted control fails it. A new run the suite needs goes in that table.
+- **The isolation suite runs in the required go1.13 smoke job**, as a step with its own
+  `^TestIntegration_` selector — a step and not a job, because a new job is advisory until branch
+  protection names it, and an isolation test in an advisory job, or matched by no selector, asserts
+  nothing. `TestTheIsolationSuiteRunsItsProbes` holds the suite to the `integration` tag, the
+  `TestIntegration_` prefix, `loadHarness`'s single skip behind `OCTONOMY_SMOKE_REQUIRED` (the
+  smoke run's knob, reused), and `runProbeMatrix` ranging over `readProbes`. The CI step is part of
+  `smokeJobPin`, and `make test-integration` equals `isolationRecipePin` (`readprobes_test.go`).
+  The client builder there sets `APIVersion: octonomy.APIV2` — `main`'s, at 5e40964, relies on its
+  `/api/v2` default there, and on this line's `/api/v1` default every namespaced read is refused
+  client-side.
 - **A `TestMain` is exactly `os.Exit(m.Run())`.** Before Go 1.15 a `TestMain` that returns exits 0
   over failing tests, and `TestNoTestMainHidesAFailure` refuses any other shape anywhere in the
   repository: it walks for every test file, a nested module's included, rather than listing
@@ -291,7 +330,8 @@ stays a faithful, ergonomic client.
 
 - Run `make check` before pushing and `make release-check` before a release. On this line neither is
   the real gate: also run `make test-go113` (real go1.13 toolchain) and, for anything touching
-  decoding or transport, `make dev-server && make smoke` against a real server.
+  decoding or transport, `make dev-server && make smoke` against a real server — with
+  `make test-integration` beside it for anything touching scoping or a read method.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
 - **Describe `main` with a link, or with the commit a comparison was made at — never by restating
   its current state.** A sentence about what `main` has *now* rots on `main`'s schedule, and nothing

@@ -15,8 +15,8 @@
 // namespace pair decoding off a real /api/v2 response, and every method of the
 // resource groups #94 ported -- the three composite bodies the vendored specs
 // describe wrongly among them, decoded to their real counts. Assertions about what the
-// server DOES -- isolation, authorization -- belong in a suite of their own;
-// porting one is #97.
+// server DOES -- isolation, authorization -- belong in a suite of their own:
+// integration_suite_test.go (#97), run by `make test-integration`.
 //
 // Run it against the container harness:
 //
@@ -48,8 +48,9 @@ import (
 // OCTONOMY_SMOKE_REQUIRED=1 removes the skip entirely, and CI sets it. Skipping
 // is right on a laptop with no Docker; in the required CI job it is the worst
 // possible outcome, because a credential export that silently broke would leave
-// this line's ONLY real-server check reporting green without running. The
-// release in #29 cannot be recalled, so "green" has to mean "ran".
+// this line's only real-server job -- this smoke run, and the isolation suite
+// beside it -- reporting green without running. The release in #29 cannot be
+// recalled, so "green" has to mean "ran".
 func newSmokeClient(t *testing.T) *octonomy.Client {
 	t.Helper()
 

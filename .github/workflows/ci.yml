@@ -200,11 +200,16 @@ jobs:
 
   # THE COMPAT LINE'S ONLY CHECK AGAINST A REAL SERVER.
   #
+  # Two suites run here against one booted harness: the smoke test (does the
+  # client decode what the server sends?) and, since #97, the namespace
+  # isolation suite (does the server keep one merchant's rows from another?).
+  #
   # It replaces the bootstrap-only `harness` job this workflow was forked from:
-  # on this line the smoke test IS the harness's consumer, so booting a container
-  # to assert only that the container booted would be a second Docker job for no
-  # added coverage. The credentials still cross a step boundary (the harness
-  # exports them, the test step reads them), which is what that job was proving.
+  # on this line the two suites below ARE the harness's consumers, so booting a
+  # container to assert only that the container booted would be a second Docker
+  # job for no added coverage. The credentials still cross a step boundary (the
+  # harness exports them, the test steps read them), which is what that job was
+  # proving.
   #
   # Why it is worth blocking a merge on -- the part that does not decay: a flake
   # costs a re-run, while an unverified `v1.x` tag cannot be recalled at all
@@ -215,9 +220,12 @@ jobs:
   smoke:
     name: go1.13 smoke test
     runs-on: ubuntu-latest
-    # Docker pull + migrations + readiness, then a sub-second test. The
-    # harness's own gates are bounded well inside this; hitting it means Docker
-    # or the registry hung.
+    # Docker pull + migrations + readiness, then the two suites, which take
+    # seconds against a healthy server. This is a cap on the whole job, not a
+    # diagnosis: the harness's own gates are bounded well inside it, but the
+    # suites' deadlines are per phase -- each seed, each matrix, each teardown
+    # step -- and together exceed it, so a hang and a server slow for long
+    # enough can both reach it first.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -238,11 +246,29 @@ jobs:
           # Without this the test SKIPS when OCTONOMY_TEST_BASE_URL is absent,
           # and a skip is a green job. The composite action checks only that the
           # env file exists, not that the variables survived $GITHUB_ENV -- so a
-          # broken export would leave this line's ONLY real-server check
-          # reporting success without running a single assertion. Required mode
-          # turns that absence into a failure.
+          # broken export would leave this job, the line's only check against a
+          # real server, reporting success without running a single assertion,
+          # here and in the isolation step below. Required mode turns that
+          # absence into a failure in both.
           OCTONOMY_SMOKE_REQUIRED: "1"
         run: go test -tags=integration -count=1 -run '^TestSmoke_' -v ./...
+      # The namespace isolation suite (#97): every authenticated read method,
+      # asked whether a merchant-A client can see a merchant-B row, under the
+      # per-merchant exact grants the harness mints. It is a step of THIS job
+      # rather than a job of its own because this job is already a required
+      # check: a new job would report green on every PR until branch protection
+      # named it, and an isolation test that runs in an advisory job -- or in no
+      # job, as a port whose selector nothing matched would have -- is a test
+      # that asserts nothing. The harness above serves both steps.
+      #
+      # Its own selector, not the smoke step's: `^TestSmoke_` matches no
+      # isolation test. TestTheIsolationSuiteRunsItsProbes holds the suite to
+      # this prefix, and OCTONOMY_SMOKE_REQUIRED turns loadHarness's skip into a
+      # failure exactly as it does newSmokeClient's.
+      - name: Namespace isolation suite against the real server
+        env:
+          OCTONOMY_SMOKE_REQUIRED: "1"
+        run: go test -tags=integration -count=1 -run '^TestIntegration_' -v ./...
       - name: Capture container logs
         if: failure()
         run: make dev-server-logs

@@ -1,8 +1,9 @@
 package octonomy
 
 // The AST readers the source-parsing guards share: TestEveryResponseTypeCanRefuseAnEmptyDecode
-// (identityfields_test.go) and TestEveryResponseTypeHasASmokeProbe
-// (smokeprobes_test.go), and #97's port of readprobes_test.go after them.
+// (identityfields_test.go), TestEveryResponseTypeHasASmokeProbe
+// (smokeprobes_test.go), and TestEveryReadMethodHasANamespaceProbe
+// (readprobes_test.go, #97).
 //
 // Every mention of main in this file means main at 5e40964, which keeps most of
 // these in readprobes_test.go and identityfields_test.go. They are in a file of
@@ -28,8 +29,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
+
+var parsedWith sync.Map // *ast.File -> *token.FileSet; see parseFixture
 
 // parsePackageSource parses every non-test .go file of this package, the way
 // TestEveryResponseDecodeIsDepthBounded does, and refuses a tree it cannot have
@@ -50,6 +54,7 @@ func parsePackageSource(t *testing.T) map[string]*ast.File {
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
 		}
+		parsedWith.Store(f, fset)
 		if f.Name.Name != "octonomy" {
 			t.Fatalf("%s is package %s, not octonomy -- the guard would read another package's types", path, f.Name.Name)
 		}
@@ -829,5 +834,11 @@ func parseFixture(t *testing.T, src string) map[string]*ast.File {
 	if err != nil {
 		t.Fatalf("parse fixture: %v", err)
 	}
+	parsedWith.Store(file, fset)
 	return map[string]*ast.File{"fixture.go": file}
 }
+
+// parsedWith records the FileSet each parsed file's positions belong to, for
+// the guards that type-check what they parsed (checkFiles, readprobes_test.go):
+// go/types reads a file's metadata through the set that parsed it. Keyed by
+// *ast.File, filled by the parse helpers above and by parseFilesOrFatal.

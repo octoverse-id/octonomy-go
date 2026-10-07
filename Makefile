@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check version-check \
-	dev-server dev-server-down dev-server-logs compat-guard compat-guard-test smoke test-go113 tools-check
+	dev-server dev-server-down dev-server-logs compat-guard compat-guard-test smoke test-integration test-go113 \
+	tools-check
 
 # A real go1.13 toolchain, for the one gate a modern toolchain cannot provide.
 # Override with the path to any go1.13.x binary:
@@ -77,6 +78,12 @@ compat-guard-test: ## Run the compat-guard fixture tests (release-PR and tag pat
 smoke: ## Run the integration smoke test against a booted harness (see dev-server)
 	@if [ -f .octonomy-harness.env ]; then set -a; . ./.octonomy-harness.env; set +a; fi; \
 	go test -tags=integration -count=1 -run '^TestSmoke_' -v ./...
+
+# Pinned, like smoke: isolationRecipePin in readprobes_test.go is this rule's
+# text, and the comment above it lists what a change must re-check.
+test-integration: ## Run the namespace isolation suite against a booted harness (see dev-server)
+	@if [ -f .octonomy-harness.env ]; then set -a; . ./.octonomy-harness.env; set +a; fi; \
+	go test -tags=integration -count=1 -run '^TestIntegration_' -v ./...
 
 test-go113: ## Build, vet and test with a REAL go1.13 toolchain (override GO113=<path>)
 	@command -v $(GO113) >/dev/null 2>&1 || { \
