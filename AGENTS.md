@@ -285,11 +285,16 @@ stays a faithful, ergonomic client.
   the client genuinely cannot send a documented input, that is the finding: an `unsent_inputs` row with
   the reason, never a driver that skips the field. Such a gap row is held to the field's absence
   (`TestRecordedGapsStillHaveNoField`, with the field named in `recordedGaps`), since while it stands
-  it would hide that field being ported and never driven. **The `contract-*` recipes are pinned**
-  (`gateRecipePins`, `acceptance_test.go`) against make's own rule database (`make -pq`), never the
-  Makefile's text, so an override make computes — a target list in a variable, an `$(eval …)` —
-  fails like a literal one; changing a recipe means updating its pin in the same commit. The CI `test` job runs `make contract-test` and
-  `make contract-check`; `TestTheGateRunsOnEveryPullRequest` holds the steps there.
+  it would hide that field being ported and never driven.
+- **What runs the gate is pinned from outside it.** CI runs `make contract-test` and `make
+  contract-check` in the `test` job and the identity check in `compat-guard`. `contractgate_test.go`
+  pins both jobs and ci.yml's `on:` block as text, and the `contract-*` and `release-check` recipes
+  as make's own rule database resolves them under each real goal (`make -pq <target>`), so a step
+  `env`, a checkout `ref`, and a recipe overridden literally or by anything make computes all fail.
+  It is in the ROOT package on purpose: `go test ./...` runs it in the required jobs without going
+  through a make target it guards, where a copy inside the gate's module stopped running the moment
+  `contract-test` was overridden. Changing a pinned job or recipe means updating its pin in the same
+  commit.
 - **Every response type needs a smoke call**, and so does every list envelope. A `TestSmoke_`
   function in `integration_test.go` must call a method that decodes it, on a client that function
   built, or

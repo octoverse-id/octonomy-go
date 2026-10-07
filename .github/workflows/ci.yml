@@ -88,6 +88,10 @@ jobs:
       #
       # First that the gate still works, then what it says: a drift gate never
       # shown to fail cannot be told apart from one that cannot.
+      #
+      # This job, compat-guard's, the `on:` block and the recipes behind these
+      # targets are pinned by contractgate_test.go in the root package -- which the
+      # `go test ./...` step above runs directly, never through a target it guards.
       - name: Test the contract gate
         run: make contract-test
       - name: Check the vendored contract against the SDK

@@ -3189,21 +3189,28 @@ func TestUnreadableBodyFallbackIsAsserted(t *testing.T) {
 
 // --- the workflows ---------------------------------------------------------------
 //
-// On this line the three tests main has here at 5e40964 are two, because only the
-// offline half was ported (#98). main at that commit runs the networked half --
-// `make contract-drift`, which fetches the server's contract from another
-// repository -- on a schedule, and GitHub fires a schedule only on the default
-// branch. A copy of that workflow
-// here would read as a weekly comparison that never once ran, so this line has
-// none, and main's test that the networked job never runs on a pull request
-// became a test that no workflow here runs it at all.
+// main's three tests here at 5e40964 are one in this file. Only the offline half
+// was ported (#98): main at that commit runs the networked half -- `make
+// contract-drift`, which fetches the server's contract from another repository --
+// on a schedule, and GitHub fires a schedule only on the default branch. A copy of
+// that workflow here would read as a weekly comparison that never once ran, so
+// this line has none, and main's test that the networked job never runs on a pull
+// request became a test that no workflow here runs it at all.
+//
+// The other half -- that the offline gate DOES run on every pull request, and that
+// the recipes behind it are the reviewed ones -- is not here at all. It lives in
+// the root package (contractgate_test.go), because it guards the very `make
+// contract-test` that runs this file: override that recipe and every test in this
+// module stops running, the one that would have refused the override included. A
+// guard has to run outside the thing it guards, and `go test ./...` at the root
+// runs in the required jobs without going through make.
 
 // ciWorkflow is the slice of a workflow file these tests read. Decoded with
 // yaml.v3, never matched as text: ci.yml explains the gate in comments that name
 // the networked half, and a scan that read comments would report the explanation
-// as the violation. `on` is not read here: GitHub accepts a scalar there
-// (`on: pull_request`, as dependabot-auto-merge.yml writes it) as well as a
-// mapping, and only gateWorkflowProblems needs the triggers, of ci.yml alone.
+// as the violation. `on` is not read: GitHub accepts a scalar there (`on:
+// pull_request`, as dependabot-auto-merge.yml writes it) as well as a mapping, and
+// nothing here needs the triggers.
 type ciWorkflow struct {
 	Jobs map[string]ciJob `yaml:"jobs"`
 }
@@ -3316,299 +3323,6 @@ func TestNetworkedRunProblemsRefusesEachForm(t *testing.T) {
 	if got := networkedRunProblems("ci.yml", clean); len(got) != 0 {
 		t.Errorf("the offline half is not the networked one: %v", got)
 	}
-}
-
-// gateSteps are the steps #98's acceptance needs on every pull request into this
-// line, by the job each must run in. The jobs are named by their ids, which is
-// what this file can see; that each one's check context is REQUIRED is branch
-// protection's business, and the reason these are steps in existing jobs rather
-// than a job of their own -- a new job's context blocks nothing until someone
-// adds it there (ci.yml says the same over the steps).
-var gateSteps = []struct{ job, run string }{
-	{"test", "make contract-test"},
-	{"test", "make contract-check"},
-	{"compat-guard", "make contract-identity"},
-	{"compat-guard", "make contract-identity-test"},
-}
-
-// gateStepKeys and gateJobKeys are CLOSED lists: a key not named here, on a gate
-// step or on a job running one, is refused rather than interpreted. Every key
-// GitHub offers that changes whether or how a step's command runs -- `if`,
-// `continue-on-error`, `env` (MAKEFLAGS=-n turns every `make` into a dry run),
-// `shell`, `working-directory`, a job's `defaults`, `container` or `needs` -- is
-// therefore refused without being listed, and so is one GitHub adds later. An
-// enumeration of the dangerous keys was the first version, and a review walked a
-// step-level `env:` straight past it.
-var (
-	gateStepKeys = map[string]bool{"name": true, "run": true}
-	gateJobKeys  = map[string]bool{"name": true, "runs-on": true, "strategy": true, "steps": true, "timeout-minutes": true}
-)
-
-// gateJobActions and checkoutInputs close the other way a gate job can run its
-// steps against something other than the pull request: WHAT it checks out. A
-// checkout `with: ref: support/go1.13` runs every gate step, exactly as pinned,
-// against the base branch, and every required context goes green over a PR the
-// gate never saw -- a review constructed it. So the only actions a gate job may
-// use are these, and a checkout may say nothing but how deep to fetch: `ref`,
-// `repository` and `path` are refused with every other input, whatever GitHub
-// adds later.
-var (
-	gateJobActions = []string{"actions/checkout@", "actions/setup-go@"}
-	checkoutInputs = map[string]bool{"fetch-depth": true}
-)
-
-// TestTheGateRunsOnEveryPullRequest is the other half of that split, and #98's
-// third acceptance line: the half that CAN be trusted on a pull request has to
-// actually run there, and fail the job when it fails, or the argument above
-// becomes an excuse for checking nothing at all.
-func TestTheGateRunsOnEveryPullRequest(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, problem := range gateWorkflowProblems(raw) {
-		t.Error(problem)
-	}
-}
-
-// gateWorkflowProblems reads a ci.yml and reports every way the gate's steps fail
-// to run, or to fail the job, on a pull request into this line.
-//
-// What it does not read, and why that is accepted: a step that runs EARLIER in
-// the same job can still change the environment of the ones after it -- `echo
-// MAKEFLAGS=-n >> "$GITHUB_ENV"` -- and the only defence against that is reading
-// what every other step's shell does, which is the parser #95 learned not to
-// write. It is adversarial-only: nobody neutralizes a gate that way by accident.
-// A workflow-level `env` or `defaults` is refused for this file by the root
-// package's smokeprobes_test.go; a matrix or trigger edit that drops a required
-// check context leaves the pull request waiting on it, which fails closed.
-func gateWorkflowProblems(raw []byte) []string {
-	var workflow struct {
-		On   yaml.Node                       `yaml:"on"`
-		Jobs map[string]map[string]yaml.Node `yaml:"jobs"`
-	}
-	if err := yaml.Unmarshal(raw, &workflow); err != nil {
-		return []string{fmt.Sprintf("ci.yml does not parse: %v", err)}
-	}
-	if len(workflow.Jobs) == 0 {
-		return []string{"read no jobs from ci.yml -- the shape changed and this check stopped checking"}
-	}
-	var problems []string
-
-	var triggers map[string]yaml.Node
-	if err := workflow.On.Decode(&triggers); err != nil {
-		problems = append(problems, fmt.Sprintf("ci.yml's `on:` is not a mapping of triggers: %v", err))
-	}
-	if pr, onPR := triggers["pull_request"]; !onPR {
-		problems = append(problems, "ci.yml does not run on pull_request")
-	} else {
-		var trigger struct {
-			Branches []string `yaml:"branches"`
-		}
-		if err := pr.Decode(&trigger); err != nil || !contains(trigger.Branches, "support/go1.13") {
-			problems = append(problems, fmt.Sprintf("ci.yml's pull_request trigger names %v and not support/go1.13 -- the gate would not run on a pull request into this line", trigger.Branches))
-		}
-	}
-
-	checkedJobs, checkedSteps := map[string]bool{}, map[string]bool{}
-	for _, want := range gateSteps {
-		job, ok := workflow.Jobs[want.job]
-		if !ok {
-			problems = append(problems, fmt.Sprintf("ci.yml has no %q job, which is where `%s` belongs", want.job, want.run))
-			continue
-		}
-		if !checkedJobs[want.job] {
-			checkedJobs[want.job] = true
-			for _, key := range sortedNodeKeys(job) {
-				if !gateJobKeys[key] {
-					problems = append(problems, fmt.Sprintf("ci.yml job %q carries `%s:`, which this check does not allow on a job running the contract gate -- it can change whether or how the gate's steps run", want.job, key))
-				}
-			}
-		}
-		var steps []map[string]yaml.Node
-		if node, ok := job["steps"]; !ok || node.Decode(&steps) != nil {
-			problems = append(problems, fmt.Sprintf("ci.yml job %q has no readable steps", want.job))
-			continue
-		}
-		if !checkedSteps[want.job] {
-			checkedSteps[want.job] = true
-			problems = append(problems, gateJobUsesProblems(want.job, steps)...)
-		}
-		found := 0
-		for _, step := range steps {
-			var run string
-			if node, ok := step["run"]; !ok || node.Decode(&run) != nil || strings.TrimSpace(run) != want.run {
-				continue
-			}
-			found++
-			for _, key := range sortedNodeKeys(step) {
-				if !gateStepKeys[key] {
-					problems = append(problems, fmt.Sprintf("ci.yml job %q runs `%s` with `%s:` on the step, so what it runs, or whether its failure fails the job, is no longer the command alone", want.job, want.run, key))
-				}
-			}
-		}
-		if found != 1 {
-			problems = append(problems, fmt.Sprintf("ci.yml job %q runs `%s` %d times, want exactly once", want.job, want.run, found))
-		}
-	}
-
-	// The identity check has to decide whether the pin is on main, which a shallow
-	// clone cannot -- the script refuses one, so a checkout reverted to the default
-	// depth turns the job red rather than green, but this says why first.
-	deep := false
-	var guardSteps []map[string]yaml.Node
-	if node, ok := workflow.Jobs["compat-guard"]["steps"]; ok {
-		_ = node.Decode(&guardSteps)
-	}
-	for _, step := range guardSteps {
-		var uses string
-		if node, ok := step["uses"]; ok {
-			_ = node.Decode(&uses)
-		}
-		if !strings.HasPrefix(uses, "actions/checkout@") {
-			continue
-		}
-		var with map[string]string
-		if node, ok := step["with"]; ok {
-			_ = node.Decode(&with)
-		}
-		deep = with["fetch-depth"] == "0"
-	}
-	if !deep {
-		problems = append(problems, "ci.yml job \"compat-guard\" checks out without `fetch-depth: 0`, and the identity check needs main's history to place the pin")
-	}
-	return problems
-}
-
-// gateJobUsesProblems holds a gate job's `uses:` steps to gateJobActions, and its
-// checkouts to checkoutInputs.
-func gateJobUsesProblems(job string, steps []map[string]yaml.Node) []string {
-	var problems []string
-	for _, step := range steps {
-		node, ok := step["uses"]
-		if !ok {
-			continue
-		}
-		var uses string
-		if node.Decode(&uses) != nil {
-			problems = append(problems, fmt.Sprintf("ci.yml job %q has a step whose `uses:` is not a string", job))
-			continue
-		}
-		allowed := false
-		for _, prefix := range gateJobActions {
-			allowed = allowed || strings.HasPrefix(uses, prefix)
-		}
-		if !allowed {
-			problems = append(problems, fmt.Sprintf("ci.yml job %q uses %s, and a job running the contract gate may use only %v -- an action can change what its steps run against", job, uses, gateJobActions))
-			continue
-		}
-		if !strings.HasPrefix(uses, "actions/checkout@") {
-			continue
-		}
-		var with map[string]yaml.Node
-		if node, ok := step["with"]; ok {
-			_ = node.Decode(&with)
-		}
-		for _, key := range sortedNodeKeys(with) {
-			if !checkoutInputs[key] {
-				problems = append(problems, fmt.Sprintf("ci.yml job %q checks out with `%s:`, so the gate's steps may run against something other than the pull request", job, key))
-			}
-		}
-	}
-	return problems
-}
-
-// TestGateWorkflowProblemsRefusesEachNeutralizer: the check above against the
-// workflows it must refuse, so passing on the real ci.yml is not its only
-// evidence. Each case is the real file with ONE edit.
-func TestGateWorkflowProblemsRefusesEachNeutralizer(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := gateWorkflowProblems(raw); len(got) != 0 {
-		t.Fatalf("the real ci.yml has problems, so the cases below prove nothing: %v", got)
-	}
-	src := string(raw)
-	check := "      - name: Check the vendored contract against the SDK\n        run: make contract-check\n"
-	identity := "      - name: The contract gate's shared files match main at the pin\n        run: make contract-identity\n"
-	testCheckout := "      - uses: actions/checkout@v7\n      - name: Set up Go ${{ matrix.go-version }}\n"
-	guardCheckout := "      - uses: actions/checkout@v7\n        with:\n"
-	for _, anchor := range []string{check, identity, testCheckout, guardCheckout, "          fetch-depth: 0\n", "  test:\n    runs-on: ubuntu-latest\n", "  pull_request:\n    branches: [main, support/go1.13]\n"} {
-		if !strings.Contains(src, anchor) {
-			t.Fatalf("ci.yml no longer contains %q -- the fixtures below no longer match it", anchor)
-		}
-	}
-	cases := []struct{ name, old, new, want string }{
-		{"a dry-run MAKEFLAGS on the step", check,
-			"      - name: Check the vendored contract against the SDK\n        env:\n          MAKEFLAGS: -n\n        run: make contract-check\n",
-			"with `env:` on the step"},
-		{"a shell that ignores the script", check,
-			"      - name: Check the vendored contract against the SDK\n        shell: \"true {0}\"\n        run: make contract-check\n",
-			"with `shell:` on the step"},
-		{"continue-on-error on the step", check,
-			"      - name: Check the vendored contract against the SDK\n        continue-on-error: true\n        run: make contract-check\n",
-			"with `continue-on-error:` on the step"},
-		{"an if that skips the step", identity,
-			"      - name: The contract gate's shared files match main at the pin\n        if: false\n        run: make contract-identity\n",
-			"with `if:` on the step"},
-		{"a working directory away from the Makefile", check,
-			"      - name: Check the vendored contract against the SDK\n        working-directory: docs\n        run: make contract-check\n",
-			"with `working-directory:` on the step"},
-		{"a job-level env", "  test:\n    runs-on: ubuntu-latest\n",
-			"  test:\n    runs-on: ubuntu-latest\n    env:\n      MAKEFLAGS: -n\n",
-			"job \"test\" carries `env:`"},
-		{"job-level defaults", "  test:\n    runs-on: ubuntu-latest\n",
-			"  test:\n    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: \"true {0}\"\n",
-			"job \"test\" carries `defaults:`"},
-		{"a job-level if", "  test:\n    runs-on: ubuntu-latest\n",
-			"  test:\n    runs-on: ubuntu-latest\n    if: false\n",
-			"job \"test\" carries `if:`"},
-		{"the step gone", check, "", "runs `make contract-check` 0 times"},
-		{"the step twice", check, check + check, "runs `make contract-check` 2 times"},
-		{"a shallow guard checkout", "          fetch-depth: 0\n", "          fetch-depth: 1\n", "without `fetch-depth: 0`"},
-		{"no pull request into this line", "  pull_request:\n    branches: [main, support/go1.13]\n",
-			"  pull_request:\n    branches: [main]\n", "not support/go1.13"},
-		{"the gate checking out the base branch", testCheckout,
-			"      - uses: actions/checkout@v7\n        with:\n          ref: support/go1.13\n      - name: Set up Go ${{ matrix.go-version }}\n",
-			"job \"test\" checks out with `ref:`"},
-		{"the identity check checking out the base branch", guardCheckout,
-			"      - uses: actions/checkout@v7\n        with:\n          ref: support/go1.13\n",
-			"job \"compat-guard\" checks out with `ref:`"},
-		{"the gate checking out another repository", testCheckout,
-			"      - uses: actions/checkout@v7\n        with:\n          repository: someone/octonomy-go\n      - name: Set up Go ${{ matrix.go-version }}\n",
-			"checks out with `repository:`"},
-		{"an action the gate job does not need", testCheckout,
-			"      - uses: someone/checkout-base@v1\n" + testCheckout,
-			"uses someone/checkout-base@v1"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := strings.Join(gateWorkflowProblems([]byte(strings.Replace(src, tc.old, tc.new, 1))), "\n")
-			if !strings.Contains(got, tc.want) {
-				t.Errorf("want a problem containing %q, got:\n%s", tc.want, got)
-			}
-		})
-	}
-}
-
-// sortedNodeKeys returns a mapping's keys in order, so problems report stably.
-func sortedNodeKeys(m map[string]yaml.Node) []string {
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func contains(list []string, want string) bool {
-	for _, item := range list {
-		if item == want {
-			return true
-		}
-	}
-	return false
 }
 
 // --- the release gate's own targets ----------------------------------------------
