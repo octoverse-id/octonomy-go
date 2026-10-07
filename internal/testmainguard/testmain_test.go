@@ -47,7 +47,7 @@ var repoRoot = filepath.Join("..", "..")
 
 // The rule is the repository's (AGENTS.md), so the directories are DISCOVERED
 // rather than listed. A list of the two test packages that existed when this
-// was written would leave the next one -- the contract gate #98 ports, say --
+// was written would leave the next one -- the contract gate #98 ported, say --
 // outside the check with nothing saying so, which is the silent shrinking every
 // other guard here refuses. A nested module is walked too: an early
 // os.Exit(0) hides failures on any Go version, whichever go.mod runs it.
@@ -122,7 +122,7 @@ func TestTestFilesFindsEveryTestPackage(t *testing.T) {
 	for _, f := range []string{
 		"a_test.go",
 		"internal/x/b_test.go",
-		"tools/contractdrift/drift_test.go", // a nested module on main
+		"tools/contractdrift/drift_test.go", // a nested module, on main and here (#98)
 		"tools/contractdrift/go.mod",
 		"pkg/plain.go",
 		".claude/worktrees/agent/c_test.go",

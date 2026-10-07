@@ -9,7 +9,9 @@ authoritative contracts are vendored from the server:
 
 [`contract-coverage.yaml`](contract-coverage.yaml) lists every operation the two publish, each naming
 the method below that implements it. Since [#94](https://github.com/octoverse-id/octonomy-go/issues/94)
-every one of them has a method.
+every one of them has a method, and since [#98](https://github.com/octoverse-id/octonomy-go/issues/98)
+the contract gate calls each one and holds what it sends and decodes to both specs; the inputs a
+method cannot send are recorded there with their reason.
 
 ## Base URL and headers
 

@@ -25,10 +25,14 @@ import (
 //
 // On main at 61fce9b, tools/contractdrift held all three (checkRecordedVersion and
 // the coverage checks), in a nested go 1.24 module with a real YAML parser. This
-// branch has no contract gate -- porting one is #98 -- and a claim that nothing
-// checks is exactly the state #90 existed to end. So these tests hold them in the
-// meantime, in the root package, where `make test` and the go1.13 job both run
-// them.
+// branch had no contract gate when #90 landed, and a claim that nothing checks is
+// exactly the state #90 existed to end, so these tests were written to hold them
+// in the root package, where `make test` and the go1.13 job both run them.
+//
+// #98 has since ported that gate, and it checks all three again -- in its own Go
+// 1.24 module, which the go1.13 job's build and test stop short of. These stay as
+// the narrow, fast half: the same claims, on the toolchain this line exists for,
+// with no dependency and no build of the client.
 //
 // # Why this reads YAML by hand, and how far it trusts itself
 //
@@ -52,8 +56,8 @@ import (
 // # What it does NOT check
 //
 //   - The response fields, the composite bodies, and whether a method sends what
-//     the contract documents. Those take a gate that calls each method, and
-//     porting one is #98.
+//     the contract documents. Those take a gate that calls each method, which is
+//     tools/contractdrift's job (#98, `make contract-check`).
 //   - That an `sdk:` method implements the operation its row names. It checks the
 //     method is declared on that receiver; which route it requests is what the
 //     gate's recording stub proves, by calling it.
@@ -239,8 +243,9 @@ type coverageRow struct {
 func (r coverageRow) key() string { return r.Method + " " + r.Path }
 
 // coverageRowKeys are the keys a row may carry -- the fields of main's
-// CoverageOperation at 61fce9b, so the file stays loadable by the gate #98 ports. Anything else is a
-// typo, and a typo'd key is a row that silently does nothing.
+// CoverageOperation at 61fce9b, which the contract gate (tools/contractdrift) still loads them into
+// with unknown keys refused. Anything else is a typo, and a typo'd key is a row that silently does
+// nothing.
 var coverageRowKeys = map[string]bool{
 	"path": true, "method": true, "sdk": true, "unimplemented": true,
 	"documented_response": true, "actual_response": true,
@@ -261,7 +266,8 @@ var (
 // It understands exactly the value forms that file uses -- a plain scalar, a
 // single-quoted scalar, a folded `>-` block, and an `&anchor` / `*alias` pair --
 // and refuses the rest. Other top-level sections are skipped: they belong to the
-// gate #98 ports, and none of them can add or remove an operation row.
+// contract gate (tools/contractdrift), and none of them can add or remove an
+// operation row.
 func parseCoverageRows(path, body string) ([]coverageRow, error) {
 	lines := strings.Split(body, "\n")
 	anchors := map[string]string{}
@@ -317,7 +323,7 @@ func parseCoverageRows(path, body string) ([]coverageRow, error) {
 		}
 		// A key given twice in one row is an error, as it is to yaml.v3. Letting
 		// the second win would read "sdk: NoSuch.Method" + "sdk: TagService.List"
-		// as a covered row that the gate #98 ports refuses to load at all.
+		// as a covered row that the contract gate refuses to load at all.
 		if first, dup := curKeys[key]; dup {
 			return nil, fmt.Errorf("%s:%d: %q is given twice in one row (first at line %d)", path, lineNo, key, first)
 		}

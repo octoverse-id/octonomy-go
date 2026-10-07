@@ -1,5 +1,18 @@
 # Octonomy contract coverage — the SDK's own statement about the contract it vendors.
 #
+# READ BY `tools/contractdrift` (see docs/development.md#contract-drift). This is a
+# checked file, not a hand-maintained document: every row is asserted against
+# docs/openapi.yaml, docs/openapi-v2.yaml, and AGAINST THE CLIENT ITSELF — the gate
+# calls each operation's method and reads the request off the wire — on every run
+# of `make contract-check`, which CI runs on every pull request into this line.
+#
+# Each implemented row needs a driver in tools/contractdrift/drivers.go that calls
+# its method with every parameter populated. A row with no driver is an operation
+# nobody exercises, and the gate says so.
+#
+# `sdk:` is the human-facing label. The gate checks the method exists; the driver
+# is what proves what it does.
+#
 # WHY IT EXISTS. An endpoint nobody implemented and an endpoint nobody noticed look
 # identical from the outside, and that is how this line came to sit two server
 # majors behind, vendoring a contract from before the server made a second API
@@ -9,43 +22,39 @@
 # every row below names a method. One that ever loses its method needs an
 # `unimplemented:` reason in its place, which is the gap made visible.
 #
-# WHAT READS IT ON THIS BRANCH, AND WHAT DOES NOT. `contractbaseline_test.go` runs
-# in `make test` and in the go1.13 job, and holds this file to four things:
-#
-#   - every operation docs/openapi.yaml or docs/openapi-v2.yaml publishes has
-#     exactly one row, and every row names an operation one of them publishes;
-#   - the two specs publish the same operations, since one version-independent
-#     row cannot be true of a surface that lacks it;
-#   - each row names EITHER an `sdk:` method OR an `unimplemented:` reason, never
-#     both and never neither, and a reason says something;
-#   - an `sdk:` method is declared in this package on that receiver.
-#
-# It does NOT check the response fields, the composite bodies, or that a method
-# sends what the contract documents. That takes a contract gate: one that CALLS
-# each method against a stub built from the vendored schema and reads the request
-# off the wire. This branch has none. #98 ports main's
-# (https://github.com/octoverse-id/octonomy-go/tree/main/tools/contractdrift), and with it the sections main's copy of this file
-# carried beyond `operations` at 61fce9b -- unsent and undocumented inputs, client
-# headers, undocumented model fields, the vendored error-code registry. Each of
-# those is a statement about what this client sends, decodes, or declares, which
-# only a gate can prove, so they arrive with one rather than as prose nothing
-# checks.
+# TWO READERS ON THIS BRANCH. The gate above, in its own Go 1.24 module (#98), and
+# `contractbaseline_test.go` (#90), which runs in `make test` and in the go1.13
+# job. The second is the narrow, fast half and predates the gate: it holds the
+# `operations:` rows to the specs and the package's declarations — one row per
+# published operation, the same operations on both surfaces, a method or a reason
+# on every row, and an `sdk:` method declared on its receiver. Everything else in
+# this file, every section after `operations:` included, only the gate reads.
 #
 # PATHS ARE VERSION-INDEPENDENT SUFFIXES — `/tags`, never `/api/v1/tags`. The
 # resource files build exactly that suffix and the transport prepends the prefix,
-# so one row covers the operation on both surfaces. Which surfaces a method reaches
-# is the transport's business (octonomy.go, transport.go), not this file's.
+# so one row covers the operation on both surfaces, and the gate drives each row
+# on both — a client configured for /api/v1 against the v1 contract, and one
+# configured for /api/v2 against the v2 contract.
 #
-# THE TWO RESPONSE FIELDS are the recorded divergence between the generated spec
-# and the running server, in the vocabulary of main's copy of this file at
-# 61fce9b, so the gate #98 ports can read these rows as they stand:
+# THE TWO RESPONSE FIELDS ARE THE RECORDED DIVERGENCE, and they are the reason the
+# gate does not flag the envelopes on every run.
 #
 #   documented_response   what the VENDORED spec says the success body is:
-#                         `array`, `ref:<Schema>`, `none`, or `other`.
-#   actual_response       what the running server really returns:
-#                         `list-envelope` ({data, pagination}), `data-envelope`
-#                         ({data: {...}}), `composite-envelope` ({data: {...counts,
-#                         items}}), `bare` (no envelope at all), or `none` (204).
+#                         `array`, `ref:<Schema>`, `none`, or `other`. Checked
+#                         against the spec.
+#   actual_response       what the running server really returns, in the SDK's own
+#                         vocabulary: `list-envelope` ({data, pagination}),
+#                         `data-envelope` ({data: {...}}), `composite-envelope`
+#                         ({data: {...counts, items}}), `bare` (no envelope at all),
+#                         or `none` (204, no body). This is not a label: it is what
+#                         the gate's stub WRAPS ITS BODY IN when it answers the
+#                         real client, so a row naming the wrong envelope usually
+#                         hands the client a shape it cannot decode and the run
+#                         fails. Usually, not always — a method that decodes no
+#                         payload is not asked to read one, though `client.do` does
+#                         still require exactly 204. So this is a REVIEWED FACT,
+#                         established against a running server, rather than a
+#                         conclusion the gate reaches on its own.
 #
 # Where the two differ, THE SERVER WINS. The spec is generated by drf-spectacular
 # from the serializers and the envelope is added by a renderer below them, so the
@@ -56,13 +65,22 @@
 # vendored here byte for byte. They were carried unchanged on the rows #94 later
 # implemented, so its port started from the reviewed shape rather than
 # re-deriving it, and every `composite-envelope` row decodes through doData with a
-# result struct, never doList. On this branch nothing asserts the values yet —
-# that is #98.
+# result struct, never doList.
+#
+# Where a response carries a plain resource, the body the stub sends is built FROM
+# the contract's schema, so decoding it is a direct test of the model: a property
+# with no field is dropped on the way back out, and a property whose type the model
+# cannot read does not decode at all. Not every retype is one it cannot read — an
+# `integer` into a float still decodes — and docs/development.md records that
+# limit. The composites and the health probes sit out of that, since the spec
+# describes none of them correctly — that is the divergence, recorded above rather
+# than reported every run.
 #
 # `composite_body` is a WITNESS, not a transcript: the shape is what the server
-# returns, the numbers are chosen so a decoder crossing two of them changes both.
-# It is copied unchanged from main's file at 61fce9b, and nothing on this branch
-# reads it until #98.
+# returns, the numbers are chosen so a decoder crossing two of them changes both,
+# and each row array is populated, because an empty one lets a decoder that
+# discards every row return exactly what was sent. It is copied unchanged from
+# main's file at 61fce9b.
 
 operations:
   # --- Tags (tags.go) ---------------------------------------------------------
@@ -157,7 +175,8 @@ operations:
     method: get
     # One specialized read: no list, no writes. `scope` is a query parameter here
     # and nowhere else, and it is one of the few things #90's refresh added to
-    # docs/openapi.yaml.
+    # docs/openapi.yaml. The driver pins it to `global`, the one value that can
+    # ride with WithIncludeGlobal (drivers.go says why).
     sdk: TagService.Resolve
     documented_response: ref:TagResolution
     actual_response: data-envelope
@@ -254,3 +273,265 @@ operations:
     sdk: HealthService.Ready
     documented_response: none
     actual_response: bare
+
+# Documented inputs the client does not send — a query parameter, a request-body
+# property, or a header.
+# Each needs a reason, because the alternative reading — nobody implemented it —
+# is the failure the gate exists to catch. `scope` on /tag-resolution is the
+# worked example of the other outcome: it belonged in the client, it is
+# implemented, and it is correctly absent from this list.
+#
+# Rows are keyed by OPERATION AND LOCATION, not by name. A name is not a decision:
+# `limit` would be legitimately unsent on /tag-resolution and is legitimately sent
+# on every list route, and `resource_type` is legitimately absent from a body while
+# being required in the path. A name-keyed allowlist would silence all of them.
+#
+# A row is a parking place with an expiry, not a permanent exemption: the moment
+# the client starts sending an input, its own row fails as stale. main's copy of
+# this list carried `q` and `slug` on GET /vocabularies until #61 added the two
+# fields there; this line has not ported them, so here the same two rows are live
+# again, and porting the fields is what retires them.
+#
+# Eleven rows below are ONE RULE, and it is a decision rather than a gap: every
+# write documents `application_id` as a query parameter and the SDK sends it in
+# the body instead. The rows exist because the gate reads the wire — so the rule
+# has to be stated somewhere it can be checked, and if the SDK ever starts putting
+# it on the query string, all eleven turn into stale-row findings at once.
+#
+# The reason is written once and referenced, so it cannot rot in ten copies —
+# and `carried_in: body` is not prose at all: the gate requires the property to
+# really be in that request's payload, so each row proves its own replacement
+# path instead of merely asserting one.
+unsent_inputs:
+  # The one GAP on this list, rather than a decision.
+  - path: /vocabularies
+    method: get
+    in: query
+    name: q
+    reason: &vocabulary_filters_not_ported >-
+      This line's VocabularyListParams has no Query and no Slug field, so the
+      client has no way to send `q` or `slug` on GET /vocabularies although both
+      vendored contracts document them. main gained the two filters in #61, and
+      no sub-issue of epic #88 owns porting them here — the gap
+      docs/compat-test-disposition.md records under "Gaps this table found". The
+      fields would be additive, so porting them needs no major; doing so retires
+      both rows, since the gate then reports them as stale.
+  - path: /vocabularies
+    method: get
+    in: query
+    name: slug
+    reason: *vocabulary_filters_not_ported
+
+  - path: /tags
+    method: post
+    in: query
+    name: application_id
+    carried_in: body
+    reason: &application_id_in_body >-
+      Application scope follows the body on a request that has one, so the SDK
+      refuses WithApplication here and the value travels in the write struct's
+      ApplicationID instead (AGENTS.md, "Application scope follows the body").
+      main's inventory records why, from a probe of the server: it keeps a query
+      application_id on a namespaced create and DROPS it on a global one, while a
+      body application_id wins in both — so honoring the option would silently
+      produce a tenant-shared row for a caller who asked for application scope.
+      The parameter is reachable, just not through the query string.
+  - path: /tags/{tag_id}
+    method: patch
+    in: query
+    name: application_id
+    carried_in: body
+    reason: *application_id_in_body
+  - path: /vocabularies
+    method: post
+    in: query
+    name: application_id
+    carried_in: body
+    reason: *application_id_in_body
+  - path: /vocabularies/{vocabulary_id}
+    method: patch
+    in: query
+    name: application_id
+    carried_in: body
+    reason: *application_id_in_body
+  - path: /tag-aliases
+    method: post
+    in: query
+    name: application_id
+    carried_in: body
+    reason: *application_id_in_body
+  - path: /tag-aliases/{alias_id}
+    method: patch
+    in: query
+    name: application_id
+    carried_in: body
+    reason: *application_id_in_body
+  - path: /tag-assignments
+    method: post
+    in: query
+    name: application_id
+    carried_in: body
+    reason: *application_id_in_body
+  - path: /tag-assignments/bulk-assign
+    method: post
+    in: query
+    name: application_id
+    carried_in: body
+    reason: *application_id_in_body
+  - path: /tag-assignments/bulk-remove
+    method: post
+    in: query
+    name: application_id
+    carried_in: body
+    reason: *application_id_in_body
+  - path: /resources/{resource_type}/{resource_id}/tags
+    method: post
+    in: query
+    name: application_id
+    carried_in: body
+    reason: *application_id_in_body
+  - path: /tag-assignments
+    method: delete
+    in: query
+    name: application_id
+    carried_in: body
+    reason: >-
+      The one DELETE that carries a body — the ids travel in it rather than in the
+      path — so the same body-wins rule applies: AssignmentRemove.ApplicationID is
+      how this is set, and WithApplication is refused on any request with a body.
+
+  # Two properties the request schema documents that the ROUTE already carries.
+  - path: /resources/{resource_type}/{resource_id}/tags
+    method: post
+    in: body
+    name: resource_type
+    reason: &resource_in_path >-
+      The route names it — POST /resources/{resource_type}/{resource_id}/tags —
+      so ResourceService.ReplaceTags takes it as an argument and puts it in the
+      path. The generated schema documents it in the body as well because the
+      serializer declares both, but sending it twice invites the two to disagree,
+      and the path is the half the server routes on.
+  - path: /resources/{resource_type}/{resource_id}/tags
+    method: post
+    in: body
+    name: resource_id
+    reason: *resource_in_path
+
+# Inputs the client sends that a SURFACE's generated contract does not document.
+#
+# One cause, applied uniformly: the server's OpenAPI hook injects the application,
+# namespace and include_global parameters on **v2 only** (octonomy/openapi/schema.py),
+# while the view code behind both surfaces reads `application_id` either way. So v1's
+# generated spec under-documents a parameter the v1 API really accepts — and v1 is
+# this line's default surface, so it is the half most of its callers reach.
+#
+# Keyed by surface and name rather than per operation, because the cause is not
+# per operation — and the gate reports any OTHER undocumented input on either
+# surface, plus this row itself if v1 ever starts documenting it.
+undocumented_inputs:
+  - surface: v1
+    in: query
+    name: application_id
+    reason: >-
+      Verified in the vendored contracts: api_v1_tags_retrieve documents only its
+      path parameter while api_v2_tags_retrieve carries the injected application,
+      namespace and include_global parameters. The v1 views read application_id
+      all the same — it is the same view tree behind both prefixes — so the SDK
+      sends it on both surfaces and the v1 spec is the half that is incomplete.
+
+# Headers the client puts on EVERY versioned request that no operation documents.
+#
+# They are transport identity rather than per-operation input: the contract's
+# parameter lists describe what varies per call, and drf-spectacular never
+# documents the ones the auth layer requires. Recorded once here rather than
+# twenty-seven times, and still checked — the gate reports any OTHER undocumented
+# header the client starts sending.
+client_headers:
+  - name: X-Tenant-ID
+    reason: >-
+      Required on every request on the versioned API (Config.TenantID) and enforced
+      server-side by middleware rather than by any one view, so no operation
+      documents it. AGENTS.md: every request on the versioned API is tenant-scoped.
+  - name: Authorization
+    reason: >-
+      The bearer token, on every versioned request and enforced by the auth layer
+      rather than by any one view. Listed here for the other half of the rule: the
+      gate requires each of these on every versioned operation and FORBIDS them on
+      the unversioned probes, which authenticate nobody — so a token leaking onto
+      /health is a finding rather than an absence.
+
+# JSON fields an SDK response model decodes that the contract's schema does not
+# document. The gate compares each decoded model with the schema behind the
+# operation's success body, so a field on one side and not the other is reported
+# unless it is recorded here.
+#
+# Empty today: every field the models decode is documented.
+undocumented_model_fields: []
+
+# The server's error registry, vendored the way the two OpenAPI contracts are — and
+# for the same reason. These codes are not in the contracts: `ErrorResponse` types
+# `code` as a bare string, so a schema comparison cannot see a single one of them.
+# Copied from main's file at 61fce9b, which checks it against the server's own
+# octonomy/core/errors.py on a schedule; this line runs no scheduled job (GitHub
+# fires schedules on the default branch only), so here the list is held to
+# errors.go on every pull request and to the server only through main's copy.
+server_error_codes:
+  - ambiguous_resolution
+  - application_mismatch
+  - authentication_required
+  - conflict
+  - forbidden
+  - inactive_tag
+  - namespace_api_disabled
+  - namespace_invalid
+  - namespace_not_supported
+  - namespaced_writes_disabled
+  - not_found
+  - scope_immutable
+  - tenant_mismatch
+  - validation_error
+
+# Code* constants whose Go NAME abbreviates the wire value it carries.
+#
+# Every other constant's name must be its value in Go's spelling: CodeNotFound
+# carries "not_found", and the gate derives one from the other. That is not
+# pedantry about naming — two constants whose VALUES are swapped leave the
+# registry's set identical, so the set comparison passes while IsNotFound answers
+# true for a forbidden and IsForbidden answers true for a missing row. It is the
+# same symmetric swap that two crossed JSON tags are, and it needs the same kind
+# of check: one that reads the declaration, not the set.
+#
+# Both rows here are kept rather than renamed: these are exported constants this
+# line has shipped since its first release, and a rename is a breaking change this
+# line has no major to carry.
+abbreviated_error_constants:
+  - constant: CodeValidation
+    code: validation_error
+    reason: >-
+      The server's registry spells it validation_error; the constant drops the
+      suffix because IsValidation reads better, and the pair has been exported
+      since this line's first release.
+  - constant: CodeAuthRequired
+    code: authentication_required
+    reason: >-
+      Abbreviates "authentication" to "auth", exported since this line's first
+      release.
+
+# Code* constants in errors.go with no counterpart in the registry above. Every
+# other constant must appear there, and every code in it must have a constant —
+# the gate checks both directions, and refuses a code listed in both places.
+sdk_only_error_codes:
+  - code: unexpected_status
+    reason: >-
+      SDK-synthesized, never sent by the server. It is the code on an *APIError built
+      from a non-2xx that arrived WITHOUT the Octonomy error envelope — a proxy 502, an
+      unrouted 404 from a server with no /api/v2, a body that could not be read.
+      Mapping such a response to a semantic code is what this line's first release
+      did (codeFromStatus, removed by #91 on both surfaces), and it made IsNotFound
+      true for a wrong BaseURL's 404, which a caller's ordinary not-found branch reads
+      as an empty taxonomy.
+  - code: not_ready
+    reason: >-
+      SDK's name for a state the server expresses as a status plus a body, not a string
+      it ever sends. /health/ready answers 503 {"status": "unavailable"}; the health
+      view has no error envelope and therefore no code of its own.

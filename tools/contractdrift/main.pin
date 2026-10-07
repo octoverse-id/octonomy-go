@@ -1,0 +1,54 @@
+# Which of the contract gate's files are main's, and from which commit (#98).
+#
+# Read by scripts/contract-identity.sh, which `make contract-identity` runs and
+# the required `compat guard` CI job runs on every pull request into this line.
+# Every file in this directory, and every file in main's tools/contractdrift at
+# the pinned commit, must have exactly one line below, or the check fails --
+# a file nothing classifies is a file nothing compares.
+#
+#   pin <sha>        main's commit the copies are taken from. Forty hex digits,
+#                    and it must be on main: a pin into this branch's own history
+#                    would compare the copies with themselves.
+#   identical <f>    byte-for-byte main's file at the pin. The check fails on any
+#                    difference. These are the files that never name the SDK --
+#                    the spec, coverage and error-registry readers and the checks
+#                    themselves -- so nothing about this line's dialect can
+#                    justify a difference, and a difference is divergence.
+#                    A fix to one of them lands on main FIRST and arrives here by
+#                    advancing the pin; editing the copy here fails the check.
+#   advisory <f>     this line's own version of main's file. It differs by
+#                    design -- drivers.go is written against this line's surface,
+#                    conformance.go and the tests name the SDK -- so no machine
+#                    can decide whether a difference is right. `make
+#                    contract-report` prints each diff against the pin, and
+#                    docs/release.md has a human read it before a tag.
+#   own <f>          exists here and not at the pin: this file, and the tests
+#                    that prove `make contract-check` itself fails (#98's
+#                    acceptance), which main has no counterpart for.
+#
+# WHY A PIN, and not main's tip. Fetching the tip would let an unchanged commit
+# on this line turn red because someone merged a formatting change on main that
+# morning -- and a required check that flakes on another branch's schedule is one
+# people work around by editing the copy, which is the divergence this exists to
+# stop. Advancing the pin is a reviewable change on this line, made by a pull
+# request that copies main's newer files in the same commit.
+#
+# 5e40964 is the commit the whole parity epic (#88) ports from.
+
+pin 5e409641e3dfafb83227e02efee3d8a50ec5602c
+
+identical checks.go
+identical coverage.go
+identical gosdk.go
+identical sdk.go
+identical spec.go
+
+advisory conformance.go
+advisory drivers.go
+advisory drift_test.go
+advisory go.mod
+advisory go.sum
+advisory main.go
+
+own acceptance_test.go
+own main.pin

@@ -93,6 +93,15 @@ on `main`.
   ported:** `main`'s, at 5e40964, read response types off `doData[T]` type arguments, which this line
   does not have, so a transformed one finds nothing to read. `sourceguard_test.go` holds the readers
   rewritten for this dialect; build on them.
+- **The contract gate is ported under a pin (#98).** `tools/contractdrift` is `main`'s gate, and five
+  of its files — `checks.go`, `coverage.go`, `gosdk.go`, `sdk.go`, `spec.go` — are `main`'s byte for
+  byte at the commit `tools/contractdrift/main.pin` names. **Never edit one of them here**: `make
+  contract-identity` (in the required `compat guard` job) fails on a single byte, and a fix lands on
+  `main` first and arrives by advancing the pin, in a PR that copies `main`'s files at the new commit.
+  Every other file in that directory is `advisory` (this line's version of a `main` file — above all
+  `drivers.go`, written against this line's surface) or `own`, and a new file on either side fails the
+  check until the pin file classifies it. `make contract-report` prints the advisory diffs; the
+  release runbook has a human read them.
 
 ## Product Rules
 
@@ -236,6 +245,12 @@ stays a faithful, ergonomic client.
 
 - Target Go **1.13**. **Standard library only** — no third-party runtime dependencies. Dev tools
   (`golangci-lint`, `govulncheck`) are not module dependencies.
+- **`tools/contractdrift` is the one exception to both, and it is a separate module.** It declares
+  `go 1.24` and requires `gopkg.in/yaml.v3`, behind its own `go.mod` with a `replace ../..` onto this
+  checkout, so neither reaches a consumer's build: Go's `./...` stops at a nested `go.mod`, and so do
+  the go1.13 job's build and vet. Never lower it to Go 1.13 or move its dependency into the root
+  module. A root test that walks the tree must stop at a nested `go.mod` too — go1.13.15's parser
+  cannot read the gate's generics (`shippedSourceIn` in `updateguard_test.go` does this).
 - No generics, no `any` (write `interface{}`), no `io.ReadAll` (write `ioutil.ReadAll`), no
   `t.Cleanup`, no `os.ReadFile`. `docs/development.md` has the full floor table. `ioutil` here is
   correct and must not be "modernized" — the `govet` `inline` analyzer that objects is disabled in
@@ -258,6 +273,14 @@ stays a faithful, ergonomic client.
   the test runs. That is rule 1 of the `t.Cleanup` replacement model in
   `docs/compat-test-disposition.md`; its other two cover a test body and a teardown that must outlive
   the helper registering it.
+- **Every coverage row needs a driver, and every driver sets every input.** `make contract-check`
+  calls each method `docs/contract-coverage.yaml` names through its driver in
+  `tools/contractdrift/drivers.go`, on both surfaces, and compares the request and the decoded value
+  with the vendored specs — names and values. A new method needs a row and a driver; a new parameter
+  or write field needs the driver to set it, or the gate reports it as documented and unsent. Where
+  the client genuinely cannot send a documented input, that is the finding: an `unsent_inputs` row with
+  the reason, never a driver that skips the field. The CI `test` job runs `make contract-test` and
+  `make contract-check`; `TestTheGateRunsOnEveryPullRequest` holds the steps there.
 - **Every response type needs a smoke call**, and so does every list envelope. A `TestSmoke_`
   function in `integration_test.go` must call a method that decodes it, on a client that function
   built, or
@@ -331,7 +354,9 @@ stays a faithful, ergonomic client.
 - Run `make check` before pushing and `make release-check` before a release. On this line neither is
   the real gate: also run `make test-go113` (real go1.13 toolchain) and, for anything touching
   decoding or transport, `make dev-server && make smoke` against a real server — with
-  `make test-integration` beside it for anything touching scoping or a read method.
+  `make test-integration` beside it for anything touching scoping or a read method. For anything
+  touching a method's parameters, a write struct, a model or the coverage file, run `make
+  contract-check`; for anything under `tools/contractdrift`, `make contract-test contract-identity`.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
 - **Describe `main` with a link, or with the commit a comparison was made at — never by restating
   its current state.** A sentence about what `main` has *now* rots on `main`'s schedule, and nothing
@@ -345,9 +370,10 @@ stays a faithful, ergonomic client.
   not implemented — and every sentence naming the contract. `make test` fails until the specs, the
   marker and the rows agree (`contractbaseline_test.go`) and until every version token in the tree
   equals the marker or carries a registered reason (`contractversion_test.go`). A sentence naming the
-  contract *without* a version in it is invisible to both; read for those by hand. Nothing on this
-  branch calls a method and compares what it sends with the contract: porting
-  [`main`'s contract gate](https://github.com/octoverse-id/octonomy-go/tree/main/tools/contractdrift) to do that is [#98](https://github.com/octoverse-id/octonomy-go/issues/98).
+  contract *without* a version in it is invisible to both; read for those by hand. `make
+  contract-check` is what fails when the client does not follow the refresh — a parameter no method
+  sends, a property no model decodes, a type the model cannot read — so a refresh is done when it
+  passes too (`docs/development.md#contract-drift`).
 
 ## Development Pipeline
 

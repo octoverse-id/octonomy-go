@@ -91,7 +91,9 @@ To add a resource, follow `tags.go`:
 
 1. Define the model, `*Create`/`*Update`, and `*ListParams` (with a `query()` method) from the
    matching schema in the vendored contracts, and give the operation its row in
-   `docs/contract-coverage.yaml` (replacing its `unimplemented:` reason with `sdk:`).
+   `docs/contract-coverage.yaml` (replacing its `unimplemented:` reason with `sdk:`), and a driver
+   in `tools/contractdrift/drivers.go` that calls the method with every input populated — the
+   contract gate fails on a row nothing drives ([development.md](development.md#contract-drift)).
 2. Add a `*Service` with `context.Context`-first, `...RequestOption`-last methods delegating to the
    helper that matches each response shape: `client.doData` for a single resource, `client.doList`
    for a list, `client.do` where there is no payload (DELETE). The wrong choice compiles; it is caught

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -124,9 +125,9 @@ import (
 //   - It sees only three dotted numbers. "`openapi.yaml` is the contract" names
 //     the contract with no version in it, and nothing here can see that; the
 //     contributor instructions say to read for it by hand.
-//   - It says nothing about the two specs or the marker agreeing. This branch has
-//     no contract gate yet (porting one is #98), so that check is
-//     contractbaseline_test.go's, and this guard only READS the marker.
+//   - It says nothing about the two specs or the marker agreeing. That check is
+//     contractbaseline_test.go's, and since #98 the contract gate's
+//     checkRecordedVersion too; this guard only READS the marker.
 //     Duplicating it here would give two tests one job and let each assume the
 //     other is doing it.
 
@@ -559,12 +560,50 @@ var contractVersionExemptions = []contractVersionExemption{
 	},
 	{
 		Name:   "gate-test-fixture",
-		Reason: "A literal inside a guard's own fixtures, which must name versions the repository does not vendor in order to prove the guard can fail. Covers this file and contractbaseline_test.go: neither can both demonstrate a stale claim and forbid writing one.",
+		Reason: "A literal inside a guard's own fixtures, which must name versions the repository does not vendor in order to prove the guard can fail. Covers this file, contractbaseline_test.go, and the contract gate's tests under tools/contractdrift (#98), which bump info.version and the marker to prove the gate notices: none of them can both demonstrate a stale claim and forbid writing one.",
 		ByRole: true,
 		Match: func(s versionSite) bool {
-			return s.Path == "contractversion_test.go" || s.Path == "contractbaseline_test.go"
+			if s.Path == "contractversion_test.go" || s.Path == "contractbaseline_test.go" {
+				return true
+			}
+			return strings.HasPrefix(s.Path, "tools/contractdrift/") && strings.HasSuffix(s.Path, "_test.go")
 		},
 	},
+	{
+		Name:   "main-pinned-copy",
+		Reason: "A file tools/contractdrift/main.pin marks `identical`: main's bytes at the pinned commit, which scripts/contract-identity.sh refuses to let differ here by one byte (#98). Its prose is main's, already held to main's marker by main's own copy of this guard, and a correction has one route -- land on main, then advance the pin. Rewording it here is not a fix this guard could ask for.",
+		ByRole: true,
+		Match: func(s versionSite) bool {
+			name := strings.TrimPrefix(s.Path, "tools/contractdrift/")
+			return name != s.Path && pinnedIdenticalFiles()[name]
+		},
+	},
+}
+
+var (
+	pinnedIdenticalOnce sync.Once
+	pinnedIdentical     map[string]bool
+)
+
+// pinnedIdenticalFiles reads the `identical` lines of tools/contractdrift/main.pin
+// -- the file scripts/contract-identity.sh reads, so the guard and the identity
+// check cannot disagree about which files are main's. An unreadable pin file
+// yields an empty set, which exempts nothing: the failure mode is a finding, not
+// a pass.
+func pinnedIdenticalFiles() map[string]bool {
+	pinnedIdenticalOnce.Do(func() {
+		pinnedIdentical = map[string]bool{}
+		raw, err := ioutil.ReadFile(filepath.Join("tools", "contractdrift", "main.pin"))
+		if err != nil {
+			return
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if name := strings.TrimPrefix(line, "identical "); name != line && name != "" {
+				pinnedIdentical[name] = true
+			}
+		}
+	})
+	return pinnedIdentical
 }
 
 // contractVersionSkipDirs are directories whose contents are out of scope
@@ -1014,6 +1053,46 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 		exempt   bool
 		whatItIs string
 	}{
+		{
+			name:     "a copy main.pin marks identical",
+			path:     "tools/contractdrift/coverage.go",
+			line:     "// on a server 1.0.0 contract while the server shipped 3.1.0.",
+			token:    "1.0.0",
+			exempt:   true,
+			whatItIs: "main's bytes at the pin; the identity check refuses rewording them here",
+		},
+		{
+			name:     "this line's own gate file is not a pinned copy",
+			path:     "tools/contractdrift/drivers.go",
+			line:     "// on a server 1.0.0 contract while the server shipped 3.1.0.",
+			token:    "1.0.0",
+			exempt:   false,
+			whatItIs: "drivers.go is advisory in main.pin, written here, and reworded here when it is wrong",
+		},
+		{
+			name:     "a pinned name outside the gate's directory",
+			path:     "coverage.go",
+			line:     "// on a server 1.0.0 contract while the server shipped 3.1.0.",
+			token:    "1.0.0",
+			exempt:   false,
+			whatItIs: "main.pin names files of tools/contractdrift only; a root file sharing a name is not one",
+		},
+		{
+			name:     "the gate's tests are fixtures",
+			path:     "tools/contractdrift/drift_test.go",
+			line:     "\"<!-- contract-version: 2.0.0 -->\")",
+			token:    "2.0.0",
+			exempt:   true,
+			whatItIs: "the gate's own test bumps the marker to prove checkRecordedVersion notices",
+		},
+		{
+			name:     "the gate's source is not a fixture",
+			path:     "tools/contractdrift/conformance.go",
+			line:     "// The specs are vendored at server 2.0.0.",
+			token:    "2.0.0",
+			exempt:   false,
+			whatItIs: "gate-test-fixture covers the gate's _test.go files, not its sources",
+		},
 		{
 			name:     "this line's own pre-#90 claim",
 			path:     "doc.go",

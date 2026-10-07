@@ -65,7 +65,7 @@ every file also meets `any` → `interface{}`.
 
 | `main` file | Lines | Verdict | Reason |
 | ----------- | ----: | ------- | ------ |
-| `tools/contractdrift/drift_test.go` | 3,355 | **OWNED BY** [#98](https://github.com/octoverse-id/octonomy-go/issues/98) | The contract gate's own tests travel with the gate |
+| `tools/contractdrift/drift_test.go` | 3,355 | **PORTED** here ([#98](https://github.com/octoverse-id/octonomy-go/issues/98)) | The contract gate's own tests, with the gate, in its own Go 1.24 module, so no porting-checklist rule touches their dialect. The import path is this module's, and every test runs as `main`'s does but the workflow section: `main`'s three tests there assume the networked half has a scheduled workflow, which this line does not carry (GitHub fires schedules on the default branch only), so they are two here — `TestNoWorkflowRunsTheNetworkedHalf`, and `TestTheGateRunsOnEveryPullRequest`, which also holds the gate's steps to the jobs they run in. `main.pin` marks the file `advisory`; `make contract-report` prints its diff against `main` at the pin |
 | `webhook/events_test.go` | 998 | **EXCLUDE** | Policy: this line never ships a webhook receiver; a consumer needing one moves to `/v2` (`AGENTS.md`, *READ FIRST*) |
 | `webhook/example_test.go` | 257 | **EXCLUDE** | As above |
 | `webhook/handler_test.go` | 719 | **EXCLUDE** | As above |
@@ -279,8 +279,9 @@ test change:
 
 - **`VocabularyListParams.Query` and `.Slug`** — the `q` and `slug` filters `main` gained in #61.
   Both vendored specs list them on `GET /vocabularies`, and `docs/contract-coverage.yaml` maps that
-  operation to `VocabularyService.List`, so the coverage reads complete while two parameters are
-  missing. Two cases of `TestVocabularies_List_Params` wait on it, and the `Vocabularies.List`
+  operation to `VocabularyService.List`. The row alone read complete while two parameters were
+  missing; since #98 the contract gate reports them as documented and unsent, so the file records
+  both under `unsent_inputs` with this reason, and porting the fields retires those rows. Two cases of `TestVocabularies_List_Params` wait on it, and the `Vocabularies.List`
   isolation probe walks the whole collection where `main`'s narrows by slug (#97).
 - **`DecodeMetadata`** — generic on `main`, with no counterpart here. Its compat signature is an
   open question the epic's design doc records (finding 6A, "define the `Each` / `DecodeMetadata`
@@ -298,6 +299,7 @@ test change:
 | `sourceguard_test.go` | #95 | The AST readers the rewritten guards share: the two of #95, and `readprobes_test.go` (#97) |
 | `transport_test.go` | #112 (#91) | Holds `main`'s `octonomy_test.go` cases, since this line's own `octonomy_test.go` is kept |
 | `update_test.go` | #112 (#91) | The `*Update` value-receiver `MarshalJSON` (#37), and the per-field wire round-trip of every `*Update` type |
+| `tools/contractdrift/acceptance_test.go` | #98 | `make contract-check` itself fails on a removed query parameter, a dropped schema field, a retyped property and a rerouted method — one staged copy of the repository per case, broken in the client's source or the specs, run through the real target |
 | `updateguard_test.go` | #96 | The source half of the `*Update` checks: no shipped struct tag names `omitzero`, which Go 1.13's `encoding/json` ignores; every `*Update` field can be left out; every PATCH body is a `*Update`; `updateBodies` names every `*Update` type |
 | `writebodies_test.go` | #113 (#94) | Every non-`*Update` request body against literal JSON |
 

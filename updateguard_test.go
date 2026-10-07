@@ -42,6 +42,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -266,14 +267,41 @@ func helperBody(fn *ast.FuncDecl) (int, string) {
 // since nothing in them reaches a caller's wire.
 func shippedSource(t *testing.T) map[string]*ast.File {
 	t.Helper()
+	files := shippedSourceIn(t, ".")
+	for _, want := range []string{"transport.go", "tags.go"} {
+		if _, ok := files[want]; !ok {
+			t.Fatalf("%s not found; the guard is not looking at this module", want)
+		}
+	}
+	return files
+}
+
+// shippedSourceIn is shippedSource over any root, keyed by slash path relative to
+// it, so the walk's boundaries can be tested on a tree built for the purpose.
+//
+// It stops at a NESTED MODULE -- a directory below the root with its own go.mod --
+// because that is where this module ends: Go's own `./...` stops there, nothing
+// in it reaches a consumer of this one, and it may be written for another
+// toolchain entirely. tools/contractdrift (#98) is the case: a go 1.24 module whose
+// generics go1.13.15's parser cannot read at all, so walking into it failed this
+// guard on the one toolchain it exists for. What its struct tags send is that
+// module's business, on a toolchain that understands omitzero.
+func shippedSourceIn(t *testing.T, root string) map[string]*ast.File {
+	t.Helper()
 	fset := token.NewFileSet()
 	files := map[string]*ast.File{}
-	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if info.IsDir() {
-			if name := info.Name(); path != "." && (strings.HasPrefix(name, ".") || name == "testdata") {
+			if path == root {
+				return nil
+			}
+			if name := info.Name(); strings.HasPrefix(name, ".") || name == "testdata" {
+				return filepath.SkipDir
+			}
+			if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
 				return filepath.SkipDir
 			}
 			return nil
@@ -285,18 +313,57 @@ func shippedSource(t *testing.T) map[string]*ast.File {
 		if err != nil {
 			return err
 		}
-		files[filepath.ToSlash(path)] = f
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files[filepath.ToSlash(rel)] = f
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk the module: %v", err)
 	}
-	for _, want := range []string{"transport.go", "tags.go"} {
-		if _, ok := files[want]; !ok {
-			t.Fatalf("%s not found; the guard is not looking at this module", want)
+	return files
+}
+
+// TestShippedSourceStopsAtANestedModule: the walk reads every directory of this
+// module and none of a module nested inside it -- including one whose source this
+// toolchain cannot parse, which is what a modern-Go tool module is to go1.13.15.
+func TestShippedSourceStopsAtANestedModule(t *testing.T) {
+	root, err := ioutil.TempDir("", "shipped-source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	write := func(rel, body string) {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := ioutil.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
-	return files
+	write("go.mod", "module example.test/m\n\ngo 1.13\n")
+	write("a.go", "package m\n")
+	write("examples/ex/main.go", "package main\n")
+	write("tools/gate/go.mod", "module example.test/gate\n\ngo 1.24\n")
+	// Unparseable before Go 1.18, and unparseable by this guard's own parser on
+	// any toolchain if the walk reached it with a syntax error -- either way the
+	// test fails loudly if the boundary is not respected.
+	write("tools/gate/gate.go", "package main\n\nfunc keys[V any](m map[string]V) {}\nfunc ( {\n")
+
+	files := shippedSourceIn(t, root)
+	for _, want := range []string{"a.go", "examples/ex/main.go"} {
+		if _, ok := files[want]; !ok {
+			t.Errorf("%s was not read; the walk stopped short of this module", want)
+		}
+	}
+	for path := range files {
+		if strings.HasPrefix(path, "tools/gate/") {
+			t.Errorf("%s was read; it belongs to a nested module", path)
+		}
+	}
 }
 
 // omitzeroTags returns every struct field whose json tag names omitzero, and
