@@ -138,10 +138,10 @@ version-check: ## Verify version.go matches the latest CHANGELOG.md release head
 # LIBRARY is Go 1.13; the gate is not, and need not be -- only CI and a
 # contributor ever compile it. See docs/development.md#contract-drift.
 #
-# Only the offline half is here. main also has `contract-drift`, which fetches
-# the server's contract from another repository; it runs there on a schedule, and
-# GitHub fires schedules on the default branch only, so this line carries neither
-# the target nor its fetch script.
+# Only the offline half is here. main at 5e40964 also has `contract-drift`, which
+# fetches the server's contract from another repository and runs there on a
+# schedule; GitHub fires schedules on the default branch only, so this line carries
+# neither the target nor its fetch script.
 
 # `go build` then run, never `go run`. The tool exits 0 clean, 1 drift found, 2
 # comparison could not be made, and `go run` collapses that 2 into a shell exit of
@@ -161,7 +161,7 @@ contract-check: ## Offline contract gate: vendored contracts vs what this client
 contract-test: ## Run the contract gate's own tests (proves the gate can still fail)
 	@cd tools/contractdrift && go vet ./... && go test -race ./...
 
-# The pinned identity check. Five of the gate's files are main's, byte for byte,
+# The pinned identity check. Six of the gate's files are main's, byte for byte,
 # at the commit tools/contractdrift/main.pin names; this fails on any difference,
 # on a pin that is not on main, and on a file in either tree the pin file does not
 # classify. Fetches the pin from origin when it is not already local.

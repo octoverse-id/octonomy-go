@@ -1,7 +1,7 @@
 #!/bin/sh
 # The contract gate's pinned identity check (#98).
 #
-# tools/contractdrift on this line is main's gate, ported. Five of its files never
+# tools/contractdrift on this line is main's gate, ported. Six of its files never
 # name the SDK, so they can be main's byte for byte -- and this makes sure they
 # are, at the commit tools/contractdrift/main.pin names. The rest differ by
 # design, and `report` prints how, for a human to read before a release.
@@ -17,6 +17,10 @@
 #   - a pin that is not a commit on main. A pin into this branch's own history
 #     would compare the copies with themselves and pass forever;
 #   - an `identical` file that differs from main's at the pin by a single byte;
+#   - a Go file main has at the pin that imports no SDK package, classified as
+#     anything but `identical`. Which files must match is DERIVED, not read off
+#     the pin file: otherwise turning `identical checks.go` into `advisory
+#     checks.go` would exempt checks.go from the comparison in one word;
 #   - a file in this directory, or in main's at the pin, that the pin file does
 #     not classify -- a new file on either side has to be decided, not inherited
 #     by default -- and a classification the trees contradict (an `own` file
@@ -125,6 +129,12 @@ if ! git rev-parse -q --verify "$mainref^{commit}" >/dev/null || ! git merge-bas
 		cannot "could not fetch $MAIN from $REMOTE to decide whether the pin is on it"
 fi
 
+# Whether the pin is one of main's commits. `check` reports it as a finding; `report`
+# refuses to print at all without it, since every diff it prints is headed "main at
+# the pin" -- and a pin off main would put another commit's content under that name.
+onmain=no
+git merge-base --is-ancestor "$pin" "$mainref" && onmain=yes
+
 # --- the two file sets ---------------------------------------------------------------
 #
 # Here: what git tracks, plus untracked files it would not ignore -- a new file has
@@ -136,6 +146,7 @@ git ls-tree -r --name-only "$pin" -- "$DIR/" | sed "s#^$DIR/##" | sort -u >"$WOR
 
 if [ "$mode" = report ]; then
 	# Report mode never fails on a difference; it fails only when it cannot say.
+	[ "$onmain" = yes ] || cannot "the pin $pin is not on $REMOTE/$MAIN, so there is no 'main at the pin' to report against"
 	printf '# Contract gate: advisory diff against main at %s\n\n' "$pin"
 	printf 'Files marked `identical` in %s are checked byte for byte by `make contract-identity` and are not shown.\n' "$PINFILE"
 	printf 'Each diff below is main at the pin (---) against this line (+++). Read each for a change main made\n'
@@ -162,9 +173,28 @@ problem() {
 	fi
 }
 
-if ! git merge-base --is-ancestor "$pin" "$mainref"; then
+if [ "$onmain" = no ]; then
 	problem "the pin $pin is not on $REMOTE/$MAIN -- it must name one of main's commits, or the copies would be compared with themselves"
 fi
+
+# The derived floor. A Go file that imports no SDK package names nothing this line's
+# dialect could make differ -- the module path, Optional, List[T] all arrive through
+# that import -- so a difference in it is divergence and nothing else. Read off
+# main's own copy at the pin, so a file cannot escape by changing here. An import is
+# a line that starts with the quoted path (inside an import block) or with
+# `import` and the path; the path in a comment or a string elsewhere is not one.
+for f in $(cat "$WORK/there"); do
+	case "$f" in
+	*.go) ;;
+	*) continue ;;
+	esac
+	git show "$pin:$DIR/$f" >"$WORK/theirs"
+	if ! grep -Eq '^[[:space:]]*(import[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*[[:space:]]+)?"github\.com/octoverse-id/octonomy-go(/v[0-9]+)?"' "$WORK/theirs"; then
+		kind=$(class_of "$f")
+		[ "$kind" = identical ] ||
+			problem "$f imports no SDK package at the pin, so nothing about this line can justify a difference in it: it must be marked identical, not ${kind:-unclassified}"
+	fi
+done
 
 for f in $(cat "$WORK/here"); do
 	case "$f" in

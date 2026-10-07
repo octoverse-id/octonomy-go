@@ -47,8 +47,10 @@ mkdir -p "$WORK/upstream/tools/contractdrift"
 (
 	cd "$WORK/upstream"
 	git init -q .
-	printf 'package main\n// shared\n' >tools/contractdrift/checks.go
-	printf 'package main\n// drives\n' >tools/contractdrift/drivers.go
+	# checks.go imports no SDK package, so it must be identical; drivers.go does,
+	# so this line may keep its own -- as on the real tree.
+	printf 'package main\n// shared; github.com/octoverse-id/octonomy-go is named, not imported\n' >tools/contractdrift/checks.go
+	printf 'package main\n\nimport octonomy "github.com/octoverse-id/octonomy-go/v2"\n\n// drives\n' >tools/contractdrift/drivers.go
 	printf 'module x\n' >tools/contractdrift/go.mod
 	commit_all "gate"
 	printf 'readme\n' >README
@@ -65,7 +67,7 @@ fixture() {
 	(
 		cd "$WORK/line"
 		git checkout -q -b support/line
-		printf 'package main\n// drives, the compat way\n' >tools/contractdrift/drivers.go
+		printf 'package main\n\nimport (\n\toctonomy "github.com/octoverse-id/octonomy-go"\n)\n\n// drives, the compat way\n' >tools/contractdrift/drivers.go
 		write_pin "$PIN"
 		commit_all "line"
 	)
@@ -172,6 +174,23 @@ write_pin "$NEWPIN"
 expect "a pin on main this clone lacks is fetched and compared" 0 "match main at $NEWPIN"
 git -C "$WORK/upstream" reset -q --hard HEAD~1
 
+# --- the derived floor ---------------------------------------------------------------------
+# One word in main.pin must not be able to exempt a shared file from the comparison.
+fixture
+sed 's/^identical checks.go$/advisory checks.go/' "$WORK/line/tools/contractdrift/main.pin" >"$WORK/pin" && cp "$WORK/pin" "$WORK/line/tools/contractdrift/main.pin"
+printf '\n' >>"$WORK/line/tools/contractdrift/checks.go"
+expect "a shared file relabelled advisory, then changed, fails" 1 "checks.go imports no SDK package at the pin"
+
+fixture
+sed 's/^identical checks.go$/advisory checks.go/' "$WORK/line/tools/contractdrift/main.pin" >"$WORK/pin" && cp "$WORK/pin" "$WORK/line/tools/contractdrift/main.pin"
+expect "a shared file relabelled advisory fails even unchanged" 1 "must be marked identical, not advisory"
+
+# An SDK-importing file may be identical too, if it happens to match.
+fixture
+sed 's/^advisory drivers.go$/identical drivers.go/' "$WORK/line/tools/contractdrift/main.pin" >"$WORK/pin" && cp "$WORK/pin" "$WORK/line/tools/contractdrift/main.pin"
+git -C "$WORK/line" show "$PIN:tools/contractdrift/drivers.go" >"$WORK/line/tools/contractdrift/drivers.go"
+expect "a file that imports the SDK may still be marked identical when it matches" 0 "2 identical file(s) match"
+
 # --- classification ----------------------------------------------------------------------
 fixture
 printf 'package main\n' >"$WORK/line/tools/contractdrift/extra.go"
@@ -268,6 +287,16 @@ fixture
 printf '\n' >>"$WORK/line/tools/contractdrift/checks.go"
 expect "report shows an advisory file's diff" 0 "+// drives, the compat way" report
 expect "report does not fail on an identical file's divergence -- check does" 0 "## drivers.go" report
+
+fixture
+(
+	cd "$WORK/line"
+	printf 'package main\n// shared; github.com/octoverse-id/octonomy-go is named, not imported\n' >tools/contractdrift/checks.go
+	printf 'local\n' >NOTE
+	commit_all "a commit on this line"
+)
+write_pin "$(git -C "$WORK/line" rev-parse HEAD)"
+expect "report refuses a pin that is not on main, rather than label it main's" 2 "no 'main at the pin'" report
 set +e
 out=$(cd "$WORK/line" && "$CHECK" report 2>&1)
 set -e

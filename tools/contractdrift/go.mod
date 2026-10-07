@@ -13,7 +13,7 @@
 // CI and a contributor, so it runs on the modern toolchain the gate was written
 // for, and the go1.13 job's `go build ./...` and `go vet ./...` stop at this
 // directory's go.mod and never see it. That split is what made porting the gate
-// affordable (#98): five of its files are main's, byte for byte, which a Go 1.13
+// affordable (#98): six of its files are main's, byte for byte, which a Go 1.13
 // rewrite would have ended.
 //
 // It also imports the SDK, through a replace on the checkout. That is how the

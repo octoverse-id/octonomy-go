@@ -93,9 +93,11 @@ on `main`.
   ported:** `main`'s, at 5e40964, read response types off `doData[T]` type arguments, which this line
   does not have, so a transformed one finds nothing to read. `sourceguard_test.go` holds the readers
   rewritten for this dialect; build on them.
-- **The contract gate is ported under a pin (#98).** `tools/contractdrift` is `main`'s gate, and five
-  of its files — `checks.go`, `coverage.go`, `gosdk.go`, `sdk.go`, `spec.go` — are `main`'s byte for
-  byte at the commit `tools/contractdrift/main.pin` names. **Never edit one of them here**: `make
+- **The contract gate is ported under a pin (#98).** `tools/contractdrift` is `main`'s gate as of
+  5e40964, and every Go file of it that imports no SDK package — `checks.go`, `coverage.go`,
+  `gosdk.go`, `main.go`, `sdk.go`, `spec.go` — is `main`'s byte for byte at the commit
+  `tools/contractdrift/main.pin` names. The identity check derives that set from `main`'s files
+  rather than reading it off the pin file, so relabelling one does not exempt it. **Never edit one of them here**: `make
   contract-identity` (in the required `compat guard` job) fails on a single byte, and a fix lands on
   `main` first and arrives by advancing the pin, in a PR that copies `main`'s files at the new commit.
   Every other file in that directory is `advisory` (this line's version of a `main` file — above all

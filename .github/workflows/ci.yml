@@ -180,7 +180,7 @@ jobs:
         # matters most -- the release PR runs it for the first time. These
         # fixtures exercise that path, and the tag paths, on every run.
         run: make compat-guard-test
-      # The contract gate's shared files against main's (#98). Five files of
+      # The contract gate's shared files against main's (#98). Six files of
       # tools/contractdrift are main's byte for byte at a PINNED commit, so
       # divergence is impossible rather than merely discouraged -- and pinned
       # rather than main's tip, so a merge on main cannot turn an unchanged

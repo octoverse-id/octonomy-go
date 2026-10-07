@@ -12,10 +12,10 @@ import (
 // parameter, a dropped schema field, a retyped property and a rerouted method,
 // one fixture per case.
 //
-// This file is this line's own (main.pin marks it `own`). main's tests prove each
-// of those findings in process, and they run here too -- but in process, the SDK
-// under test is the one compiled into the test binary, so main synthesizes the
-// client-side half (TestUnsentQueryParameterIsReported deletes a key from an
+// This file is this line's own (main.pin marks it `own`). main's tests at
+// 5e40964 prove each of those findings in process, and they run here too -- but in
+// process, the SDK under test is the one compiled into the test binary, so those
+// tests synthesize the client-side half (TestUnsentQueryParameterIsReported deletes a key from an
 // observation; TestWrongRouteIsReported rewrites one). That proves the CHECK. It
 // does not prove the GATE: that the Makefile target builds the tool against the
 // tree in front of it, that the replace in go.mod points at that tree, that the

@@ -1,10 +1,9 @@
 // Command contractdrift reports when the Octonomy server's REST contract has
 // moved away from what this SDK implements.
 //
-// It exists because nothing else does. main's SDK sat on the server's first
-// contract while the server shipped two majors past it and made an entire second
-// API surface primary, and nobody was told, because no mechanism existed to tell
-// anyone (#18). This line sat further behind still, until #90.
+// It exists because nothing else does. The SDK sat on a server 1.0.0 contract
+// while the server shipped 3.1.0 and made an entire second API surface primary,
+// and nobody was told, because no mechanism existed to tell anyone (issue #18).
 //
 // WHAT IT COMPARES, and why a path inventory would not have been enough. The
 // drift that prompted this was query parameters, error codes, response schemas,
@@ -52,14 +51,11 @@
 //	                   without the follow-through, since after a refresh both
 //	                   sides of the cross-repository comparison are one file.
 //	-upstream DIR      adds the cross-repository comparison against a fetched
-//	                   copy of the server's contracts. Never a merge gate: a job
-//	                   that reaches across repositories can fail for reasons that
-//	                   have nothing to do with the change under review, and a
-//	                   merge gate that does that is a merge gate people learn to
-//	                   route around. main runs it on a schedule; GitHub fires a
-//	                   schedule only on the default branch, so on support/go1.13
-//	                   nothing runs it, and it is there for a hand-run against a
-//	                   directory fetched by hand (docs/development.md#contract-drift).
+//	                   copy of the server's contracts. Scheduled only: a job that
+//	                   reaches across repositories can fail for reasons that have
+//	                   nothing to do with the change under review, and a merge
+//	                   gate that does that is a merge gate people learn to
+//	                   route around.
 //
 // Each operation is driven FOUR times: both REST surfaces, and on each, two
 // executions with different path values and different response witnesses. Each
@@ -67,11 +63,9 @@
 // the path and the inputs whose expectation is declared to differ by execution --
 // the booleans, which two values cannot otherwise tell apart.
 //
-// Fetching is deliberately NOT this program's job. On main,
-// scripts/contract-fetch.sh does it; this line does not carry that script, since
-// nothing here runs the networked half. Either way this reads plain files --
-// which is what makes a synthetic upstream copy a one-line test rather than a
-// network fixture.
+// Fetching is deliberately NOT this program's job. scripts/contract-fetch.sh
+// does it, and this reads plain files -- which is what makes a synthetic
+// upstream copy a one-line test rather than a network fixture.
 //
 // Exit codes: 0 clean, 1 drift found, 2 the comparison could not be made. The
 // third is separate because a gate that cannot read its inputs must never be

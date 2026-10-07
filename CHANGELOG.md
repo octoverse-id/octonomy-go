@@ -23,12 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     target to fail on each.
   - **`drivers.go` is written for this line**: the `*Update` structs' pointer fields, the
     per-resource list envelopes, and an `APIVersion` named on every client the gate builds.
-  - **Five of the gate's files are `main`'s, byte for byte**, at the commit
-    `tools/contractdrift/main.pin` names. `make contract-identity` (`scripts/contract-identity.sh`)
-    fails on a differing byte, a pin that is not on `main`, or a file on either side the pin file does
-    not classify; `make contract-identity-test` proves it fails each way. `make contract-report`
+  - **Six of the gate's files are `main`'s, byte for byte** — every Go file that imports no SDK
+    package — at the commit `tools/contractdrift/main.pin` names. `make contract-identity`
+    (`scripts/contract-identity.sh`) fails on a differing byte, on such a file classified as anything
+    but `identical`, on a pin that is not on `main`, or on a file on either side the pin file does not
+    classify; `make contract-identity-test` proves it fails each way. `make contract-report`
     prints the other files' diffs against the pin, for the release runbook's reader.
-  - **`docs/contract-coverage.yaml`** gains the sections `main`'s copy carries beyond `operations:` —
+  - **`docs/contract-coverage.yaml`** gains the sections `main`'s copy carried beyond `operations:` at
+    5e40964 —
     `unsent_inputs`, `undocumented_inputs`, `client_headers`, `undocumented_model_fields`, the
     vendored `server_error_codes`, and the two kinds of recorded error constant. The gate found one
     gap, recorded there rather than closed: `VocabularyListParams` cannot send `q` or `slug`.

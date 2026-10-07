@@ -25,6 +25,23 @@ import (
 // properties of the documented request schema -- so a field left unset here shows
 // up as something the contract documents and the client did not send.
 //
+// "Every field" means every input the CONTRACT documents, and it stops there --
+// which leaves inputs this table deliberately does not drive, the same ones main's
+// does not at 5e40964:
+//
+//   - WithActor and Config.ActorID (X-Actor-ID), WithRequestID (X-Request-ID),
+//     and the user-agent fields. No operation in either vendored contract
+//     documents those headers, and checks.go reports any header it cannot find
+//     documented -- so driving them would make the gate report the option itself,
+//     and nothing about their wire value could be compared with the contract.
+//     transport_test.go, octonomy_test.go and health_test.go hold them instead.
+//   - WithGlobalNamespace, which REMOVES the namespace headers rather than
+//     sending any; Namespaced below sends the pair it would remove.
+//     scope_test.go holds it.
+//
+// A regression that stopped one of those reaching the wire is therefore not this
+// gate's to see. It is not a gap in one driver but a boundary of the design.
+//
 // Where the client genuinely cannot send a documented parameter, that IS the
 // finding, and it belongs in the YAML's unsent_inputs with a reason -- not in a
 // driver that quietly skips it. On this line the live case is `q` and `slug` on

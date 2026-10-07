@@ -11,9 +11,12 @@
 #                    would compare the copies with themselves.
 #   identical <f>    byte-for-byte main's file at the pin. The check fails on any
 #                    difference. These are the files that never name the SDK --
-#                    the spec, coverage and error-registry readers and the checks
-#                    themselves -- so nothing about this line's dialect can
-#                    justify a difference, and a difference is divergence.
+#                    the spec, coverage and error-registry readers, the checks,
+#                    and the command -- so nothing about this line's dialect can
+#                    justify a difference, and a difference is divergence. Which
+#                    files must be here is DERIVED by the script, not taken from
+#                    this list: every Go file that imports no SDK package at the
+#                    pin, so a file cannot leave this class by being relabelled.
 #                    A fix to one of them lands on main FIRST and arrives here by
 #                    advancing the pin; editing the copy here fails the check.
 #   advisory <f>     this line's own version of main's file. It differs by
@@ -40,6 +43,7 @@ pin 5e409641e3dfafb83227e02efee3d8a50ec5602c
 identical checks.go
 identical coverage.go
 identical gosdk.go
+identical main.go
 identical sdk.go
 identical spec.go
 
@@ -48,7 +52,6 @@ advisory drivers.go
 advisory drift_test.go
 advisory go.mod
 advisory go.sum
-advisory main.go
 
 own acceptance_test.go
 own main.pin

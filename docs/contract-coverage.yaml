@@ -331,7 +331,7 @@ unsent_inputs:
       Application scope follows the body on a request that has one, so the SDK
       refuses WithApplication here and the value travels in the write struct's
       ApplicationID instead (AGENTS.md, "Application scope follows the body").
-      main's inventory records why, from a probe of the server: it keeps a query
+      main's inventory at 61fce9b records why, from a probe of the server: it keeps a query
       application_id on a namespaced create and DROPS it on a global one, while a
       body application_id wins in both — so honoring the option would silently
       produce a tenant-shared row for a caller who asked for application scope.
@@ -471,10 +471,11 @@ undocumented_model_fields: []
 # The server's error registry, vendored the way the two OpenAPI contracts are — and
 # for the same reason. These codes are not in the contracts: `ErrorResponse` types
 # `code` as a bare string, so a schema comparison cannot see a single one of them.
-# Copied from main's file at 61fce9b, which checks it against the server's own
-# octonomy/core/errors.py on a schedule; this line runs no scheduled job (GitHub
-# fires schedules on the default branch only), so here the list is held to
-# errors.go on every pull request and to the server only through main's copy.
+# Copied from main's file at 61fce9b; main at that commit also checks its copy
+# against the server's own octonomy/core/errors.py on a schedule. This line runs
+# no scheduled job (GitHub fires schedules on the default branch only), so here the
+# list is held to errors.go on every pull request, and to the server only by a
+# hand-run of the gate's -upstream mode (docs/development.md#contract-drift).
 server_error_codes:
   - ambiguous_resolution
   - application_mismatch

@@ -340,11 +340,21 @@ different path values and different response witnesses:
 | **Recorded version** | both specs' `info.version` against the marker in [versioning.md](versioning.md) |
 
 The mechanics, and why each check is shaped the way it is, are written up beside the checks
-themselves — `tools/contractdrift`'s comments are main's, and its boundaries are main's too: a
-method that hard-codes a witness exactly, or a decoder hard-coded to the populated response, passes,
-because exact comparison proves these executions rather than that the SDK propagates arbitrary
-values. `required` is not exercised offline, since the stub populates every property. The smoke and
-isolation suites are what exercise real values against a real server.
+themselves, and the boundaries are the ones `main`'s gate had at 5e40964:
+
+- **Only what the contract documents is driven.** `WithActor` / `Config.ActorID` (`X-Actor-ID`),
+  `WithRequestID` (`X-Request-ID`) and the user-agent fields put headers on the wire that no
+  operation documents, and the gate reports any undocumented header — so they are not driven, and a
+  regression that stopped one reaching the wire is invisible to it. `WithGlobalNamespace` removes
+  the namespace headers rather than sending any, and is not driven either. Their unit tests
+  (`transport_test.go`, `octonomy_test.go`, `health_test.go`, `scope_test.go`) are what hold them.
+- **Exact comparison proves these executions**, not that the SDK propagates arbitrary values: a
+  method that hard-codes a witness exactly, or a decoder hard-coded to the populated response,
+  passes.
+- **`required` is not exercised offline**, since the stub populates every property, and a property
+  documented `integer` decoded into a `float64` still decodes.
+
+The smoke and isolation suites are what exercise real values against a real server.
 
 ### What is different on this line
 
@@ -363,21 +373,28 @@ isolation suites are what exercise real values against a real server.
   the client cannot send `q` or `slug` on `GET /vocabularies`. The gate found it, and
   `contract-coverage.yaml` lists both under `unsent_inputs` with the reason; porting the two fields
   retires both rows, because the gate then reports them as stale.
-- **Only the offline half.** `main` also runs the gate with `-upstream`, against a copy of the
-  server's contracts it fetches from octoverse-id/octonomy, on a schedule. GitHub fires a schedule
-  only on the default branch, so this line carries neither that workflow nor its fetch script, and
-  `TestNoWorkflowRunsTheNetworkedHalf` keeps it that way. The mode is still in the binary: put the
-  server's `docs/openapi.yaml`, `docs/openapi-v2.yaml` and `octonomy/core/errors.py` in a directory,
-  build the tool, and run `contractdrift -repo . -upstream DIR` by hand. Until then this line's
-  `server_error_codes` meets the server only through `main`'s scheduled comparison of its own copy.
+- **Only the offline half.** At 5e40964 `main` also runs the gate with `-upstream`, against a copy
+  of the server's contracts it fetches from octoverse-id/octonomy, on a schedule
+  ([`contract-drift.yml`](https://github.com/octoverse-id/octonomy-go/blob/main/.github/workflows/contract-drift.yml)).
+  GitHub fires a schedule only on the default branch, so this line carries neither that workflow nor
+  its fetch script, and `TestNoWorkflowRunsTheNetworkedHalf` keeps it that way. The mode is still in
+  the binary: put the server's `docs/openapi.yaml`, `docs/openapi-v2.yaml` and
+  `octonomy/core/errors.py` in a directory, build the tool, and run
+  `contractdrift -repo . -upstream DIR` by hand. Nothing on this line does that on its own, so this
+  line's `server_error_codes` meets the server's registry only when someone does.
 
 ### The pin, and what may differ from `main`
 
-Five of the gate's files never name the SDK — `checks.go`, `coverage.go`, `gosdk.go`, `sdk.go`,
-`spec.go` — so they are `main`'s, **byte for byte**, at the commit
+Six of the gate's files never name the SDK — `checks.go`, `coverage.go`, `gosdk.go`, `main.go`,
+`sdk.go`, `spec.go` — so they are `main`'s, **byte for byte**, at the commit
 [`tools/contractdrift/main.pin`](../tools/contractdrift/main.pin) names. `make contract-identity`
 (the `compat guard` CI job runs it on every pull request) fails on any difference, on a pin that is
-not one of `main`'s commits, and on a file on either side that the pin file does not classify.
+not one of `main`'s commits, and on a file on either side that the pin file does not classify. Which
+files must match is **derived**, not declared: every Go file of `main`'s at the pin that imports no
+SDK package has to be marked `identical`, so turning `identical` into `advisory` in the pin file does
+not exempt one. Their comments are `main`'s too, describing `main`'s tooling where they mention it —
+the scheduled networked half, its fetch script — which this line does not carry; correcting one is a
+change to `main`.
 Divergence is therefore impossible rather than discouraged, and a fix to one of those files has one
 route: land it on `main`, then advance the pin here.
 
@@ -400,6 +417,6 @@ read it.
 - **A new parameter** needs its field set in the operation's driver, or the gate reports it as
   documented and unsent. If the client genuinely cannot send it, that is a finding: record it under
   `unsent_inputs` with the reason, never in a driver that quietly skips it.
-- **A new check** belongs on `main` first if it lands in one of the five shared files, and arrives
+- **A new check** belongs on `main` first if it lands in one of the shared files, and arrives
   here with the pin. Prove it can fail the way the existing tests do: mutate a staged copy of the real
   contract and assert the finding.
