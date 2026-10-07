@@ -166,7 +166,7 @@ single-resource envelope defect.
 ### Namespace isolation suite
 
 `integration_suite_test.go` (build tag `integration`, #97) asks the question `/api/v2` exists to
-answer: can a merchant-A client see a merchant-B row? Every read method is a probe in `readProbes`,
+answer: can a merchant-A client see a merchant-B row? Every authenticated read method is a probe in `readProbes` — the two unauthenticated health probes are argued exclusions —
 and two tests ask each probe a matrix of questions against rows seeded in two merchant namespaces and
 the global one — `TestIntegration_NamespaceIsolation` (the namespace filter, under an exact grant and
 under the wildcard, and the 403 a merchant-A token gets asking for merchant B) and

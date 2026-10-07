@@ -70,7 +70,8 @@ var readProbeExclusions = map[string]string{
 		"no request, so it has no row to show anyone",
 }
 
-// Every read method this SDK exposes needs a probe in readProbes.
+// Every read method this SDK exposes needs a probe in readProbes, or an argued
+// exclusion -- the unauthenticated health probes are the two there are.
 //
 // That table is what makes "a merchant-A client never sees a merchant-B row" a
 // statement about the WHOLE read surface rather than about whichever endpoints

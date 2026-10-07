@@ -48,9 +48,9 @@ import (
 // suiteTimeout bounds each phase of a top-level test that talks to the server:
 // every seed's writes get a context of this length, and so do all of the
 // matrix's reads together, from a context the test creates once its rows
-// exist. Generous: one matrix is close to a hundred reads, and a seed is five
-// writes, each of which also writes an audit row and an outbox event on the
-// server. Teardown steps get cleanupTimeout each.
+// exist. Generous: one matrix is close to a hundred reads, and a seed is four
+// write requests, each of which also writes an audit row and an outbox event on
+// the server. Teardown steps get cleanupTimeout each.
 const suiteTimeout = 120 * time.Second
 
 // cleanupTimeout bounds one seeded row's teardown. It is a context of its own
@@ -259,8 +259,8 @@ func (td *teardown) run() {
 }
 
 // namespaceFixture is one SCOPE's worth of rows -- one merchant's, or the
-// global namespace's -- enough that every read endpoint the SDK exposes has
-// something of that scope's to find.
+// global namespace's -- enough that every authenticated read endpoint the SDK
+// exposes has something of that scope's to find.
 //
 // The resource carries the tag, so the assignment, resource-tag, and audit
 // routes all resolve to the same underlying write, which is what makes a single

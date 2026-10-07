@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#97](https://github.com/octoverse-id/octonomy-go/issues/97), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests, CI, the harness and docs
   only; no exported symbol changes.
-  - **`integration_suite_test.go`** ports `main`'s `readProbes` table — every read method, asked
+  - **`integration_suite_test.go`** ports `main`'s `readProbes` table — every authenticated read method, asked
     whether a client reading one namespace can see another's row — and the two tests that run it:
     `TestIntegration_NamespaceIsolation` (the namespace filter under an exact grant and under the
     wildcard, and the `403` a merchant-A token gets asking for merchant B) and

@@ -415,8 +415,9 @@ type probeRun struct {
 	expect outcome
 }
 
-// runProbeMatrix asks every read endpoint this SDK exposes every question in
-// runs, and holds each answer to what that endpoint is supposed to do.
+// runProbeMatrix asks every authenticated read endpoint this SDK exposes every
+// question in runs, and holds each answer to what that endpoint is supposed to
+// do.
 //
 // One matrix rather than a handful of hand-written cases, because the property
 // under test is about the READ SURFACE and not about any endpoint: a rule that
@@ -474,11 +475,11 @@ func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRu
 
 // TestIntegration_NamespaceIsolation is the 2am-Friday test.
 //
-// Two merchants are seeded with a full set of rows, and every read endpoint this
-// SDK exposes is asked the same question six times: three runs that must find
-// the row, and three that must not. Both halves are load-bearing, and the
-// negatives cover THREE distinct mechanisms, each of which has to hold on its
-// own:
+// Two merchants are seeded with a full set of rows, and every authenticated
+// read endpoint this SDK exposes is asked the same question six times: three
+// runs that must find the row, and three that must not. Both halves are
+// load-bearing, and the negatives cover THREE distinct mechanisms, each of
+// which has to hold on its own:
 //
 //	the FILTER, under a merchant token   merchant A reads its own namespace and
 //	                                     merchant B's rows are simply not in the
@@ -572,7 +573,7 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 }
 
 // TestIntegration_IncludeGlobalFailsClosed pins the one option whose failure
-// mode is silent, across the whole read surface.
+// mode is silent, across the whole authenticated read surface.
 //
 // WithIncludeGlobal widens what a namespaced read ASKS for. Whether the global
 // rows actually come back is decided separately, by whether the token holds
@@ -586,11 +587,11 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 // fail-closed branch would never execute. It needs a token that genuinely cannot
 // see global rows, which is why the harness mints exact grants.
 //
-// It runs as a matrix over every read endpoint for the same reason the isolation
-// test does: the server threads request_include_global through the tag detail,
-// resolution, vocabulary, alias, resource and audit views SEPARATELY. One view
-// can misuse the flag while Tags.List stays correct, and a single-endpoint test
-// would never see it.
+// It runs as a matrix over every authenticated read endpoint for the same
+// reason the isolation test does: the server threads request_include_global
+// through the tag detail, resolution, vocabulary, alias, resource and audit
+// views SEPARATELY. One view can misuse the flag while Tags.List stays correct,
+// and a single-endpoint test would never see it.
 //
 // The five runs, and why each is needed:
 //
