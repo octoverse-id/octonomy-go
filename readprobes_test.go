@@ -1177,6 +1177,7 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 	if why != "" {
 		problems = append(problems, why)
 	}
+	tt := newTypedTests(info, decls)
 	funcs := map[string]*ast.FuncDecl{}
 	for _, decl := range decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Body != nil {
@@ -1199,7 +1200,7 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 	if matrix, ok := funcs["runProbeMatrix"]; !ok {
 		problems = append(problems, "the isolation suite declares no runProbeMatrix, so nothing runs readProbes")
 	} else {
-		problems = append(problems, matrixProblems(matrix, helpers, info)...)
+		problems = append(problems, matrixProblems(matrix, helpers, tt)...)
 	}
 
 	// Every caller of the matrix is a test the runners select, calling it from
@@ -1226,7 +1227,7 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 		if !strings.HasPrefix(name, isolationTestPrefix) {
 			continue
 		}
-		problems = append(problems, isolationTestProblems(funcs[name], helpers, info)...)
+		problems = append(problems, isolationTestProblems(funcs[name], helpers, tt)...)
 	}
 
 	for _, name := range isolationTestNames() {
@@ -1253,13 +1254,13 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 // isolationTestProblems refuses the two ways a selected test can turn green
 // without running what follows: a skip, and an early return. The suite's only
 // skip is loadHarness's, behind the required gate.
-func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers, info *types.Info) []string {
+func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers, tt typedTests) []string {
 	var problems []string
 	// The seeded rows' teardown is this test's own defer (rules 2 and 3 of the
 	// t.Cleanup model), which holds only while its subtests are sequential; and
 	// the Vocabularies.List walk counts a collection another test running at
 	// the same time would change.
-	if callsParallel(fn, helpers, info, map[*ast.FuncDecl]bool{}) {
+	if callsParallel(fn, helpers, tt, map[*ast.FuncDecl]bool{}) {
 		problems = append(problems, fn.Name.Name+" calls Parallel, directly or through a helper. The isolation "+
 			"tests run in sequence: a parallel subtest outlives the deferred teardown of the rows it reads, and "+
 			"two isolation tests at once change the collections the Vocabularies.List walk counts")
@@ -1301,7 +1302,7 @@ func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers, info *types.I
 // of the matrix while the test stays green, and a run the matrix leaves out is
 // as unrun as one the test never declared. What the matrix asserts about each
 // answer is the reviewer's.
-func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers, info *types.Info) []string {
+func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers, tt typedTests) []string {
 	var problems []string
 	for _, why := range skipsIn(fn, helpers) {
 		problems = append(problems, "runProbeMatrix "+why+"; a skipped probe is a green run that asserted nothing")
@@ -1317,7 +1318,7 @@ func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers, info *types.Info) []
 		}
 		return true
 	})
-	if callsParallel(fn, helpers, info, map[*ast.FuncDecl]bool{}) {
+	if callsParallel(fn, helpers, tt, map[*ast.FuncDecl]bool{}) {
 		problems = append(problems, "runProbeMatrix calls Parallel, directly or through a helper. Its subtests "+
 			"close over the loops' probe and run, which before Go 1.22 a parallel subtest reads at the loop's "+
 			"last value -- copies of one probe or one run, not the matrix -- and the fixtures' teardown is the "+
@@ -1403,11 +1404,21 @@ func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers, info *types.Info) []
 	return problems
 }
 
-// callsParallel reports whether fn can call Parallel: directly, anywhere in its
+// callsParallel reports whether fn can call testing's Parallel: anywhere in its
 // body, closures included, or through a function or method the files read
-// declare, resolved as the skip reader resolves them. A helper the reader
-// cannot resolve is already refused when it is handed the T (skipsIn).
-func callsParallel(fn *ast.FuncDecl, h smokeHelpers, info *types.Info, seen map[*ast.FuncDecl]bool) bool {
+// declare. A helper the reader cannot resolve is already refused when it is
+// handed the T (skipsIn).
+//
+// A call is read by what it SELECTS, off the files' own type-check
+// (checkFiles), never by its receiver's type -- which is where an embedding, a
+// pointer or an alias would hide a T, and where go1.13's go/types and a modern
+// one disagree. A method the files declare is followed into, so a local
+// type's own Parallel counts only if its body calls testing's. Any other
+// Parallel is taken to be testing's: one promoted from an embedded *testing.T,
+// an interface's (which may hold a T), or one the checker cannot resolve
+// because its receiver's type is an import's. That is the fail-closed
+// direction.
+func callsParallel(fn *ast.FuncDecl, h smokeHelpers, tt typedTests, seen map[*ast.FuncDecl]bool) bool {
 	if fn == nil || fn.Body == nil || seen[fn] {
 		return false
 	}
@@ -1420,14 +1431,22 @@ func callsParallel(fn *ast.FuncDecl, h smokeHelpers, info *types.Info, seen map[
 		}
 		switch callee := unparen(call.Fun).(type) {
 		case *ast.SelectorExpr:
-			if callee.Sel.Name == "Parallel" && mayBeTestingT(callee.X, info) {
+			switch decl := tt.selectedDecl(callee); {
+			case decl != nil:
+				found = callsParallel(decl, h, tt, seen)
+			case callee.Sel.Name == "Parallel":
 				found = true
-			} else if typ := receiverTypeOf(fn, callee.X, h); typ != "" {
-				found = callsParallel(h.methods[typ+"."+callee.Sel.Name], h, info, seen)
+			default:
+				// A selection the checker did not resolve to a declaration here:
+				// follow it as the skip reader would, by its receiver's spelled
+				// type, so a helper is never read less than skipsIn reads it.
+				if typ := receiverTypeOf(fn, callee.X, h); typ != "" {
+					found = callsParallel(h.methods[typ+"."+callee.Sel.Name], h, tt, seen)
+				}
 			}
 		case *ast.Ident:
 			if len(declarationsOf(callee.Name, fn)) == 0 {
-				found = callsParallel(h.declared[callee.Name], h, info, seen)
+				found = callsParallel(h.declared[callee.Name], h, tt, seen)
 			}
 		}
 		return !found
@@ -1435,37 +1454,38 @@ func callsParallel(fn *ast.FuncDecl, h smokeHelpers, info *types.Info, seen map[
 	return found
 }
 
-// mayBeTestingT reports whether a Parallel call's receiver may be a test's T,
-// read off the files' own type-check (checkFiles): anything but a value whose
-// type, under every alias and definition, is concrete and declared in those
-// files -- `var p pool` with pool a struct. An interface may hold a
-// *testing.T, and a type from an import -- testing.T itself, which the checker
-// sees as an empty package's -- or one that does not check is taken to be one:
-// the fail-closed direction.
-func mayBeTestingT(x ast.Expr, info *types.Info) bool {
-	typ := info.TypeOf(x)
-	if typ == nil {
-		return true
-	}
-	// Look through pointers. The toolchains differ here, and this line's real
-	// one is the reason: go1.13.15's go/types types `*testing.T`, with testing
-	// stubbed empty, as a pointer to an invalid type, where a modern go/types
-	// makes the whole type invalid. Without this, a direct t.Parallel() passes
-	// the guard on go1.13 alone -- which a modern-toolchain run cannot see.
-	for {
-		ptr, ok := typ.Underlying().(*types.Pointer)
-		if !ok {
-			break
+// typedTests is the isolation suite's two files, type-checked together
+// (checkFiles), with each declared function's object mapped to its
+// declaration.
+type typedTests struct {
+	info   *types.Info
+	declOf map[*types.Func]*ast.FuncDecl
+}
+
+func newTypedTests(info *types.Info, decls []ast.Decl) typedTests {
+	tt := typedTests{info: info, declOf: map[*types.Func]*ast.FuncDecl{}}
+	for _, decl := range decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			if f, ok := info.Defs[fn.Name].(*types.Func); ok {
+				tt.declOf[f] = fn
+			}
 		}
-		typ = ptr.Elem()
 	}
-	switch under := typ.Underlying().(type) {
-	case *types.Interface:
-		return true
-	case *types.Basic:
-		return under.Kind() == types.Invalid
+	return tt
+}
+
+// selectedDecl is the declaration a selector selects, when the checker
+// resolved it to a method these files declare; nil otherwise.
+func (tt typedTests) selectedDecl(e *ast.SelectorExpr) *ast.FuncDecl {
+	sel, ok := tt.info.Selections[e]
+	if !ok {
+		return nil
 	}
-	return false
+	f, ok := sel.Obj().(*types.Func)
+	if !ok {
+		return nil
+	}
+	return tt.declOf[f]
 }
 
 // isFindOfRun reports whether call is probe.find(<ctx>, run.client,
@@ -2657,6 +2677,14 @@ func isolationHarnessFixture(gate, extra string) string {
 	}
 	return `package octonomy_test
 
+type merchant struct{ id, token string }
+
+type harness struct{ merchantA, merchantB merchant }
+
+type teardown struct{ steps []func() }
+
+type namespaceFixture struct{ namespaceID string }
+
 func loadHarness(t *testing.T) harness {
 	required := os.Getenv("OCTONOMY_SMOKE_REQUIRED") == "1"
 	baseURL := os.Getenv("OCTONOMY_TEST_BASE_URL")
@@ -3275,6 +3303,49 @@ func TestIntegration_Extra(t *testing.T) {
 	h := loadHarness(t)
 	_ = h
 	runParallel(t)
+}`},
+			want: []string{"TestIntegration_Extra calls Parallel"},
+		},
+		{
+			// Promoted from an embedded *testing.T: the receiver's type is a
+			// concrete struct, and the Parallel it selects is still testing's.
+			name: "a T made parallel through an embedding wrapper",
+			suite: isolationSuiteFixture{extra: `type suiteT struct{ *testing.T }
+
+func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	_ = h
+	s := suiteT{t}
+	s.Parallel()
+}`},
+			want: []string{"TestIntegration_Extra calls Parallel"},
+		},
+		{
+			name: "a T made parallel through an embedded interface",
+			suite: isolationSuiteFixture{extra: `type parallelT interface{ Parallel() }
+
+type suiteI struct{ parallelT }
+
+func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	_ = h
+	s := suiteI{t}
+	s.Parallel()
+}`},
+			want: []string{"TestIntegration_Extra calls Parallel"},
+		},
+		{
+			// A local Parallel counts by what its body does.
+			name: "a local Parallel that calls testing's",
+			suite: isolationSuiteFixture{extra: `type wrap struct{ t *testing.T }
+
+func (w wrap) Parallel() { w.t.Parallel() }
+
+func TestIntegration_Extra(t *testing.T) {
+	h := loadHarness(t)
+	_ = h
+	w := wrap{t}
+	w.Parallel()
 }`},
 			want: []string{"TestIntegration_Extra calls Parallel"},
 		},

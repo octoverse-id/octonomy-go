@@ -356,11 +356,12 @@ probe_status() {
 
 # The exact merchant grants, each proved in both directions.
 #
-# Unlike assert_namespaced_write above, the failure this guards against is not a
-# vacuous pass in the isolation suite -- a token that reached nothing would make
-# every assertion there fail loudly. It is a MISDIAGNOSIS: thirty 403s inside
-# Go assertions read as an SDK defect, and the actual fault is a token minted
-# with the wrong grant shape. Four requests here say so in one line instead.
+# Unlike assert_namespaced_write above, the failure this guards against is not
+# mainly a vacuous pass: a grant that reached nothing would fail the suite's
+# exact-grant visible and filtered runs, a 403 each across every probe. It is a
+# MISDIAGNOSIS: dozens of 403s inside Go assertions read as an SDK defect, and
+# the actual fault is a token minted with the wrong grant shape. Four requests
+# here say so in one line instead.
 #
 # The negative direction is the one worth the round trip. A grant that reached
 # every namespace would still satisfy the positive probe, and the whole suite

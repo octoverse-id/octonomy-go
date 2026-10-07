@@ -220,9 +220,12 @@ jobs:
   smoke:
     name: go1.13 smoke test
     runs-on: ubuntu-latest
-    # Docker pull + migrations + readiness, then a sub-second test. The
-    # harness's own gates are bounded well inside this; hitting it means Docker
-    # or the registry hung.
+    # Docker pull + migrations + readiness, then the two suites, which take
+    # seconds against a healthy server. The harness's own gates are bounded well
+    # inside this. The suites' deadlines are per phase -- each seed, each
+    # matrix, each teardown step -- so a server that hangs mid-suite can reach
+    # this ceiling before they all expire; either way, hitting it means
+    # something hung rather than that a run was slow.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7

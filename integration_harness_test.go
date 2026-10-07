@@ -47,9 +47,10 @@ import (
 
 // suiteTimeout bounds each phase of a top-level test that talks to the server:
 // every seed's writes get a context of this length, and so do all of the
-// matrix's reads together. Generous: the matrix alone is close to a hundred
-// round trips against a container that is also writing audit rows and outbox
-// events for every one of them. Teardown steps get cleanupTimeout each.
+// matrix's reads together, from a context the test creates once its rows
+// exist. Generous: one matrix is close to a hundred reads, and a seed is five
+// writes, each of which also writes an audit row and an outbox event on the
+// server. Teardown steps get cleanupTimeout each.
 const suiteTimeout = 120 * time.Second
 
 // cleanupTimeout bounds one seeded row's teardown. It is a context of its own

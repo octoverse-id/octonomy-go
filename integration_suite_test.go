@@ -500,8 +500,6 @@ func runProbeMatrix(ctx context.Context, t *testing.T, h harness, runs []probeRu
 // route out of thirteen, which is why this is asserted per endpoint here.
 func TestIntegration_NamespaceIsolation(t *testing.T) {
 	h := loadHarness(t)
-	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)
-	defer cancel()
 	var rows teardown
 	defer rows.run()
 
@@ -515,6 +513,10 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 	fixtureA := h.seed(t, &rows, wildcard, h.merchantA.id)
 	fixtureB := h.seed(t, &rows, wildcard, h.merchantB.id)
 
+	// The matrix's budget starts here, once the rows exist: each seed had its
+	// own (suiteTimeout).
+	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)
+	defer cancel()
 	runProbeMatrix(ctx, t, h, []probeRun{
 		{
 			name:   "a wildcard token reading merchant B sees merchant B",
@@ -607,8 +609,6 @@ func TestIntegration_NamespaceIsolation(t *testing.T) {
 //	                    which is the fail-closed behaviour being claimed
 func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
 	h := loadHarness(t)
-	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)
-	defer cancel()
 	var rows teardown
 	defer rows.run()
 
@@ -623,6 +623,10 @@ func TestIntegration_IncludeGlobalFailsClosed(t *testing.T) {
 
 	includeGlobal := []octonomy.RequestOption{octonomy.WithIncludeGlobal()}
 
+	// As in TestIntegration_NamespaceIsolation: the matrix's budget starts once
+	// the rows exist.
+	ctx, cancel := context.WithTimeout(context.Background(), suiteTimeout)
+	defer cancel()
 	runProbeMatrix(ctx, t, h, []probeRun{
 		{
 			name:   "a namespaced read excludes the global rows by default",
