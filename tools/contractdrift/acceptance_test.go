@@ -381,7 +381,8 @@ func makeDatabase(makefile string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	// -q exits 1 for "not up to date", which is not a failure here; 2 is.
 	var exit *exec.ExitError
-	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
+	notUpToDate := errors.As(err, &exit) && exit.ExitCode() == 1
+	if err != nil && !notUpToDate {
 		return "", fmt.Errorf("make -pq on %s: %v\n%s", makefile, err, out)
 	}
 	if !strings.Contains(string(out), "\n# Files\n") {
