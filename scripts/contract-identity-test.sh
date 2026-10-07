@@ -203,10 +203,16 @@ fixture
 printf 'own gone.go\n' >>"$WORK/line/tools/contractdrift/main.pin"
 expect "an own file that is not here fails" 1 "gone.go is marked own and this line does not have it"
 
-# A `.` is not a wildcard: checksXgo must not borrow checks.go's classification.
+# Names are compared whole, never as patterns: neither a name that differs only
+# where a classified one has a `.`, nor one that is a fragment of a classified
+# one, borrows that file's classification.
 fixture
 printf 'package main\n' >"$WORK/line/tools/contractdrift/checksXgo"
 expect "a name differing only where the other has a dot is still unclassified" 1 "checksXgo is not classified"
+
+fixture
+printf 'package main\n' >"$WORK/line/tools/contractdrift/s.go"
+expect "a name that is part of a classified one is still unclassified" 1 "s.go is not classified"
 
 # --- the pin file itself -------------------------------------------------------------------
 for case in \
