@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -299,6 +300,17 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 // reader matched only lines starting with the target and passed the multi-target
 // form.
 //
+// A SOURCE reader still cannot read what make computes: `gate := contract-check
+// contract-test` then `$(gate): ; @true` overrides both recipes, and so does an
+// `$(eval ...)`, and neither line names a target a reader can see. So there is a
+// second layer that does not read the source at all: make's own rule database
+// (`make -pq`, which runs no recipe). It is held to the same pins -- each target's
+// EFFECTIVE recipe, release-check's prerequisites -- and refuses, as make resolved
+// them, a target-specific or pattern-specific variable reaching a gate target,
+// `.IGNORE` for one or for every target, `.ONESHELL`, and SHELL, .SHELLFLAGS,
+// MAKEFLAGS or GOFLAGS set by the Makefile at all. What the database cannot show
+// -- a recipe whose own text runs something else -- is what the source pin is for.
+//
 // Changing one of these means re-checking what it is pinned for -- the gate's tests
 // run, the gate's exit status reaches make, the identity check CHECKS -- and then
 // updating the pin in the same commit.
@@ -325,6 +337,199 @@ func TestTheGateRecipesArePinned(t *testing.T) {
 	}
 	for _, problem := range gateRecipeProblems(string(raw)) {
 		t.Error(problem)
+	}
+	db, err := makeDatabase(filepath.Join(repoRoot, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, problem := range makeDatabaseProblems(db) {
+		t.Error(problem)
+	}
+}
+
+// makeDatabase prints make's rule database for a Makefile without running any of
+// its recipes: -q asks only whether a goal is up to date, and the goal is an empty
+// target in a second makefile, so nothing the first one defines is considered at
+// all. The make variables a caller's environment can carry -- the MAKEFLAGS a
+// parent `make contract-test` exports among them -- are cleared, so the database is
+// the Makefile's alone.
+func makeDatabase(makefile string) (string, error) {
+	if _, err := exec.LookPath("make"); err != nil {
+		return "", fmt.Errorf("make is not installed, and its rule database is what this reads")
+	}
+	goal, err := os.CreateTemp("", "contractdrift-goal-*.mk")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Remove(goal.Name()) }()
+	if _, err := goal.WriteString("__contractdrift_database__:\n"); err != nil {
+		return "", err
+	}
+	if err := goal.Close(); err != nil {
+		return "", err
+	}
+	cmd := exec.Command("make", "-pq", "-f", filepath.Base(makefile), "-f", goal.Name(), "__contractdrift_database__")
+	cmd.Dir = filepath.Dir(makefile)
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		switch name {
+		case "MAKEFLAGS", "MFLAGS", "GNUMAKEFLAGS", "MAKELEVEL", "MAKEFILES", "MAKEOVERRIDES":
+			continue
+		}
+		cmd.Env = append(cmd.Env, kv)
+	}
+	out, err := cmd.CombinedOutput()
+	// -q exits 1 for "not up to date", which is not a failure here; 2 is.
+	var exit *exec.ExitError
+	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
+		return "", fmt.Errorf("make -pq on %s: %v\n%s", makefile, err, out)
+	}
+	if !strings.Contains(string(out), "\n# Files\n") {
+		return "", fmt.Errorf("make -pq on %s printed no rule database:\n%s", makefile, out)
+	}
+	return string(out), nil
+}
+
+// makeDatabaseProblems holds make's own resolved view of the Makefile to the pins.
+func makeDatabaseProblems(db string) []string {
+	var problems []string
+	guarded := func(target string) bool {
+		_, pinned := gateRecipePins[target]
+		return pinned || target == "release-check"
+	}
+	lines := strings.Split(db, "\n")
+
+	// Variables the Makefile itself set that decide how EVERY recipe runs. The
+	// origin line above each one says where it came from.
+	for i, line := range lines {
+		name, _, ok := strings.Cut(line, " ")
+		if !ok || i == 0 {
+			continue
+		}
+		switch name {
+		case "SHELL", ".SHELLFLAGS", "MAKEFLAGS", "GOFLAGS":
+		default:
+			continue
+		}
+		if strings.HasPrefix(lines[i-1], "# makefile (from ") {
+			problems = append(problems, fmt.Sprintf("make resolves %s from the Makefile (%s), and it decides how every gate recipe runs", name, strings.TrimPrefix(lines[i-1], "# makefile ")))
+		}
+	}
+
+	// Pattern-specific variables, as make indexed them.
+	inPatterns := false
+	for _, line := range lines {
+		switch {
+		case line == "# Pattern-specific Variable Values":
+			inPatterns = true
+			continue
+		case inPatterns && strings.HasPrefix(line, "# ") && strings.Contains(line, "pattern-specific variable values"):
+			inPatterns = false
+		case inPatterns && strings.HasSuffix(line, " :") && !strings.HasPrefix(line, "#"):
+			pattern := strings.TrimSuffix(line, " :")
+			for _, target := range append(sortedStrings(gateRecipePins), "release-check") {
+				if namesMakeTarget([]string{pattern}, target) {
+					problems = append(problems, fmt.Sprintf("make holds a pattern-specific variable for %s, which reaches %s", pattern, target))
+				}
+			}
+		}
+	}
+
+	// The rules, as make resolved them: one block per target, each with its
+	// effective recipe.
+	files := strings.Index(db, "\n# Files\n")
+	recipes, prereqs := map[string]string{}, map[string][]string{}
+	var current string
+	inRecipe := false
+	for _, line := range strings.Split(db[files:], "\n") {
+		switch {
+		case line == "":
+			current, inRecipe = "", false
+		case strings.HasPrefix(line, "#  recipe to execute"):
+			inRecipe = current != ""
+		case strings.HasPrefix(line, "\t") && inRecipe:
+			recipes[current] += line + "\n"
+		case strings.HasPrefix(line, "#"):
+		default:
+			target, rest, ok := strings.Cut(line, ":")
+			if !ok {
+				continue
+			}
+			if strings.Contains(rest, "=") {
+				if guarded(target) {
+					problems = append(problems, fmt.Sprintf("make holds a target-specific variable for %s: %s", target, line))
+				}
+				continue
+			}
+			current = target
+			prereqs[target] = strings.Fields(rest)
+			switch target {
+			case ".ONESHELL":
+				problems = append(problems, "make holds .ONESHELL, so each gate recipe runs as one script and its last line decides its status")
+			case ".IGNORE":
+				if len(prereqs[target]) == 0 {
+					problems = append(problems, "make holds .IGNORE for every target, so it ignores every gate recipe's failure")
+				}
+				for _, name := range prereqs[target] {
+					if guarded(name) {
+						problems = append(problems, fmt.Sprintf("make holds .IGNORE for %s, so it ignores that recipe's failure", name))
+					}
+				}
+			}
+		}
+	}
+	for _, target := range sortedStrings(gateRecipePins) {
+		pin := gateRecipePins[target]
+		want := pin[strings.Index(pin, "\n")+1:] + "\n"
+		if got, ok := recipes[target]; !ok {
+			problems = append(problems, fmt.Sprintf("make's database has no recipe for %s", target))
+		} else if got != want {
+			problems = append(problems, fmt.Sprintf("the recipe make will run for %s is not the pinned one:\n got:\n%s\nwant:\n%s", target, got, want))
+		}
+	}
+	if got := recipes["release-check"]; got != "\t@echo \"release-check passed\"\n" {
+		problems = append(problems, fmt.Sprintf("the recipe make will run for release-check is %q", got))
+	}
+	for _, want := range []string{"contract-test", "contract-check", "contract-identity"} {
+		if !contains(prereqs["release-check"], want) {
+			problems = append(problems, fmt.Sprintf("in make's database release-check does not depend on %s", want))
+		}
+	}
+	return problems
+}
+
+// TestMakeDatabaseProblemsRefusesWhatMakeComputes: the forms a source reader
+// cannot see, each appended to the real Makefile, read back through make itself.
+func TestMakeDatabaseProblemsRefusesWhatMakeComputes(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ name, add, want string }{
+		{"a target list in a variable", "gate := contract-check contract-test contract-identity contract-identity-test contract-report release-check\n$(gate): ; @true\n", "the recipe make will run for contract-check"},
+		{"a rule from eval", "$(eval contract-test: ; @true)\n", "the recipe make will run for contract-test"},
+		{"a computed target-specific variable", "t := contract-identity\n$(t): MAKEFLAGS += -n\n", "target-specific variable for contract-identity"},
+		{"a computed pattern-specific variable", "p := contract-%\n$(p): SHELL = /bin/true\n", "pattern-specific variable for contract-%"},
+		{"a computed .IGNORE", "i := .IGNORE\n$(i): contract-test\n", ".IGNORE for contract-test"},
+		{"a computed bare .IGNORE", "i := .IGNORE\n$(i):\n", ".IGNORE for every target"},
+		{"a computed .ONESHELL", "o := .ONESHELL\n$(o):\n", ".ONESHELL"},
+		{"a computed SHELL", "s := SHELL\n$(s) := /bin/true\n", "resolves SHELL from the Makefile"},
+		{"the release gate overridden", "r := release-check\n$(r): ; @true\n", "release-check is"},
+	}
+	dir := t.TempDir()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, "Makefile")
+			write(t, path, string(raw)+"\n"+tc.add)
+			db, err := makeDatabase(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Join(makeDatabaseProblems(db), "\n")
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("want a problem containing %q, got:\n%s", tc.want, got)
+			}
+		})
 	}
 }
 

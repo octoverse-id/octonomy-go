@@ -37,7 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     gap row is held to its field's absence, so porting the fields forces it out.
   - **CI**: `make contract-test` and `make contract-check` run in the `test` job, the identity check
     and its tests in `compat guard` (now on full history), and `lint` and `vuln` cover the gate's
-    module in steps of their own. `make lint`, `make vuln` and `release-check` cover it too.
+    module in steps of their own. `make lint`, `make vuln` and `release-check` cover it too. The
+    steps are held closed-world (no step `env`/`shell`/`if`, no checkout `ref`), and the `contract-*`
+    recipes are pinned against both the Makefile's text and make's own rule database.
   - `TestNoStructTagCarriesOmitzero`'s walk stops at a nested `go.mod`: on go1.13.15 it failed
     parsing the gate's generics. `TestNoTestMainHidesAFailure` still walks into nested modules, and
     reads a test file there that this toolchain cannot parse lexically, refusing a `TestMain` in one.
