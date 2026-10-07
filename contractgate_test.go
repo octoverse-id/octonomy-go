@@ -279,7 +279,9 @@ func makeDatabase(makefile, goal string, extraEnv []string) (string, error) {
 	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	// -q exits 1 for "not up to date", which is not a failure here; 2 is.
-	if exit, ok := err.(*exec.ExitError); err != nil && !(ok && exit.ExitCode() == 1) {
+	exit, ok := err.(*exec.ExitError)
+	notUpToDate := ok && exit.ExitCode() == 1
+	if err != nil && !notUpToDate {
 		return "", fmt.Errorf("make -pq %s in %s: %v\n%s", goal, cmd.Dir, err, out)
 	}
 	if !strings.Contains(string(out), "\n# Files\n") {
