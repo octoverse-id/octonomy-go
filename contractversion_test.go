@@ -560,13 +560,13 @@ var contractVersionExemptions = []contractVersionExemption{
 	},
 	{
 		Name:   "gate-test-fixture",
-		Reason: "A literal inside a guard's own fixtures, which must name versions the repository does not vendor in order to prove the guard can fail. Covers this file, contractbaseline_test.go, and the contract gate's tests under tools/contractdrift (#98), which bump info.version and the marker to prove the gate notices: none of them can both demonstrate a stale claim and forbid writing one.",
+		Reason: "A literal inside a guard's own fixtures, which must name versions the repository does not vendor in order to prove the guard can fail. Covers this file, contractbaseline_test.go, and tools/contractdrift/drift_test.go (#98), whose fixtures bump info.version and the marker to prove the gate notices: none of them can both demonstrate a stale claim and forbid writing one. The gate's other test files hold no such fixture and stay guarded.",
 		ByRole: true,
 		Match: func(s versionSite) bool {
 			if s.Path == "contractversion_test.go" || s.Path == "contractbaseline_test.go" {
 				return true
 			}
-			return strings.HasPrefix(s.Path, "tools/contractdrift/") && strings.HasSuffix(s.Path, "_test.go")
+			return s.Path == "tools/contractdrift/drift_test.go"
 		},
 	},
 	{
@@ -1084,6 +1084,14 @@ func TestContractVersionGuardCatchesAStaleClaim(t *testing.T) {
 			token:    "2.0.0",
 			exempt:   true,
 			whatItIs: "the gate's own test bumps the marker to prove checkRecordedVersion notices",
+		},
+		{
+			name:     "the gate's own-line test file is not a fixture file",
+			path:     "tools/contractdrift/acceptance_test.go",
+			line:     "// The specs are vendored at server 2.0.0.",
+			token:    "2.0.0",
+			exempt:   false,
+			whatItIs: "gate-test-fixture covers drift_test.go, whose fixtures need old versions, and no other gate test",
 		},
 		{
 			name:     "the gate's source is not a fixture",

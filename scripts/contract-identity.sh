@@ -168,14 +168,15 @@ if [ "$mode" = report ]; then
 	printf 'Files marked `identical` in %s are checked byte for byte by `make contract-identity` and are not shown.\n' "$PINFILE"
 	printf 'Each diff below is main at the pin (---) against this line (+++). Read each for a change main made\n'
 	printf 'that this line should take, or a change here that main should; neither side is automatically right.\n'
-	for f in $(sed -n 's/^advisory //p' "$WORK/classes"); do
+	sed -n 's/^advisory //p' "$WORK/classes" >"$WORK/advisory"
+	while IFS= read -r f; do
 		printf '\n## %s\n\n' "$f"
 		git show "$pin:$DIR/$f" >"$WORK/theirs" 2>/dev/null || { printf '(not at the pin)\n'; continue; }
 		[ -f "$DIR/$f" ] || { printf '(missing here)\n'; continue; }
 		if diff -u --label "main@${pin%"${pin#???????}"}:$DIR/$f" --label "$DIR/$f" "$WORK/theirs" "$DIR/$f"; then
 			printf '(no difference -- consider marking it identical)\n'
 		fi
-	done
+	done <"$WORK/advisory"
 	exit 0
 fi
 
@@ -199,7 +200,11 @@ fi
 # that import -- so a difference in it is divergence and nothing else. Read off
 # main's own copy at the pin, so a file cannot escape by changing here; what counts
 # as an import is imports_sdk's business, above.
-for f in $(cat "$WORK/there"); do
+#
+# Every loop over file names reads them a LINE at a time. `for f in $(cat ...)`
+# split them at spaces, and an untracked file named `checks.go main.go` read as two
+# classified names and passed.
+while IFS= read -r f; do
 	case "$f" in
 	*.go) ;;
 	*) continue ;;
@@ -210,9 +215,9 @@ for f in $(cat "$WORK/there"); do
 		[ "$kind" = identical ] ||
 			problem "$f imports no SDK package at the pin, so nothing about this line can justify a difference in it: it must be marked identical, not ${kind:-unclassified}"
 	fi
-done
+done <"$WORK/there"
 
-for f in $(cat "$WORK/here"); do
+while IFS= read -r f; do
 	case "$f" in
 	*/*)
 		problem "$DIR/$f is in a subdirectory; the pin file classifies the files of $DIR itself"
@@ -220,10 +225,10 @@ for f in $(cat "$WORK/here"); do
 		;;
 	esac
 	[ -n "$(class_of "$f")" ] || problem "$DIR/$f is not classified in $PINFILE -- mark it identical, advisory or own"
-done
-for f in $(cat "$WORK/there"); do
+done <"$WORK/here"
+while IFS= read -r f; do
 	[ -n "$(class_of "$f")" ] || problem "main has $DIR/$f at the pin and $PINFILE does not classify it -- port it and mark it, or say why not"
-done
+done <"$WORK/there"
 
 while read -r kind f; do
 	inhere=no

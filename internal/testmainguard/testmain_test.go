@@ -30,12 +30,14 @@ package testmainguard
 // TestMain that is rewritten under review with this check updated.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -65,13 +67,101 @@ func TestNoTestMainHidesAFailure(t *testing.T) {
 	}
 	fset := token.NewFileSet()
 	for _, path := range paths {
-		file, err := parser.ParseFile(fset, path, nil, 0)
+		problems, err := testFileProblems(fset, repoRoot, path)
 		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
+			t.Fatal(err)
 		}
-		for _, why := range testMainProblems(file) {
+		for _, why := range problems {
 			t.Errorf("%s: %s", path, why)
 		}
+	}
+}
+
+// testFileProblems parses one test file and reports its TestMain problems.
+//
+// A file in a NESTED module may be written for a newer Go than the toolchain
+// running this -- tools/contractdrift is go 1.24 (#98), and go1.13.15's parser
+// cannot read a type parameter -- so failing there would let code that is legal
+// in its own module turn the go1.13 job red. Such a file gets a lexical check
+// instead: it may not declare a TestMain at all, since one this toolchain cannot
+// parse is one whose shape it cannot verify. That fails closed, and only for the
+// declaration the rule is about. A file of THIS module that does not parse is
+// still an error: the go1.13 job builds every one of them anyway.
+func testFileProblems(fset *token.FileSet, root, path string) ([]string, error) {
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err == nil {
+		return testMainProblems(file), nil
+	}
+	if !inNestedModule(root, path) {
+		return nil, fmt.Errorf("parse %s: %v", path, err)
+	}
+	src, readErr := ioutil.ReadFile(path)
+	if readErr != nil {
+		return nil, readErr
+	}
+	if declaresTestMain.Match(src) {
+		return []string{"declares a TestMain this toolchain cannot parse (" + err.Error() + "), so its shape " +
+			"cannot be checked: it must be exactly os.Exit(m.Run()) and readable here, or not exist"}, nil
+	}
+	return nil, nil
+}
+
+// declaresTestMain matches a top-level TestMain declaration, lexically.
+var declaresTestMain = regexp.MustCompile(`(?m)^func[ \t]+TestMain[ \t]*\(`)
+
+// inNestedModule reports whether a directory between path and root, root
+// excluded, holds its own go.mod.
+func inNestedModule(root, path string) bool {
+	root = filepath.Clean(root)
+	for dir := filepath.Dir(path); dir != root && dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// TestUnparseableNestedTestFilesAreReadLexically: a nested module's test file in
+// syntax this toolchain cannot parse passes when it declares no TestMain and is
+// refused when it does; a file of the root module that does not parse is still an
+// error. Each fixture needs a type parameter only on a toolchain that lacks them,
+// so each also carries a syntax error, and the outcome is the same on every Go.
+func TestUnparseableNestedTestFilesAreReadLexically(t *testing.T) {
+	root, err := ioutil.TempDir("", "testmainguard-nested")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(root) }()
+	files := map[string]string{
+		"go.mod":                    "module example.test/m\n",
+		"tools/gate/go.mod":         "module example.test/gate\n",
+		"tools/gate/clean_test.go":  "package main\n\nfunc keys[V any](m map[string]V) {}\nfunc ( {\n",
+		"tools/gate/main_test.go":   "package main\n\nfunc keys[V any]() {}\nfunc ( {\n\nfunc TestMain(m *testing.M) { m.Run() }\n",
+		"root_broken_test.go":       "package m\n\nfunc ( {\n",
+		"tools/gate/sub/ok_test.go": "package sub\n\nfunc ( {\n",
+	}
+	for rel, body := range files {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := ioutil.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fset := token.NewFileSet()
+	at := func(rel string) string { return filepath.Join(root, filepath.FromSlash(rel)) }
+
+	for _, rel := range []string{"tools/gate/clean_test.go", "tools/gate/sub/ok_test.go"} {
+		if problems, err := testFileProblems(fset, root, at(rel)); err != nil || len(problems) != 0 {
+			t.Errorf("%s: an unparseable nested file with no TestMain should pass, got %v / %v", rel, problems, err)
+		}
+	}
+	if problems, err := testFileProblems(fset, root, at("tools/gate/main_test.go")); err != nil || len(problems) != 1 {
+		t.Errorf("an unparseable nested file declaring TestMain should be refused, got %v / %v", problems, err)
+	}
+	if _, err := testFileProblems(fset, root, at("root_broken_test.go")); err == nil {
+		t.Error("a root-module test file that does not parse should be an error, not a lexical pass")
 	}
 }
 

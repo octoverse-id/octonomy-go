@@ -24,12 +24,20 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 # Every git call here is about the fixtures, never the caller's repository or
 # configuration: a hook, a global template or a GIT_DIR leaking in would make the
-# fixtures something other than what each case says they are.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES 2>/dev/null || true
+# fixtures something other than what each case says they are -- and the `git
+# config --global` writes below must land in a throwaway file, never the caller's.
+# Moving HOME alone does not do that: git writes its global config to
+# $GIT_CONFIG_GLOBAL when set, and to $XDG_CONFIG_HOME/git/config when that exists
+# and ~/.gitconfig does not, so both are pointed inside $WORK as well, and the
+# `-c` variables a caller's environment can inject are cleared.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+	GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT 2>/dev/null || true
 GIT_CONFIG_NOSYSTEM=1
 HOME="$WORK/home"
-mkdir -p "$HOME"
-export GIT_CONFIG_NOSYSTEM HOME
+XDG_CONFIG_HOME="$HOME/.config"
+GIT_CONFIG_GLOBAL="$HOME/.gitconfig"
+mkdir -p "$HOME" "$XDG_CONFIG_HOME"
+export GIT_CONFIG_NOSYSTEM HOME XDG_CONFIG_HOME GIT_CONFIG_GLOBAL
 git config --global user.email test@example.test
 git config --global user.name test
 git config --global init.defaultBranch main
@@ -248,6 +256,12 @@ expect "a name differing only where the other has a dot is still unclassified" 1
 fixture
 printf 'package main\n' >"$WORK/line/tools/contractdrift/s.go"
 expect "a name that is part of a classified one is still unclassified" 1 "s.go is not classified"
+
+# A name is one line, not words: `checks.go main.go` is one unclassified file, not
+# two classified ones.
+fixture
+printf 'package main\n' >"$WORK/line/tools/contractdrift/checks.go drivers.go"
+expect "a name with a space in it is one name" 1 "checks.go drivers.go is not classified"
 
 # --- the pin file itself -------------------------------------------------------------------
 for case in \

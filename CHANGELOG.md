@@ -33,12 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     5e40964 —
     `unsent_inputs`, `undocumented_inputs`, `client_headers`, `undocumented_model_fields`, the
     vendored `server_error_codes`, and the two kinds of recorded error constant. The gate found one
-    gap, recorded there rather than closed: `VocabularyListParams` cannot send `q` or `slug`.
+    gap, recorded there rather than closed: `VocabularyListParams` cannot send `q` or `slug`. A
+    gap row is held to its field's absence, so porting the fields forces it out.
   - **CI**: `make contract-test` and `make contract-check` run in the `test` job, the identity check
     and its tests in `compat guard` (now on full history), and `lint` and `vuln` cover the gate's
     module in steps of their own. `make lint`, `make vuln` and `release-check` cover it too.
   - `TestNoStructTagCarriesOmitzero`'s walk stops at a nested `go.mod`: on go1.13.15 it failed
-    parsing the gate's generics.
+    parsing the gate's generics. `TestNoTestMainHidesAFailure` still walks into nested modules, and
+    reads a test file there that this toolchain cannot parse lexically, refusing a `TestMain` in one.
 - **Namespace isolation coverage, and a run that executes it**
   ([#97](https://github.com/octoverse-id/octonomy-go/issues/97), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests, CI, the harness and docs

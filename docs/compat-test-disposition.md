@@ -281,7 +281,8 @@ test change:
   Both vendored specs list them on `GET /vocabularies`, and `docs/contract-coverage.yaml` maps that
   operation to `VocabularyService.List`. The row alone read complete while two parameters were
   missing; since #98 the contract gate reports them as documented and unsent, so the file records
-  both under `unsent_inputs` with this reason, and porting the fields retires those rows. Two cases of `TestVocabularies_List_Params` wait on it, and the `Vocabularies.List`
+  both under `unsent_inputs` with this reason. Porting the fields fails `TestRecordedGapsStillHaveNoField`
+  until those rows come out, and the gate then holds the vocabulary driver to sending both. Two cases of `TestVocabularies_List_Params` wait on it, and the `Vocabularies.List`
   isolation probe walks the whole collection where `main`'s narrows by slug (#97).
 - **`DecodeMetadata`** — generic on `main`, with no counterpart here. Its compat signature is an
   open question the epic's design doc records (finding 6A, "define the `Each` / `DecodeMetadata`

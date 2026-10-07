@@ -252,7 +252,9 @@ stays a faithful, ergonomic client.
   checkout, so neither reaches a consumer's build: Go's `./...` stops at a nested `go.mod`, and so do
   the go1.13 job's build and vet. Never lower it to Go 1.13 or move its dependency into the root
   module. A root test that walks the tree must stop at a nested `go.mod` too — go1.13.15's parser
-  cannot read the gate's generics (`shippedSourceIn` in `updateguard_test.go` does this).
+  cannot read the gate's generics (`shippedSourceIn` in `updateguard_test.go` does this) — or, if it
+  walks into one on purpose, must not need this toolchain to parse what it finds there
+  (`testFileProblems` in `internal/testmainguard` reads such a file lexically).
 - No generics, no `any` (write `interface{}`), no `io.ReadAll` (write `ioutil.ReadAll`), no
   `t.Cleanup`, no `os.ReadFile`. `docs/development.md` has the full floor table. `ioutil` here is
   correct and must not be "modernized" — the `govet` `inline` analyzer that objects is disabled in
@@ -281,7 +283,9 @@ stays a faithful, ergonomic client.
   with the vendored specs — names and values. A new method needs a row and a driver; a new parameter
   or write field needs the driver to set it, or the gate reports it as documented and unsent. Where
   the client genuinely cannot send a documented input, that is the finding: an `unsent_inputs` row with
-  the reason, never a driver that skips the field. The CI `test` job runs `make contract-test` and
+  the reason, never a driver that skips the field. Such a gap row is held to the field's absence
+  (`TestRecordedGapsStillHaveNoField`, with the field named in `recordedGaps`), since while it stands
+  it would hide that field being ported and never driven. The CI `test` job runs `make contract-test` and
   `make contract-check`; `TestTheGateRunsOnEveryPullRequest` holds the steps there.
 - **Every response type needs a smoke call**, and so does every list envelope. A `TestSmoke_`
   function in `integration_test.go` must call a method that decodes it, on a client that function

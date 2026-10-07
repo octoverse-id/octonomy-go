@@ -1,11 +1,16 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
+
+	octonomy "github.com/octoverse-id/octonomy-go"
 )
 
 // #98's acceptance, end to end: `make contract-check` FAILS on a removed query
@@ -35,9 +40,11 @@ import (
 type acceptanceCase struct {
 	name    string
 	breakIt func(t *testing.T, repo string)
-	// want is a substring of the report line the defect must produce. The exit
-	// status alone would pass a gate that fails for the wrong reason.
-	want string
+	// want are substrings of the report the defect must produce. The exit status
+	// alone would pass a gate that fails for the wrong reason, and so would a
+	// generic phrase every decode failure shares -- so each case also names what
+	// it broke.
+	want []string
 }
 
 func TestMakeContractCheckFailsOnEachAcceptanceFixture(t *testing.T) {
@@ -63,7 +70,7 @@ func TestMakeContractCheckFailsOnEachAcceptanceFixture(t *testing.T) {
 				edit(t, filepath.Join(repo, "tags.go"), "func (p *TagListParams) query() url.Values {",
 					`q.Set("vocabulary_id", *p.VocabularyID)`, `_ = p.VocabularyID`)
 			},
-			want: "`get /tags` documents the query parameter `vocabulary_id` and the client did not send it",
+			want: []string{"`get /tags` documents the query parameter `vocabulary_id` and the client did not send it"},
 		},
 		{
 			// The model stops decoding a property the schema documents. `json:"-"`
@@ -74,7 +81,7 @@ func TestMakeContractCheckFailsOnEachAcceptanceFixture(t *testing.T) {
 				edit(t, filepath.Join(repo, "tags.go"), "type Tag struct {",
 					"`json:\"usage_count\"`", "`json:\"-\"`")
 			},
-			want: "schema `Tag` documents `usage_count` and it does not survive decoding",
+			want: []string{"schema `Tag` documents `usage_count` and it does not survive decoding"},
 		},
 		{
 			// The contract retypes a property the model still has a field for. The
@@ -88,7 +95,7 @@ func TestMakeContractCheckFailsOnEachAcceptanceFixture(t *testing.T) {
 						"        usage_count:\n          type: string\n")
 				}
 			},
-			want: "could not handle a response built from the vendored schema",
+			want: []string{"could not handle a response built from the vendored schema", "usage_count"},
 		},
 		{
 			// The method the inventory names requests a different route.
@@ -97,7 +104,7 @@ func TestMakeContractCheckFailsOnEachAcceptanceFixture(t *testing.T) {
 				edit(t, filepath.Join(repo, "tags.go"), "func (s *TagService) Get(",
 					`"/tags/"+url.PathEscape(id)`, `"/tag/"+url.PathEscape(id)`)
 			},
-			want: "`TagService.Get` requests `GET /tag/{tag_id}`",
+			want: []string{"`TagService.Get` requests `GET /tag/{tag_id}`"},
 		},
 	}
 	for _, tc := range cases {
@@ -108,8 +115,10 @@ func TestMakeContractCheckFailsOnEachAcceptanceFixture(t *testing.T) {
 			if err == nil {
 				t.Fatalf("`make contract-check` exited 0 on %s:\n%s", tc.name, out)
 			}
-			if !strings.Contains(out, tc.want) {
-				t.Fatalf("`make contract-check` failed on %s without the finding that names it (%q):\n%s", tc.name, tc.want, out)
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Fatalf("`make contract-check` failed on %s without the finding that names it (%q):\n%s", tc.name, want, out)
+				}
 			}
 		})
 	}
@@ -160,4 +169,210 @@ func stageMakeRepo(t *testing.T) string {
 		t.Fatalf("staged only %d of the gate's own files", copied)
 	}
 	return dir
+}
+
+// recordedGaps are the unsent_inputs rows that record a GAP -- a documented input
+// this client has no field to send -- each with the field whose absence the row
+// asserts. Every other unsent_inputs row is a decision with a carried_in or a path
+// that says where the input goes instead.
+//
+// They need a check of their own because a gap row suppresses exactly the finding
+// that would notice the gap closing badly. Port VocabularyListParams.Query and
+// forget the driver, and with the row in place the gate reports nothing at all:
+// the row says "documented and unsent" is expected, so a field that exists and is
+// never driven reads the same as one that does not exist. So a row here has to be
+// TRUE -- the field really is missing -- and the moment the field arrives this test
+// fails, the row comes out, and the gate takes over: documented and unsent until
+// the driver sets it.
+var recordedGaps = []struct {
+	op, in, name string
+	params       reflect.Type
+	field        string
+}{
+	{"get /vocabularies", "query", "q", reflect.TypeOf(octonomy.VocabularyListParams{}), "Query"},
+	{"get /vocabularies", "query", "slug", reflect.TypeOf(octonomy.VocabularyListParams{}), "Slug"},
+}
+
+func TestRecordedGapsStillHaveNoField(t *testing.T) {
+	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]bool{}
+	for _, gap := range recordedGaps {
+		listed[gap.op+" "+gap.in+" "+gap.name] = true
+	}
+	rows := map[string]bool{}
+	for _, row := range cov.UnsentInputs {
+		key := row.Method + " " + row.Path + " " + row.In + " " + row.Name
+		rows[key] = true
+		// A row with no replacement path is a gap, and a gap needs a field to hold
+		// it to. The resource_type / resource_id rows name the route instead.
+		if row.CarriedIn == "" && row.In == "query" && !listed[key] {
+			t.Errorf("unsent_inputs records `%s` with nowhere else to carry it -- a gap -- and recordedGaps does not name the field whose absence it asserts", key)
+		}
+	}
+	for _, gap := range recordedGaps {
+		key := gap.op + " " + gap.in + " " + gap.name
+		if !rows[key] {
+			t.Errorf("recordedGaps names `%s`, which unsent_inputs no longer lists -- drop the entry", key)
+			continue
+		}
+		if _, has := gap.params.FieldByName(gap.field); has {
+			t.Errorf("%s.%s exists, so the unsent_inputs row for `%s` records a gap that is closed -- drop the row, set the field in drivers.go, and the gate holds it from there",
+				gap.params.Name(), gap.field, key)
+		}
+	}
+}
+
+// gateRecipePins are the Makefile rules the gate's CI steps and the release gate
+// run, PINNED: each rule's header line and recipe, verbatim. CI runs `make
+// contract-test` and `make contract-identity` and trusts their status, and
+// gateWorkflowProblems holds the STEPS to that -- which proves nothing if the
+// recipe behind the step stops doing its job: `scripts/contract-identity.sh report
+// >/dev/null` in place of `check` passed every other test here. A shell reader of
+// recipes never converged on this repository (#95), so the text is pinned instead,
+// like the smoke and isolation recipes in the root package.
+//
+// A pinned recipe can still be changed from OUTSIDE its text. The file-wide ways --
+// a bare `.IGNORE:`, `.ONESHELL`, SHELL, MAKEFLAGS, GOFLAGS, an include -- are
+// refused for this Makefile by the root package's smokeprobes_test.go. The ways
+// that name a target are refused here: `.IGNORE: contract-identity`, a
+// target-specific variable (`contract-identity: SHELL = ...` is a second
+// `contract-identity:` line, which the exactly-once count refuses), and a pattern
+// rule or pattern-specific variable whose pattern matches a pinned target.
+//
+// Changing one of these means re-checking what it is pinned for -- the gate's tests
+// run, the gate's exit status reaches make, the identity check CHECKS -- and then
+// updating the pin in the same commit.
+var gateRecipePins = map[string]string{
+	"contract-check": "contract-check: ## Offline contract gate: vendored contracts vs what this client sends and decodes\n" +
+		"\t@set -e; \\\n" +
+		"\tdir=$$(mktemp -d); trap 'rm -rf \"$$dir\"' EXIT; \\\n" +
+		"\t(cd tools/contractdrift && go build -o \"$$dir/contractdrift\" .); \\\n" +
+		"\t\"$$dir/contractdrift\" -repo . -local",
+	"contract-test": "contract-test: ## Run the contract gate's own tests (proves the gate can still fail)\n" +
+		"\t@cd tools/contractdrift && go vet ./... && go test -race ./...",
+	"contract-identity": "contract-identity: ## Fail unless the gate's shared files are byte-identical to main at the pinned commit\n" +
+		"\t@scripts/contract-identity.sh check",
+	"contract-identity-test": "contract-identity-test: ## Run the identity check's fixture tests\n" +
+		"\t@scripts/contract-identity-test.sh",
+	"contract-report": "contract-report: ## Print the diff of the gate's compat-only files against main at the pin (advisory)\n" +
+		"\t@scripts/contract-identity.sh report",
+}
+
+func TestTheGateRecipesArePinned(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for target, want := range gateRecipePins {
+		got, n := makeRule(string(raw), target)
+		switch {
+		case n != 1:
+			t.Errorf("the Makefile defines `%s:` %d times, want exactly once", target, n)
+		case got != want:
+			t.Errorf("the Makefile's `%s` rule changed. Re-check what gateRecipePins is pinned for, then update the pin.\n got:\n%s\nwant:\n%s", target, got, want)
+		}
+	}
+	for _, problem := range recipeOverrideProblems(string(raw)) {
+		t.Error(problem)
+	}
+	// And the release gate runs the three that hold: the gate's tests, the gate,
+	// and the identity check.
+	header, n := makeRule(string(raw), "release-check")
+	if n != 1 {
+		t.Fatalf("the Makefile defines `release-check:` %d times, want exactly once", n)
+	}
+	prereqs := strings.Fields(strings.SplitN(strings.SplitN(header, "\n", 2)[0], "##", 2)[0])
+	for _, want := range []string{"contract-test", "contract-check", "contract-identity"} {
+		if !contains(prereqs, want) {
+			t.Errorf("release-check does not run %s", want)
+		}
+	}
+}
+
+// makeRule returns a rule's header line and the tab-indented recipe lines under it,
+// and how many times the Makefile starts a rule for that target.
+func makeRule(makefile, target string) (string, int) {
+	var rule []string
+	count := 0
+	in := false
+	for _, line := range strings.Split(makefile, "\n") {
+		switch {
+		case strings.HasPrefix(line, target+":"):
+			count++
+			in = true
+			rule = append(rule, line)
+		case in && strings.HasPrefix(line, "\t"):
+			rule = append(rule, line)
+		default:
+			in = false
+		}
+	}
+	return strings.Join(rule, "\n"), count
+}
+
+// recipeOverrideProblems reports the Makefile lines that change how a pinned
+// target's recipe runs by naming the target rather than by editing its text.
+func recipeOverrideProblems(makefile string) []string {
+	var problems []string
+	// Logical lines, as make reads them: a backslash-newline continues one.
+	lines := strings.Split(strings.ReplaceAll(makefile, "\\\n", " "), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "\t") || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		head, rest, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		head = strings.TrimSpace(head)
+		if head == ".IGNORE" {
+			for _, name := range strings.Fields(strings.SplitN(rest, "#", 2)[0]) {
+				if _, pinned := gateRecipePins[name]; pinned {
+					problems = append(problems, fmt.Sprintf("the Makefile declares .IGNORE for %s, so make ignores its recipe's failure", name))
+				}
+			}
+			continue
+		}
+		for _, pattern := range strings.Fields(head) {
+			if !strings.Contains(pattern, "%") {
+				continue
+			}
+			prefix, suffix, _ := strings.Cut(pattern, "%")
+			for name := range gateRecipePins {
+				if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) && len(name) > len(prefix)+len(suffix) {
+					problems = append(problems, fmt.Sprintf("the Makefile line %q is a pattern that matches %s, so it can change how that pinned recipe runs", line, name))
+				}
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// TestRecipeOverrideProblemsRefusesEachForm: the overrides above, against a
+// Makefile built for the purpose, and the lines they must leave alone.
+func TestRecipeOverrideProblemsRefusesEachForm(t *testing.T) {
+	for _, line := range []string{
+		".IGNORE: contract-identity",
+		".IGNORE: dev-server-down \\\n\tcontract-test",
+		"contract-%: SHELL = /bin/true",
+		"%-identity: MAKEFLAGS += -n",
+		"%: ; @true",
+	} {
+		if got := recipeOverrideProblems(line + "\n"); len(got) == 0 {
+			t.Errorf("%q: no problem reported", line)
+		}
+	}
+	for _, line := range []string{
+		".IGNORE: dev-server-down",
+		"%.o: %.c",
+		"contract-identity: ## a help string mentioning contract-% is not a pattern",
+	} {
+		if got := recipeOverrideProblems(line + "\n"); len(got) != 0 {
+			t.Errorf("%q: unexpected problems %v", line, got)
+		}
+	}
 }

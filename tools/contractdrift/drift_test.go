@@ -3255,16 +3255,66 @@ func TestNoWorkflowRunsTheNetworkedHalf(t *testing.T) {
 			continue
 		}
 		read++
-		for id, job := range readWorkflow(t, name).Jobs {
-			for _, step := range job.Steps {
-				if strings.Contains(step.Run, "contract-drift") || strings.Contains(step.Run, "contract-fetch") {
-					t.Errorf("%s job %q runs the networked half: %q", name, id, strings.TrimSpace(step.Run))
-				}
-			}
+		for _, problem := range networkedRunProblems(name, readWorkflow(t, name)) {
+			t.Error(problem)
 		}
 	}
 	if read == 0 {
 		t.Fatal("read no workflow files -- this test stopped testing")
+	}
+}
+
+// networkedHalfMarkers are what a step running the networked half has to say.
+// `-upstream` is the one that matters on this line: it carries no
+// `contract-drift` target and no contract-fetch script, so those two can only fail
+// here, while the binary's own flag works -- docs/development.md even says how to
+// run it by hand. The first version of this check refused the two that cannot work
+// and passed the one that can.
+var networkedHalfMarkers = []string{"-upstream", "contract-drift", "contract-fetch"}
+
+// networkedRunProblems reports every step of one workflow whose command runs the
+// networked half.
+func networkedRunProblems(name string, workflow ciWorkflow) []string {
+	var problems []string
+	for _, id := range sortedJobIDs(workflow.Jobs) {
+		for _, step := range workflow.Jobs[id].Steps {
+			for _, marker := range networkedHalfMarkers {
+				if strings.Contains(step.Run, marker) {
+					problems = append(problems, fmt.Sprintf("%s job %q runs the networked half (%s): %q", name, id, marker, strings.TrimSpace(step.Run)))
+					break
+				}
+			}
+		}
+	}
+	return problems
+}
+
+func sortedJobIDs(jobs map[string]ciJob) []string {
+	ids := make([]string, 0, len(jobs))
+	for id := range jobs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// TestNetworkedRunProblemsRefusesEachForm: the check above against steps it must
+// refuse -- above all the form that works on this line -- and one it must not.
+func TestNetworkedRunProblemsRefusesEachForm(t *testing.T) {
+	for _, run := range []string{
+		"cd tools/contractdrift && go build -o /tmp/cd . && /tmp/cd -repo ../.. -upstream /tmp/upstream",
+		"go run ./tools/contractdrift -repo . -upstream=dir",
+		"make contract-drift",
+		"scripts/contract-fetch.sh dir",
+	} {
+		workflow := ciWorkflow{Jobs: map[string]ciJob{"test": {Steps: []ciStep{{Run: "make contract-check"}, {Run: run}}}}}
+		if got := networkedRunProblems("ci.yml", workflow); len(got) != 1 {
+			t.Errorf("%q: want one problem, got %v", run, got)
+		}
+	}
+	clean := ciWorkflow{Jobs: map[string]ciJob{"test": {Steps: []ciStep{{Run: "make contract-check"}, {Run: "make contract-identity"}}}}}
+	if got := networkedRunProblems("ci.yml", clean); len(got) != 0 {
+		t.Errorf("the offline half is not the networked one: %v", got)
 	}
 }
 

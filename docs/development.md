@@ -319,7 +319,7 @@ the wire and what came back with the contract. Nothing is inferred from reading 
 
 ```bash
 make contract-check      # the gate itself: offline, deterministic, the pull-request check
-make contract-test       # the gate's own tests, including one fixture per acceptance case below
+make contract-test       # the gate's own tests, including acceptance_test.go's four broken copies
 make contract-identity   # the shared files against main's at the pinned commit
 make contract-report     # the other files' diffs against main's at the pin (advisory)
 ```
@@ -364,15 +364,18 @@ The smoke and isolation suites are what exercise real values against a real serv
   job's `go build ./...` and `go vet ./...` stop at that `go.mod` and never see it; the `test` job
   runs `make contract-test` and `make contract-check` on both of its Go versions, and `lint` and
   `vuln` cover the gate's module in steps of their own. A root test that walks the tree has to stop
-  at a nested `go.mod` too — see the porting checklist.
+  at a nested `go.mod`, or, if it walks into one on purpose, must not need this toolchain to parse
+  what it finds there — see the porting checklist.
 - **`drivers.go` is written against this line's surface**, not copied: the `*Update` structs keep
   their pointer fields, so a PATCH driver fills them as a create does; a list method returns its own
   envelope rather than `List[T]`; and every client the gate builds names its `APIVersion`, since
   this line's default surface is not `main`'s.
 - **One gap is recorded rather than closed.** `VocabularyListParams` has no `Query` or `Slug`, so
   the client cannot send `q` or `slug` on `GET /vocabularies`. The gate found it, and
-  `contract-coverage.yaml` lists both under `unsent_inputs` with the reason; porting the two fields
-  retires both rows, because the gate then reports them as stale.
+  `contract-coverage.yaml` lists both under `unsent_inputs` with the reason. A row like that would
+  hide a field ported and never driven, so `TestRecordedGapsStillHaveNoField` holds each gap row to
+  its field's absence: porting the two fields fails it until both rows come out, and the gate then
+  reports `q` and `slug` as documented and unsent until the vocabulary driver sets them.
 - **Only the offline half.** At 5e40964 `main` also runs the gate with `-upstream`, against a copy
   of the server's contracts it fetches from octoverse-id/octonomy, on a schedule
   ([`contract-drift.yml`](https://github.com/octoverse-id/octonomy-go/blob/main/.github/workflows/contract-drift.yml)).

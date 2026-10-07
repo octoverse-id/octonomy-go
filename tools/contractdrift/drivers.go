@@ -47,7 +47,9 @@ import (
 // driver that quietly skips it. On this line the live case is `q` and `slug` on
 // GET /vocabularies: main's VocabularyListParams gained them in #61 and this
 // line's has neither field, so the vocabulary list driver below sets every field
-// the struct HAS, and the two rows say why the rest are missing.
+// the struct HAS, and the two rows say why the rest are missing. Those rows are
+// held to the fields' absence (TestRecordedGapsStillHaveNoField), so porting the
+// fields forces the rows out and this driver to set them.
 //
 // THE COMPAT DIALECT, which is why this file is not main's (#98). It is the one
 // file in the gate written against this line's surface rather than copied:
