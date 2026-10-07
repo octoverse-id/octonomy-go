@@ -331,20 +331,30 @@ var gateRecipePins = map[string]string{
 }
 
 func TestTheGateRecipesArePinned(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
+	problems, err := gateMakefileProblems(filepath.Join(repoRoot, "Makefile"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, problem := range gateRecipeProblems(string(raw)) {
+	for _, problem := range problems {
 		t.Error(problem)
 	}
-	db, err := makeDatabase(filepath.Join(repoRoot, "Makefile"))
+}
+
+// gateMakefileProblems runs both layers over one Makefile: its text against the
+// pins, and make's resolved database against them. The real tree and every fixture
+// below go through this one function, so dropping a layer from it fails the
+// fixtures that only that layer can catch.
+func gateMakefileProblems(path string) ([]string, error) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	for _, problem := range makeDatabaseProblems(db) {
-		t.Error(problem)
+	problems := gateRecipeProblems(string(raw))
+	db, err := makeDatabase(path)
+	if err != nil {
+		return nil, err
 	}
+	return append(problems, makeDatabaseProblems(db)...), nil
 }
 
 // makeDatabase prints make's rule database for a Makefile without running any of
@@ -522,11 +532,11 @@ func TestMakeDatabaseProblemsRefusesWhatMakeComputes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(dir, "Makefile")
 			write(t, path, string(raw)+"\n"+tc.add)
-			db, err := makeDatabase(path)
+			problems, err := gateMakefileProblems(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := strings.Join(makeDatabaseProblems(db), "\n")
+			got := strings.Join(problems, "\n")
 			if !strings.Contains(got, tc.want) {
 				t.Errorf("want a problem containing %q, got:\n%s", tc.want, got)
 			}
