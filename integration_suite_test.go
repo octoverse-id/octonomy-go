@@ -18,7 +18,7 @@
 // authorization and filtering rather than of any payload:
 //
 //	namespace isolation  -- a merchant-A client never sees a merchant-B row, on
-//	                        any read endpoint this SDK exposes
+//	                        any authenticated read endpoint this SDK exposes
 //	include_global       -- fail-closed: the opt-in widens what is ASKED for, and
 //	                        a token with no global authority still sees no
 //	                        global rows

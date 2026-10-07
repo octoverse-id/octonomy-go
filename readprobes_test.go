@@ -74,10 +74,11 @@ var readProbeExclusions = map[string]string{
 // exclusion -- the unauthenticated health probes are the two there are.
 //
 // That table is what makes "a merchant-A client never sees a merchant-B row" a
-// statement about the WHOLE read surface rather than about whichever endpoints
-// someone remembered. Nothing enforces that by itself: the suite iterates
-// whatever the table holds, so a read method added without a probe leaves the
-// isolation assertion covering less than it did with every gate green.
+// statement about the WHOLE authenticated read surface rather than about
+// whichever endpoints someone remembered. Nothing enforces that by itself: the
+// suite iterates whatever the table holds, so a read method added without a
+// probe leaves the isolation assertion covering less than it did with every
+// gate green.
 //
 // This reads the SOURCE of both halves, so a resource added later is covered by
 // this test existing rather than by somebody remembering.

@@ -264,7 +264,7 @@ func (td *teardown) run() {
 //
 // The resource carries the tag, so the assignment, resource-tag, and audit
 // routes all resolve to the same underlying write, which is what makes a single
-// fixture sufficient for the whole read surface.
+// fixture sufficient for the whole authenticated read surface.
 //
 // A blank namespaceID means the global namespace. describeScope renders it for
 // failure messages, where "merchant " would be wrong.

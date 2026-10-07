@@ -269,8 +269,8 @@ stays a faithful, ergonomic client.
   re-checking what the pins' comment lists against a real server, then updating the pin in the same
   commit.
 - **A new read method needs a probe in `readProbes`** (`integration_suite_test.go`, #97). That table is
-  what makes "a merchant-A client never sees a merchant-B row" a statement about the whole read
-  surface rather than about whichever endpoints someone remembered. A read endpoint nobody probed is
+  what makes "a merchant-A client never sees a merchant-B row" a statement about the whole authenticated
+  read surface rather than about whichever endpoints someone remembered. A read endpoint nobody probed is
   where a cross-merchant leak lives. **`TestEveryReadMethodHasANamespaceProbe` (`readprobes_test.go`,
   no build tag) enforces this.** It resolves each surface method's verb from the source —
   following a call into a helper, since `Health.Live` names no verb of its own — and fails on a read
