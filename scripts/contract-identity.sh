@@ -82,6 +82,23 @@ pin=""
 # The kind a file is classified as, or nothing. Compared as a string, not a
 # pattern: a `.` in a file name is not a wildcard here.
 class_of() { awk -v n="$1" '$2 == n { print $1 }' "$WORK/classes"; }
+
+# Whether a Go file imports an SDK package. An import is the quoted path on a
+# top-level `import` line, or on a line of a top-level `import ( ... )` block --
+# where gofmt puts every import, at column 0. A line anywhere else that starts with
+# the quoted path -- inside a raw string, a block comment, a table of fixtures -- is
+# NOT one, so it cannot make a file look SDK-bound and exempt it from the floor
+# below. Lexical, not a parser: an `import (` at column 0 inside a raw string or
+# block comment would still open a block, and nothing in main's files has one.
+imports_sdk() {
+	awk '
+		/^import[ \t]*\($/ { inblock = 1; next }
+		inblock && /^\)/ { inblock = 0; next }
+		inblock && /^[ \t]*([A-Za-z_.][A-Za-z0-9_]*[ \t]+)?"github\.com\/octoverse-id\/octonomy-go(\/v[0-9]+)?"/ { found = 1 }
+		/^import[ \t]+([A-Za-z_.][A-Za-z0-9_]*[ \t]+)?"github\.com\/octoverse-id\/octonomy-go(\/v[0-9]+)?"/ { found = 1 }
+		END { exit !found }
+	' "$1"
+}
 lineno=0
 while IFS= read -r line || [ -n "$line" ]; do
 	lineno=$((lineno + 1))
@@ -180,16 +197,15 @@ fi
 # The derived floor. A Go file that imports no SDK package names nothing this line's
 # dialect could make differ -- the module path, Optional, List[T] all arrive through
 # that import -- so a difference in it is divergence and nothing else. Read off
-# main's own copy at the pin, so a file cannot escape by changing here. An import is
-# a line that starts with the quoted path (inside an import block) or with
-# `import` and the path; the path in a comment or a string elsewhere is not one.
+# main's own copy at the pin, so a file cannot escape by changing here; what counts
+# as an import is imports_sdk's business, above.
 for f in $(cat "$WORK/there"); do
 	case "$f" in
 	*.go) ;;
 	*) continue ;;
 	esac
 	git show "$pin:$DIR/$f" >"$WORK/theirs"
-	if ! grep -Eq '^[[:space:]]*(import[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*[[:space:]]+)?"github\.com/octoverse-id/octonomy-go(/v[0-9]+)?"' "$WORK/theirs"; then
+	if ! imports_sdk "$WORK/theirs"; then
 		kind=$(class_of "$f")
 		[ "$kind" = identical ] ||
 			problem "$f imports no SDK package at the pin, so nothing about this line can justify a difference in it: it must be marked identical, not ${kind:-unclassified}"

@@ -185,6 +185,22 @@ fixture
 sed 's/^identical checks.go$/advisory checks.go/' "$WORK/line/tools/contractdrift/main.pin" >"$WORK/pin" && cp "$WORK/pin" "$WORK/line/tools/contractdrift/main.pin"
 expect "a shared file relabelled advisory fails even unchanged" 1 "must be marked identical, not advisory"
 
+# A line naming the module that is not an import -- here inside a raw string, where
+# it sits at the start of a line exactly as an import-block line would -- does not
+# make checks.go SDK-bound.
+(
+	cd "$WORK/upstream"
+	printf 'package main\n\nvar fixture = `\n"github.com/octoverse-id/octonomy-go/v2"\n`\n' >tools/contractdrift/checks.go
+	commit_all "a module path in a raw string"
+)
+STRPIN=$(git -C "$WORK/upstream" rev-parse HEAD)
+fixture
+git -C "$WORK/upstream" show "$STRPIN:tools/contractdrift/checks.go" >"$WORK/line/tools/contractdrift/checks.go"
+write_pin "$STRPIN"
+sed 's/^identical checks.go$/advisory checks.go/' "$WORK/line/tools/contractdrift/main.pin" >"$WORK/pin" && cp "$WORK/pin" "$WORK/line/tools/contractdrift/main.pin"
+expect "a module path in a raw string is not an import" 1 "checks.go imports no SDK package at the pin"
+git -C "$WORK/upstream" reset -q --hard HEAD~1
+
 # An SDK-importing file may be identical too, if it happens to match.
 fixture
 sed 's/^advisory drivers.go$/identical drivers.go/' "$WORK/line/tools/contractdrift/main.pin" >"$WORK/pin" && cp "$WORK/pin" "$WORK/line/tools/contractdrift/main.pin"
