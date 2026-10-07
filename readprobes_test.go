@@ -1431,18 +1431,13 @@ func callsParallel(fn *ast.FuncDecl, h smokeHelpers, tt typedTests, seen map[*as
 		}
 		switch callee := unparen(call.Fun).(type) {
 		case *ast.SelectorExpr:
-			switch decl := tt.selectedDecl(callee); {
-			case decl != nil:
+			// A method these files declare has its receiver type in them too, so
+			// the checker resolves every such call; what it does not resolve is
+			// declared elsewhere, and only its name can be read.
+			if decl := tt.selectedDecl(callee); decl != nil {
 				found = callsParallel(decl, h, tt, seen)
-			case callee.Sel.Name == "Parallel":
-				found = true
-			default:
-				// A selection the checker did not resolve to a declaration here:
-				// follow it as the skip reader would, by its receiver's spelled
-				// type, so a helper is never read less than skipsIn reads it.
-				if typ := receiverTypeOf(fn, callee.X, h); typ != "" {
-					found = callsParallel(h.methods[typ+"."+callee.Sel.Name], h, tt, seen)
-				}
+			} else {
+				found = callee.Sel.Name == "Parallel"
 			}
 		case *ast.Ident:
 			if len(declarationsOf(callee.Name, fn)) == 0 {
