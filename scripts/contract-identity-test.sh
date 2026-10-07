@@ -288,6 +288,28 @@ printf '\n' >>"$WORK/line/tools/contractdrift/checks.go"
 expect "report shows an advisory file's diff" 0 "+// drives, the compat way" report
 expect "report does not fail on an identical file's divergence -- check does" 0 "## drivers.go" report
 
+# Same fixture as the two above: a report that SUCCEEDED, printed the advisory
+# file, and left the identical one out. Asserting only the absence would pass on a
+# report that printed nothing at all.
+set +e
+out=$(cd "$WORK/line" && "$CHECK" report 2>&1)
+got=$?
+set -e
+case "$got:$out" in
+0:*"## checks.go"*)
+	printf 'FAIL report: it printed an identical file as if it were advisory\n%s\n' "$out"
+	failed=$((failed + 1))
+	;;
+0:*"## drivers.go"*)
+	printf 'ok   %s\n' "report leaves identical files to check"
+	passed=$((passed + 1))
+	;;
+*)
+	printf 'FAIL report: exit %s, or no advisory file printed\n%s\n' "$got" "$out"
+	failed=$((failed + 1))
+	;;
+esac
+
 fixture
 (
 	cd "$WORK/line"
@@ -297,19 +319,6 @@ fixture
 )
 write_pin "$(git -C "$WORK/line" rev-parse HEAD)"
 expect "report refuses a pin that is not on main, rather than label it main's" 2 "no 'main at the pin'" report
-set +e
-out=$(cd "$WORK/line" && "$CHECK" report 2>&1)
-set -e
-case "$out" in
-*"## checks.go"*)
-	printf 'FAIL report: it printed an identical file as if it were advisory\n%s\n' "$out"
-	failed=$((failed + 1))
-	;;
-*)
-	printf 'ok   %s\n' "report leaves identical files to check"
-	passed=$((passed + 1))
-	;;
-esac
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
