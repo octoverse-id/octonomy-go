@@ -1420,6 +1420,11 @@ func matrixProblems(fn *ast.FuncDecl, helpers smokeHelpers, tt typedTests) []str
 // an interface's (which may hold a T), or one the checker cannot resolve
 // because its receiver's type is an import's. That is the fail-closed
 // direction.
+//
+// WHERE IT ENDS: Parallel taken as a value and called later -- `p :=
+// t.Parallel; p()` -- is not followed, since the call is to a local rather
+// than through a selector. Nobody writes that except to get past this check,
+// so it is left to review (#97, review round 10).
 func callsParallel(fn *ast.FuncDecl, h smokeHelpers, tt typedTests, seen map[*ast.FuncDecl]bool) bool {
 	if fn == nil || fn.Body == nil || seen[fn] {
 		return false
