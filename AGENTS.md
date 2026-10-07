@@ -286,8 +286,8 @@ stays a faithful, ergonomic client.
   the reason, never a driver that skips the field. Such a gap row is held to the field's absence
   (`TestRecordedGapsStillHaveNoField`, with the field named in `recordedGaps`), since while it stands
   it would hide that field being ported and never driven. **The `contract-*` recipes are pinned**
-  (`gateRecipePins`, `acceptance_test.go`), both as written and as make's own rule database resolves
-  them (`make -pq`), so an override make computes — a target list in a variable, an `$(eval …)` —
+  (`gateRecipePins`, `acceptance_test.go`) against make's own rule database (`make -pq`), never the
+  Makefile's text, so an override make computes — a target list in a variable, an `$(eval …)` —
   fails like a literal one; changing a recipe means updating its pin in the same commit. The CI `test` job runs `make contract-test` and
   `make contract-check`; `TestTheGateRunsOnEveryPullRequest` holds the steps there.
 - **Every response type needs a smoke call**, and so does every list envelope. A `TestSmoke_`

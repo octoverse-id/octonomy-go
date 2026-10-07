@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -278,56 +277,39 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 	}
 }
 
-// gateRecipePins are the Makefile rules the gate's CI steps and the release gate
-// run, PINNED: each rule's header line and recipe, verbatim. CI runs `make
-// contract-test` and `make contract-identity` and trusts their status, and
-// gateWorkflowProblems holds the STEPS to that -- which proves nothing if the
-// recipe behind the step stops doing its job: `scripts/contract-identity.sh report
-// >/dev/null` in place of `check` passed every other test here. A shell reader of
-// recipes never converged on this repository (#95), so the text is pinned instead,
-// like the smoke and isolation recipes in the root package.
+// gateRecipePins are the recipes behind the gate's CI steps and the release gate,
+// PINNED, verbatim. CI runs `make contract-test` and `make contract-identity` and
+// trusts their status, and gateWorkflowProblems holds the STEPS to that -- which
+// proves nothing if the recipe behind a step stops doing its job:
+// `scripts/contract-identity.sh report >/dev/null` in place of `check` passed every
+// other test here. A shell reader of recipes never converged on this repository
+// (#95), so the text is pinned instead, like the smoke and isolation recipes in the
+// root package.
 //
-// A pinned recipe can still be changed from OUTSIDE its text. The file-wide ways --
-// a bare `.IGNORE:`, `.ONESHELL`, SHELL, MAKEFLAGS, GOFLAGS, an include -- are
-// refused for this Makefile by the root package's smokeprobes_test.go. Every way
-// that names a target is caught here, because what is pinned is not one rule but
-// EVERY line whose targets reach the pinned one, read as make reads them: a second
-// rule, a line naming several targets at once (`noop contract-check: ; @true` is
-// an explicit rule for contract-check too), a target-specific variable, a pattern
-// that matches the target -- each adds a line the pin does not have. The one way
-// that names a target as a PREREQUISITE is `.IGNORE: contract-identity`, and that
-// is refused separately. This is the root package's makeRule, ported; an earlier
-// reader matched only lines starting with the target and passed the multi-target
-// form.
-//
-// A SOURCE reader still cannot read what make computes: `gate := contract-check
-// contract-test` then `$(gate): ; @true` overrides both recipes, and so does an
-// `$(eval ...)`, and neither line names a target a reader can see. So there is a
-// second layer that does not read the source at all: make's own rule database
-// (`make -pq`, which runs no recipe). It is held to the same pins -- each target's
-// EFFECTIVE recipe, release-check's prerequisites -- and refuses, as make resolved
-// them, a target-specific or pattern-specific variable reaching a gate target,
-// `.IGNORE` for one or for every target, `.ONESHELL`, and SHELL, .SHELLFLAGS,
-// MAKEFLAGS or GOFLAGS set by the Makefile at all. What the database cannot show
-// -- a recipe whose own text runs something else -- is what the source pin is for.
+// The pins are held to make's OWN rule database (`make -pq`, which runs no recipe),
+// never to the Makefile's text, because a recipe is also changed from outside its
+// text, and make is the only reader that sees every way: a second rule, a line
+// naming several targets at once (`noop contract-check: ; @true`), a target list in
+// a variable (`$(gate): ; @true`), an `$(eval ...)`, a target- or pattern-specific
+// variable, `.IGNORE`, `.ONESHELL`, a Makefile-set SHELL. Each target's EFFECTIVE
+// recipe must be its pin, release-check's must still name the three contract
+// targets, and the rest is refused as make resolved it. A source reader did this
+// job first -- the root package's makeRule, ported -- and a review walked a
+// variable target list past it; with the database beside it, it caught nothing the
+// database did not, so it went.
 //
 // Changing one of these means re-checking what it is pinned for -- the gate's tests
 // run, the gate's exit status reaches make, the identity check CHECKS -- and then
 // updating the pin in the same commit.
 var gateRecipePins = map[string]string{
-	"contract-check": "contract-check: ## Offline contract gate: vendored contracts vs what this client sends and decodes\n" +
-		"\t@set -e; \\\n" +
+	"contract-check": "\t@set -e; \\\n" +
 		"\tdir=$$(mktemp -d); trap 'rm -rf \"$$dir\"' EXIT; \\\n" +
 		"\t(cd tools/contractdrift && go build -o \"$$dir/contractdrift\" .); \\\n" +
 		"\t\"$$dir/contractdrift\" -repo . -local",
-	"contract-test": "contract-test: ## Run the contract gate's own tests (proves the gate can still fail)\n" +
-		"\t@cd tools/contractdrift && go vet ./... && go test -race ./...",
-	"contract-identity": "contract-identity: ## Fail unless the gate's shared files are byte-identical to main at the pinned commit\n" +
-		"\t@scripts/contract-identity.sh check",
-	"contract-identity-test": "contract-identity-test: ## Run the identity check's fixture tests\n" +
-		"\t@scripts/contract-identity-test.sh",
-	"contract-report": "contract-report: ## Print the diff of the gate's compat-only files against main at the pin (advisory)\n" +
-		"\t@scripts/contract-identity.sh report",
+	"contract-test":          "\t@cd tools/contractdrift && go vet ./... && go test -race ./...",
+	"contract-identity":      "\t@scripts/contract-identity.sh check",
+	"contract-identity-test": "\t@scripts/contract-identity-test.sh",
+	"contract-report":        "\t@scripts/contract-identity.sh report",
 }
 
 func TestTheGateRecipesArePinned(t *testing.T) {
@@ -340,21 +322,15 @@ func TestTheGateRecipesArePinned(t *testing.T) {
 	}
 }
 
-// gateMakefileProblems runs both layers over one Makefile: its text against the
-// pins, and make's resolved database against them. The real tree and every fixture
-// below go through this one function, so dropping a layer from it fails the
-// fixtures that only that layer can catch.
+// gateMakefileProblems reads one Makefile through make and holds it to the pins.
+// The real tree and every fixture below go through it, so what the fixtures prove
+// is what the real tree is held to.
 func gateMakefileProblems(path string) ([]string, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	problems := gateRecipeProblems(string(raw))
 	db, err := makeDatabase(path)
 	if err != nil {
 		return nil, err
 	}
-	return append(problems, makeDatabaseProblems(db)...), nil
+	return makeDatabaseProblems(db), nil
 }
 
 // makeDatabase prints make's rule database for a Makefile without running any of
@@ -490,8 +466,7 @@ func makeDatabaseProblems(db string) []string {
 		}
 	}
 	for _, target := range sortedStrings(gateRecipePins) {
-		pin := gateRecipePins[target]
-		want := pin[strings.Index(pin, "\n")+1:] + "\n"
+		want := gateRecipePins[target] + "\n"
 		if got, ok := recipes[target]; !ok {
 			problems = append(problems, fmt.Sprintf("make's database has no recipe for %s", target))
 		} else if got != want {
@@ -508,129 +483,6 @@ func makeDatabaseProblems(db string) []string {
 	}
 	return problems
 }
-
-// TestMakeDatabaseProblemsRefusesWhatMakeComputes: the forms a source reader
-// cannot see, each appended to the real Makefile, read back through make itself.
-func TestMakeDatabaseProblemsRefusesWhatMakeComputes(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cases := []struct{ name, add, want string }{
-		{"a target list in a variable", "gate := contract-check contract-test contract-identity contract-identity-test contract-report release-check\n$(gate): ; @true\n", "the recipe make will run for contract-check"},
-		{"a rule from eval", "$(eval contract-test: ; @true)\n", "the recipe make will run for contract-test"},
-		{"a computed target-specific variable", "t := contract-identity\n$(t): MAKEFLAGS += -n\n", "target-specific variable for contract-identity"},
-		{"a computed pattern-specific variable", "p := contract-%\n$(p): SHELL = /bin/true\n", "pattern-specific variable for contract-%"},
-		{"a computed .IGNORE", "i := .IGNORE\n$(i): contract-test\n", ".IGNORE for contract-test"},
-		{"a computed bare .IGNORE", "i := .IGNORE\n$(i):\n", ".IGNORE for every target"},
-		{"a computed .ONESHELL", "o := .ONESHELL\n$(o):\n", ".ONESHELL"},
-		{"a computed SHELL", "s := SHELL\n$(s) := /bin/true\n", "resolves SHELL from the Makefile"},
-		{"the release gate overridden", "r := release-check\n$(r): ; @true\n", "release-check is"},
-	}
-	dir := t.TempDir()
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(dir, "Makefile")
-			write(t, path, string(raw)+"\n"+tc.add)
-			problems, err := gateMakefileProblems(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := strings.Join(problems, "\n")
-			if !strings.Contains(got, tc.want) {
-				t.Errorf("want a problem containing %q, got:\n%s", tc.want, got)
-			}
-		})
-	}
-}
-
-// gateRecipeProblems holds a Makefile to gateRecipePins, and its release gate to
-// running the three contract targets that hold.
-func gateRecipeProblems(makefile string) []string {
-	var problems []string
-	for _, target := range sortedStrings(gateRecipePins) {
-		if got := makeRule(makefile, target); got != gateRecipePins[target] {
-			problems = append(problems, fmt.Sprintf("the Makefile's lines for `%s` are not the pinned rule. Re-check what gateRecipePins is pinned for, then update the pin.\n got:\n%s\nwant:\n%s",
-				target, got, gateRecipePins[target]))
-		}
-	}
-	// The release gate: exactly one line reaching it -- its own rule -- whose
-	// prerequisites include the gate's tests, the gate and the identity check.
-	rule := makeRule(makefile, "release-check")
-	headers := 0
-	var prereqs []string
-	for _, line := range strings.Split(rule, "\n") {
-		if strings.HasPrefix(line, "\t") {
-			continue
-		}
-		headers++
-		if _, rest, ok := strings.Cut(line, ":"); ok {
-			prereqs = strings.Fields(strings.SplitN(rest, "##", 2)[0])
-		}
-	}
-	if headers != 1 {
-		problems = append(problems, fmt.Sprintf("%d Makefile lines reach `release-check`, want exactly its own rule:\n%s", headers, rule))
-	}
-	for _, want := range []string{"contract-test", "contract-check", "contract-identity"} {
-		if !contains(prereqs, want) {
-			problems = append(problems, fmt.Sprintf("release-check does not run %s", want))
-		}
-	}
-	// The one override that names a pinned target as a prerequisite.
-	for _, ll := range makeLogicalLines(makefile) {
-		head, rest, ok := strings.Cut(ll, ":")
-		if !ok || strings.TrimSpace(head) != ".IGNORE" {
-			continue
-		}
-		for _, name := range strings.Fields(strings.SplitN(rest, "#", 2)[0]) {
-			if _, pinned := gateRecipePins[name]; pinned || name == "release-check" {
-				problems = append(problems, fmt.Sprintf("the Makefile declares .IGNORE for %s, so make ignores its recipe's failure", name))
-			}
-		}
-	}
-	return problems
-}
-
-// makeRule returns every make line whose targets reach target -- the rule, a
-// target-specific variable, a line naming several targets at once, and a pattern
-// that matches it -- each followed by its recipe lines, trimmed of trailing space
-// and joined by newlines. Ported from the root package's smokeprobes_test.go.
-// Continuations are joined first, as make joins them; a `target :=` is a
-// variable named target, not a rule; and `.PHONY: … target` names it as a
-// prerequisite, not a target.
-func makeRule(src, target string) string {
-	lines := strings.Split(src, "\n")
-	var out []string
-	for _, ll := range makeLogicalLinesAt(src) {
-		if strings.HasPrefix(ll.text, "\t") {
-			continue
-		}
-		m := makeTargets.FindStringSubmatch(ll.text)
-		if m == nil || !namesMakeTarget(strings.Fields(m[1]), target) {
-			continue
-		}
-		out = append(out, strings.TrimRight(ll.text, " \t"))
-		end := ll.line
-		for end < len(lines) && strings.HasSuffix(strings.TrimRight(lines[end-1], " \t"), "\\") {
-			end++
-		}
-		for j := end; j < len(lines); j++ {
-			if strings.HasPrefix(lines[j], "\t") {
-				out = append(out, strings.TrimRight(lines[j], " \t"))
-				continue
-			}
-			if strings.TrimSpace(lines[j]) == "" {
-				continue
-			}
-			break
-		}
-	}
-	return strings.Join(out, "\n")
-}
-
-// makeTargets matches a rule or target-specific line, capturing its targets: the
-// text before a `:` or `::` that does not open an assignment.
-var makeTargets = regexp.MustCompile(`^([^\t#=:][^#=:]*?)\s*::?([^=]|$)`)
 
 // namesMakeTarget reports whether a list of make targets reaches target: by name,
 // or as a pattern (`%oke`, `sm%`, `%`).
@@ -649,73 +501,59 @@ func namesMakeTarget(words []string, target string) bool {
 	return false
 }
 
-type makeLogical struct {
-	line int // the physical line it starts on, 1-based
-	text string
-}
-
-// makeLogicalLinesAt joins backslash continuations as make does.
-func makeLogicalLinesAt(src string) []makeLogical {
-	var out []makeLogical
-	physical := strings.Split(src, "\n")
-	for i := 0; i < len(physical); i++ {
-		start, text := i+1, physical[i]
-		for strings.HasSuffix(strings.TrimRight(text, " \t"), "\\") && i+1 < len(physical) {
-			text = strings.TrimSuffix(strings.TrimRight(text, " \t"), "\\") + " " + physical[i+1]
-			i++
-		}
-		out = append(out, makeLogical{line: start, text: text})
-	}
-	return out
-}
-
-func makeLogicalLines(src string) []string {
-	var out []string
-	for _, ll := range makeLogicalLinesAt(src) {
-		out = append(out, ll.text)
-	}
-	return out
-}
-
-// TestGateRecipeProblemsRefusesEachOverride: the check above against the real
-// Makefile with ONE edit each -- every form that could make a gate target, or the
-// release gate, run something other than its pinned recipe -- so passing on the
-// real file is not its only evidence.
-func TestGateRecipeProblemsRefusesEachOverride(t *testing.T) {
+// TestGateMakefileProblemsRefusesEachOverride: every way above to make a gate
+// target, or the release gate, run something other than its pin, each as ONE edit
+// of the real Makefile read back through make -- the literal forms and the ones
+// only make can compute -- and the edits it must leave alone.
+func TestGateMakefileProblemsRefusesEachOverride(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(raw)
-	if got := gateRecipeProblems(src); len(got) != 0 {
-		t.Fatalf("the real Makefile has problems, so the cases below prove nothing: %v", got)
-	}
 	const identityRecipe = "\t@scripts/contract-identity.sh check\n"
 	if !strings.Contains(src, identityRecipe) {
-		t.Fatal("the Makefile no longer contains the identity recipe the fixtures edit")
+		t.Fatal("the Makefile no longer contains the identity recipe a fixture edits")
 	}
-	cases := []struct{ name, edit, want string }{
-		{"the recipe edited", strings.Replace(src, identityRecipe, "\t@scripts/contract-identity.sh report >/dev/null\n", 1), "`contract-identity` are not the pinned rule"},
-		{"a multi-target rule overriding every gate target", src + "\nnoop contract-check contract-test contract-identity contract-identity-test release-check:\n\t@true\n", "`contract-check` are not the pinned rule"},
-		{"the same, for the release gate", src + "\nnoop release-check:\n\t@true\n", "lines reach `release-check`"},
-		{"a target-specific variable", src + "\ncontract-test: MAKEFLAGS += -n\n", "`contract-test` are not the pinned rule"},
-		{"a pattern-specific variable", src + "\ncontract-%: SHELL = /bin/true\n", "`contract-identity` are not the pinned rule"},
-		{"a match-anything pattern rule", src + "\n%:\n\t@true\n", "`contract-check` are not the pinned rule"},
+	cases := []struct{ name, makefile, want string }{
+		{"the recipe edited", strings.Replace(src, identityRecipe, "\t@scripts/contract-identity.sh report >/dev/null\n", 1), "the recipe make will run for contract-identity"},
+		{"a multi-target rule", src + "\nnoop contract-check contract-test contract-identity contract-identity-test release-check: ; @true\n", "the recipe make will run for contract-check"},
+		{"a target list in a variable", src + "\ngate := contract-check contract-test contract-identity contract-identity-test contract-report release-check\n$(gate): ; @true\n", "the recipe make will run for contract-test"},
+		{"a rule from eval", src + "\n$(eval contract-test: ; @true)\n", "the recipe make will run for contract-test"},
+		{"a target-specific variable", src + "\ncontract-test: MAKEFLAGS += -n\n", "target-specific variable for contract-test"},
+		{"a computed target-specific variable", src + "\nt := contract-identity\n$(t): MAKEFLAGS += -n\n", "target-specific variable for contract-identity"},
+		{"a pattern-specific variable", src + "\ncontract-%: SHELL = /bin/true\n", "pattern-specific variable for contract-%"},
+		{"a computed pattern-specific variable", src + "\np := contract-%\n$(p): SHELL = /bin/true\n", "pattern-specific variable for contract-%"},
 		{"a .IGNORE naming a gate target", src + "\n.IGNORE: dev-server-down \\\n\tcontract-test\n", ".IGNORE for contract-test"},
-		{"the release gate dropping the identity check", strings.Replace(src, " contract-identity ## Full pre-release gate", " ## Full pre-release gate", 1), "release-check does not run contract-identity"},
+		{"a computed .IGNORE", src + "\ni := .IGNORE\n$(i): contract-test\n", ".IGNORE for contract-test"},
+		{"a computed bare .IGNORE", src + "\ni := .IGNORE\n$(i):\n", ".IGNORE for every target"},
+		{"a computed .ONESHELL", src + "\no := .ONESHELL\n$(o):\n", ".ONESHELL"},
+		{"a computed SHELL", src + "\ns := SHELL\n$(s) := /bin/true\n", "resolves SHELL from the Makefile"},
+		{"the release gate overridden", src + "\nr := release-check\n$(r): ; @true\n", "the recipe make will run for release-check"},
+		{"the release gate dropping the identity check", strings.Replace(src, " contract-identity ## Full pre-release gate", " ## Full pre-release gate", 1), "release-check does not depend on contract-identity"},
 	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Makefile")
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := strings.Join(gateRecipeProblems(tc.edit), "\n")
-			if !strings.Contains(got, tc.want) {
+			write(t, path, tc.makefile)
+			problems, err := gateMakefileProblems(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(problems, "\n"); !strings.Contains(got, tc.want) {
 				t.Errorf("want a problem containing %q, got:\n%s", tc.want, got)
 			}
 		})
 	}
-	// And what must stay quiet: a .IGNORE for something else, a pattern that
-	// matches no gate target, the .PHONY line naming them as prerequisites.
-	quiet := src + "\n.IGNORE: dev-server-down\n%.o: %.c\n\t@true\n"
-	if got := gateRecipeProblems(quiet); len(got) != 0 {
-		t.Errorf("unexpected problems: %v", got)
+	// What must stay quiet: a .IGNORE for something else, a pattern rule that no
+	// explicit gate rule uses, the .PHONY line naming the gate targets.
+	write(t, path, src+"\n.IGNORE: dev-server-down\n%.o: %.c\n\t@true\n%:\n\t@true\n")
+	problems, err := gateMakefileProblems(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Errorf("unexpected problems: %v", problems)
 	}
 }
