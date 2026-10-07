@@ -342,12 +342,14 @@ different path values and different response witnesses:
 The mechanics, and why each check is shaped the way it is, are written up beside the checks
 themselves, and the boundaries are the ones `main`'s gate had at 5e40964:
 
-- **Only what the contract documents is driven.** `WithActor` / `Config.ActorID` (`X-Actor-ID`),
-  `WithRequestID` (`X-Request-ID`) and the user-agent fields put headers on the wire that no
-  operation documents, and the gate reports any undocumented header — so they are not driven, and a
-  regression that stopped one reaching the wire is invisible to it. `WithGlobalNamespace` removes
-  the namespace headers rather than sending any, and is not driven either. Their unit tests
-  (`transport_test.go`, `octonomy_test.go`, `health_test.go`, `scope_test.go`) are what hold them.
+- **Only what the contract documents is driven.** `WithActor` / `Config.ActorID` (`X-Actor-ID`)
+  and `WithRequestID` (`X-Request-ID`) put headers on the wire that no operation documents, and the
+  gate reports any undocumented `X-` header — so they are not driven. The user-agent fields are not
+  either, for a different reason: the recorder keeps only the `X-` headers and `Authorization` and
+  drops `User-Agent` as transport decoration, so there would be nothing to compare.
+  `WithGlobalNamespace` removes the namespace headers rather than sending any, and is not driven.
+  A regression that stopped any of these reaching the wire is invisible to the gate; their unit
+  tests (`transport_test.go`, `octonomy_test.go`, `health_test.go`, `scope_test.go`) hold them.
 - **Exact comparison proves these executions**, not that the SDK propagates arbitrary values: a
   method that hard-codes a witness exactly, or a decoder hard-coded to the populated response,
   passes.

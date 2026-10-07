@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"sort"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -288,11 +288,16 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 //
 // A pinned recipe can still be changed from OUTSIDE its text. The file-wide ways --
 // a bare `.IGNORE:`, `.ONESHELL`, SHELL, MAKEFLAGS, GOFLAGS, an include -- are
-// refused for this Makefile by the root package's smokeprobes_test.go. The ways
-// that name a target are refused here: `.IGNORE: contract-identity`, a
-// target-specific variable (`contract-identity: SHELL = ...` is a second
-// `contract-identity:` line, which the exactly-once count refuses), and a pattern
-// rule or pattern-specific variable whose pattern matches a pinned target.
+// refused for this Makefile by the root package's smokeprobes_test.go. Every way
+// that names a target is caught here, because what is pinned is not one rule but
+// EVERY line whose targets reach the pinned one, read as make reads them: a second
+// rule, a line naming several targets at once (`noop contract-check: ; @true` is
+// an explicit rule for contract-check too), a target-specific variable, a pattern
+// that matches the target -- each adds a line the pin does not have. The one way
+// that names a target as a PREREQUISITE is `.IGNORE: contract-identity`, and that
+// is refused separately. This is the root package's makeRule, ported; an earlier
+// reader matched only lines starting with the target and passed the multi-target
+// form.
 //
 // Changing one of these means re-checking what it is pinned for -- the gate's tests
 // run, the gate's exit status reaches make, the identity check CHECKS -- and then
@@ -318,113 +323,183 @@ func TestTheGateRecipesArePinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for target, want := range gateRecipePins {
-		got, n := makeRule(string(raw), target)
-		switch {
-		case n != 1:
-			t.Errorf("the Makefile defines `%s:` %d times, want exactly once", target, n)
-		case got != want:
-			t.Errorf("the Makefile's `%s` rule changed. Re-check what gateRecipePins is pinned for, then update the pin.\n got:\n%s\nwant:\n%s", target, got, want)
-		}
-	}
-	for _, problem := range recipeOverrideProblems(string(raw)) {
+	for _, problem := range gateRecipeProblems(string(raw)) {
 		t.Error(problem)
 	}
-	// And the release gate runs the three that hold: the gate's tests, the gate,
-	// and the identity check.
-	header, n := makeRule(string(raw), "release-check")
-	if n != 1 {
-		t.Fatalf("the Makefile defines `release-check:` %d times, want exactly once", n)
+}
+
+// gateRecipeProblems holds a Makefile to gateRecipePins, and its release gate to
+// running the three contract targets that hold.
+func gateRecipeProblems(makefile string) []string {
+	var problems []string
+	for _, target := range sortedStrings(gateRecipePins) {
+		if got := makeRule(makefile, target); got != gateRecipePins[target] {
+			problems = append(problems, fmt.Sprintf("the Makefile's lines for `%s` are not the pinned rule. Re-check what gateRecipePins is pinned for, then update the pin.\n got:\n%s\nwant:\n%s",
+				target, got, gateRecipePins[target]))
+		}
 	}
-	prereqs := strings.Fields(strings.SplitN(strings.SplitN(header, "\n", 2)[0], "##", 2)[0])
+	// The release gate: exactly one line reaching it -- its own rule -- whose
+	// prerequisites include the gate's tests, the gate and the identity check.
+	rule := makeRule(makefile, "release-check")
+	headers := 0
+	var prereqs []string
+	for _, line := range strings.Split(rule, "\n") {
+		if strings.HasPrefix(line, "\t") {
+			continue
+		}
+		headers++
+		if _, rest, ok := strings.Cut(line, ":"); ok {
+			prereqs = strings.Fields(strings.SplitN(rest, "##", 2)[0])
+		}
+	}
+	if headers != 1 {
+		problems = append(problems, fmt.Sprintf("%d Makefile lines reach `release-check`, want exactly its own rule:\n%s", headers, rule))
+	}
 	for _, want := range []string{"contract-test", "contract-check", "contract-identity"} {
 		if !contains(prereqs, want) {
-			t.Errorf("release-check does not run %s", want)
+			problems = append(problems, fmt.Sprintf("release-check does not run %s", want))
 		}
 	}
-}
-
-// makeRule returns a rule's header line and the tab-indented recipe lines under it,
-// and how many times the Makefile starts a rule for that target.
-func makeRule(makefile, target string) (string, int) {
-	var rule []string
-	count := 0
-	in := false
-	for _, line := range strings.Split(makefile, "\n") {
-		switch {
-		case strings.HasPrefix(line, target+":"):
-			count++
-			in = true
-			rule = append(rule, line)
-		case in && strings.HasPrefix(line, "\t"):
-			rule = append(rule, line)
-		default:
-			in = false
-		}
-	}
-	return strings.Join(rule, "\n"), count
-}
-
-// recipeOverrideProblems reports the Makefile lines that change how a pinned
-// target's recipe runs by naming the target rather than by editing its text.
-func recipeOverrideProblems(makefile string) []string {
-	var problems []string
-	// Logical lines, as make reads them: a backslash-newline continues one.
-	lines := strings.Split(strings.ReplaceAll(makefile, "\\\n", " "), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "\t") || strings.HasPrefix(strings.TrimSpace(line), "#") {
+	// The one override that names a pinned target as a prerequisite.
+	for _, ll := range makeLogicalLines(makefile) {
+		head, rest, ok := strings.Cut(ll, ":")
+		if !ok || strings.TrimSpace(head) != ".IGNORE" {
 			continue
 		}
-		head, rest, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		head = strings.TrimSpace(head)
-		if head == ".IGNORE" {
-			for _, name := range strings.Fields(strings.SplitN(rest, "#", 2)[0]) {
-				if _, pinned := gateRecipePins[name]; pinned {
-					problems = append(problems, fmt.Sprintf("the Makefile declares .IGNORE for %s, so make ignores its recipe's failure", name))
-				}
-			}
-			continue
-		}
-		for _, pattern := range strings.Fields(head) {
-			if !strings.Contains(pattern, "%") {
-				continue
-			}
-			prefix, suffix, _ := strings.Cut(pattern, "%")
-			for name := range gateRecipePins {
-				if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) && len(name) > len(prefix)+len(suffix) {
-					problems = append(problems, fmt.Sprintf("the Makefile line %q is a pattern that matches %s, so it can change how that pinned recipe runs", line, name))
-				}
+		for _, name := range strings.Fields(strings.SplitN(rest, "#", 2)[0]) {
+			if _, pinned := gateRecipePins[name]; pinned || name == "release-check" {
+				problems = append(problems, fmt.Sprintf("the Makefile declares .IGNORE for %s, so make ignores its recipe's failure", name))
 			}
 		}
 	}
-	sort.Strings(problems)
 	return problems
 }
 
-// TestRecipeOverrideProblemsRefusesEachForm: the overrides above, against a
-// Makefile built for the purpose, and the lines they must leave alone.
-func TestRecipeOverrideProblemsRefusesEachForm(t *testing.T) {
-	for _, line := range []string{
-		".IGNORE: contract-identity",
-		".IGNORE: dev-server-down \\\n\tcontract-test",
-		"contract-%: SHELL = /bin/true",
-		"%-identity: MAKEFLAGS += -n",
-		"%: ; @true",
-	} {
-		if got := recipeOverrideProblems(line + "\n"); len(got) == 0 {
-			t.Errorf("%q: no problem reported", line)
+// makeRule returns every make line whose targets reach target -- the rule, a
+// target-specific variable, a line naming several targets at once, and a pattern
+// that matches it -- each followed by its recipe lines, trimmed of trailing space
+// and joined by newlines. Ported from the root package's smokeprobes_test.go.
+// Continuations are joined first, as make joins them; a `target :=` is a
+// variable named target, not a rule; and `.PHONY: … target` names it as a
+// prerequisite, not a target.
+func makeRule(src, target string) string {
+	lines := strings.Split(src, "\n")
+	var out []string
+	for _, ll := range makeLogicalLinesAt(src) {
+		if strings.HasPrefix(ll.text, "\t") {
+			continue
+		}
+		m := makeTargets.FindStringSubmatch(ll.text)
+		if m == nil || !namesMakeTarget(strings.Fields(m[1]), target) {
+			continue
+		}
+		out = append(out, strings.TrimRight(ll.text, " \t"))
+		end := ll.line
+		for end < len(lines) && strings.HasSuffix(strings.TrimRight(lines[end-1], " \t"), "\\") {
+			end++
+		}
+		for j := end; j < len(lines); j++ {
+			if strings.HasPrefix(lines[j], "\t") {
+				out = append(out, strings.TrimRight(lines[j], " \t"))
+				continue
+			}
+			if strings.TrimSpace(lines[j]) == "" {
+				continue
+			}
+			break
 		}
 	}
-	for _, line := range []string{
-		".IGNORE: dev-server-down",
-		"%.o: %.c",
-		"contract-identity: ## a help string mentioning contract-% is not a pattern",
-	} {
-		if got := recipeOverrideProblems(line + "\n"); len(got) != 0 {
-			t.Errorf("%q: unexpected problems %v", line, got)
+	return strings.Join(out, "\n")
+}
+
+// makeTargets matches a rule or target-specific line, capturing its targets: the
+// text before a `:` or `::` that does not open an assignment.
+var makeTargets = regexp.MustCompile(`^([^\t#=:][^#=:]*?)\s*::?([^=]|$)`)
+
+// namesMakeTarget reports whether a list of make targets reaches target: by name,
+// or as a pattern (`%oke`, `sm%`, `%`).
+func namesMakeTarget(words []string, target string) bool {
+	for _, w := range words {
+		if w == target {
+			return true
 		}
+		if i := strings.IndexByte(w, '%'); i >= 0 {
+			prefix, suffix := w[:i], w[i+1:]
+			if len(target) >= len(prefix)+len(suffix) && strings.HasPrefix(target, prefix) && strings.HasSuffix(target, suffix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type makeLogical struct {
+	line int // the physical line it starts on, 1-based
+	text string
+}
+
+// makeLogicalLinesAt joins backslash continuations as make does.
+func makeLogicalLinesAt(src string) []makeLogical {
+	var out []makeLogical
+	physical := strings.Split(src, "\n")
+	for i := 0; i < len(physical); i++ {
+		start, text := i+1, physical[i]
+		for strings.HasSuffix(strings.TrimRight(text, " \t"), "\\") && i+1 < len(physical) {
+			text = strings.TrimSuffix(strings.TrimRight(text, " \t"), "\\") + " " + physical[i+1]
+			i++
+		}
+		out = append(out, makeLogical{line: start, text: text})
+	}
+	return out
+}
+
+func makeLogicalLines(src string) []string {
+	var out []string
+	for _, ll := range makeLogicalLinesAt(src) {
+		out = append(out, ll.text)
+	}
+	return out
+}
+
+// TestGateRecipeProblemsRefusesEachOverride: the check above against the real
+// Makefile with ONE edit each -- every form that could make a gate target, or the
+// release gate, run something other than its pinned recipe -- so passing on the
+// real file is not its only evidence.
+func TestGateRecipeProblemsRefusesEachOverride(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	if got := gateRecipeProblems(src); len(got) != 0 {
+		t.Fatalf("the real Makefile has problems, so the cases below prove nothing: %v", got)
+	}
+	const identityRecipe = "\t@scripts/contract-identity.sh check\n"
+	if !strings.Contains(src, identityRecipe) {
+		t.Fatal("the Makefile no longer contains the identity recipe the fixtures edit")
+	}
+	cases := []struct{ name, edit, want string }{
+		{"the recipe edited", strings.Replace(src, identityRecipe, "\t@scripts/contract-identity.sh report >/dev/null\n", 1), "`contract-identity` are not the pinned rule"},
+		{"a multi-target rule overriding every gate target", src + "\nnoop contract-check contract-test contract-identity contract-identity-test release-check:\n\t@true\n", "`contract-check` are not the pinned rule"},
+		{"the same, for the release gate", src + "\nnoop release-check:\n\t@true\n", "lines reach `release-check`"},
+		{"a target-specific variable", src + "\ncontract-test: MAKEFLAGS += -n\n", "`contract-test` are not the pinned rule"},
+		{"a pattern-specific variable", src + "\ncontract-%: SHELL = /bin/true\n", "`contract-identity` are not the pinned rule"},
+		{"a match-anything pattern rule", src + "\n%:\n\t@true\n", "`contract-check` are not the pinned rule"},
+		{"a .IGNORE naming a gate target", src + "\n.IGNORE: dev-server-down \\\n\tcontract-test\n", ".IGNORE for contract-test"},
+		{"the release gate dropping the identity check", strings.Replace(src, " contract-identity ## Full pre-release gate", " ## Full pre-release gate", 1), "release-check does not run contract-identity"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.Join(gateRecipeProblems(tc.edit), "\n")
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("want a problem containing %q, got:\n%s", tc.want, got)
+			}
+		})
+	}
+	// And what must stay quiet: a .IGNORE for something else, a pattern that
+	// matches no gate target, the .PHONY line naming them as prerequisites.
+	quiet := src + "\n.IGNORE: dev-server-down\n%.o: %.c\n\t@true\n"
+	if got := gateRecipeProblems(quiet); len(got) != 0 {
+		t.Errorf("unexpected problems: %v", got)
 	}
 }

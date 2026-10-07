@@ -3344,6 +3344,19 @@ var (
 	gateJobKeys  = map[string]bool{"name": true, "runs-on": true, "strategy": true, "steps": true, "timeout-minutes": true}
 )
 
+// gateJobActions and checkoutInputs close the other way a gate job can run its
+// steps against something other than the pull request: WHAT it checks out. A
+// checkout `with: ref: support/go1.13` runs every gate step, exactly as pinned,
+// against the base branch, and every required context goes green over a PR the
+// gate never saw -- a review constructed it. So the only actions a gate job may
+// use are these, and a checkout may say nothing but how deep to fetch: `ref`,
+// `repository` and `path` are refused with every other input, whatever GitHub
+// adds later.
+var (
+	gateJobActions = []string{"actions/checkout@", "actions/setup-go@"}
+	checkoutInputs = map[string]bool{"fetch-depth": true}
+)
+
 // TestTheGateRunsOnEveryPullRequest is the other half of that split, and #98's
 // third acceptance line: the half that CAN be trusted on a pull request has to
 // actually run there, and fail the job when it fails, or the argument above
@@ -3397,7 +3410,7 @@ func gateWorkflowProblems(raw []byte) []string {
 		}
 	}
 
-	checkedJobs := map[string]bool{}
+	checkedJobs, checkedSteps := map[string]bool{}, map[string]bool{}
 	for _, want := range gateSteps {
 		job, ok := workflow.Jobs[want.job]
 		if !ok {
@@ -3416,6 +3429,10 @@ func gateWorkflowProblems(raw []byte) []string {
 		if node, ok := job["steps"]; !ok || node.Decode(&steps) != nil {
 			problems = append(problems, fmt.Sprintf("ci.yml job %q has no readable steps", want.job))
 			continue
+		}
+		if !checkedSteps[want.job] {
+			checkedSteps[want.job] = true
+			problems = append(problems, gateJobUsesProblems(want.job, steps)...)
 		}
 		found := 0
 		for _, step := range steps {
@@ -3463,6 +3480,44 @@ func gateWorkflowProblems(raw []byte) []string {
 	return problems
 }
 
+// gateJobUsesProblems holds a gate job's `uses:` steps to gateJobActions, and its
+// checkouts to checkoutInputs.
+func gateJobUsesProblems(job string, steps []map[string]yaml.Node) []string {
+	var problems []string
+	for _, step := range steps {
+		node, ok := step["uses"]
+		if !ok {
+			continue
+		}
+		var uses string
+		if node.Decode(&uses) != nil {
+			problems = append(problems, fmt.Sprintf("ci.yml job %q has a step whose `uses:` is not a string", job))
+			continue
+		}
+		allowed := false
+		for _, prefix := range gateJobActions {
+			allowed = allowed || strings.HasPrefix(uses, prefix)
+		}
+		if !allowed {
+			problems = append(problems, fmt.Sprintf("ci.yml job %q uses %s, and a job running the contract gate may use only %v -- an action can change what its steps run against", job, uses, gateJobActions))
+			continue
+		}
+		if !strings.HasPrefix(uses, "actions/checkout@") {
+			continue
+		}
+		var with map[string]yaml.Node
+		if node, ok := step["with"]; ok {
+			_ = node.Decode(&with)
+		}
+		for _, key := range sortedNodeKeys(with) {
+			if !checkoutInputs[key] {
+				problems = append(problems, fmt.Sprintf("ci.yml job %q checks out with `%s:`, so the gate's steps may run against something other than the pull request", job, key))
+			}
+		}
+	}
+	return problems
+}
+
 // TestGateWorkflowProblemsRefusesEachNeutralizer: the check above against the
 // workflows it must refuse, so passing on the real ci.yml is not its only
 // evidence. Each case is the real file with ONE edit.
@@ -3477,7 +3532,9 @@ func TestGateWorkflowProblemsRefusesEachNeutralizer(t *testing.T) {
 	src := string(raw)
 	check := "      - name: Check the vendored contract against the SDK\n        run: make contract-check\n"
 	identity := "      - name: The contract gate's shared files match main at the pin\n        run: make contract-identity\n"
-	for _, anchor := range []string{check, identity, "          fetch-depth: 0\n", "  test:\n    runs-on: ubuntu-latest\n", "  pull_request:\n    branches: [main, support/go1.13]\n"} {
+	testCheckout := "      - uses: actions/checkout@v7\n      - name: Set up Go ${{ matrix.go-version }}\n"
+	guardCheckout := "      - uses: actions/checkout@v7\n        with:\n"
+	for _, anchor := range []string{check, identity, testCheckout, guardCheckout, "          fetch-depth: 0\n", "  test:\n    runs-on: ubuntu-latest\n", "  pull_request:\n    branches: [main, support/go1.13]\n"} {
 		if !strings.Contains(src, anchor) {
 			t.Fatalf("ci.yml no longer contains %q -- the fixtures below no longer match it", anchor)
 		}
@@ -3512,6 +3569,18 @@ func TestGateWorkflowProblemsRefusesEachNeutralizer(t *testing.T) {
 		{"a shallow guard checkout", "          fetch-depth: 0\n", "          fetch-depth: 1\n", "without `fetch-depth: 0`"},
 		{"no pull request into this line", "  pull_request:\n    branches: [main, support/go1.13]\n",
 			"  pull_request:\n    branches: [main]\n", "not support/go1.13"},
+		{"the gate checking out the base branch", testCheckout,
+			"      - uses: actions/checkout@v7\n        with:\n          ref: support/go1.13\n      - name: Set up Go ${{ matrix.go-version }}\n",
+			"job \"test\" checks out with `ref:`"},
+		{"the identity check checking out the base branch", guardCheckout,
+			"      - uses: actions/checkout@v7\n        with:\n          ref: support/go1.13\n",
+			"job \"compat-guard\" checks out with `ref:`"},
+		{"the gate checking out another repository", testCheckout,
+			"      - uses: actions/checkout@v7\n        with:\n          repository: someone/octonomy-go\n      - name: Set up Go ${{ matrix.go-version }}\n",
+			"checks out with `repository:`"},
+		{"an action the gate job does not need", testCheckout,
+			"      - uses: someone/checkout-base@v1\n" + testCheckout,
+			"uses someone/checkout-base@v1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

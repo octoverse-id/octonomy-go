@@ -29,12 +29,17 @@ import (
 // which leaves inputs this table deliberately does not drive, the same ones main's
 // does not at 5e40964:
 //
-//   - WithActor and Config.ActorID (X-Actor-ID), WithRequestID (X-Request-ID),
-//     and the user-agent fields. No operation in either vendored contract
-//     documents those headers, and checks.go reports any header it cannot find
-//     documented -- so driving them would make the gate report the option itself,
-//     and nothing about their wire value could be compared with the contract.
-//     transport_test.go, octonomy_test.go and health_test.go hold them instead.
+//   - WithActor and Config.ActorID (X-Actor-ID), and WithRequestID
+//     (X-Request-ID). No operation in either vendored contract documents those
+//     headers, and checks.go reports any X- header it cannot find documented --
+//     so driving them would make the gate report the option itself, and nothing
+//     about their wire value could be compared with the contract.
+//     transport_test.go and octonomy_test.go hold them instead.
+//   - Config.UserAgent and WithHealthUserAgent. User-Agent never reaches a
+//     check at all: the recorder keeps only the X- headers and Authorization
+//     (headerNames in conformance.go) and drops the rest as transport
+//     decoration, so driving them would compare nothing. octonomy_test.go and
+//     health_test.go hold them.
 //   - WithGlobalNamespace, which REMOVES the namespace headers rather than
 //     sending any; Namespaced below sends the pair it would remove.
 //     scope_test.go holds it.
