@@ -220,11 +220,10 @@ func stageMakeRepo(t *testing.T) string {
 // include_global through WithIncludeGlobal -- passes both. Such an input is not a
 // gap at all, and its driver should send it. And one fully filled call cannot see
 // a field the client sends only while another is unset. The option blind spot
-// matters most for headers: every header a caller controls comes from a Config
-// field (Token as Authorization, TenantID, ActorID, UserAgent) or a
-// RequestOption (WithNamespace, WithRequestID, WithActor) -- transport.go sets no
-// other -- so a header gap is held only as far as the header would arrive
-// through Config.
+// matters most for headers, which this client sets from Config fields such as
+// TenantID and ActorID, and from options such as WithNamespace, WithRequestID and
+// the health client's WithHealthUserAgent, never from a params or write struct:
+// a header gap is held only as far as the header would arrive through Config.
 //
 // An entry is written {op, in, name, reflect.TypeOf(T{}), "Field"}, where T is
 // the struct the first witness reads: the params struct for a query input
