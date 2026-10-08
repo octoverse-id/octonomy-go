@@ -93,8 +93,9 @@ func (u VocabularyUpdate) MarshalJSON() ([]byte, error) {
 // server-side semantics: Slug is an exact match, and Query maps to the free-text
 // `q` parameter, which matches name OR slug case-insensitively. Both vendored
 // contracts list them on GET /vocabularies. This line gained them in #118, ported
-// from main's #61 (which closed #36); until then a caller had to page the whole
-// collection to find a vocabulary by slug.
+// from main's vocabularies.go at 5e40964, where #61 had added them (closing #36);
+// until then a caller had to page the whole collection to find a vocabulary by
+// slug.
 type VocabularyListParams struct {
 	ListOptions
 	ApplicationID *string

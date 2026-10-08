@@ -23,11 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     was held before, so an uncarried body row suppressed the gate's finding unheld. A named gap is
     still held to the absence of the field it names, and now also to a witness that does not trust
     that name: the operation's SDK method, called with every fixed parameter filled through a
-    recording transport, must not send the input. A header gap, which no struct carries, is refused
-    outright.
-  - `TestVocabularies_List_Params` gains `main`'s `q` and `slug` cases, and the `Vocabularies.List`
-    isolation probe narrows by slug, as `main`'s does, instead of walking every page.
-  - `TestSmoke_RealServer` gains `main`'s proof that a real server *reads* both filters — an unknown
+    recording transport, must not send the input. A header gap is refused outright: a header comes
+    from a `Config` field or a `RequestOption`, never from a struct an entry could name.
+  - `TestVocabularies_List_Params` gains the `q` and `slug` cases of `main`'s at 5e40964, and the
+    `Vocabularies.List` isolation probe narrows by slug, as `main`'s does there, instead of walking
+    every page.
+  - `TestSmoke_RealServer` gains, from `main`'s smoke test at 5e40964, the proof that a real server *reads* both filters — an unknown
     query parameter is dropped in silence — against a second, decoy vocabulary each filter must
     exclude.
   - Unkeyed literals: an *unkeyed* composite literal of `VocabularyListParams` stops compiling — the

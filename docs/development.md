@@ -384,9 +384,9 @@ The smoke and isolation suites are what exercise real values against a real serv
   row comes out, and the gate reports the input as documented and unsent until the driver sets it.
   Neither is a proof the client cannot send it: an input a `RequestOption` carries is not a gap
   at all, and passes both, and one fully filled call cannot see a field sent only while another
-  is unset — the comment on `recordedGaps` records both. A header gap is refused outright: a
-  header comes from a `RequestOption`, and the options cannot be enumerated the way a struct's
-  fields can. None is recorded now. The gate found one, `q` and `slug` on `GET /vocabularies`, and recorded it from
+  is unset — the comment on `recordedGaps` records both. A header gap is refused outright: this
+  client sends a header from a `Config` field or a `RequestOption`, never from a params or write
+  struct, so there is no field to name and no option list to call. None is recorded now. The gate found one, `q` and `slug` on `GET /vocabularies`, and recorded it from
   #98 until #118 ported `VocabularyListParams.Query` and `.Slug` — which ran that sequence end to
   end.
 - **What runs the gate is pinned from outside it.** `contractgate_test.go`, in the root package,

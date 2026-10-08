@@ -172,7 +172,7 @@ func TestVocabularies_List_Params(t *testing.T) {
 			// vocabulary_selectors.py), but applying that rule HERE -- dropping
 			// the key because the value looks empty -- would be the SDK
 			// re-implementing server validation, which AGENTS.md rules out.
-			// main's case carries q and slug; application_id is this line's,
+			// main's case at 5e40964 carries q and slug; application_id is this line's,
 			// from before the two fields were ported.
 			name:   "empty strings are still sent",
 			params: &VocabularyListParams{ApplicationID: String(""), Query: String(""), Slug: String("")},

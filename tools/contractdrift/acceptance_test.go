@@ -206,11 +206,12 @@ func stageMakeRepo(t *testing.T) string {
 //     fails the moment that field exists. That trusts the entry's naming: a
 //     misspelled field, or the wrong struct, is absent forever.
 //  2. So a second witness does not read the naming at all. observeSDK calls the
-//     SDK method contract-coverage.yaml names for the operation, with every
-//     fixed parameter filled as fully as reflection can fill it, through a
-//     transport that records the request, and the test fails the moment that
-//     request carries the input -- whatever the field is called, and however
-//     encoding/json or a params struct's query() spells it.
+//     SDK method contract-coverage.yaml names for the operation, on a client
+//     built from a filled Config, with every fixed parameter filled as fully as
+//     reflection can fill it, through a transport that records the request, and
+//     the test fails the moment that request carries the input -- whatever the
+//     field is called, and however encoding/json or a params struct's query()
+//     spells it.
 //
 // What neither sees, and the reader of a row's reason still has to: the call
 // passes no RequestOption, since options cannot be enumerated by reflection, so
@@ -218,6 +219,12 @@ func stageMakeRepo(t *testing.T) string {
 // include_global through WithIncludeGlobal -- passes both. Such an input is not a
 // gap at all, and its driver should send it. And one fully filled call cannot see
 // a field the client sends only while another is unset.
+//
+// A header gap is not held at all: it is refused. This client puts a header on
+// the wire from a Config field (TenantID, ActorID, UserAgent) or a RequestOption
+// (WithNamespace, WithRequestID), never from a params or write struct, so there
+// is no field for the first witness to name, and the second cannot enumerate
+// the options.
 //
 // An entry is written {op, in, name, reflect.TypeOf(octonomy.FooListParams{}), "Field"}.
 var recordedGaps []recordedGap
@@ -241,11 +248,12 @@ func TestRecordedGapsStillHaveNoField(t *testing.T) {
 }
 
 // sentRequest is what one SDK call put on the wire: its method, and the names in
-// its query string and in its JSON object body.
+// its query string, its JSON object body and its headers (canonical form).
 type sentRequest struct {
-	method string
-	query  map[string]bool
-	body   map[string]bool
+	method  string
+	query   map[string]bool
+	body    map[string]bool
+	headers map[string]bool
 }
 
 // observer reports the request the client sends for an operation, "method /path".
@@ -260,9 +268,7 @@ type observer func(op string) (sentRequest, error)
 // A gap is decided by what the row says, never by where the input is documented.
 // Until #118 only a query row was held, so an uncarried body or header row -- a
 // write field dropped from its driver, say -- suppressed the gate's finding
-// unheld. A header gap cannot be held at all: this client sends a header from a
-// RequestOption, and the options cannot be enumerated the way a struct's fields
-// can, so the row is refused until this check learns another way to ask.
+// unheld. A header gap is refused, for the reason recordedGaps gives.
 func recordedGapProblems(rows []UnsentInput, gaps []recordedGap, observe observer) []string {
 	var problems []string
 	listed := map[string]bool{}
@@ -287,7 +293,7 @@ func recordedGapProblems(rows []UnsentInput, gaps []recordedGap, observe observe
 			continue
 		}
 		if gap.in != "query" && gap.in != "body" {
-			problems = append(problems, fmt.Sprintf("recordedGaps names `%s`, a %s: this client sends headers from RequestOptions, which this check cannot enumerate, so nothing can hold the row -- teach recordedGapProblems to ask before recording a header gap", key, gap.in))
+			problems = append(problems, fmt.Sprintf("recordedGaps names `%s`, a %s: this client sends headers from Config fields and RequestOptions, never from a params or write struct, so neither witness can hold the row -- teach recordedGapProblems to ask before recording a header gap", key, gap.in))
 			continue
 		}
 		if gap.params == nil || gap.field == "" {
@@ -346,17 +352,19 @@ func coverageObserver(cov *Coverage) observer {
 }
 
 // observeSDK calls the SDK method "Receiver.Method" -- a method of Client, or of
-// the service an exported Client field holds -- on a client whose transport
-// records the request instead of sending it.
+// the service an exported Client field holds -- on a client built from a filled
+// Config, whose transport records the request instead of sending it.
 func observeSDK(symbol string) (sentRequest, error) {
 	rec := &gapRecorder{}
-	client, err := octonomy.New(octonomy.Config{
-		BaseURL:    "http://contractdrift.invalid",
-		Token:      "gate",
-		TenantID:   "gate",
-		APIVersion: octonomy.APIV2,
-		HTTPClient: &http.Client{Transport: rec},
-	})
+	// The Config is filled like every parameter, so an input a Config field
+	// carries is observed too; only what decides where and how the request goes
+	// is set by hand.
+	var cfg octonomy.Config
+	fill(reflect.ValueOf(&cfg).Elem(), 0)
+	cfg.BaseURL = "http://contractdrift.invalid"
+	cfg.APIVersion = octonomy.APIV2
+	cfg.HTTPClient = &http.Client{Transport: rec}
+	client, err := octonomy.New(cfg)
 	if err != nil {
 		return sentRequest{}, err
 	}
@@ -488,7 +496,10 @@ func (r *gapRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func (r *gapRecorder) record(req *http.Request) {
-	got := sentRequest{method: req.Method, query: map[string]bool{}, body: map[string]bool{}}
+	got := sentRequest{method: req.Method, query: map[string]bool{}, body: map[string]bool{}, headers: map[string]bool{}}
+	for name := range req.Header {
+		got.headers[name] = true
+	}
 	for name := range req.URL.Query() {
 		got.query[name] = true
 	}
@@ -643,6 +654,11 @@ func TestEveryOperationIsObservable(t *testing.T) {
 		}
 		if !strings.EqualFold(sent.method, op.Method) {
 			t.Errorf("%s (%s) sent %s", key, op.SDK, sent.method)
+		}
+		// The Config is filled too, which only a Config field's own input shows:
+		// ActorID's header, on every request but the unauthenticated probes.
+		if !strings.HasPrefix(op.Path, "/health/") && !sent.headers[http.CanonicalHeaderKey("X-Actor-ID")] {
+			t.Errorf("%s (%s) sent no X-Actor-ID, so the observed client's Config was not filled", key, op.SDK)
 		}
 		observed[key] = sent
 	}

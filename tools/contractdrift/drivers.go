@@ -50,12 +50,12 @@ import (
 // Where the client genuinely cannot send a documented parameter, that IS the
 // finding, and it belongs in the YAML's unsent_inputs with a reason -- not in a
 // driver that quietly skips it. The worked example used to be `q` and `slug` on
-// GET /vocabularies: main's VocabularyListParams gained them in #61, this line's
-// lacked both, and the gate recorded the pair as a gap from #98 until #118 ported
-// the fields -- at which point TestRecordedGapsStillHaveNoField forced the rows
-// out and the gate held the driver below to setting them. What remains listed is
-// a decision rather than a gap (`application_id` on writes, which travels in the
-// body).
+// GET /vocabularies: main's VocabularyListParams has them at 5e40964 (#61 added
+// them), this line's lacked both, and the gate recorded the pair as a gap from
+// #98 until #118 ported the fields -- at which point
+// TestRecordedGapsStillHaveNoField forced the rows out and the gate held the
+// driver below to setting them. What remains listed is a decision rather than a
+// gap (`application_id` on writes, which travels in the body).
 //
 // THE COMPAT DIALECT, which is why this file is not main's (#98). It is the one
 // file in the gate written against this line's surface rather than copied:
