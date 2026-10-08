@@ -494,8 +494,15 @@ func TestEach_EmptyPageTerminatesEvenWhenNextSaysOtherwise(t *testing.T) {
 
 func TestEach_ArgumentValidation(t *testing.T) {
 	ctx := context.Background()
-	okPage := func(context.Context, ListOptions) (Page, error) {
-		return &TagList{}, nil
+	// A page that would satisfy every OTHER guard: it echoes the offset asked
+	// for, holds one row and says nothing follows. With main's empty &List[T]{}
+	// at 5e40964 the offset guard refused the walk too, so the nil-callback and
+	// negative-limit checks could be deleted with this test still passing.
+	okPage := func(_ context.Context, o ListOptions) (Page, error) {
+		return &TagList{
+			Data:       []Tag{{ID: "tag_0"}},
+			Pagination: Pagination{Limit: 50, Offset: o.Offset, Count: o.Offset + 1},
+		}, nil
 	}
 	tests := []struct {
 		name       string

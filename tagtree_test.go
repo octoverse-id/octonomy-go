@@ -222,12 +222,17 @@ func TestBuildTagTree_ParentAndChildrenAreWiredBothWays(t *testing.T) {
 }
 
 func TestBuildTagTree_IsOrphanSeparatesTheTwoMeaningsOfANilParent(t *testing.T) {
-	tree, err := BuildTagTree([]Tag{tag("root", ""), tag("orphan", "absent")})
+	tree, err := BuildTagTree([]Tag{tag("root", ""), tag("orphan", "absent"), tag("kid", "root")})
 	if err != nil {
 		t.Fatalf("BuildTagTree: %v", err)
 	}
 	if tree.Node("root").IsOrphan() {
 		t.Error("a tag with no ParentID reports IsOrphan")
+	}
+	// Not in main's at 5e40964: a linked child also has a ParentID, so an
+	// IsOrphan that read ParentID alone passed every assertion here.
+	if tree.Node("kid").IsOrphan() {
+		t.Error("a tag whose parent IS in the input reports IsOrphan")
 	}
 	if !tree.Node("orphan").IsOrphan() {
 		t.Error("a tag whose parent is absent does not report IsOrphan")
@@ -572,8 +577,11 @@ func TestTagTree_Walk(t *testing.T) {
 			}
 			return nil
 		})
-		if !errors.Is(err, stop) {
-			t.Fatalf("Walk = %v, want the sentinel back", err)
+		// Identity, not errors.Is: the doc comment promises the error back
+		// UNCHANGED, and a wrapped sentinel still satisfies errors.Is (main's
+		// at 5e40964 asserted with errors.Is, so a wrapping Walk passed it).
+		if err != stop {
+			t.Fatalf("Walk = %v, want the sentinel back unchanged", err)
 		}
 		if want := []string{"a", "a1"}; !equalStrings(visited, want) {
 			t.Errorf("visited %v after the error, want %v", visited, want)
@@ -808,6 +816,22 @@ func TestReverseHelpers(t *testing.T) {
 		}
 		if got := ids(nodes); !equalStrings(got, tc.want) {
 			t.Errorf("reverseNodes(%v) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The label is "id (slug)". The tag helper gives every tag a slug equal to its
+// id, so a message that printed the id twice passes every cycle test above.
+func TestBuildTagTree_CycleMessageNamesIDAndSlug(t *testing.T) {
+	a, b := tag("id-a", "id-b"), tag("id-b", "id-a")
+	a.Slug, b.Slug = "slug-a", "slug-b"
+	_, err := BuildTagTree([]Tag{a, b})
+	if !errors.Is(err, ErrTagCycle) {
+		t.Fatalf("BuildTagTree = %v, want ErrTagCycle", err)
+	}
+	for _, want := range []string{"id-a (slug-a)", "id-b (slug-b)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message does not carry %q: %v", want, err)
 		}
 	}
 }

@@ -35,7 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`make examples` fails when it finds none**, and **`make dev-server` prints the export block**
     the examples read, through the new `make dev-server-env`, ported from `main`.
   - `pagination_test.go` and `tagtree_test.go` are `main`'s, ported, plus the compat tests the
-    `Page` signature needs.
+    `Page` signature and the local `slices.Reverse` need. Five of `main`'s assertions are
+    strengthened, each because a mutant of the code it covers survived it on `main` at 5e40964 as
+    well: `Each`'s nil-callback and negative-limit checks, `IsOrphan` on a linked child, `Walk`
+    returning the callback's error unchanged, and the slug in a cycle label.
 - **`VocabularyListParams.Query` and `.Slug`**
   ([#118](https://github.com/octoverse-id/octonomy-go/issues/118), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)) — the `q` and `slug` filters on

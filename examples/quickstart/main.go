@@ -54,16 +54,28 @@ func main() {
 		if !octonomy.IsConflict(err) {
 			log.Fatalf("create vocabulary: %v", err)
 		}
+		//
+		// The slug is unique among the ACTIVE rows of one scope, not across the
+		// tenant: an application's vocabulary may carry it too, and a list with
+		// no ApplicationID returns every application's rows as well as the
+		// tenant-shared ones. This one was created with no ApplicationID, so
+		// the row it collided with is the shared one -- pick that, not the
+		// first row.
 		existing, listErr := client.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
 			Slug: octonomy.String(vocabSlug),
 		})
 		if listErr != nil {
 			log.Fatalf("find the existing vocabulary: %v", listErr)
 		}
-		if len(existing.Data) == 0 {
-			log.Fatalf("vocabulary %q conflicted, but no row carries that slug", vocabSlug)
+		for i := range existing.Data {
+			if existing.Data[i].ApplicationID == nil {
+				vocab = &existing.Data[i]
+				break
+			}
 		}
-		vocab = &existing.Data[0]
+		if vocab == nil {
+			log.Fatalf("vocabulary %q conflicted, but no tenant-shared row carries that slug", vocabSlug)
+		}
 	}
 	fmt.Printf("vocabulary %s (%s)\n", vocab.Name, vocab.ID)
 
@@ -76,7 +88,8 @@ func main() {
 	})
 	if err != nil {
 		// The same recovery, on the pair that is actually unique: tag slugs are
-		// unique per TYPE, so both filters are needed to name one row.
+		// unique per TYPE, so both filters are needed -- and, as above, per
+		// scope, so the tenant-shared row is the one to pick.
 		if !octonomy.IsConflict(err) {
 			log.Fatalf("create tag: %v", err)
 		}
@@ -87,10 +100,15 @@ func main() {
 		if listErr != nil {
 			log.Fatalf("find the existing tag: %v", listErr)
 		}
-		if len(existing.Data) == 0 {
-			log.Fatalf("tag %q/%q conflicted, but no row carries that pair", tagType, tagSlug)
+		for i := range existing.Data {
+			if existing.Data[i].ApplicationID == nil {
+				tag = &existing.Data[i]
+				break
+			}
 		}
-		tag = &existing.Data[0]
+		if tag == nil {
+			log.Fatalf("tag %q/%q conflicted, but no tenant-shared row carries that pair", tagType, tagSlug)
+		}
 	}
 	fmt.Printf("tag %s (%s)\n", tag.Name, tag.ID)
 
@@ -112,7 +130,14 @@ func main() {
 	// the row's VALUE -- an octonomy.Tag, not a *Tag. Assert it with the
 	// two-value form: the closures are easy to edit apart, and the one-value
 	// form panics when they disagree.
+	//
+	// An offset walk is not a snapshot. A row written mid-walk shifts the
+	// window, and on a server older than 3.2.1 GET /tags had no ORDER BY at
+	// all, so its pages could repeat or miss rows with nothing writing.
+	// De-duplicate on ID: it is cheap and removes the repeated half. A missed
+	// row leaves no trace -- see the Each doc comment.
 	walked := 0
+	seen := map[string]bool{}
 	offset, err := octonomy.Each(ctx, octonomy.ListOptions{Limit: 20},
 		func(ctx context.Context, o octonomy.ListOptions) (octonomy.Page, error) {
 			return client.Tags.List(ctx, &octonomy.TagListParams{
@@ -121,17 +146,19 @@ func main() {
 			})
 		},
 		func(item interface{}) error {
-			if _, ok := item.(octonomy.Tag); !ok {
+			t, ok := item.(octonomy.Tag)
+			if !ok {
 				return fmt.Errorf("walk tags: got a %T", item)
 			}
 			walked++
+			seen[t.ID] = true
 			return nil
 		},
 	)
 	if err != nil {
 		log.Fatalf("walk tags: %v (resume from offset %d)", err, offset)
 	}
-	fmt.Printf("walked %d label tag(s) across every page\n", walked)
+	fmt.Printf("walked %d label tag row(s) across every page, %d distinct\n", walked, len(seen))
 
 	// Metadata is map[string]interface{}, decoded by encoding/json: a string
 	// arrives as a string, but every JSON number arrives as a float64 and an
@@ -144,7 +171,8 @@ func main() {
 // --- configuration ------------------------------------------------------------
 //
 // Every example that calls the API reads the same three variables, so one export
-// block drives all of them. `make dev-server` prints exactly this block.
+// block drives all of them. `make dev-server` prints one export block carrying
+// every variable the examples read.
 //
 // The block is repeated in each of them rather than shared, deliberately: an
 // example is copied whole, and a helper package would move the one part a reader

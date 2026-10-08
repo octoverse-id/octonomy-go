@@ -245,7 +245,8 @@ func printTree(tree *octonomy.TagTree) {
 // --- configuration ------------------------------------------------------------
 //
 // Every example that calls the API reads the same three variables, so one export
-// block drives all of them. `make dev-server` prints exactly this block.
+// block drives all of them. `make dev-server` prints one export block carrying
+// every variable the examples read.
 //
 // The block is repeated in each of them rather than shared, deliberately: an
 // example is copied whole, and a helper package would move the one part a reader

@@ -25,10 +25,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Namespaces exist on /api/v2 only, and this line's default is /api/v1: a
-	// client that does not opt in refuses every namespace option BEFORE the
-	// request leaves, rather than sending a header the v1 surface would ignore.
-	// mustClient below sets APIVersion: octonomy.APIV2; this one does not.
+	// Namespaces exist on /api/v2 only, and this line's default is /api/v1. A
+	// client that does not opt in refuses WithNamespace and WithIncludeGlobal
+	// BEFORE the request leaves, with an error naming the fix. The server would
+	// refuse it too -- /api/v1 answers namespace headers with a 400
+	// namespace_not_supported rather than reading the global namespace -- so the
+	// SDK's refusal saves a round trip, and is not the only thing standing
+	// between a misrouted call and another merchant's rows. (WithGlobalNamespace
+	// is accepted on either surface: sending no namespace headers is a legal v1
+	// request.) mustClient below sets APIVersion: octonomy.APIV2; this one does
+	// not.
 	defaultClient, err := octonomy.New(octonomy.Config{
 		BaseURL:  env("OCTONOMY_BASE_URL", "http://127.0.0.1:8000"),
 		Token:    mustEnv("OCTONOMY_TOKEN"),
@@ -142,7 +148,8 @@ func main() {
 // --- configuration ------------------------------------------------------------
 //
 // Every example that calls the API reads the same three variables, plus the
-// application and namespace here. `make dev-server` prints exactly this block.
+// application and namespace here. `make dev-server` prints one export block
+// carrying every variable the examples read.
 //
 // The block is repeated in each of them rather than shared, deliberately: an
 // example is copied whole, and a helper package would move the one part a reader
@@ -156,7 +163,7 @@ func mustClient() *octonomy.Client {
 		TenantID: mustEnv("OCTONOMY_TENANT_ID"),
 		ActorID:  "example-namespaces",
 		// The opt-in. Without it this client targets /api/v1, this line's
-		// default, and refuses every namespace option above.
+		// default, and refuses WithNamespace and WithIncludeGlobal, as above.
 		APIVersion: octonomy.APIV2,
 	})
 	if err != nil {

@@ -164,7 +164,7 @@ stays a faithful, ergonomic client.
   takes a `*List[T]` and a `func(T) error`, and this line's takes a `Page` and a `func(interface{}) error`
   holding the row's **value**. `doList`'s parameter type embeds `Page`, so a new list type without
   `contents()` does not compile, and `contents()` reports a nil receiver as a nil block, because a
-  typed nil inside a `Page` passes a `p == nil` test.
+  nil `*TagList` returned as a `Page` is a non-nil interface: `p == nil` is false for it.
 - Pick the transport helper by response shape: `client.doData` for a single resource (unwraps the
   server's `{"data": {...}}`), `client.doList` for a list envelope, `client.do` for a call with no
   payload to decode (DELETE's 204, which it asserts). The wrong choice compiles, and is caught only
