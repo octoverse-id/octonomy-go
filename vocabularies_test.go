@@ -124,12 +124,10 @@ func TestVocabularies_Delete(t *testing.T) {
 	}
 }
 
-// Ported from main's vocabularies_test.go at 5e40964 for #95, without two of its
-// cases: main's VocabularyListParams has Query and Slug (the q and slug filters,
-// main's #61), and this line's does not yet, although docs/openapi-v2.yaml and
-// docs/openapi.yaml both list them. docs/compat-test-disposition.md records the
-// gap. Every filter this line does have is asserted, and so is the absence of
-// any other parameter.
+// Ported from main's vocabularies_test.go at 5e40964: for #95 without its q and
+// slug cases, which waited on VocabularyListParams.Query and .Slug, and with them
+// since #118 ported the two fields. Every filter is asserted, and so is the
+// absence of any other parameter.
 func TestVocabularies_List_Params(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -143,6 +141,8 @@ func TestVocabularies_List_Params(t *testing.T) {
 				ApplicationID: String("commerce"),
 				IncludeShared: Bool(true),
 				IsActive:      Bool(false),
+				Query:         String("promo"),
+				Slug:          String("labels"),
 			},
 			want: map[string]string{
 				"limit":          "25",
@@ -150,17 +150,33 @@ func TestVocabularies_List_Params(t *testing.T) {
 				"application_id": "commerce",
 				"include_shared": "true",
 				"is_active":      "false",
+				"q":              "promo",
+				"slug":           "labels",
 			},
+		},
+		{
+			name:   "q alone",
+			params: &VocabularyListParams{Query: String("promo")},
+			want:   map[string]string{"q": "promo"},
+		},
+		{
+			name:   "slug alone",
+			params: &VocabularyListParams{Slug: String("labels")},
+			want:   map[string]string{"slug": "labels"},
 		},
 		{
 			// nil and &"" are different requests, and which one the caller meant
 			// is not this package's call to make: nil omits the parameter, &""
-			// sends it empty. Dropping the key because the value looks empty
-			// would be the SDK re-implementing server validation, which AGENTS.md
-			// rules out.
-			name:   "an empty string is still sent",
-			params: &VocabularyListParams{ApplicationID: String("")},
-			want:   map[string]string{"application_id": ""},
+			// sends it empty. The server happens to read a blank value as no
+			// filter on all three (`if application_id`, `if value:` and `if q:` in
+			// vocabulary_selectors.py), but applying that rule HERE -- dropping
+			// the key because the value looks empty -- would be the SDK
+			// re-implementing server validation, which AGENTS.md rules out.
+			// main's case carries q and slug; application_id is this line's,
+			// from before the two fields were ported.
+			name:   "empty strings are still sent",
+			params: &VocabularyListParams{ApplicationID: String(""), Query: String(""), Slug: String("")},
+			want:   map[string]string{"application_id": "", "q": "", "slug": ""},
 		},
 		{
 			name:   "nil params",

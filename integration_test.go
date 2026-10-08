@@ -10,8 +10,10 @@
 // is narrow -- that the client still decodes what a real, current Octonomy server
 // sends. It covers the {data, pagination} envelope (which the vendored spec does
 // not describe, so only a real server can confirm it), a list of each
-// implemented resource, one real error envelope, the bare {"status": ...} body
-// of both health probes, an empty Metadata reaching the server as {}, the
+// implemented resource, the vocabulary list's q and slug filters read by the
+// server rather than merely sent, one real error envelope, the bare
+// {"status": ...} body of both health probes, an empty Metadata reaching the
+// server as {}, the
 // namespace pair decoding off a real /api/v2 response, and every method of the
 // resource groups #94 ported -- the three composite bodies the vendored specs
 // describe wrongly among them, decoded to their real counts. Assertions about what the
@@ -32,6 +34,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,6 +176,78 @@ func TestSmoke_RealServer(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Vocabularies.List returned %d rows, none of them the created %s", len(vocabs.Data), vocab.ID)
+	}
+
+	// The two filters #118 ported, from main's smoke test at 5e40964. Only a
+	// real server can prove either one is READ rather than merely sent: an
+	// unknown query parameter is dropped in silence, so a name the SDK got wrong
+	// -- or one this route never supported -- comes back as a full, plausible
+	// page that looks exactly like a filter that worked. The unit test asserts
+	// the wire, and the contract gate the name against the spec; this asserts
+	// the effect.
+	//
+	// A SECOND ROW IS WHAT MAKES THAT ASSERTION MEAN ANYTHING. On a freshly
+	// booted harness the vocabulary created above may be the only one this
+	// client can see, and then "the filtered page holds only our row" is equally
+	// true of a server that ignored the parameter and returned the entire
+	// collection. With a second visible row present, an ignored filter returns
+	// two and every assertion below fails, which is the point.
+	//
+	// Its slug shares no substring with vocabSlug (`smoke-decoy-` against
+	// `smoke-vocab-`, each with its own pid/nanos suffix), so it cannot be swept
+	// in by the free-text lookup either.
+	decoySlug := uniqueSlug("smoke-decoy")
+	decoy, err := client.Vocabularies.Create(ctx, octonomy.VocabularyCreate{
+		Name:        "Go 1.13 smoke decoy",
+		Slug:        decoySlug,
+		Description: octonomy.String("a second visible vocabulary, so a filtered lookup has something to exclude"),
+	})
+	if err != nil {
+		t.Fatalf("Vocabularies.Create decoy: %v", err)
+	}
+	defer func() {
+		if err := client.Vocabularies.Delete(ctx, decoy.ID); err != nil {
+			t.Errorf("Vocabularies.Delete decoy: %v", err)
+		}
+	}()
+
+	// Each slug returns its OWN row, which is two assertions in one: the filter
+	// includes the match, and it excludes the other row that is provably visible
+	// to this same client -- provably, because the other lookup just returned it.
+	for _, tc := range []struct {
+		slug string
+		want string
+	}{
+		{slug: vocabSlug, want: vocab.ID},
+		{slug: decoySlug, want: decoy.ID},
+	} {
+		page, err := client.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
+			Slug:        octonomy.String(tc.slug),
+			ListOptions: octonomy.ListOptions{Limit: 50},
+		})
+		if err != nil {
+			t.Fatalf("Vocabularies.List(slug=%s): %v", tc.slug, err)
+		}
+		if len(page.Data) != 1 || page.Data[0].ID != tc.want {
+			t.Fatalf("Vocabularies.List(slug=%s) returned %d rows, want only %s: %+v",
+				tc.slug, len(page.Data), tc.want, page.Data)
+		}
+	}
+
+	// `q` is a case-insensitive substring of the name OR the slug on the
+	// server, so the slug in a different case is a match the exact filter above
+	// would miss -- which is what tells the two filters apart from here, rather
+	// than leaving `q` proved by a value `slug` would have matched anyway.
+	byQuery, err := client.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
+		Query:       octonomy.String(strings.ToUpper(vocabSlug)),
+		ListOptions: octonomy.ListOptions{Limit: 50},
+	})
+	if err != nil {
+		t.Fatalf("Vocabularies.List by q: %v", err)
+	}
+	if len(byQuery.Data) != 1 || byQuery.Data[0].ID != vocab.ID {
+		t.Fatalf("Vocabularies.List(q=%s) returned %d rows, want only %s: %+v",
+			strings.ToUpper(vocabSlug), len(byQuery.Data), vocab.ID, byQuery.Data)
 	}
 
 	// A real error envelope from the real server, not a canned httptest body.

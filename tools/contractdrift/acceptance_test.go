@@ -8,8 +8,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	octonomy "github.com/octoverse-id/octonomy-go"
 )
 
 // #98's acceptance, end to end: `make contract-check` FAILS on a removed query
@@ -176,17 +174,22 @@ func stageMakeRepo(t *testing.T) string {
 // that says where the input goes instead.
 //
 // They need a check of their own because a gap row suppresses exactly the finding
-// that would notice the gap closing badly. Port VocabularyListParams.Query and
-// forget the driver, and with the row in place the gate reports nothing at all:
-// the row says "documented and unsent" is expected, so a field that exists and is
-// never driven reads the same as one that does not exist. So a row here has to be
-// TRUE -- the field really is missing -- and the moment the field arrives this test
-// fails, the row comes out, and the gate takes over: documented and unsent until
-// the driver sets it.
-var recordedGaps = []recordedGap{
-	{"get /vocabularies", "query", "q", reflect.TypeOf(octonomy.VocabularyListParams{}), "Query"},
-	{"get /vocabularies", "query", "slug", reflect.TypeOf(octonomy.VocabularyListParams{}), "Slug"},
-}
+// that would notice the gap closing badly. Port the missing field and forget the
+// driver, and with the row in place the gate reports nothing at all: the row says
+// "documented and unsent" is expected, so a field that exists and is never driven
+// reads the same as one that does not exist. So a row here has to be TRUE -- the
+// field really is missing -- and the moment the field arrives this test fails, the
+// row comes out, and the gate takes over: documented and unsent until the driver
+// sets it.
+//
+// EMPTY, and kept. Its only entries were `q` and `slug` on GET /vocabularies,
+// recorded from #98 until #118 ported VocabularyListParams.Query and .Slug, when
+// this test failed exactly as described above. The table stays because the empty
+// case is still a rule: recordedGapProblems refuses any unsent_inputs query row
+// with no carried_in that this table does not name, so a future gap row cannot be
+// added without naming the field whose absence it asserts. An entry is written
+// {op, in, name, reflect.TypeOf(octonomy.FooListParams{}), "Field"}.
+var recordedGaps []recordedGap
 
 // recordedGap is one gap row and the field whose absence it asserts.
 type recordedGap struct {

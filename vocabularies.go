@@ -88,11 +88,20 @@ func (u VocabularyUpdate) MarshalJSON() ([]byte, error) {
 
 // VocabularyListParams filters and pages the vocabulary list. A nil *params lists
 // with server defaults.
+//
+// Query and Slug are the same pair TagListParams carries, with the same
+// server-side semantics: Slug is an exact match, and Query maps to the free-text
+// `q` parameter, which matches name OR slug case-insensitively. Both vendored
+// contracts list them on GET /vocabularies. This line gained them in #118, ported
+// from main's #61 (which closed #36); until then a caller had to page the whole
+// collection to find a vocabulary by slug.
 type VocabularyListParams struct {
 	ListOptions
 	ApplicationID *string
 	IncludeShared *bool
 	IsActive      *bool
+	Query         *string
+	Slug          *string
 }
 
 func (p *VocabularyListParams) query() url.Values {
@@ -109,6 +118,12 @@ func (p *VocabularyListParams) query() url.Values {
 	}
 	if p.IsActive != nil {
 		q.Set("is_active", strconv.FormatBool(*p.IsActive))
+	}
+	if p.Query != nil {
+		q.Set("q", *p.Query)
+	}
+	if p.Slug != nil {
+		q.Set("slug", *p.Slug)
 	}
 	return q
 }

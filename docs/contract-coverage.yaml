@@ -289,12 +289,14 @@ operations:
 # A row is a parking place with an expiry, not a permanent exemption: the moment
 # the client starts sending an input, its own row fails as stale. main's copy of
 # this list carried `q` and `slug` on GET /vocabularies until #61 added the two
-# fields there; this line has not ported them, so here the same two rows are live
-# again. A GAP row like these suppresses exactly the finding that would notice the
-# gap closing badly -- a field ported and never driven -- so it is held to the
-# field's absence: TestRecordedGapsStillHaveNoField (acceptance_test.go) fails the
-# moment VocabularyListParams gains Query or Slug, the rows come out, and the gate
-# then reports `q` and `slug` as documented and unsent until the driver sets them.
+# fields there, and this line carried the same two rows, as a gap, from #98 until
+# #118 ported the fields. No gap is recorded here now. A GAP row -- an input with
+# no `carried_in` and no route that holds it -- suppresses exactly the finding
+# that would notice the gap closing badly, a field ported and never driven, so a
+# new one is held to its field's absence: TestRecordedGapsStillHaveNoField
+# (acceptance_test.go) refuses one that recordedGaps does not name, and fails the
+# moment the field it names arrives. The row then comes out, and the gate reports
+# the input as documented and unsent until the driver sets it.
 #
 # Eleven rows below are ONE RULE, and it is a decision rather than a gap: every
 # write documents `application_id` as a query parameter and the SDK sends it in
@@ -307,26 +309,6 @@ operations:
 # really be in that request's payload, so each row proves its own replacement
 # path instead of merely asserting one.
 unsent_inputs:
-  # The one GAP on this list, rather than a decision.
-  - path: /vocabularies
-    method: get
-    in: query
-    name: q
-    reason: &vocabulary_filters_not_ported >-
-      This line's VocabularyListParams has no Query and no Slug field, so the
-      client has no way to send `q` or `slug` on GET /vocabularies although both
-      vendored contracts document them. main gained the two filters in #61, and
-      no sub-issue of epic #88 owns porting them here — the gap
-      docs/compat-test-disposition.md records under "Gaps this table found". The
-      fields would be additive, so porting them needs no major. Doing so fails
-      TestRecordedGapsStillHaveNoField until both rows come out, and the gate then
-      holds the vocabulary driver to setting them.
-  - path: /vocabularies
-    method: get
-    in: query
-    name: slug
-    reason: *vocabulary_filters_not_ported
-
   - path: /tags
     method: post
     in: query

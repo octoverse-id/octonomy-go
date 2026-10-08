@@ -102,7 +102,7 @@ stays. `main`'s cases went to `transport_test.go`.
 | ----------- | ------- |
 | `TestVocabularies_Create`, `_List`, `_Update`, `_Delete` | Same names in this line's own file |
 | `TestVocabularies_Get` | **PORTED** here, with a raw wire fixture whose `application_id` is a value; `main`'s null case is its `a shared vocabulary` subtest |
-| `TestVocabularies_List_Params` | **PORTED** here **without** its `q` and `slug` cases: this line's `VocabularyListParams` has no `Query` or `Slug`. See *Gaps* |
+| `TestVocabularies_List_Params` | **PORTED** here, every case. #95 ported it without its `q` and `slug` cases, which waited on `VocabularyListParams.Query` and `.Slug`; #118 ported the fields and the cases with them. Its empty-string case also sends `application_id`, this line's own case from before the fields arrived |
 
 ### `integration_suite_test.go`
 
@@ -112,7 +112,7 @@ also stands on `integration_harness_test.go`'s per-merchant clients, which #97 p
 
 | `main` test | Verdict |
 | ----------- | ------- |
-| `readProbes`, `runProbeMatrix`, `TestIntegration_NamespaceIsolation`, `TestIntegration_IncludeGlobalFailsClosed` | **PORTED** here (#97) — the isolation coverage `/api/v2` exists to provide. One probe differs: `main`'s `Vocabularies.List` narrows with a slug filter, which this line's `VocabularyListParams` lacks (see *Gaps*), so here it walks every page and fails unless it saw as many distinct rows as the server counts. The suite runs in the required go1.13 smoke job, as a step with its own `^TestIntegration_` selector |
+| `readProbes`, `runProbeMatrix`, `TestIntegration_NamespaceIsolation`, `TestIntegration_IncludeGlobalFailsClosed` | **PORTED** here (#97) — the isolation coverage `/api/v2` exists to provide. `Vocabularies.List` narrows by the fixture's slug, as `main`'s does; it walked every page here instead until #118 ported the filter. The suite runs in the required go1.13 smoke job, as a step with its own `^TestIntegration_` selector |
 | `TestIntegration_AssignmentIdempotence`, `_BulkPartialFailure`, `_DeactivationCascade`, `_DuplicateSlugScopedPerNamespace` | **EXCLUDE** (epic scope). They assert what the server does with a row, not what this client decodes; the smoke test holds the shapes |
 | `TestIntegration_ErrorEnvelopes` | **EXCLUDE** (epic scope), and the strongest candidate to revisit: it pins the code and status a real server sends for twelve `Is*` helpers. This line's smoke tests reach four of them — `IsNotFound` on both surfaces, `IsValidation`, `IsInactiveTag`, `IsApplicationMismatch` — and the other eight need the per-merchant clients #97 ported |
 | `TestIntegration_DeactivatedParentOrphansItsLiveChildren`, `_ParentCycleIsReachableAndRefused` | **EXCLUDE** (epic scope). Both read the result through `BuildTagTree` (#99) |
@@ -127,6 +127,11 @@ line's walk is five `TestSmoke_` functions, each building its own clients on one
 `/api/v1` by default, and `/api/v2` opt-in for the namespace pair — and it stays that way. The registry is test structure, not
 capability; restructuring 719 lines verified against a real server to carry it would buy one thing
 the rewritten guard already checks directly. See the second rewrite below.
+
+One of `main`'s smoke assertions arrived later, with the capability it proves: that a real server
+*reads* the vocabulary `q` and `slug` filters rather than dropping them in silence, held against a
+second visible decoy row. #118 added it to `TestSmoke_RealServer` with
+`VocabularyListParams.Query` and `.Slug`.
 
 ## The three rewrites
 
@@ -273,17 +278,10 @@ one of them is a comment in `integration_harness_test.go`, so the call sites num
 
 ## Gaps this table found
 
-Two of `main`'s test files reach exported surface this line lacks, and no sub-issue of #88 owns
-porting it. Each is a capability gap, not a test one, so it is recorded here rather than ported in a
-test change:
+One of `main`'s test files reaches exported surface this line lacks, and no sub-issue of #88 owns
+porting it. It is a capability gap, not a test one, so it is recorded here rather than ported in a
+test change. The table found a second, `VocabularyListParams.Query` and `.Slug`; #118 closed it.
 
-- **`VocabularyListParams.Query` and `.Slug`** — the `q` and `slug` filters `main` gained in #61.
-  Both vendored specs list them on `GET /vocabularies`, and `docs/contract-coverage.yaml` maps that
-  operation to `VocabularyService.List`. The row alone read complete while two parameters were
-  missing; since #98 the contract gate reports them as documented and unsent, so the file records
-  both under `unsent_inputs` with this reason. Porting the fields fails `TestRecordedGapsStillHaveNoField`
-  until those rows come out, and the gate then holds the vocabulary driver to sending both. Two cases of `TestVocabularies_List_Params` wait on it, and the `Vocabularies.List`
-  isolation probe walks the whole collection where `main`'s narrows by slug (#97).
 - **`DecodeMetadata`** — generic on `main`, with no counterpart here. Its compat signature is an
   open question the epic's design doc records (finding 6A, "define the `Each` / `DecodeMetadata`
   compat signatures"), and only `Each` has an issue (#99). Five tests in `types_test.go` wait on it.
