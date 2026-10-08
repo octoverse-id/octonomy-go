@@ -553,6 +553,21 @@ func TestEach_NilListWithNoError(t *testing.T) {
 			return list, nil
 		}, "nil *octonomy.AuditLogList"},
 	}
+	// Every list type, through Each rather than through contents directly, so
+	// a list type pageRows refuses outright -- one missing from its case --
+	// fails here on the type's name as well as in the walk test below.
+	for _, l := range identityLists() {
+		nilList := reflect.Zero(reflect.TypeOf(l.list)).Interface().(Page)
+		tests = append(tests, struct {
+			name string
+			page func(context.Context, ListOptions) (Page, error)
+			want string
+		}{
+			fmt.Sprintf("nil %T inside a Page", l.list),
+			func(context.Context, ListOptions) (Page, error) { return nilList, nil },
+			fmt.Sprintf("nil %T with no error", l.list),
+		})
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			offset, err := Each(context.Background(), ListOptions{Offset: 4}, tt.page,
