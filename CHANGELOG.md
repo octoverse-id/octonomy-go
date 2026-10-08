@@ -19,7 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller's requests do not change.
   - The contract gate's `get /vocabularies` driver sets both, and the two `unsent_inputs` rows that
     recorded the gap are gone. `recordedGaps` stays, empty, so a future gap row still has to name the
-    field whose absence it asserts.
+    field whose absence it asserts — now in the body or a header as well as the query. Only a query
+    row was held before, so an uncarried body row suppressed the gate's finding with nothing holding
+    it to its field's absence; a body gap is now held to its write struct's field, and a header gap,
+    which has no field, is refused outright.
   - `TestVocabularies_List_Params` gains `main`'s `q` and `slug` cases, and the `Vocabularies.List`
     isolation probe narrows by slug, as `main`'s does, instead of walking every page.
   - `TestSmoke_RealServer` gains `main`'s proof that a real server *reads* both filters — an unknown

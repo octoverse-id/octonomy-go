@@ -85,8 +85,13 @@ func newSmokeClient(t *testing.T) *octonomy.Client {
 
 // uniqueSlug keeps repeat runs against one long-lived harness from colliding on
 // the server's (type, slug) uniqueness constraint.
+//
+// The nonce is zero-padded so that every slug one prefix and pid produce has the
+// same length, and none can be a substring of another. The free-text `q`
+// assertion in TestSmoke_RealServer depends on that: unpadded, a row an aborted
+// run leaked as smoke-vocab-42-1234 also matches q=smoke-vocab-42-123.
 func uniqueSlug(prefix string) string {
-	return fmt.Sprintf("%s-%d-%d", prefix, os.Getpid(), time.Now().UnixNano()%1e6)
+	return fmt.Sprintf("%s-%d-%06d", prefix, os.Getpid(), time.Now().UnixNano()%1e6)
 }
 
 func TestSmoke_RealServer(t *testing.T) {

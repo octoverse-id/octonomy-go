@@ -375,9 +375,11 @@ The smoke and isolation suites are what exercise real values against a real serv
 - **A gap row is held to its field's absence.** A documented input the client has no field to send
   goes under `unsent_inputs` in `contract-coverage.yaml`, with the reason. A row like that would
   hide a field ported and never driven, so `TestRecordedGapsStillHaveNoField` refuses a gap row
-  that `recordedGaps` (`acceptance_test.go`) does not name, and fails the moment the field it names
-  arrives; the row comes out, and the gate reports the input as documented and unsent until the
-  driver sets it. None is recorded now. The gate found one, `q` and `slug` on `GET /vocabularies`,
+  that `recordedGaps` (`acceptance_test.go`) does not name — in the query, the body or a header,
+  where a row is a gap unless its `carried_in` or its route says where the input goes instead — and
+  fails the moment the field it names arrives; the row comes out, and the gate reports the input as
+  documented and unsent until the driver sets it. A header gap is refused outright: a header comes
+  from a `RequestOption`, not a field, so no field's absence can hold the row. None is recorded now. The gate found one, `q` and `slug` on `GET /vocabularies`,
   and recorded it from #98 until #118 ported `VocabularyListParams.Query` and `.Slug` — which ran
   that sequence end to end.
 - **What runs the gate is pinned from outside it.** `contractgate_test.go`, in the root package,

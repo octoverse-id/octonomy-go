@@ -170,8 +170,8 @@ func stageMakeRepo(t *testing.T) string {
 
 // recordedGaps are the unsent_inputs rows that record a GAP -- a documented input
 // this client has no field to send -- each with the field whose absence the row
-// asserts. Every other unsent_inputs row is a decision with a carried_in or a path
-// that says where the input goes instead.
+// asserts. Every other unsent_inputs row is a decision with a carried_in, or a
+// route that names the input as a path parameter, saying where it goes instead.
 //
 // They need a check of their own because a gap row suppresses exactly the finding
 // that would notice the gap closing badly. Port the missing field and forget the
@@ -185,13 +185,15 @@ func stageMakeRepo(t *testing.T) string {
 // EMPTY, and kept. Its only entries were `q` and `slug` on GET /vocabularies,
 // recorded from #98 until #118 ported VocabularyListParams.Query and .Slug, when
 // this test failed exactly as described above. The table stays because the empty
-// case is still a rule: recordedGapProblems refuses any unsent_inputs query row
-// with no carried_in that this table does not name, so a future gap row cannot be
-// added without naming the field whose absence it asserts. An entry is written
-// {op, in, name, reflect.TypeOf(octonomy.FooListParams{}), "Field"}.
+// case is still a rule: recordedGapProblems refuses every unsent_inputs row that
+// is a gap -- in the query, the body or a header -- unless this table names it,
+// so a future gap row cannot be added without naming the field whose absence it
+// asserts. An entry is written {op, in, name, reflect.TypeOf(T{}), "Field"}, with
+// T the params struct for a query input and the write struct for a body one.
 var recordedGaps []recordedGap
 
-// recordedGap is one gap row and the field whose absence it asserts.
+// recordedGap is one gap row and the field whose absence it asserts: params is
+// the struct that would carry the input, and field the Go name it would have.
 type recordedGap struct {
 	op, in, name string
 	params       reflect.Type
@@ -208,9 +210,17 @@ func TestRecordedGapsStillHaveNoField(t *testing.T) {
 	}
 }
 
-// recordedGapProblems holds the unsent_inputs rows to the gaps table: every query
-// row with nowhere else to carry its input is a gap the table names, every entry
-// in the table is still a row, and every gap's field is still missing.
+// recordedGapProblems holds the unsent_inputs rows to the gaps table: every row
+// with nowhere else to carry its input is a gap the table names, every entry in
+// the table is still a row, and every gap's field is still missing.
+//
+// A gap is decided by what the row says, never by where the input is documented.
+// Until #118 only a query row was held, so an uncarried body or header row -- a
+// write field dropped from its driver, say -- suppressed the gate's finding with
+// nothing holding it to its field's absence. A header gap cannot be held at all:
+// this client sends a header from a RequestOption, not a struct field, so there
+// is no field whose absence to assert, and the row is refused until recordedGap
+// learns another way to say what is missing.
 func recordedGapProblems(rows []UnsentInput, gaps []recordedGap) []string {
 	var problems []string
 	listed := map[string]bool{}
@@ -223,14 +233,23 @@ func recordedGapProblems(rows []UnsentInput, gaps []recordedGap) []string {
 		present[key] = true
 		// A row with no replacement path is a gap, and a gap needs a field to hold
 		// it to. The resource_type / resource_id rows name the route instead.
-		if row.CarriedIn == "" && row.In == "query" && !listed[key] {
-			problems = append(problems, fmt.Sprintf("unsent_inputs records `%s` with nowhere else to carry it -- a gap -- and recordedGaps does not name the field whose absence it asserts", key))
+		if row.CarriedIn != "" || routeCarries(row) || listed[key] {
+			continue
 		}
+		problems = append(problems, fmt.Sprintf("unsent_inputs records `%s` with nowhere else to carry it -- a gap -- and recordedGaps does not name the field whose absence it asserts", key))
 	}
 	for _, gap := range gaps {
 		key := gap.op + " " + gap.in + " " + gap.name
 		if !present[key] {
 			problems = append(problems, fmt.Sprintf("recordedGaps names `%s`, which unsent_inputs no longer lists -- drop the entry", key))
+			continue
+		}
+		if gap.in == "header" {
+			problems = append(problems, fmt.Sprintf("recordedGaps names `%s`, a header: this client sends headers from RequestOptions, not struct fields, so no field's absence can hold the row -- extend recordedGap before recording a header gap", key))
+			continue
+		}
+		if gap.params == nil || gap.field == "" {
+			problems = append(problems, fmt.Sprintf("recordedGaps names `%s` with no struct and field, so nothing holds the row to its field's absence", key))
 			continue
 		}
 		if _, has := gap.params.FieldByName(gap.field); has {
@@ -241,20 +260,40 @@ func recordedGapProblems(rows []UnsentInput, gaps []recordedGap) []string {
 	return problems
 }
 
+// routeCarries reports whether row's input is a path parameter of its own route:
+// the contract documents it elsewhere as well, and the path the client requests
+// already carries it -- the gate holds the route to the contract's, so the row
+// cannot claim a route the client does not use. resource_type and resource_id on
+// the resource-tag replace are the rows this describes.
+func routeCarries(row UnsentInput) bool {
+	return strings.Contains(row.Path, "{"+row.Name+"}")
+}
+
 // TestRecordedGapProblemsRefusesEachForm: the check above against a gap that has
-// closed, a gap row nobody listed, and a listed gap with no row -- so passing on
-// the real file is not its only evidence.
+// closed, a gap row nobody listed, and a listed gap with no row -- in the query,
+// the body and a header -- so passing on the real file is not its only evidence.
 func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
-	type closed struct{ Query *string }
+	type closed struct {
+		Query       *string
+		Description *string
+	}
 	type open struct{ Other *string }
 	row := UnsentInput{Path: "/things", Method: "get", In: "query", Name: "q", Reason: "r"}
 	gap := recordedGap{"get /things", "query", "q", reflect.TypeOf(open{}), "Query"}
+	body := UnsentInput{Path: "/things", Method: "post", In: "body", Name: "description", Reason: "r"}
+	bodyGap := recordedGap{"post /things", "body", "description", reflect.TypeOf(open{}), "Description"}
+	header := UnsentInput{Path: "/things", Method: "get", In: "header", Name: "X-Thing", Reason: "r"}
+	headerGap := recordedGap{"get /things", "header", "X-Thing", reflect.TypeOf(open{}), "Thing"}
 
-	if got := recordedGapProblems([]UnsentInput{row}, []recordedGap{gap}); len(got) != 0 {
-		t.Fatalf("a listed gap whose field is missing is fine, got %v", got)
+	if got := recordedGapProblems([]UnsentInput{row, body}, []recordedGap{gap, bodyGap}); len(got) != 0 {
+		t.Fatalf("a listed gap whose field is missing is fine, in the query or the body, got %v", got)
 	}
 	closedGap := gap
 	closedGap.params = reflect.TypeOf(closed{})
+	closedBodyGap := bodyGap
+	closedBodyGap.params = reflect.TypeOf(closed{})
+	noField := gap
+	noField.params = nil
 	cases := []struct {
 		name string
 		rows []UnsentInput
@@ -264,6 +303,11 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 		{"the field arrived", []UnsentInput{row}, []recordedGap{closedGap}, "closed.Query exists"},
 		{"a gap row nobody listed", []UnsentInput{row}, nil, "recordedGaps does not name"},
 		{"a listed gap with no row", nil, []recordedGap{gap}, "no longer lists"},
+		{"a body field arrived", []UnsentInput{body}, []recordedGap{closedBodyGap}, "closed.Description exists"},
+		{"a body gap row nobody listed", []UnsentInput{body}, nil, "recordedGaps does not name"},
+		{"a header gap row nobody listed", []UnsentInput{header}, nil, "recordedGaps does not name"},
+		{"a header gap listed", []UnsentInput{header}, []recordedGap{headerGap}, "a header"},
+		{"a gap listed with no struct", []UnsentInput{row}, []recordedGap{noField}, "with no struct and field"},
 	}
 	for _, tc := range cases {
 		got := strings.Join(recordedGapProblems(tc.rows, tc.gaps), "\n")
@@ -271,10 +315,27 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 			t.Errorf("%s: want a problem containing %q, got %q", tc.name, tc.want, got)
 		}
 	}
-	// A row that names where the input travels instead is a decision, not a gap.
-	carried := row
-	carried.CarriedIn = "body"
-	if got := recordedGapProblems([]UnsentInput{carried}, nil); len(got) != 0 {
-		t.Errorf("a carried_in row is not a gap, got %v", got)
+	// A row that names where the input travels instead is a decision, not a gap,
+	// in every location.
+	for _, r := range []UnsentInput{row, body, header} {
+		carried := r
+		carried.CarriedIn = "body"
+		if r.In == "body" {
+			carried.CarriedIn = "query"
+		}
+		if got := recordedGapProblems([]UnsentInput{carried}, nil); len(got) != 0 {
+			t.Errorf("a carried_in %s row is not a gap, got %v", r.In, got)
+		}
+	}
+	// So is one whose route names it as a path parameter -- but only by its whole
+	// name: `id` is not carried by a route whose parameter is `{thing_id}`.
+	routed := UnsentInput{Path: "/things/{thing_id}/parts", Method: "post", In: "body", Name: "thing_id", Reason: "r"}
+	if got := recordedGapProblems([]UnsentInput{routed}, nil); len(got) != 0 {
+		t.Errorf("a row its route carries is not a gap, got %v", got)
+	}
+	partial := routed
+	partial.Name = "id"
+	if got := strings.Join(recordedGapProblems([]UnsentInput{partial}, nil), "\n"); !strings.Contains(got, "recordedGaps does not name") {
+		t.Errorf("`id` on a route carrying {thing_id} is a gap, got %q", got)
 	}
 }
