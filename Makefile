@@ -69,13 +69,19 @@ vuln: ## Run govulncheck on the SDK and on the contract gate's module (skipped i
 		echo "govulncheck not installed; skipping. Install: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest"; \
 	fi
 
-# Ported from main's at 5e40964 (#99). The loop this replaced read `find` through
-# a pipe, so an examples/ with no main.go in it compiled nothing and exited 0 --
-# a release gate that passes having checked nothing. `set -e` and the count are
-# what make it fail closed, and the empty check runs before any build.
+# Ported from main's at 5e40964 (#99), with one fix. The loop this replaced read
+# `find` through a pipe, so an examples/ with no main.go in it compiled nothing
+# and exited 0 -- a release gate that passes having checked nothing. Three
+# things make it fail closed: `find` runs in an assignment of its own, so under
+# `set -e` its exit status is the assignment's (main's ran it inside
+# `find | sort`, whose status is sort's, so a traversal error that still printed
+# some directories passed with the rest unchecked); the empty check runs before
+# any build; and every build runs under `set -e`. The count printed at the end is
+# for a reader, not a check.
 examples: ## Compile-check the runnable examples (no binaries emitted); fails if there are none
 	@set -e; \
-	dirs=$$(find examples -name main.go -exec dirname {} \; | sort -u); \
+	found=$$(find examples -name main.go -exec dirname {} \;); \
+	dirs=$$(printf '%s\n' "$$found" | sort -u); \
 	[ -n "$$dirs" ] || { \
 		echo "examples: no main.go found under examples/."; \
 		echo "examples: this target would otherwise report success having compiled nothing."; \

@@ -717,3 +717,47 @@ func TestEach_AMismatchedAssertionStopsAtTheRowItRefused(t *testing.T) {
 		t.Errorf("offset = %d after %d rows, want 1 after 0 -- the first row refused is the resume point", offset, visited)
 	}
 }
+
+// Page's unexported method does not seal it: a struct embedding a Page, or a
+// list type, satisfies it by promotion, and calling contents through one whose
+// embedded value is nil -- or through a nil pointer to it -- panics. Each reads
+// only the six list pointers (pageRows) and refuses the rest, whether or not
+// the wrapper would have worked. These types are declared in the package's own
+// test, but promotion is the same from a caller's package, and that is where
+// the construction comes from.
+type embedsPage struct{ Page }
+type embedsTagList struct{ *TagList }
+
+func TestEach_RefusesAPageItDoesNotDeclare(t *testing.T) {
+	var nilWrapper *embedsTagList
+	tests := []struct {
+		name string
+		page Page
+	}{
+		{"a struct embedding a nil Page", &embedsPage{}},
+		{"a nil pointer to a struct embedding a *TagList", nilWrapper},
+		{"a struct embedding a nil *TagList", &embedsTagList{}},
+		{"a struct embedding a valid *TagList", &embedsTagList{TagList: &TagList{
+			Data:       []Tag{{ID: "tag_0"}},
+			Pagination: Pagination{Limit: 50, Count: 1},
+		}}},
+		{"a struct embedding a Page that holds a valid *TagList", &embedsPage{Page: &TagList{
+			Data:       []Tag{{ID: "tag_0"}},
+			Pagination: Pagination{Limit: 50, Count: 1},
+		}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			delivered := 0
+			offset, err := Each(context.Background(), ListOptions{Offset: 2},
+				func(context.Context, ListOptions) (Page, error) { return tt.page, nil },
+				func(interface{}) error { delivered++; return nil })
+			if err == nil || !strings.Contains(err.Error(), "not one of this package's list types") {
+				t.Fatalf("err = %v, want a refusal naming the unknown page type", err)
+			}
+			if offset != 2 || delivered != 0 {
+				t.Errorf("offset = %d after %d rows, want 2 after 0", offset, delivered)
+			}
+		})
+	}
+}

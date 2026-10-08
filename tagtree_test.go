@@ -13,7 +13,10 @@ import (
 // helpers below, and DeleteFunc and SortFunc are the Go 1.13 spellings that
 // BuildTagTree's doc comment shows -- so the tests that exercise those
 // examples exercise the code a reader copies, not a version of it. The
-// range-over-int in the determinism test is a C-style loop.
+// range-over-int in the determinism test is a C-style loop. Beyond the dialect,
+// some of main's assertions are strengthened where a mutant survived them, and
+// compat-only tests follow at the end; docs/compat-test-disposition.md names
+// them.
 
 // tag builds a Tag with just the fields the tree cares about. parent is the
 // parent's id, or "" for none.

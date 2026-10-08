@@ -51,18 +51,46 @@ type Pagination struct {
 // interface{}. Every list envelope above implements it, so a list method's
 // result is returned from a page function as it is.
 //
-// Its one method is unexported, so no type outside this package implements it.
-// A page function in a test can still return a fake page: build one of the
-// list types above from its exported Data and Pagination fields.
+// Its one method is unexported, which keeps a caller from writing a Page of its
+// own but does NOT seal the interface: a caller's struct that embeds a Page or
+// one of the list types satisfies it by promotion. Each therefore accepts
+// exactly the six list pointers above and refuses any other Page with an error
+// (see pageRows), so a wrapper is a refusal rather than a panic. A page
+// function in a test can still return a fake page: build one of the list
+// types above from its exported Data and Pagination fields.
 type Page interface {
 	// contents returns the page's rows, each boxed as the VALUE type the list
 	// holds (a Tag for a *TagList, never a *Tag), and a pointer to its
 	// pagination block. A nil receiver returns (nil, nil): Each reads the nil
 	// block as a typed nil, which an interface comparison with nil misses.
 	//
-	// A new list type implements it beside rows(); doList's parameter type
-	// embeds Page, so one that does not fails to compile there.
+	// A new list type implements it beside rows() -- doList's parameter type
+	// embeds Page, so one that does not fails to compile there -- and joins
+	// the case in pageRows, without which Each refuses it at runtime.
+	// identityLists (transport_test.go) is held to the source, and
+	// TestEach_HandsTheCallbackTheListsElementValue walks every type it names,
+	// so a list type missing from pageRows fails there.
 	contents() ([]interface{}, *Pagination)
+}
+
+// pageRows is the one place Each reads a Page, and it reads only the six list
+// pointers this package declares. The unexported method does not keep other
+// types out: a caller's
+//
+//	type wrapped struct{ octonomy.Page }
+//
+// satisfies Page by promotion, and calling contents through a wrapped{} whose
+// Page is nil -- or through a nil *wrapped embedding a *TagList -- panics in
+// this package, which never panics. A type switch over the concrete types
+// dispatches only to their own nil-safe contents, and ok is false for
+// everything else.
+func pageRows(p Page) (rows []interface{}, pagination *Pagination, ok bool) {
+	switch p.(type) {
+	case *TagList, *VocabularyList, *TagAliasList, *ResourceTagList, *TagResourceList, *AuditLogList:
+		rows, pagination = p.contents()
+		return rows, pagination, true
+	}
+	return nil, nil, false
 }
 
 // Each walks every page of a list endpoint and calls fn once per item.
@@ -277,11 +305,14 @@ func Each(
 		if p == nil {
 			return pageStart, errors.New("octonomy: Each: page function returned a nil Page with no error")
 		}
+		rows, pagination, ok := pageRows(p)
+		if !ok {
+			return pageStart, fmt.Errorf("octonomy: Each: page function returned a %T, which is not one of this package's list types; return the list method's result itself", p)
+		}
 		// A typed nil -- a nil *TagList inside a non-nil Page -- is the shape
 		// `return nil, nil` takes in a page function whose own variable is a
 		// *TagList, and a p == nil test cannot see it. contents reports it as a
 		// nil block rather than dereferencing the receiver.
-		rows, pagination := p.contents()
 		if pagination == nil {
 			return pageStart, fmt.Errorf("octonomy: Each: page function returned a nil %T with no error", p)
 		}

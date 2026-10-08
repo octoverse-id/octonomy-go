@@ -7,11 +7,13 @@ import (
 )
 
 // BuildTagTree and its types are ported from main's tagtree.go at 5e40964
-// (#99). The code differs in one place: slices.Reverse (Go 1.21) is
-// reverseNodes and reverseTags below. The doc comments differ in three: the
-// two examples that used slices.DeleteFunc and slices.SortFunc are spelled in
-// Go 1.13 -- a loop and sort.Slice -- since an example is code a reader
-// copies, and the namespace-scope orphan names the APIV2 opt-in it needs here.
+// (#99); `git diff 5e40964 -- tagtree.go` is the complete record of how they
+// differ. The behaviour does not: the code changes only where Go 1.13 needs it
+// (slices.Reverse, Go 1.21, is reverseNodes and reverseTags below). The doc
+// comments change where they showed Go newer than 1.13 -- an example is code a
+// reader copies, so the slices.DeleteFunc and slices.SortFunc examples are a
+// loop and sort.Slice -- and where this line's surface differs from main's, such
+// as the APIV2 opt-in a namespace-scope orphan needs here.
 
 // ErrTagCycle reports that the tags handed to BuildTagTree contain a parent
 // cycle -- a chain of ParentID links that returns to where it started -- and

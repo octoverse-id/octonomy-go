@@ -16,9 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     page, and returns the offset it reached — on an error too, so a failed walk resumes. `main`'s is
     generic there; this line's page function returns the new **`Page`** interface, which all six list
     envelopes implement, and its callback takes an `interface{}` holding the row's value (`Tag`, not
-    `*Tag`). `Page`'s one method is unexported, so it is sealed. `Each` refuses a typed nil inside a
-    `Page` — `return list, nil` with a nil `*TagList` — which `main`'s `*List[T]` cannot produce and
-    a `p == nil` test misses. The doc comment's account of offset drift and of the pre-3.2.1 tags
+    `*Tag`). `Page`'s one method is unexported, so a caller cannot write a `Page` of its own — but a
+    struct embedding a `Page` or a list type satisfies it by promotion, so `Each` reads only the six
+    list pointers and refuses any other `Page` with an error rather than calling through it (a nil
+    embedded value would panic). It also refuses a typed nil inside a `Page` — `return list, nil`
+    with a nil `*TagList` — which `main`'s `*List[T]` cannot produce and a `p == nil` test misses. The doc comment's account of offset drift and of the pre-3.2.1 tags
     order comes with it unchanged.
   - **`BuildTagTree`** assembles a fetched `[]Tag` into the `ParentID` hierarchy client-side, with
     `TagTree`, `TagNode`, `ErrTagCycle` and `ErrDuplicateTagID`. No tag is ever dropped: a missing
