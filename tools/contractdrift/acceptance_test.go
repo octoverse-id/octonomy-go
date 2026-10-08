@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -335,9 +336,17 @@ func sdkCarrier(symbol, in string) (reflect.Type, error) {
 	if !found {
 		return nil, fmt.Errorf("no method %s reachable from octonomy.Client", symbol)
 	}
+	// In(0) of a method value's type is its receiver.
+	return signatureCarrier(symbol, method.Type, 1, in)
+}
+
+// signatureCarrier is sdkCarrier's reading of a signature, from parameter from
+// on: exactly one pointer-to-struct for the query, exactly one struct by value
+// for the body.
+func signatureCarrier(symbol string, sig reflect.Type, from int, in string) (reflect.Type, error) {
 	var carriers []reflect.Type
-	for i := 1; i < method.Type.NumIn(); i++ { // In(0) is the receiver
-		param := method.Type.In(i)
+	for i := from; i < sig.NumIn(); i++ {
+		param := sig.In(i)
 		switch {
 		case in == "query" && param.Kind() == reflect.Ptr && param.Elem().Kind() == reflect.Struct:
 			carriers = append(carriers, param.Elem())
@@ -501,5 +510,65 @@ func TestSDKCarrierReadsTheSignature(t *testing.T) {
 	}
 	if _, err := sdkCarrier("NoSuchService.List", "query"); err == nil {
 		t.Error("an unknown receiver must be an error")
+	}
+}
+
+// TestSignatureCarrierTakesExactlyOne: the shapes no real signature has today, so
+// the real-client test above cannot see them -- two candidates is an error, not
+// the first one, and a struct passed by value never carries the query.
+func TestSignatureCarrierTakesExactlyOne(t *testing.T) {
+	type params struct{ Q *string }
+	type write struct{ Name string }
+	for _, tc := range []struct {
+		name string
+		fn   interface{}
+		in   string
+		want string
+	}{
+		{"two params structs", func(context.Context, *params, *params, ...octonomy.RequestOption) error { return nil }, "query", "takes 2"},
+		{"two write structs", func(context.Context, write, write) error { return nil }, "body", "takes 2"},
+		{"a by-value struct is not a query carrier", func(context.Context, params) error { return nil }, "query", "takes 0"},
+		{"a pointer is not a body carrier", func(context.Context, *write) error { return nil }, "body", "takes 0"},
+	} {
+		if _, err := signatureCarrier(tc.name, reflect.TypeOf(tc.fn), 0, tc.in); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want an error containing %q, got %v", tc.name, tc.want, err)
+		}
+	}
+	got, err := signatureCarrier("one of each", reflect.TypeOf(func(context.Context, string, *params, write) error { return nil }), 0, "query")
+	if err != nil || got != reflect.TypeOf(params{}) {
+		t.Errorf("query carrier = %v, %v; want params", got, err)
+	}
+}
+
+// TestExportedFieldsSeesPromotedFields: a field arriving on an embedded struct --
+// ListOptions gaining a cursor, say -- changes no top-level name, so the list a
+// gap is recorded against has to carry the promoted fields too. Each block
+// declares its own Opts, so the embedded field's name is the same in both.
+func TestExportedFieldsSeesPromotedFields(t *testing.T) {
+	var before, after []string
+	{
+		type Opts struct{ Limit int }
+		type params struct {
+			Opts
+			Other *string
+		}
+		before = exportedFields(reflect.TypeOf(params{}))
+	}
+	{
+		type Opts struct {
+			Limit  int
+			Cursor *string
+		}
+		type params struct {
+			Opts
+			Other *string
+		}
+		after = exportedFields(reflect.TypeOf(params{}))
+	}
+	if reflect.DeepEqual(before, after) {
+		t.Errorf("a field promoted from an embedded struct went unseen: %q both times", before)
+	}
+	if want := []string{"Opts", "Limit", "Other"}; !reflect.DeepEqual(before, want) {
+		t.Errorf("exportedFields = %q, want %q", before, want)
 	}
 }
