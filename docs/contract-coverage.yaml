@@ -293,12 +293,12 @@ operations:
 # #118 ported the fields. No gap is recorded here now. A GAP row -- an input with
 # no `carried_in` and no route that holds it -- suppresses exactly the finding
 # that would notice the gap closing badly, a field ported and never driven, so a
-# new one is held to its field's absence: TestRecordedGapsStillHaveNoField
-# (acceptance_test.go) refuses one that recordedGaps does not hold to the struct
-# that would carry it -- read off the signature of the method this file names for
-# the operation -- and fails the moment that struct's fields change. The row then
-# comes out, and the gate reports the input as documented and unsent until the
-# driver sets it.
+# new one is held to the client: TestRecordedGapsStillHaveNoField
+# (acceptance_test.go) refuses one that recordedGaps does not name, and for one it
+# does, calls the method this file names for the operation with every parameter
+# filled and fails the moment the request carries the input. The row then comes
+# out, and the gate reports the input as documented and unsent until the driver
+# sets it.
 #
 # Eleven rows below are ONE RULE, and it is a decision rather than a gap: every
 # write documents `application_id` as a query parameter and the SDK sends it in

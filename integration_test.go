@@ -92,8 +92,9 @@ func newSmokeClient(t *testing.T) *octonomy.Client {
 // is the low six digits of the nanosecond count and therefore REPEATS EVERY
 // MILLISECOND: two calls exactly 1ms apart in one process produce the same
 // string, and a rerun that inherits a recycled pid can collide with the run
-// before it. Slugs are unique per (type, slug) on the server, so a collision is
-// a 409 on a create -- or worse, a list filter that matches a row this run did
+// before it. The server keeps an active row's slug unique within its tenant,
+// application and namespace (and, for a tag, its type), so a collision is a
+// 409 on a create -- or worse, a list filter that matches a row this run did
 // not make and an exact-count assertion that fails for a reason nobody can see
 // from the output. The counter makes two calls in one process distinct by
 // construction; the full nanosecond stamp and the pid separate one process from
@@ -101,7 +102,7 @@ func newSmokeClient(t *testing.T) *octonomy.Client {
 var slugSeq uint64
 
 // uniqueSlug keeps repeat runs against one long-lived harness from colliding on
-// the server's (type, slug) uniqueness constraint.
+// the server's slug uniqueness constraints (see slugSeq for their scope).
 //
 // LENGTH IS BOUNDED BY THE TIGHTEST CONSUMER, not by `slug`. A value is its
 // prefix, three separators, the pid, a nineteen-digit nanosecond stamp (nineteen

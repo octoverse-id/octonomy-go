@@ -19,12 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller's requests do not change.
   - The contract gate's `get /vocabularies` driver sets both, and the two `unsent_inputs` rows that
     recorded the gap are gone. `recordedGaps` stays, empty, so a future gap row is still refused
-    until it is held to its field's absence — now in the body or a header as well as the query. Only
-    a query row was held before, so an uncarried body row suppressed the gate's finding unheld. An
-    entry no longer names its struct and field by hand, where the wrong struct or a misspelled field
-    passed: the carrier is read off the signature of the operation's SDK method, and the entry
-    records its fields, so any change to them fails the check. A header gap, which no struct
-    carries, is refused outright.
+    unless it is named there — now in the body or a header as well as the query. Only a query row
+    was held before, so an uncarried body row suppressed the gate's finding unheld. A named gap is
+    held to the client, not to a struct and field typed by hand (where the wrong struct or a
+    misspelled field passed): the check calls the operation's SDK method with every parameter
+    filled, through a recording transport, and fails once the request carries the input. A header
+    gap, which no struct carries, is refused outright.
   - `TestVocabularies_List_Params` gains `main`'s `q` and `slug` cases, and the `Vocabularies.List`
     isolation probe narrows by slug, as `main`'s does, instead of walking every page.
   - `TestSmoke_RealServer` gains `main`'s proof that a real server *reads* both filters — an unknown
