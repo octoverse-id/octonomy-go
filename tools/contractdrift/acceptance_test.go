@@ -202,7 +202,8 @@ func stageMakeRepo(t *testing.T) string {
 //
 //  1. To the field's absence, as AGENTS.md has it: the entry names the struct
 //     that would carry the input (the *Params struct for a query input, the
-//     write struct for a body one) and the Go field it would be, and the test
+//     write struct for a body one, Config for a header) and the Go field it
+//     would be, and the test
 //     fails the moment that field exists. That trusts the entry's naming: a
 //     misspelled field, or the wrong struct, is absent forever.
 //  2. So a second witness does not read the naming at all. observeSDK calls the
@@ -218,13 +219,11 @@ func stageMakeRepo(t *testing.T) string {
 // an input an option carries -- application_id through WithApplication,
 // include_global through WithIncludeGlobal -- passes both. Such an input is not a
 // gap at all, and its driver should send it. And one fully filled call cannot see
-// a field the client sends only while another is unset.
-//
-// A header gap is not held at all: it is refused. This client puts a header on
-// the wire from a Config field (TenantID, ActorID, UserAgent) or a RequestOption
-// (WithNamespace, WithRequestID), never from a params or write struct, so there
-// is no field for the first witness to name, and the second cannot enumerate
-// the options.
+// a field the client sends only while another is unset. The option blind spot
+// matters most for headers: this client puts a header on the wire from a Config
+// field (TenantID, ActorID, UserAgent) or a RequestOption (WithNamespace,
+// WithRequestID, WithActor), so a header gap is held only as far as the header
+// would arrive through Config.
 //
 // An entry is written {op, in, name, reflect.TypeOf(octonomy.FooListParams{}), "Field"}.
 var recordedGaps []recordedGap
@@ -268,7 +267,7 @@ type observer func(op string) (sentRequest, error)
 // A gap is decided by what the row says, never by where the input is documented.
 // Until #118 only a query row was held, so an uncarried body or header row -- a
 // write field dropped from its driver, say -- suppressed the gate's finding
-// unheld. A header gap is refused, for the reason recordedGaps gives.
+// unheld; a header name is compared in its canonical form.
 func recordedGapProblems(rows []UnsentInput, gaps []recordedGap, observe observer) []string {
 	var problems []string
 	listed := map[string]bool{}
@@ -292,8 +291,8 @@ func recordedGapProblems(rows []UnsentInput, gaps []recordedGap, observe observe
 			problems = append(problems, fmt.Sprintf("recordedGaps names `%s`, which unsent_inputs no longer lists -- drop the entry", key))
 			continue
 		}
-		if gap.in != "query" && gap.in != "body" {
-			problems = append(problems, fmt.Sprintf("recordedGaps names `%s`, a %s: this client sends headers from Config fields and RequestOptions, never from a params or write struct, so neither witness can hold the row -- teach recordedGapProblems to ask before recording a header gap", key, gap.in))
+		if gap.in != "query" && gap.in != "body" && gap.in != "header" {
+			problems = append(problems, fmt.Sprintf("recordedGaps names `%s`, in no location the request has", key))
 			continue
 		}
 		if gap.params == nil || gap.field == "" {
@@ -314,11 +313,14 @@ func recordedGapProblems(rows []UnsentInput, gaps []recordedGap, observe observe
 			problems = append(problems, fmt.Sprintf("recordedGaps names `%s`, and the method behind it sent %s, not %s", key, sent.method, strings.ToUpper(method)))
 			continue
 		}
-		carried := sent.query
-		if gap.in == "body" {
+		carried, name := sent.query, gap.name
+		switch gap.in {
+		case "body":
 			carried = sent.body
+		case "header":
+			carried, name = sent.headers, http.CanonicalHeaderKey(gap.name)
 		}
-		if carried[gap.name] {
+		if carried[name] {
 			problems = append(problems, fmt.Sprintf("the client sends `%s` in the %s of `%s` once every field it takes is set, although %s.%s does not exist -- the entry names the wrong struct or field, and the gap is closed: drop the row, set the field in drivers.go, and the gate holds it from there",
 				gap.name, gap.in, gap.op, gap.params.Name(), gap.field))
 		}
@@ -525,14 +527,17 @@ func (r *gapRecorder) record(req *http.Request) {
 // closed, a gap row nobody listed, and a listed gap with no row -- in the query,
 // the body and a header -- so passing on the real file is not its only evidence.
 func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
-	sends := func(method string, query, body []string) observer {
+	sends := func(method string, query, body []string, headers ...string) observer {
 		return func(string) (sentRequest, error) {
-			got := sentRequest{method: method, query: map[string]bool{}, body: map[string]bool{}}
+			got := sentRequest{method: method, query: map[string]bool{}, body: map[string]bool{}, headers: map[string]bool{}}
 			for _, name := range query {
 				got.query[name] = true
 			}
 			for _, name := range body {
 				got.body[name] = true
+			}
+			for _, name := range headers {
+				got.headers[http.CanonicalHeaderKey(name)] = true
 			}
 			return got, nil
 		}
@@ -560,7 +565,14 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 	body := UnsentInput{Path: "/things", Method: "post", In: "body", Name: "description", Reason: "r"}
 	bodyGap := recordedGap{"post /things", "body", "description", reflect.TypeOf(openWrite{}), "Description"}
 	header := UnsentInput{Path: "/things", Method: "get", In: "header", Name: "X-Thing", Reason: "r"}
-	headerGap := recordedGap{"get /things", "header", "X-Thing", reflect.TypeOf(openParams{}), "Thing"}
+	type openConfig struct{ Token string }
+	type closedConfig struct {
+		Token string
+		Thing string
+	}
+	headerGap := recordedGap{"get /things", "header", "X-Thing", reflect.TypeOf(openConfig{}), "Thing"}
+	closedHeaderGap := headerGap
+	closedHeaderGap.params = reflect.TypeOf(closedConfig{})
 	closedGap, closedBodyGap, noField := gap, bodyGap, gap
 	closedGap.params = reflect.TypeOf(closedParams{})
 	closedBodyGap.params = reflect.TypeOf(closedWrite{})
@@ -590,7 +602,10 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 		{"a listed gap with no row", nil, []recordedGap{gap}, openGet, "no longer lists"},
 		{"a body gap row nobody listed", []UnsentInput{body}, nil, openPost, "recordedGaps does not name it"},
 		{"a header gap row nobody listed", []UnsentInput{header}, nil, openGet, "recordedGaps does not name it"},
-		{"a header gap listed", []UnsentInput{header}, []recordedGap{headerGap}, openGet, "a header"},
+		{"a header gap the client cannot send", []UnsentInput{header}, []recordedGap{headerGap}, openGet, ""},
+		{"the named header field arrived", []UnsentInput{header}, []recordedGap{closedHeaderGap}, openGet, "closedConfig.Thing exists"},
+		{"the client sends the header, in any case", []UnsentInput{header}, []recordedGap{headerGap}, sends("GET", nil, nil, "x-thing"), "the client sends `X-Thing` in the header"},
+		{"a gap in no location", []UnsentInput{{Path: "/things", Method: "get", In: "cookie", Name: "c", Reason: "r"}}, []recordedGap{{"get /things", "cookie", "c", reflect.TypeOf(openConfig{}), "C"}}, openGet, "in no location the request has"},
 		{"an unobservable gap", []UnsentInput{row}, []recordedGap{gap}, unobservable, "could not be observed"},
 	}
 	for _, tc := range cases {
