@@ -564,13 +564,13 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 	gap := recordedGap{"get /things", "query", "q", reflect.TypeOf(openParams{}), "Query"}
 	body := UnsentInput{Path: "/things", Method: "post", In: "body", Name: "description", Reason: "r"}
 	bodyGap := recordedGap{"post /things", "body", "description", reflect.TypeOf(openWrite{}), "Description"}
-	header := UnsentInput{Path: "/things", Method: "get", In: "header", Name: "X-Thing", Reason: "r"}
+	header := UnsentInput{Path: "/things", Method: "get", In: "header", Name: "X-Thing-ID", Reason: "r"}
 	type openConfig struct{ Token string }
 	type closedConfig struct {
 		Token string
 		Thing string
 	}
-	headerGap := recordedGap{"get /things", "header", "X-Thing", reflect.TypeOf(openConfig{}), "Thing"}
+	headerGap := recordedGap{"get /things", "header", "X-Thing-ID", reflect.TypeOf(openConfig{}), "Thing"}
 	closedHeaderGap := headerGap
 	closedHeaderGap.params = reflect.TypeOf(closedConfig{})
 	closedGap, closedBodyGap, noField := gap, bodyGap, gap
@@ -604,7 +604,7 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 		{"a header gap row nobody listed", []UnsentInput{header}, nil, openGet, "recordedGaps does not name it"},
 		{"a header gap the client cannot send", []UnsentInput{header}, []recordedGap{headerGap}, openGet, ""},
 		{"the named header field arrived", []UnsentInput{header}, []recordedGap{closedHeaderGap}, openGet, "closedConfig.Thing exists"},
-		{"the client sends the header, in any case", []UnsentInput{header}, []recordedGap{headerGap}, sends("GET", nil, nil, "x-thing"), "the client sends `X-Thing` in the header"},
+		{"the client sends the header, in any case", []UnsentInput{header}, []recordedGap{headerGap}, sends("GET", nil, nil, "x-thing-id"), "the client sends `X-Thing-ID` in the header"},
 		{"a gap in no location", []UnsentInput{{Path: "/things", Method: "get", In: "cookie", Name: "c", Reason: "r"}}, []recordedGap{{"get /things", "cookie", "c", reflect.TypeOf(openConfig{}), "C"}}, openGet, "in no location the request has"},
 		{"an unobservable gap", []UnsentInput{row}, []recordedGap{gap}, unobservable, "could not be observed"},
 	}
