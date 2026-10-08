@@ -220,12 +220,17 @@ func stageMakeRepo(t *testing.T) string {
 // include_global through WithIncludeGlobal -- passes both. Such an input is not a
 // gap at all, and its driver should send it. And one fully filled call cannot see
 // a field the client sends only while another is unset. The option blind spot
-// matters most for headers: this client puts a header on the wire from a Config
-// field (TenantID, ActorID, UserAgent) or a RequestOption (WithNamespace,
-// WithRequestID, WithActor), so a header gap is held only as far as the header
-// would arrive through Config.
+// matters most for headers: every header a caller controls comes from a Config
+// field (Token as Authorization, TenantID, ActorID, UserAgent) or a
+// RequestOption (WithNamespace, WithRequestID, WithActor) -- transport.go sets no
+// other -- so a header gap is held only as far as the header would arrive
+// through Config.
 //
-// An entry is written {op, in, name, reflect.TypeOf(octonomy.FooListParams{}), "Field"}.
+// An entry is written {op, in, name, reflect.TypeOf(T{}), "Field"}, where T is
+// the struct the first witness reads: the params struct for a query input
+// (octonomy.FooListParams, not the pointer the method takes), the write struct
+// for a body one (octonomy.FooCreate, FooUpdate, ...), and octonomy.Config for a
+// header. Naming another struct passes the first witness forever.
 var recordedGaps []recordedGap
 
 // recordedGap is one gap row and the field whose absence it asserts: params is
