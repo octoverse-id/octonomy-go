@@ -213,17 +213,19 @@ var contractGateRecipePins = map[string]string{
 
 // contractGateMakeBaseline is what make's database says, under `make -pq` with the
 // caller's make variables cleared, about the variables that decide how EVERY recipe
-// runs: each one's origin line and its value line, exactly. Both, because the
-// origin alone is not enough -- `MAKEFLAGS += -n` in the Makefile leaves MAKEFLAGS's
-// origin `# makefile`, the same as when nothing touched it, and changes only its
-// value to `npq`. Anything else -- `override`, `$(eval ...)`, `export`, `define`,
-// an include -- shows as a different origin, a different value, or both.
-var contractGateMakeBaseline = map[string][2]string{
-	"SHELL":         {"# makefile", "SHELL = /bin/sh"},
-	".SHELLFLAGS":   {"# default", ".SHELLFLAGS := -c"},
-	"MAKEFLAGS":     {"# makefile", "MAKEFLAGS = pq"},
-	"MAKEFILES":     {"# default", "MAKEFILES := "},
-	".RECIPEPREFIX": {"# default", ".RECIPEPREFIX := "},
+// runs: each one's value line, exactly -- flavor, value and all. The VALUE, because
+// it is what a recipe runs under, and it is what every harmful edit changes:
+// `MAKEFLAGS += -n` leaves the origin line `# makefile`, as if nothing touched it,
+// and turns the value into `npq`. The origin line is printed in the finding and not
+// compared: an edit that changes only it -- `override SHELL = /bin/sh` -- runs
+// exactly what the baseline runs, and a review of this check showed that comparing
+// it caught nothing the value did not.
+var contractGateMakeBaseline = map[string]string{
+	"SHELL":         "SHELL = /bin/sh",
+	".SHELLFLAGS":   ".SHELLFLAGS := -c",
+	"MAKEFLAGS":     "MAKEFLAGS = pq",
+	"MAKEFILES":     "MAKEFILES := ",
+	".RECIPEPREFIX": ".RECIPEPREFIX := ",
 }
 
 func TestTheContractGateRecipesArePinned(t *testing.T) {
@@ -299,7 +301,8 @@ func makeDatabaseProblems(db string) []string {
 	}
 	lines := strings.Split(db, "\n")
 
-	// The variables that decide how every recipe runs: origin and value, exactly.
+	// The variables that decide how every recipe runs: the value line, exactly. A
+	// variable's definition is the line after its origin comment.
 	found := map[string]bool{}
 	for i := 1; i < len(lines); i++ {
 		name := lines[i]
@@ -311,12 +314,12 @@ func makeDatabaseProblems(db string) []string {
 			continue
 		}
 		found[name] = true
-		if lines[i-1] != want[0] || lines[i] != want[1] {
-			problems = append(problems, fmt.Sprintf("make resolves %s as %q (%s), not %q (%s) -- it decides how every gate recipe runs",
-				name, lines[i], strings.TrimPrefix(lines[i-1], "# "), want[1], strings.TrimPrefix(want[0], "# ")))
+		if lines[i] != want {
+			problems = append(problems, fmt.Sprintf("make resolves %s as %q (%s), not %q -- it decides how every gate recipe runs",
+				name, lines[i], strings.TrimPrefix(lines[i-1], "# "), want))
 		}
 	}
-	for _, name := range sortedBaselineKeys(contractGateMakeBaseline) {
+	for _, name := range sortedPinKeys(contractGateMakeBaseline) {
 		if !found[name] {
 			problems = append(problems, fmt.Sprintf("make's database does not list %s, so whether it was changed cannot be checked", name))
 		}
@@ -480,15 +483,6 @@ func TestContractGateMakefileProblemsRefusesEachOverride(t *testing.T) {
 }
 
 func sortedPinKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedBaselineKeys(m map[string][2]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
