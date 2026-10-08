@@ -121,10 +121,11 @@ const (
 // what changed is that something says so now.
 //
 // PAGINATION IS NOT AN EXHAUSTIVENESS ARGUMENT. Every list probe below narrows
-// to the fixture with an exact server-side filter; a route whose params struct
-// offered no such filter would have to walk the whole collection and prove the
-// walk complete, as Vocabularies.List did until #118 gave it a slug filter on
-// this line. A single page -- even at the server's 200-row clamp -- proves only
+// to the fixture on the server -- by an exact filter (a slug, an entity id) or
+// by a route that addresses the fixture's own parent row. A collection route
+// whose params struct offered no such filter would have to walk the whole
+// collection and prove the walk complete, as Vocabularies.List did until #118
+// gave it a slug filter on this line. A single page -- even at the server's 200-row clamp -- proves only
 // that the row is not on the FIRST page, and "not on page one" is not "not
 // visible": a long-lived harness, or a run that leaked fixtures, pushes a
 // genuinely leaked row past the boundary and turns the leak into a pass. The
@@ -274,7 +275,7 @@ func readProbes(h harness) []readProbe {
 				// This probe used to WALK the collection, and prove the walk
 				// complete, because VocabularyListParams on this line had no slug
 				// filter; #118 ported main's, and with it in place the probe
-				// narrows like every other one, as main's does at 5e40964. An
+				// narrows to the fixture by slug, as main's does at 5e40964. An
 				// empty page means the row is genuinely not visible rather than
 				// merely absent from the page we looked at.
 				page, err := c.Vocabularies.List(ctx, &octonomy.VocabularyListParams{

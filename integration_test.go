@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,15 +84,42 @@ func newSmokeClient(t *testing.T) *octonomy.Client {
 	return client
 }
 
+// slugSeq distinguishes two slugs the clock cannot. Ported from main's
+// integration_test.go at 5e40964 (#118), where it is an atomic.Uint64; that type
+// needs Go 1.19, so here it is a plain uint64 behind atomic.AddUint64.
+//
+// It is not decoration. The timestamp half used to be `UnixNano() % 1e6`, which
+// is the low six digits of the nanosecond count and therefore REPEATS EVERY
+// MILLISECOND: two calls exactly 1ms apart in one process produce the same
+// string, and a rerun that inherits a recycled pid can collide with the run
+// before it. Slugs are unique per (type, slug) on the server, so a collision is
+// a 409 on a create -- or worse, a list filter that matches a row this run did
+// not make and an exact-count assertion that fails for a reason nobody can see
+// from the output. The counter makes two calls in one process distinct by
+// construction; the full nanosecond stamp and the pid separate one process from
+// the next.
+var slugSeq uint64
+
 // uniqueSlug keeps repeat runs against one long-lived harness from colliding on
 // the server's (type, slug) uniqueness constraint.
 //
-// The nonce is zero-padded so that every slug one prefix and pid produce has the
-// same length, and none can be a substring of another. The free-text `q`
-// assertion in TestSmoke_RealServer depends on that: unpadded, a row an aborted
-// run leaked as smoke-vocab-42-1234 also matches q=smoke-vocab-42-123.
+// LENGTH IS BOUNDED BY THE TIGHTEST CONSUMER, not by `slug`. A value is its
+// prefix, three separators, the pid, a nineteen-digit nanosecond stamp (nineteen
+// until the year 2262, where int64 nanoseconds run out) and the counter: under
+// 60 characters for the longest prefix either integration file uses, on a Linux
+// pid_max of 4194304, far inside the contract's 255 on `slug` and `resource_id`.
+// One value is not a slug at all: TestSmoke_APIV2Namespace sends "go113-smoke-"
+// plus a slug as a request id, which the server stores in a 100-CHARACTER column
+// -- an over-long id fails the row insert and comes back as a bare 500. It runs
+// to 51 characters on that pid_max with a two-digit counter, so a longer prefix
+// there is measured against 100.
+//
+// The fixed-width stamp also serves the free-text `q` assertion in
+// TestSmoke_RealServer, which expects exactly one row: no prefix here ends with
+// another, so a value another call made can contain this one only by sharing
+// its prefix, pid and nanosecond stamp.
 func uniqueSlug(prefix string) string {
-	return fmt.Sprintf("%s-%d-%06d", prefix, os.Getpid(), time.Now().UnixNano()%1e6)
+	return fmt.Sprintf("%s-%d-%d-%d", prefix, os.Getpid(), time.Now().UnixNano(), atomic.AddUint64(&slugSeq, 1))
 }
 
 func TestSmoke_RealServer(t *testing.T) {

@@ -375,13 +375,17 @@ The smoke and isolation suites are what exercise real values against a real serv
 - **A gap row is held to its field's absence.** A documented input the client has no field to send
   goes under `unsent_inputs` in `contract-coverage.yaml`, with the reason. A row like that would
   hide a field ported and never driven, so `TestRecordedGapsStillHaveNoField` refuses a gap row
-  that `recordedGaps` (`acceptance_test.go`) does not name — in the query, the body or a header,
-  where a row is a gap unless its `carried_in` or its route says where the input goes instead — and
-  fails the moment the field it names arrives; the row comes out, and the gate reports the input as
-  documented and unsent until the driver sets it. A header gap is refused outright: a header comes
-  from a `RequestOption`, not a field, so no field's absence can hold the row. None is recorded now. The gate found one, `q` and `slug` on `GET /vocabularies`,
-  and recorded it from #98 until #118 ported `VocabularyListParams.Query` and `.Slug` — which ran
-  that sequence end to end.
+  that `recordedGaps` (`acceptance_test.go`) does not hold to its carrier — in the query, the body
+  or a header, where a row is a gap unless its `carried_in` or its route says where the input goes
+  instead. The carrier is not typed by hand: it is read off the signature of the method
+  `contract-coverage.yaml` names for the operation (the `*Params` struct for a query input, the
+  write struct for a body one), and the entry records that struct's fields. The check fails the
+  moment they change, or a body field takes the input's JSON name; the row comes out, and the gate
+  reports the input as documented and unsent until the driver sets it. A header gap is refused
+  outright: a header comes from a `RequestOption`, not a field, so no struct can hold the row. None
+  is recorded now. The gate found one, `q` and `slug` on `GET /vocabularies`, and recorded it from
+  #98 until #118 ported `VocabularyListParams.Query` and `.Slug` — which ran that sequence end to
+  end.
 - **What runs the gate is pinned from outside it.** `contractgate_test.go`, in the root package,
   pins the `test` and `compat-guard` jobs and ci.yml's `on:` block as text, and the `contract-*` and
   `release-check` recipes as make's own rule database resolves them under each real goal, each
