@@ -108,7 +108,32 @@
 // envelope type per resource, rather than one generic envelope, because type
 // parameters need Go 1.18.
 //
+// Each walks every page for you. It issues ONE REQUEST PER PAGE -- said plainly
+// because this package promises no hidden behavior -- and returns the offset of
+// the first item it did not process, so a failed walk resumes instead of
+// starting over. Its page function returns a Page, which every list envelope
+// above implements, and its callback receives each row as an interface{}
+// holding the row's value. Its doc comment covers the offset drift that
+// limit/offset paging cannot avoid.
+//
 // The bulk assignment calls and Resources.ReplaceTags are not lists: they return
 // a composite of counts and rows (*BulkAssignResult, *BulkRemoveResult,
 // *ResourceReplaceResult), with no pagination block.
+//
+// # Assembling the tag hierarchy
+//
+// Tags nest through ParentID and the server returns them flat: there is no tree
+// endpoint and no children route. BuildTagTree assembles a fetched slice into
+// that hierarchy locally -- it makes no request -- and its invariant is that NO
+// TAG IS EVER DROPPED: every tag handed in is reachable from Roots exactly once.
+//
+// The cases that send a hand-written assembler wrong are the point of it. A tag
+// whose parent is not in the slice keeps its place as a root and is named in
+// Orphans rather than vanishing, because a missing parent is ORDINARY -- the
+// server's delete deactivates a parent without touching its children, and the
+// default list returns active rows only, so a live child routinely comes back
+// alone. Inactive tags are never pruned, since pruning is a filter you apply
+// when you fetch. A parent cycle, which the server permits (only the one-hop
+// case is forbidden by a database constraint), is refused with ErrTagCycle
+// rather than silently dropping every row in it.
 package octonomy

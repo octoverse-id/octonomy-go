@@ -192,6 +192,18 @@ func (l *TagList) rows() []identifiedResource {
 	return rows
 }
 
+// contents hands Each the page's Tag values and its pagination block; see Page.
+func (l *TagList) contents() ([]interface{}, *Pagination) {
+	if l == nil {
+		return nil, nil
+	}
+	rows := make([]interface{}, len(l.Data))
+	for i := range l.Data {
+		rows[i] = l.Data[i]
+	}
+	return rows, &l.Pagination
+}
+
 // TagService accesses the /tags endpoints. Reach it via Client.Tags.
 type TagService struct {
 	client *Client

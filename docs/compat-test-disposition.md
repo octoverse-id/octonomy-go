@@ -50,14 +50,14 @@ every file also meets `any` → `interface{}`.
 | `integration_test.go` | 1,701 | **PRESERVE** this line's own | `integration_test.go` | `t.Cleanup` ×1, on the root test (`smokeState.deleteLater`). The shapes it covers landed in #112 (v2 namespace, health, `Metadata{}`) and #113 (the resource groups). `main`'s `smokeProbes()` registry is **not** ported; see *integration_test.go* below |
 | `octonomy_test.go` | 952 | **PRESERVE** this line's own; `main`'s cases **PORTED** to `transport_test.go` | `octonomy_test.go` (351 lines, this line's), `transport_test.go` | `t.Cleanup` ×4; `Header.Values` (1.14) → `r.Header[http.CanonicalHeaderKey(k)]`; `List[…]`. Per test below |
 | `optional_test.go` | 406 | **EXCLUDE** | — | Everything it asserts is `Optional[T]` and its `omitzero` tags, and neither exists here: `Optional` is deliberately not ported, because the `*Update` structs keep their published pointer fields (`AGENTS.md`, *Porting from `main`*). What it guards is covered for this dialect by `update_test.go` (#112) and, for the source half, by `updateguard_test.go` ([#96](https://github.com/octoverse-id/octonomy-go/issues/96)) |
-| `pagination_test.go` | 536 | **OWNED BY** [#99](https://github.com/octoverse-id/octonomy-go/issues/99) | — | All 14 tests are `TestEach_*`, and `Each` arrives with #99. `t.Cleanup` ×1, in a test body (rule 2); `List[…]` ×8 → the per-resource lists |
+| `pagination_test.go` | 536 | **PORTED** here ([#99](https://github.com/octoverse-id/octonomy-go/issues/99)) | `pagination_test.go` | All 14 tests are `TestEach_*`. `t.Cleanup` ×1, in a test body → `defer` (rule 2); `List[…]` ×8 → `Page`, and each `func(Tag) error` callback → `func(interface{}) error` through `tagItem`, which fails the test on a row of another type. `TestEach_NilListWithNoError` gains the typed-nil cases `main`'s `*List[T]` cannot produce. Three compat-only tests sit beside them: `TestEveryListEnvelopeIsAPage`, `TestEach_HandsTheCallbackTheListsElementValue`, `TestEach_AMismatchedAssertionStopsAtTheRowItRefused` |
 | `readprobes_test.go` | 1,223 | **REWRITTEN** here (#97) | `readprobes_test.go` | A source-parsing guard reading the verb off `doData[T](ctx, c, method, …)`, argument 2; here every transport helper is a client method with the verb at argument 1. `ast.Unparen` (1.22), `ast.IndexListExpr` (1.18), `io/fs` (1.16). See *The three rewrites* |
 | `resolution_test.go` | 613 | **PORTED** in #113 (#94) | `resolution_test.go` | `url.Values.Has` ×2 |
 | `resources_test.go` | 641 | **PORTED** in #113 (#94) | `resources_test.go` | `url.Values.Has`; `Optional`. The resource-tag replace's composite. `TestResources_OnV1` is `TestResources_OnV2` here |
 | `scope_test.go` | 808 | **PORTED** in #112 (#91) | `scope_test.go` | The only unit coverage of `checkScopeCoherence`. `t.Cleanup` ×1 → `newVersionedTestClient` returns its cleanup. Range-over-int **plus `i := i`** — see *Flagged* |
 | `smokeprobes_test.go` | 720 | **REWRITTEN** here (#95) | `smokeprobes_test.go` | `doData[T]` / `doList[T]` resolution; `List[…]`; and a `smokeProbes()` table this line does not have. See *The three rewrites* |
 | `tags_test.go` | 241 | **PRESERVE** this line's own; `TestTags_Get` **PORTED** here | `tags_test.go` | `io.ReadAll`; `Optional`. The fixture is raw wire JSON rather than a marshalled `Tag`, and every field it expects a value in is sent a non-zero one — `main`'s sent `"parent_id": null`, which a misspelled tag also decodes to — so a misspelled tag on one of them fails. The null case is `TestTags_Get_NullParentStaysNil` |
-| `tagtree_test.go` | 738 | **OWNED BY** #99 | — | `BuildTagTree` arrives with #99. `slices.*` ×13; range-over-int (`for i := range 50`) |
+| `tagtree_test.go` | 738 | **PORTED** here (#99) | `tagtree_test.go` | `slices.*` ×13: `Equal` ×10 and `Contains` → `equalStrings` and `containsNode`; `DeleteFunc` and `SortFunc` → the loop and `sort.Slice` that `BuildTagTree`'s doc comment shows, so the tests run the code a reader copies. Range-over-int (`for i := range 50`) → a C-style loop; it captures no `i`, so no shadow |
 | `types_test.go` | 369 | Mixed — per test below | `types_test.go` | `Optional` ×11; `io.ReadAll`; `DecodeMetadata[T]` |
 | `vocabularies_test.go` | 278 | **PRESERVE** this line's own; two of `main`'s tests **PORTED** here | `vocabularies_test.go` | `io.ReadAll`; `Optional`. Per test below |
 
@@ -115,8 +115,8 @@ also stands on `integration_harness_test.go`'s per-merchant clients, which #97 p
 | `readProbes`, `runProbeMatrix`, `TestIntegration_NamespaceIsolation`, `TestIntegration_IncludeGlobalFailsClosed` | **PORTED** here (#97) — the isolation coverage `/api/v2` exists to provide. `Vocabularies.List` narrows by the fixture's slug, as `main`'s does; it walked every page here instead until #118 ported the filter. The suite runs in the required go1.13 smoke job, as a step with its own `^TestIntegration_` selector |
 | `TestIntegration_AssignmentIdempotence`, `_BulkPartialFailure`, `_DeactivationCascade`, `_DuplicateSlugScopedPerNamespace` | **EXCLUDE** (epic scope). They assert what the server does with a row, not what this client decodes; the smoke test holds the shapes |
 | `TestIntegration_ErrorEnvelopes` | **EXCLUDE** (epic scope), and the strongest candidate to revisit: it pins the code and status a real server sends for twelve `Is*` helpers. This line's smoke tests reach four of them — `IsNotFound` on both surfaces, `IsValidation`, `IsInactiveTag`, `IsApplicationMismatch` — and the other eight need the per-merchant clients #97 ported |
-| `TestIntegration_DeactivatedParentOrphansItsLiveChildren`, `_ParentCycleIsReachableAndRefused` | **EXCLUDE** (epic scope). Both read the result through `BuildTagTree` (#99) |
-| `TestIntegration_TagsListPagesInATotalOrder` | **EXCLUDE** (epic scope). It walks pages with `Each` (#99) |
+| `TestIntegration_DeactivatedParentOrphansItsLiveChildren`, `_ParentCycleIsReachableAndRefused` | **EXCLUDE** (epic scope). Both read the result through `BuildTagTree`, which #99 ported, so neither waits on a capability now. The server behaviour they pin — a deactivated parent's live child returned alone, and a parent cycle accepted through an ordinary `PATCH` — is what `examples/tags` runs against a real server, as an example rather than a gate |
+| `TestIntegration_TagsListPagesInATotalOrder` | **EXCLUDE** (epic scope). It walks pages with `Each`, which #99 ported, and it pins the `(name, slug, id)` order of server 3.2.1. This line's harness boots the pinned `ghcr.io/octoverse-id/octonomy:3.1.0` (`scripts/octonomy-harness.sh`, the CI action), a server older than that order, whose tags list carries no `ORDER BY` — so a port would assert against a server that does not have the order |
 | `TestIntegration_NullClearsOnlyTheNullableFields` | **EXCLUDE, for good.** It sends `Null[…]` to clear a nullable field, and this line cannot express a clear: the pointer fields stay (`AGENTS.md`, *Porting from `main`*). That carve-out is the reason, not a gap |
 
 ### `integration_test.go`
@@ -262,7 +262,7 @@ is why the stack belongs to the root test, and why `TestTheIsolationSuiteRunsIts
 parallel subtest, which would outlive it.
 
 `main`'s sites, by rule: `octonomy_test.go` ×4 (1 helper, 3 test bodies), `health_test.go` ×5
-(1 helper, 4 bodies), `scope_test.go` ×1 (helper) — all ported; `pagination_test.go` ×1 (body, #99);
+(1 helper, 4 bodies), `scope_test.go` ×1 (helper) — all ported; `pagination_test.go` ×1 (body, ported in #99);
 `integration_harness_test.go` ×1 (rule 3, ported in #97); `integration_suite_test.go` ×10 (bodies
 and subtests of the excluded tests; the isolation tests have none); `integration_test.go` ×1 (rule 3, not
 needed while the registry is not ported). #95 counts 24: a search for the name finds 24 lines, and
@@ -284,7 +284,8 @@ test change. The table found a second, `VocabularyListParams.Query` and `.Slug`;
 
 - **`DecodeMetadata`** — generic on `main`, with no counterpart here. Its compat signature is an
   open question the epic's design doc records (finding 6A, "define the `Each` / `DecodeMetadata`
-  compat signatures"), and only `Each` has an issue (#99). Five tests in `types_test.go` wait on it.
+  compat signatures"). #99 settled `Each`'s — a `Page` and an `interface{}` callback — and nothing
+  owns `DecodeMetadata`'s. Five tests in `types_test.go` wait on it.
 
 ## Test files with no `main` counterpart
 

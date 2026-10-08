@@ -25,7 +25,7 @@ make vet            # go vet ./...
 make lint           # golangci-lint on both modules (if installed)
 make test           # go test -race -cover ./...
 make cover          # prints total coverage
-make examples       # compile-check examples/
+make examples       # compile-check every example; fails if examples/ holds none
 make compat-guard      # assert go.mod still matches this release line
 make compat-guard-test # the guard's own fixture tests (release-PR and tag paths)
 make tools-check       # fail unless golangci-lint and govulncheck are installed
@@ -207,7 +207,8 @@ CI runs it as a step of the required go1.13 smoke job, against the same harness 
 and nothing else:
 
 ```bash
-make dev-server        # boot, verify, write .octonomy-harness.env  (~40s)
+make dev-server        # boot, verify, write .octonomy-harness.env, print the examples' exports  (~40s)
+make dev-server-env    # reprint those exports without rebooting
 make dev-server-logs   # dump container logs
 make dev-server-down   # tear everything down
 ```
@@ -228,15 +229,34 @@ actually works** before reporting success. Credentials land in `.octonomy-harnes
 | `OCTONOMY_TEST_NAMESPACE_A_ID` / `_A_TOKEN` | A merchant namespace, and a token with an EXACT grant for it alone |
 | `OCTONOMY_TEST_NAMESPACE_B_ID` / `_B_TOKEN` | A second merchant, likewise. The isolation suite reads both pairs |
 
-```bash
-make dev-server
-set -a; . ./.octonomy-harness.env; set +a
+`make dev-server` ends by printing the export block the examples read, so running one is a
+copy-paste and a `go run`. `make dev-server-env` reprints it — into a second terminal, or after the
+first one scrolled away — without rebooting the container.
 
-OCTONOMY_BASE_URL="$OCTONOMY_TEST_BASE_URL" \
-OCTONOMY_TOKEN="$OCTONOMY_TEST_TOKEN" \
-OCTONOMY_TENANT_ID="$OCTONOMY_TEST_TENANT_ID" \
+```bash
+make dev-server          # boots, then prints the block below
+
+export OCTONOMY_BASE_URL='http://127.0.0.1:8000'
+export OCTONOMY_TOKEN='octo_...'
+export OCTONOMY_TENANT_ID='harness-tenant'
+export OCTONOMY_APPLICATION_ID='harness-app'
+export OCTONOMY_NAMESPACE_TYPE='merchant'
+export OCTONOMY_NAMESPACE_ID='harness-merchant'
+
 go run ./examples/quickstart
+go run ./examples/namespaces
 ```
+
+The two variable sets are deliberately not one. The harness writes `OCTONOMY_TEST_*` because the
+integration suites **gate** on those names — an empty `OCTONOMY_TEST_BASE_URL` is what makes them
+skip rather than fail — while an example is a program a reader copies into their own service, where
+the variables are `OCTONOMY_*`. `make dev-server-env` is the bridge, so neither set has to give up
+its property. It prints a live token, to your own terminal: nothing in CI calls it.
+
+**An example is run, not just compiled.** `make examples` proves each one builds, and the `go1.13`
+job runs it under go1.13.15; neither proves a comment in one is true. Every example is executed
+against a booted `make dev-server` before it is committed, and its output goes in the PR
+(`AGENTS.md`, *Local Development*).
 
 Everything is overridable — `OCTONOMY_HARNESS_PORT`, `OCTONOMY_HARNESS_PREFIX`,
 `OCTONOMY_HARNESS_IMAGE`, `OCTONOMY_HARNESS_ENV_FILE` and friends — so two harnesses can run side by

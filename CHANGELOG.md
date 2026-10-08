@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`Each`, `BuildTagTree`, and ten runnable examples**
+  ([#99](https://github.com/octoverse-id/octonomy-go/issues/99), for
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)) — the parity residuals, ported
+  from `main`'s `pagination.go`, `tagtree.go` and `examples/` at 5e40964.
+  - **`Each`** walks every page of a list method and calls a callback once per row, one request per
+    page, and returns the offset it reached — on an error too, so a failed walk resumes. `main`'s is
+    generic there; this line's page function returns the new **`Page`** interface, which all six list
+    envelopes implement, and its callback takes an `interface{}` holding the row's value (`Tag`, not
+    `*Tag`). `Page`'s one method is unexported, so it is sealed. `Each` refuses a typed nil inside a
+    `Page` — `return list, nil` with a nil `*TagList` — which `main`'s `*List[T]` cannot produce and
+    a `p == nil` test misses. The doc comment's account of offset drift and of the pre-3.2.1 tags
+    order comes with it unchanged.
+  - **`BuildTagTree`** assembles a fetched `[]Tag` into the `ParentID` hierarchy client-side, with
+    `TagTree`, `TagNode`, `ErrTagCycle` and `ErrDuplicateTagID`. No tag is ever dropped: a missing
+    parent makes an orphan root, inactive tags are kept, and a parent cycle or a repeated id is an
+    error. `slices.Reverse` became two local helpers, and the doc comment's `slices.DeleteFunc` and
+    `slices.SortFunc` examples are a loop and `sort.Slice`.
+  - **`examples/`** gains `vocabularies`, `tags`, `aliases`, `resolution`, `assignments`,
+    `resources`, `audit-logs`, `health` and `namespaces`, and `quickstart` is rewritten — ten, one
+    per resource group plus the quickstart; `main`'s `webhook` is out by policy. Each was run against
+    a booted `make dev-server`. They target this line's default `/api/v1`, except `namespaces`, which
+    shows the `APIV2` opt-in and the refusal a v1 client gives `WithNamespace`. Where `main`'s
+    clear a field with `Null` or read metadata with `DecodeMetadata`, these show what this line
+    does instead.
+  - **`make examples` fails when it finds none**, and **`make dev-server` prints the export block**
+    the examples read, through the new `make dev-server-env`, ported from `main`.
+  - `pagination_test.go` and `tagtree_test.go` are `main`'s, ported, plus the compat tests the
+    `Page` signature needs.
 - **`VocabularyListParams.Query` and `.Slug`**
   ([#118](https://github.com/octoverse-id/octonomy-go/issues/118), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)) — the `q` and `slug` filters on

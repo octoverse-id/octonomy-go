@@ -141,6 +141,7 @@ differences from the modern line — permanent, or not planned — and the secon
 | Difference | Why | Workaround |
 | ------- | --- | ---------- |
 | `List[T]` | Type parameters need Go 1.18 — **never**, since the floor never moves | A per-resource type (`TagList`, `TagAliasList`, `AuditLogList`, …) — same fields |
+| `Each[T]`, generic | Type parameters need Go 1.18 — **never** | `Each`, whose page function returns a `Page` (every list type is one) and whose callback takes an `interface{}` holding the row's value |
 | `/api/v2` **by default** | **Never** — this line cannot change a default under a caller, so `DefaultAPIVersion` is `APIV1` here, where `main` had `APIV2` when the selector was ported | Set `Config.APIVersion = APIV2` |
 | A webhook receiver | **Never** — policy, above | Move to the `/v2` module |
 | Clearing a nullable field with PATCH | **Not planned** — a named carve-out of the epic: the `*Update` fields stay pointers, since `main`'s `Optional[T]` would change their types (no major, above). `Metadata` is not affected: `Metadata{}` sends `{}` and empties it | Move to the `/v2` module |
