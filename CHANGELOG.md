@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The contract gate, ported** ([#98](https://github.com/octoverse-id/octonomy-go/issues/98), for
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tooling, CI and docs only; no
+  exported symbol changes.
+  - **`tools/contractdrift`** is `main`'s gate, in its own Go 1.24 module (`replace ../..` onto this
+    checkout, `gopkg.in/yaml.v3` its one dependency), so neither reaches a consumer's build. It calls
+    every method `docs/contract-coverage.yaml` names, on both REST surfaces and twice each, against a
+    recording transport that answers with bodies built from the vendored schema, and compares the
+    route, query parameters, headers and body — names and values — and the decoded value with the
+    contract; it also drives the error envelope and all sixteen `Is*` helpers.
+    `make contract-check` runs it; `make contract-test` runs its tests, including
+    `acceptance_test.go`, which breaks a staged copy of the repository four ways — a removed query
+    parameter, a dropped schema field, a retyped property, a rerouted method — and requires the real
+    target to fail on each.
+  - **`drivers.go` is written for this line**: the `*Update` structs' pointer fields, the
+    per-resource list envelopes, and an `APIVersion` named on every client the gate builds.
+  - **Six of the gate's files are `main`'s, byte for byte** — every Go file that imports no SDK
+    package — at the commit `tools/contractdrift/main.pin` names. `make contract-identity`
+    (`scripts/contract-identity.sh`) fails on a differing byte, on such a file classified as anything
+    but `identical`, on a pin that is not on `main`, or on a file on either side the pin file does not
+    classify; `make contract-identity-test` proves it fails each way. `make contract-report`
+    prints the other files' diffs against the pin, for the release runbook's reader.
+  - **`docs/contract-coverage.yaml`** gains the sections `main`'s copy carried beyond `operations:` at
+    5e40964 —
+    `unsent_inputs`, `undocumented_inputs`, `client_headers`, `undocumented_model_fields`, the
+    vendored `server_error_codes`, and the two kinds of recorded error constant. The gate found one
+    gap, recorded there rather than closed: `VocabularyListParams` cannot send `q` or `slug`. A
+    gap row is held to its field's absence, so porting the fields forces it out.
+  - **CI**: `make contract-test` and `make contract-check` run in the `test` job, the identity check
+    and its tests in `compat guard` (now on full history), and `lint` and `vuln` cover the gate's
+    module in steps of their own. `make lint`, `make vuln` and `release-check` cover it too.
+  - **`contractgate_test.go`** (root package) pins what runs the gate: both CI jobs and the `on:`
+    block as text, and the `contract-*` and `release-check` recipes as make's own rule database
+    resolves them under each real goal, each still phony. In the root package so `go test ./...` runs it without
+    going through a make target it guards.
+  - `TestNoStructTagCarriesOmitzero`'s walk stops at a nested `go.mod`: on go1.13.15 it failed
+    parsing the gate's generics. `TestNoTestMainHidesAFailure` still walks into nested modules, and
+    reads a test file there that this toolchain cannot parse lexically, refusing a `TestMain` in one.
 - **Namespace isolation coverage, and a run that executes it**
   ([#97](https://github.com/octoverse-id/octonomy-go/issues/97), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tests, CI, the harness and docs

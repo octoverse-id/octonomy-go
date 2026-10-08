@@ -5,6 +5,12 @@ examples/quickstart/quickstart
 *.test
 *.out
 
+# The contract gate is built to a temp directory and run from there (see the
+# Makefile, which says why it is never `go run`). A stray `go build ./...` inside
+# its own directory still leaves this behind -- and scripts/contract-identity.sh
+# would then refuse it as a file main.pin does not classify.
+/tools/contractdrift/contractdrift
+
 # Coverage artifacts
 coverage.out
 coverage.html

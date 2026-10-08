@@ -66,7 +66,9 @@ These mirror [AGENTS.md](AGENTS.md):
 - Keep types faithful to the vendored contracts — `docs/openapi.yaml` (`/api/v1`, the surface this
   tree's requests reach) and `docs/openapi-v2.yaml` (`/api/v2`), both at server 3.2.1. Document any
   deliberate divergence from the spec, and keep `docs/contract-coverage.yaml` naming the method (or
-  the reason there is none) for every operation they publish.
+  the reason there is none) for every operation they publish. `make contract-check` holds both:
+  it calls each method through its driver in `tools/contractdrift/drivers.go` and compares what
+  went on the wire with the contract, so a new method or field needs its driver too.
 - Every exported symbol has a doc comment.
 
 ## Testing expectations

@@ -22,7 +22,7 @@ There are **no runtime dependencies** — keep `go.mod` free of a runtime `requi
 ```bash
 make fmt-check      # gofmt -l . (no output = clean)
 make vet            # go vet ./...
-make lint           # golangci-lint (if installed)
+make lint           # golangci-lint on both modules (if installed)
 make test           # go test -race -cover ./...
 make cover          # prints total coverage
 make examples       # compile-check examples/
@@ -34,6 +34,10 @@ make release-check     # the full modern-toolchain pre-release gate
 make test-go113     # THE gate: build + vet + test -race on a real go1.13 toolchain
 make smoke          # integration smoke test against a booted server
 make test-integration # namespace isolation suite against a booted server
+make contract-check    # the contract gate: what this client sends and decodes vs the vendored specs
+make contract-test     # the gate's own tests -- proves it can still fail
+make contract-identity # the gate's shared files are main's, byte for byte, at the pinned commit
+make contract-report   # advisory: how the gate's other files differ from main's at the pin
 ```
 
 ## The Go 1.13 floor (read before touching code)
@@ -299,5 +303,132 @@ coverage file to the specs; `contractversion_test.go` holds the prose to the mar
 version it cannot classify by file and line. What neither can see is a sentence naming the contract
 without a version number in it — "`openapi.yaml` is the contract" — so read for those by hand.
 
-That is not a contract gate. Nothing on this branch calls a method and compares what it puts on the
-wire, or what it decodes, with the vendored schema; porting [`main`'s](https://github.com/octoverse-id/octonomy-go/tree/main/tools/contractdrift) to do that is [#98](https://github.com/octoverse-id/octonomy-go/issues/98).
+Neither of those calls a method. `make contract-check` does, and it is what fails when a refresh
+lands without the client following it: a parameter the refreshed spec documents and no method sends,
+a property no model decodes, a type the model can no longer read. See *Contract drift* below.
+
+## Contract drift
+
+[`tools/contractdrift`](../tools/contractdrift) is the contract gate, ported from
+[`main`'s](https://github.com/octoverse-id/octonomy-go/tree/main/tools/contractdrift) by
+[#98](https://github.com/octoverse-id/octonomy-go/issues/98). It **calls** every method
+[`contract-coverage.yaml`](contract-coverage.yaml) names, through a driver per operation
+(`tools/contractdrift/drivers.go`) that populates every input the method offers, against a recording
+transport that answers with a body **built from the vendored schema** — and compares what went on
+the wire and what came back with the contract. Nothing is inferred from reading the source.
+
+```bash
+make contract-check      # the gate itself: offline, deterministic, the pull-request check
+make contract-test       # the gate's own tests, including acceptance_test.go's four broken copies
+make contract-identity   # the shared files against main's at the pinned commit
+make contract-report     # the other files' diffs against main's at the pin (advisory)
+```
+
+What a run compares, per operation and on **both** REST surfaces — a client configured for `/api/v1`
+against `openapi.yaml`, one configured for `/api/v2` against `openapi-v2.yaml` — twice each, with
+different path values and different response witnesses:
+
+| | |
+| --- | --- |
+| **Inventory** | every operation either spec publishes has a row, every row names a published operation, and the two specs publish the same operations |
+| **Routes** | the request line the method really issued, its `/api/<version>` prefix, and each path argument in its own placeholder |
+| **Request shape** | query parameters, headers and request-body properties, **names and values**, in both directions: a documented input the client does not send, and an input it sends that nothing documents |
+| **Response models** | every documented property survives decoding with its value, a `nullable` one round-trips as `null`, and the list envelope's pagination block comes back intact |
+| **Model field names** | each response model's Go field against the property it decodes — the one defect a round trip cannot see |
+| **Error envelope** | a 409 built from `ErrorResponse` comes back as an `*APIError` carrying its code, message, request id and details; each of the sixteen `Is*` helpers answers for its own code and no other; and the two paths that manufacture `CodeUnexpectedStatus` — a body that is not an envelope, a body that cannot be read — produce it |
+| **Error codes** | the vendored registry in `contract-coverage.yaml` against the `Code*` constants, as sets and by name |
+| **Recorded version** | both specs' `info.version` against the marker in [versioning.md](versioning.md) |
+
+The mechanics, and why each check is shaped the way it is, are written up beside the checks
+themselves, and the boundaries are the ones `main`'s gate had at 5e40964:
+
+- **Only what the contract documents is driven.** `WithActor` / `Config.ActorID` (`X-Actor-ID`)
+  and `WithRequestID` (`X-Request-ID`) put headers on the wire that no operation documents, and the
+  gate reports any undocumented `X-` header — so they are not driven. The user-agent fields are not
+  either, for a different reason: the recorder keeps only the `X-` headers and `Authorization` and
+  drops `User-Agent` as transport decoration, so there would be nothing to compare.
+  `WithGlobalNamespace` removes the namespace headers rather than sending any, and is not driven.
+  A regression that stopped any of these reaching the wire is invisible to the gate; their unit
+  tests (`transport_test.go`, `octonomy_test.go`, `health_test.go`, `scope_test.go`) hold them.
+- **Exact comparison proves these executions**, not that the SDK propagates arbitrary values: a
+  method that hard-codes a witness exactly, or a decoder hard-coded to the populated response,
+  passes.
+- **`required` is not exercised offline**, since the stub populates every property, and a property
+  documented `integer` decoded into a `float64` still decodes.
+
+The smoke and isolation suites are what exercise real values against a real server.
+
+### What is different on this line
+
+- **The gate is a Go 1.24 module.** The library is held to Go 1.13 because a consumer compiles it
+  with Go 1.13; nobody compiles the gate but CI and a contributor, so it runs on the toolchain it
+  was written for, behind its own `go.mod` with a `replace ../..` onto this checkout. The `go1.13`
+  job's `go build ./...` and `go vet ./...` stop at that `go.mod` and never see it; the `test` job
+  runs `make contract-test` and `make contract-check` on both of its Go versions, and `lint` and
+  `vuln` cover the gate's module in steps of their own. A root test that walks the tree has to stop
+  at a nested `go.mod`, or, if it walks into one on purpose, must not need this toolchain to parse
+  what it finds there — see the porting checklist.
+- **`drivers.go` is written against this line's surface**, not copied: the `*Update` structs keep
+  their pointer fields, so a PATCH driver fills them as a create does; a list method returns its own
+  envelope rather than `List[T]`; and every client the gate builds names its `APIVersion`, since
+  this line's default surface is not `main`'s.
+- **One gap is recorded rather than closed.** `VocabularyListParams` has no `Query` or `Slug`, so
+  the client cannot send `q` or `slug` on `GET /vocabularies`. The gate found it, and
+  `contract-coverage.yaml` lists both under `unsent_inputs` with the reason. A row like that would
+  hide a field ported and never driven, so `TestRecordedGapsStillHaveNoField` holds each gap row to
+  its field's absence: porting the two fields fails it until both rows come out, and the gate then
+  reports `q` and `slug` as documented and unsent until the vocabulary driver sets them.
+- **What runs the gate is pinned from outside it.** `contractgate_test.go`, in the root package,
+  pins the `test` and `compat-guard` jobs and ci.yml's `on:` block as text, and the `contract-*` and
+  `release-check` recipes as make's own rule database resolves them under each real goal, each
+  still phony. The adversarial-only limits it does not reach are recorded in the file. It sits
+  in the root package so that `go test ./...` runs it in the required jobs without going through a
+  make target it guards — overriding `contract-test` would otherwise stop the very test that refuses
+  the override.
+- **Only the offline half.** At 5e40964 `main` also runs the gate with `-upstream`, against a copy
+  of the server's contracts it fetches from octoverse-id/octonomy, on a schedule
+  ([`contract-drift.yml`](https://github.com/octoverse-id/octonomy-go/blob/main/.github/workflows/contract-drift.yml)).
+  GitHub fires a schedule only on the default branch, so this line carries neither that workflow nor
+  its fetch script, and `TestNoWorkflowRunsTheNetworkedHalf` keeps it that way. The mode is still in
+  the binary: put the server's `docs/openapi.yaml`, `docs/openapi-v2.yaml` and
+  `octonomy/core/errors.py` in a directory, build the tool, and run
+  `contractdrift -repo . -upstream DIR` by hand. Nothing on this line does that on its own, so this
+  line's `server_error_codes` meets the server's registry only when someone does.
+
+### The pin, and what may differ from `main`
+
+Six of the gate's files never name the SDK — `checks.go`, `coverage.go`, `gosdk.go`, `main.go`,
+`sdk.go`, `spec.go` — so they are `main`'s, **byte for byte**, at the commit
+[`tools/contractdrift/main.pin`](../tools/contractdrift/main.pin) names. `make contract-identity`
+(the `compat guard` CI job runs it on every pull request) fails on any difference, on a pin that is
+not one of `main`'s commits, and on a file on either side that the pin file does not classify. Which
+files must match is **derived**, not declared: every Go file of `main`'s at the pin that imports no
+SDK package has to be marked `identical`, so turning `identical` into `advisory` in the pin file does
+not exempt one. Their comments are `main`'s too, describing `main`'s tooling where they mention it —
+the scheduled networked half, its fetch script — which this line does not carry; correcting one is a
+change to `main`.
+Divergence is therefore impossible rather than discouraged, and a fix to one of those files has one
+route: land it on `main`, then advance the pin here.
+
+The pin is a commit and not `main`'s tip on purpose: fetching the tip would let an unchanged commit
+here turn red because `main` merged something that morning, and a required check that goes red on
+another branch's schedule is one people work around by editing the copy. **Advancing the pin** is
+an ordinary pull request into this line: copy `main`'s files at the new commit, update the `pin`
+line, and run `make contract-identity contract-test contract-check`.
+
+Every other file is marked `advisory` (this line's version of a `main` file) or `own` (no `main`
+counterpart). They differ by design — `drivers.go` is written against this line's surface, and the
+tests and `conformance.go` name the SDK — so no machine can decide whether a difference is right.
+`make contract-report` prints each one's diff against the pin, and the release runbook has a human
+read it.
+
+### Adding a method, a parameter, or a check
+
+- **A new endpoint** needs the method, a row in `contract-coverage.yaml`, and a driver in
+  `drivers.go`; the gate fails until all three exist.
+- **A new parameter** needs its field set in the operation's driver, or the gate reports it as
+  documented and unsent. If the client genuinely cannot send it, that is a finding: record it under
+  `unsent_inputs` with the reason, never in a driver that quietly skips it.
+- **A new check** belongs on `main` first if it lands in one of the shared files, and arrives
+  here with the pin. Prove it can fail the way the existing tests do: mutate a staged copy of the real
+  contract and assert the finding.

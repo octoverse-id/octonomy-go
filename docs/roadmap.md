@@ -28,7 +28,9 @@ Copy `tags.go` and `tags_test.go` as the template, then:
    vendored specs (both at server 3.2.1): it carries the `namespace_type` / `namespace_id` fields
    that [`openapi.yaml`](openapi.yaml) omits. The operation needs a row in
    [`contract-coverage.yaml`](contract-coverage.yaml) naming `sdk: <Service>.<Method>`; the contract
-   refresh that published it adds the row with an `unimplemented:` reason, which this replaces.
+   refresh that published it adds the row with an `unimplemented:` reason, which this replaces. It
+   also needs a driver in `tools/contractdrift/drivers.go` calling the method with every input
+   populated, or `make contract-check` reports an operation nothing exercises.
 2. Create `<resource>.go` with: the model struct and its value-receiver `identityFields()`,
    `*Create`/`*Update` write structs (pointer + `omitempty`, and a value-receiver `MarshalJSON` on a
    `*Update` carrying `Metadata`), a `*List` type with `rows()`, `*ListParams` with a `query()`

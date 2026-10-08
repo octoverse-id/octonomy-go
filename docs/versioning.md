@@ -28,7 +28,10 @@ source of truth for how a change maps to a version bump.
 > a row for every operation they publish; `contractversion_test.go` measures every other version this
 > repository writes down against it, and each must equal it or carry a registered reason. Both run in
 > `make test` and in the `go1.13` job. Update the marker in the same commit that refreshes the specs.
-> This branch has no contract gate yet; porting [`main`'s](https://github.com/octoverse-id/octonomy-go/tree/main/tools/contractdrift) is [#98](https://github.com/octoverse-id/octonomy-go/issues/98).
+> The contract gate (`tools/contractdrift`, [#98](https://github.com/octoverse-id/octonomy-go/issues/98))
+> asserts the marker too, and goes further: it calls every method the coverage rows name and compares
+> what the client sends and decodes with both specs — see
+> [development.md](development.md#contract-drift).
 
 The SDK versions **independently** of the Octonomy server. A new SDK release does not require a new
 server release, and vice versa. `make version-check` asserts `version.go` matches the latest

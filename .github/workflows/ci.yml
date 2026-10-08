@@ -41,6 +41,17 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+      # The contract gate (tools/contractdrift, #98) is its own module, which
+      # `golangci-lint run` at the root stops short of exactly as `go vet ./...`
+      # does. AGENTS.md promises a golangci-lint-clean tree, and a directory
+      # nothing lints is where that stops being true quietly. Same config,
+      # second invocation.
+      - name: golangci-lint (contract gate)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          working-directory: tools/contractdrift
+          args: --config ../../.golangci.yml
 
   test:
     runs-on: ubuntu-latest
@@ -55,12 +66,36 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
+          # The SDK module has no go.sum (it is standard-library only); the
+          # contract gate's module is the one in the repository.
+          cache-dependency-path: tools/contractdrift/go.sum
       - name: Build
         run: go build ./...
       - name: Build examples
         run: go build ./examples/...
       - name: Test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
+      # The contract gate (#98): main's tools/contractdrift, ported. It CALLS each
+      # method the inventory names against a stub built from the vendored schema
+      # and compares what went on the wire, and what came back, with the
+      # contract -- on both REST surfaces.
+      #
+      # Steps in this job rather than a job of their own: a new job's check
+      # context blocks nothing until branch protection names it, and a gate that
+      # can go red without stopping a merge is the advisory state #97 kept the
+      # isolation suite out of. The gate's module declares go 1.24, which both
+      # matrix entries satisfy -- so it is also proven to build at its floor.
+      #
+      # First that the gate still works, then what it says: a drift gate never
+      # shown to fail cannot be told apart from one that cannot.
+      #
+      # This job, compat-guard's, the `on:` block and the recipes behind these
+      # targets are pinned by contractgate_test.go in the root package -- which the
+      # `go test ./...` step above runs directly, never through a target it guards.
+      - name: Test the contract gate
+        run: make contract-test
+      - name: Check the vendored contract against the SDK
+        run: make contract-check
 
   # THE ONLY GATE ON THIS LINE'S STDLIB FLOOR.
   #
@@ -135,6 +170,12 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history, for the contract gate's identity check below: it has to
+          # decide whether the commit tools/contractdrift/main.pin names is on
+          # main, and a shallow clone cannot answer that -- the script refuses one
+          # rather than guess.
+          fetch-depth: 0
       - name: Assert the release line's go.mod invariants
         run: make compat-guard
       - name: The guard's own tests
@@ -143,6 +184,17 @@ jobs:
         # matters most -- the release PR runs it for the first time. These
         # fixtures exercise that path, and the tag paths, on every run.
         run: make compat-guard-test
+      # The contract gate's shared files against main's (#98). Six files of
+      # tools/contractdrift are main's byte for byte at a PINNED commit, so
+      # divergence is impossible rather than merely discouraged -- and pinned
+      # rather than main's tip, so a merge on main cannot turn an unchanged
+      # commit here red. It belongs in this job because it is the same kind of
+      # check as the one above: what this line may and may not differ from main
+      # in. Fetches only from this repository.
+      - name: The contract gate's shared files match main at the pin
+        run: make contract-identity
+      - name: The identity check's own tests
+        run: make contract-identity-test
 
   vuln:
     runs-on: ubuntu-latest
@@ -192,10 +244,18 @@ jobs:
       # failed install would report a green scan that never happened. Calling the
       # binary directly makes a missing one a failing step.
       #
-      # One invocation is enough here: `./...` stops at a go.mod boundary, and
-      # this line has exactly one module. A tree that grows a nested one needs a
-      # second step -- nothing about this command would report its absence.
+      # Two invocations, because `./...` stops at a go.mod boundary and this
+      # line has two modules since #98: the SDK, and the contract gate in
+      # tools/contractdrift. A third module would need a third step -- nothing
+      # about either command reports one it did not reach.
       - name: govulncheck
+        run: govulncheck ./...
+      # The gate's module carries the repository's only third-party dependency
+      # (gopkg.in/yaml.v3). That it never reaches a consumer's build is a
+      # statement about the dependency graph, not a reason to leave it
+      # unscanned.
+      - name: govulncheck (contract gate)
+        working-directory: tools/contractdrift
         run: govulncheck ./...
 
   # THE COMPAT LINE'S ONLY CHECK AGAINST A REAL SERVER.

@@ -14,8 +14,9 @@ See [versioning.md](versioning.md). `Version` in `version.go` is canonical and m
 make release-check
 ```
 
-This runs `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`, `examples`, `version-check`, and
-`compat-guard`. All must pass.
+This runs `tools-check`, `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`, `examples`,
+`version-check`, `compat-guard` and its tests, and the contract gate: `contract-test`,
+`contract-check` and `contract-identity`. All must pass.
 
 **On the compat line (`support/go1.13`), `release-check` is not sufficient.** It runs on a modern
 toolchain, which cannot see a stdlib-floor violation, and it never talks to a real server. Two more
@@ -96,7 +97,12 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
 4. **Update the CHANGELOG:** move `[Unreleased]` items under a new `## [VERSION] - <date>` heading —
    also unprefixed, because `make version-check` compares it against `version.go` verbatim — and
    refresh the link definitions at the bottom.
-5. **Run the gate:** `make release-check`.
+5. **Run the gate:** `make release-check`. On the compat line, also **read** `make contract-report`:
+   the diff of each contract-gate file this line keeps its own version of against `main`'s at the
+   pinned commit. It never fails — the files differ by design, and no machine can say whether a given
+   difference is right — so it is a human's to read, for a fix `main` made that this line should
+   take, or one made here that `main` should. See
+   [development.md](development.md#the-pin-and-what-may-differ-from-main).
 6. **Open the release PR targeting `BASE`** — *not* necessarily `main`. Get it reviewed and merged.
 7. **Tag the merge commit on `BASE`:**
    ```bash
@@ -125,4 +131,5 @@ If a release targets a new Octonomy server contract, refresh both vendored specs
 the `<!-- contract-version: -->` marker, the "targeted server contract" note around it in
 [versioning.md](versioning.md), and `docs/contract-coverage.yaml`, in the same PR.
 [development.md](development.md#keeping-the-contract-current) has the checklist and the tests that
-fail until it is done.
+fail until it is done; on the compat line `make contract-check` is one of them, and it fails until
+every parameter and property the refresh added is either sent and decoded or recorded.

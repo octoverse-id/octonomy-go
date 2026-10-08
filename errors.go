@@ -218,7 +218,7 @@ func IsNamespaceAPIDisabled(err error) bool { return hasCode(err, CodeNamespaceA
 //
 // It belongs to the server's tag-resolution route (GET /tag-resolution); which
 // method implements that route on this line, or why none does, is recorded in
-// docs/contract-coverage.yaml, where a test holds it true. The code and the
+// docs/contract-coverage.yaml, where a test and the contract gate hold it true. The code and the
 // helper sit here with the rest of the error vocabulary, so a caller's branch on
 // it does not depend on which resource methods this line has.
 func IsAmbiguousResolution(err error) bool { return hasCode(err, CodeAmbiguousResolution) }
