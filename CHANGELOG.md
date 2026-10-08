@@ -21,10 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     recorded the gap are gone. `recordedGaps` stays, empty, so a future gap row is still refused
     unless it is named there — now in the body or a header as well as the query. Only a query row
     was held before, so an uncarried body row suppressed the gate's finding unheld. A named gap is
-    held to the client, not to a struct and field typed by hand (where the wrong struct or a
-    misspelled field passed): the check calls the operation's SDK method with every parameter
-    filled, through a recording transport, and fails once the request carries the input. A header
-    gap, which no struct carries, is refused outright.
+    still held to the absence of the field it names, and now also to a witness that does not trust
+    that name: the operation's SDK method, called with every fixed parameter filled through a
+    recording transport, must not send the input. A header gap, which no struct carries, is refused
+    outright.
   - `TestVocabularies_List_Params` gains `main`'s `q` and `slug` cases, and the `Vocabularies.List`
     isolation probe narrows by slug, as `main`'s does, instead of walking every page.
   - `TestSmoke_RealServer` gains `main`'s proof that a real server *reads* both filters — an unknown

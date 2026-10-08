@@ -186,31 +186,49 @@ func stageMakeRepo(t *testing.T) string {
 // driver, and with the row in place the gate reports nothing at all: the row says
 // "documented and unsent" is expected, so a field that exists and is never driven
 // reads the same as one that does not exist. So a row here has to be TRUE -- the
-// client really cannot send the input -- and the moment it can, this test fails,
-// the row comes out, and the gate takes over: documented and unsent until the
-// driver sets it.
+// field really is missing -- and the moment it arrives this test fails, the row
+// comes out, and the gate takes over: documented and unsent until the driver
+// sets it.
 //
 // EMPTY, and kept. Its only entries were `q` and `slug` on GET /vocabularies,
 // recorded from #98 until #118 ported VocabularyListParams.Query and .Slug, when
 // this test failed exactly as described above. The table stays because the empty
 // case is still a rule: recordedGapProblems refuses every unsent_inputs row that
 // is a gap -- in the query, the body or a header -- unless this table names it,
-// so a future gap row cannot be added without being held to the client.
+// so a future gap row cannot be added without naming the field whose absence it
+// asserts.
 //
-// HOW A GAP IS HELD. Not by naming a struct and a field, which is how this table
-// began: neither was checked, so a gap recorded against the wrong struct, or a
-// misspelled field, passed while the real field sat undriven. Nor by modelling
-// encoding/json or a params struct's query() over the carrier's fields, which
-// review showed cannot be done faithfully from reflection -- embedded-field
-// dominance, a custom MarshalJSON and a query() that maps a field to a name in
-// code all defeat it. The test ASKS THE CLIENT instead: coverageObserver calls
-// the SDK method contract-coverage.yaml names for the operation, with every
-// parameter filled as fully as reflection can fill it, and reads the request it
-// sends. The gap is open exactly while that request does not carry the input.
+// HOW A GAP IS HELD -- twice, and neither is a proof.
+//
+//  1. To the field's absence, as AGENTS.md has it: the entry names the struct
+//     that would carry the input (the *Params struct for a query input, the
+//     write struct for a body one) and the Go field it would be, and the test
+//     fails the moment that field exists. That trusts the entry's naming: a
+//     misspelled field, or the wrong struct, is absent forever.
+//  2. So a second witness does not read the naming at all. observeSDK calls the
+//     SDK method contract-coverage.yaml names for the operation, with every
+//     fixed parameter filled as fully as reflection can fill it, through a
+//     transport that records the request, and the test fails the moment that
+//     request carries the input -- whatever the field is called, and however
+//     encoding/json or a params struct's query() spells it.
+//
+// What neither sees, and the reader of a row's reason still has to: the call
+// passes no RequestOption, since options cannot be enumerated by reflection, so
+// an input an option carries -- application_id through WithApplication,
+// include_global through WithIncludeGlobal -- passes both. Such an input is not a
+// gap at all, and its driver should send it. And one fully filled call cannot see
+// a field the client sends only while another is unset.
+//
+// An entry is written {op, in, name, reflect.TypeOf(octonomy.FooListParams{}), "Field"}.
 var recordedGaps []recordedGap
 
-// recordedGap is one gap row: an operation, a location and a name.
-type recordedGap struct{ op, in, name string }
+// recordedGap is one gap row and the field whose absence it asserts: params is
+// the struct that would carry the input, and field the Go name it would have.
+type recordedGap struct {
+	op, in, name string
+	params       reflect.Type
+	field        string
+}
 
 func TestRecordedGapsStillHaveNoField(t *testing.T) {
 	cov, err := LoadCoverage(filepath.Join(repoRoot, "docs", "contract-coverage.yaml"))
@@ -235,7 +253,9 @@ type observer func(op string) (sentRequest, error)
 
 // recordedGapProblems holds the unsent_inputs rows to the gaps table: every row
 // with nowhere else to carry its input is a gap the table names, every entry in
-// the table is still a row, and the client still cannot send any gap's input.
+// the table is still a row, and each gap is held both ways recordedGaps
+// describes -- its field still absent, and a fully filled call still not sending
+// its input.
 //
 // A gap is decided by what the row says, never by where the input is documented.
 // Until #118 only a query row was held, so an uncarried body or header row -- a
@@ -270,6 +290,15 @@ func recordedGapProblems(rows []UnsentInput, gaps []recordedGap, observe observe
 			problems = append(problems, fmt.Sprintf("recordedGaps names `%s`, a %s: this client sends headers from RequestOptions, which this check cannot enumerate, so nothing can hold the row -- teach recordedGapProblems to ask before recording a header gap", key, gap.in))
 			continue
 		}
+		if gap.params == nil || gap.field == "" {
+			problems = append(problems, fmt.Sprintf("recordedGaps names `%s` with no struct and field, so nothing holds the row to its field's absence", key))
+			continue
+		}
+		if _, has := gap.params.FieldByName(gap.field); has {
+			problems = append(problems, fmt.Sprintf("%s.%s exists, so the unsent_inputs row for `%s` records a gap that is closed -- drop the row, set the field in drivers.go, and the gate holds it from there",
+				gap.params.Name(), gap.field, key))
+			continue
+		}
 		sent, err := observe(gap.op)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("recordedGaps names `%s`, and the client's request could not be observed, so nothing holds it: %v", key, err))
@@ -284,8 +313,8 @@ func recordedGapProblems(rows []UnsentInput, gaps []recordedGap, observe observe
 			carried = sent.body
 		}
 		if carried[gap.name] {
-			problems = append(problems, fmt.Sprintf("the client sends `%s` in the %s of `%s` once every field it takes is set, so the unsent_inputs row for `%s` records a gap that is closed -- drop the row, set the field in drivers.go, and the gate holds it from there",
-				gap.name, gap.in, gap.op, key))
+			problems = append(problems, fmt.Sprintf("the client sends `%s` in the %s of `%s` once every field it takes is set, although %s.%s does not exist -- the entry names the wrong struct or field, and the gap is closed: drop the row, set the field in drivers.go, and the gate holds it from there",
+				gap.name, gap.in, gap.op, gap.params.Name(), gap.field))
 		}
 	}
 	return problems
@@ -358,7 +387,14 @@ func observeSDK(symbol string) (sentRequest, error) {
 // and returns the one request rec saw. Anything but exactly one request is an
 // error: a call refused before it reached the transport proves nothing about
 // what the client can send.
-func observeCall(fn reflect.Value, rec *gapRecorder) (sentRequest, error) {
+func observeCall(fn reflect.Value, rec *gapRecorder) (sent sentRequest, err error) {
+	// A panic in fill or in the call is a gap nothing could observe, reported as
+	// one rather than taking the test binary down with it.
+	defer func() {
+		if r := recover(); r != nil {
+			sent, err = sentRequest{}, fmt.Errorf("the call panicked: %v", r)
+		}
+	}()
 	sig := fn.Type()
 	fixed := sig.NumIn()
 	if sig.IsVariadic() {
@@ -497,11 +533,27 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 	unobservable := func(string) (sentRequest, error) { return sentRequest{}, errors.New("no request") }
 
 	row := UnsentInput{Path: "/things", Method: "get", In: "query", Name: "q", Reason: "r"}
-	gap := recordedGap{"get /things", "query", "q"}
+	type openParams struct{ Other *string }
+	type closedParams struct {
+		Other *string
+		Query *string
+	}
+	type openWrite struct {
+		Name *string `json:"name,omitempty"`
+	}
+	type closedWrite struct {
+		Name        *string `json:"name,omitempty"`
+		Description *string `json:"description,omitempty"`
+	}
+	gap := recordedGap{"get /things", "query", "q", reflect.TypeOf(openParams{}), "Query"}
 	body := UnsentInput{Path: "/things", Method: "post", In: "body", Name: "description", Reason: "r"}
-	bodyGap := recordedGap{"post /things", "body", "description"}
+	bodyGap := recordedGap{"post /things", "body", "description", reflect.TypeOf(openWrite{}), "Description"}
 	header := UnsentInput{Path: "/things", Method: "get", In: "header", Name: "X-Thing", Reason: "r"}
-	headerGap := recordedGap{"get /things", "header", "X-Thing"}
+	headerGap := recordedGap{"get /things", "header", "X-Thing", reflect.TypeOf(openParams{}), "Thing"}
+	closedGap, closedBodyGap, noField := gap, bodyGap, gap
+	closedGap.params = reflect.TypeOf(closedParams{})
+	closedBodyGap.params = reflect.TypeOf(closedWrite{})
+	noField.params = nil
 
 	if got := recordedGapProblems([]UnsentInput{row}, []recordedGap{gap}, openGet); len(got) != 0 {
 		t.Fatalf("a query gap the client cannot send is fine, got %v", got)
@@ -516,8 +568,11 @@ func TestRecordedGapProblemsRefusesEachForm(t *testing.T) {
 		observe observer
 		want    string
 	}{
-		{"a query input the client sends now", []UnsentInput{row}, []recordedGap{gap}, closedGet, "the client sends `q` in the query"},
-		{"a body input the client sends now", []UnsentInput{body}, []recordedGap{bodyGap}, closedPost, "the client sends `description` in the body"},
+		{"the named query field arrived", []UnsentInput{row}, []recordedGap{closedGap}, openGet, "closedParams.Query exists"},
+		{"the named body field arrived", []UnsentInput{body}, []recordedGap{closedBodyGap}, openPost, "closedWrite.Description exists"},
+		{"a gap listed with no struct", []UnsentInput{row}, []recordedGap{noField}, openGet, "with no struct and field"},
+		{"the client sends the query input under a field the entry does not name", []UnsentInput{row}, []recordedGap{gap}, closedGet, "the client sends `q` in the query"},
+		{"the client sends the body input under a field the entry does not name", []UnsentInput{body}, []recordedGap{bodyGap}, closedPost, "names the wrong struct or field"},
 		{"sent in the other location only", []UnsentInput{row}, []recordedGap{gap}, sends("GET", nil, []string{"q"}), ""},
 		{"a request for another method", []UnsentInput{row}, []recordedGap{gap}, openPost, "sent POST, not GET"},
 		{"a gap row nobody listed", []UnsentInput{row}, nil, openGet, "recordedGaps does not name it"},
@@ -615,7 +670,7 @@ func TestEveryOperationIsObservable(t *testing.T) {
 // fields got wrong, observed through a real json.Marshal -- two embedded structs
 // promoting one Go name under two JSON names (encoding/json sends both; a field
 // walk dropped both), a field promoted through an unexported embedded struct, and
-// a custom MarshalJSON. Plus the refusals: no request, and two.
+// a custom MarshalJSON. Plus the refusals: no request, two, and a panic.
 func TestObserveCallSeesWhatTheEncoderSends(t *testing.T) {
 	type left struct {
 		Value *string `json:"q,omitempty"`
@@ -660,6 +715,10 @@ func TestObserveCallSeesWhatTheEncoderSends(t *testing.T) {
 	}
 	if !rec.sent[1].body["renamed"] || rec.sent[1].body["Field"] {
 		t.Errorf("a custom MarshalJSON's names were not the ones observed: %v", rec.sent[1].body)
+	}
+
+	if _, err := observeCall(reflect.ValueOf(func(context.Context) error { panic("boom") }), &gapRecorder{}); err == nil || !strings.Contains(err.Error(), "panicked: boom") {
+		t.Errorf("a panicking call must be reported, got %v", err)
 	}
 
 	silent := &gapRecorder{}

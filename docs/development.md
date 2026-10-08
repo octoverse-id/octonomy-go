@@ -376,13 +376,17 @@ The smoke and isolation suites are what exercise real values against a real serv
   goes under `unsent_inputs` in `contract-coverage.yaml`, with the reason. A row like that would
   hide a field ported and never driven, so `TestRecordedGapsStillHaveNoField` refuses a gap row
   that `recordedGaps` (`acceptance_test.go`) does not name — in the query, the body or a header,
-  where a row is a gap unless its `carried_in` or its route says where the input goes instead. For
-  a named gap it asks the client rather than reading its structs: it calls the method
-  `contract-coverage.yaml` names for the operation, with every parameter filled, through a
-  transport that records the request, and fails the moment that request carries the input; the
-  row comes out, and the gate reports the input as documented and unsent until the driver sets
-  it. A header gap is refused outright: a header comes from a `RequestOption`, and the options
-  cannot be enumerated the way a struct's fields can. None is recorded now. The gate found one, `q` and `slug` on `GET /vocabularies`, and recorded it from
+  where a row is a gap unless its `carried_in` or its route says where the input goes instead. A
+  named gap is held twice: to the absence of the struct field the entry names, and — since that
+  trusts the entry's naming — to a call of the method `contract-coverage.yaml` names for the
+  operation, with every fixed parameter filled and no option, through a transport that records
+  the request. The test fails the moment the field exists or the request carries the input; the
+  row comes out, and the gate reports the input as documented and unsent until the driver sets it.
+  Neither is a proof the client cannot send it: an input a `RequestOption` carries is not a gap
+  at all, and passes both, and one fully filled call cannot see a field sent only while another
+  is unset — the comment on `recordedGaps` records both. A header gap is refused outright: a
+  header comes from a `RequestOption`, and the options cannot be enumerated the way a struct's
+  fields can. None is recorded now. The gate found one, `q` and `slug` on `GET /vocabularies`, and recorded it from
   #98 until #118 ported `VocabularyListParams.Query` and `.Slug` — which ran that sequence end to
   end.
 - **What runs the gate is pinned from outside it.** `contractgate_test.go`, in the root package,
