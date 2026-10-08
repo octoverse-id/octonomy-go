@@ -230,19 +230,24 @@ var contractGateRecipePins = map[string]string{
 
 // contractGateMakeBaseline is what make's database says, under `make -pq` with the
 // caller's make variables cleared, about the variables that decide how EVERY recipe
-// runs: each one's value line, exactly -- flavor, value and all. The VALUE, because
-// it is what a recipe runs under, and it is what every harmful edit changes:
-// `MAKEFLAGS += -n` leaves the origin line `# makefile`, as if nothing touched it,
-// and turns the value into `npq`. The origin line is printed in the finding and not
-// compared: an edit that changes only it -- `override SHELL = /bin/sh` -- runs
-// exactly what the baseline runs, and a review of this check showed that comparing
-// it caught nothing the value did not.
+// runs: each one's VALUE, exactly, because it is what a recipe runs under, and it is
+// what every harmful edit changes: `MAKEFLAGS += -n` leaves the origin line `#
+// makefile`, as if nothing touched it, and turns the value into `npq`.
+//
+// Neither the origin line nor the flavor (`=` or `:=`) is compared, because the
+// same untouched make spells them differently depending on the ENVIRONMENT: GNU make
+// 4.3 prints `# makefile` / `SHELL = /bin/sh` when SHELL is set in the environment
+// (a CI runner, a login shell) and `# default` / `SHELL := /bin/sh` when it is not
+// (`env -i`, cron, a minimal container) -- an exact-line baseline failed on a
+// correct tree there (PR #117's review). Neither carries meaning here: an origin-only
+// edit (`override SHELL = /bin/sh`) runs exactly the baseline, and a recursive
+// `SHELL = $(X)` is printed unexpanded, so its value is `$(X)` and is refused.
 var contractGateMakeBaseline = map[string]string{
-	"SHELL":         "SHELL = /bin/sh",
-	".SHELLFLAGS":   ".SHELLFLAGS := -c",
-	"MAKEFLAGS":     "MAKEFLAGS = pq",
-	"MAKEFILES":     "MAKEFILES := ",
-	".RECIPEPREFIX": ".RECIPEPREFIX := ",
+	"SHELL":         "/bin/sh",
+	".SHELLFLAGS":   "-c",
+	"MAKEFLAGS":     "pq",
+	"MAKEFILES":     "",
+	".RECIPEPREFIX": "",
 }
 
 func TestTheContractGateRecipesArePinned(t *testing.T) {
@@ -298,7 +303,21 @@ func makeDatabase(makefile, goal string, extraEnv []string) (string, error) {
 		}
 		cmd.Env = append(cmd.Env, kv)
 	}
-	cmd.Env = append(cmd.Env, extraEnv...)
+	// extraEnv entries are NAME=value to set, or a bare NAME to unset -- the
+	// fixtures need both, since make reads an unset SHELL differently from a set one.
+	for _, kv := range extraEnv {
+		name := kv[:strings.IndexByte(kv+"=", '=')]
+		kept := cmd.Env[:0]
+		for _, have := range cmd.Env {
+			if have[:strings.IndexByte(have+"=", '=')] != name {
+				kept = append(kept, have)
+			}
+		}
+		cmd.Env = kept
+		if strings.Contains(kv, "=") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
 	out, err := cmd.CombinedOutput()
 	// -q exits 1 for "not up to date", which is not a failure here; 2 is.
 	exit, ok := err.(*exec.ExitError)
@@ -321,7 +340,7 @@ func makeDatabaseProblems(db string) []string {
 	}
 	lines := strings.Split(db, "\n")
 
-	// The variables that decide how every recipe runs: the value line, exactly. A
+	// The variables that decide how every recipe runs: the value, exactly. A
 	// variable's definition is the line after its origin comment.
 	found := map[string]bool{}
 	for i := 1; i < len(lines); i++ {
@@ -334,9 +353,13 @@ func makeDatabaseProblems(db string) []string {
 			continue
 		}
 		found[name] = true
-		if lines[i] != want {
+		value, readable := makeVariableValue(lines[i], name)
+		switch {
+		case !readable:
+			problems = append(problems, fmt.Sprintf("make prints %s as %q, which is not `%s = …` or `%s := …` -- whether it was changed cannot be read", name, lines[i], name, name))
+		case value != want:
 			problems = append(problems, fmt.Sprintf("make resolves %s as %q (%s), not %q -- it decides how every gate recipe runs",
-				name, lines[i], strings.TrimPrefix(lines[i-1], "# "), want))
+				name, value, strings.TrimPrefix(lines[i-1], "# "), want))
 		}
 	}
 	for _, name := range sortedPinKeys(contractGateMakeBaseline) {
@@ -430,6 +453,46 @@ func makeDatabaseProblems(db string) []string {
 		}
 	}
 	return problems
+}
+
+// makeVariableValue reads the value out of a variable line of make's database:
+// `NAME = value` (recursive, printed unexpanded) or `NAME := value` (simple). Any
+// other shape is unreadable, and the caller refuses it rather than guess.
+func makeVariableValue(line, name string) (string, bool) {
+	rest := strings.TrimPrefix(line, name)
+	for _, op := range []string{" := ", " = "} {
+		if strings.HasPrefix(rest, op) {
+			return rest[len(op):], true
+		}
+	}
+	return "", false
+}
+
+// TestTheBaselineHoldsWhateverMakesEnvironment: the real Makefile, read with SHELL
+// unset and with it set -- the two environments in which GNU make spells its
+// untouched SHELL differently -- is clean in both, and the value reader takes both
+// spellings and refuses what is neither.
+func TestTheBaselineHoldsWhateverMakesEnvironment(t *testing.T) {
+	for _, env := range [][]string{{"SHELL"}, {"SHELL=/bin/bash"}, {"SHELL="}} {
+		problems, err := contractGateMakefileProblems("Makefile", env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(problems) != 0 {
+			t.Errorf("environment %v: the real Makefile reads as changed: %v", env, problems)
+		}
+	}
+	for line, want := range map[string]string{"SHELL = /bin/sh": "/bin/sh", "SHELL := /bin/sh": "/bin/sh", "MAKEFILES := ": ""} {
+		name := line[:strings.IndexByte(line, ' ')]
+		if got, ok := makeVariableValue(line, name); !ok || got != want {
+			t.Errorf("makeVariableValue(%q) = %q, %v; want %q", line, got, ok, want)
+		}
+	}
+	for _, line := range []string{"SHELL += /bin/sh", "SHELL ?= /bin/sh", "SHELL=/bin/sh", "SHELLX = /bin/sh"} {
+		if got, ok := makeVariableValue(line, "SHELL"); ok {
+			t.Errorf("makeVariableValue(%q) read %q; a shape it does not know must be refused", line, got)
+		}
+	}
 }
 
 // TestContractGateMakefileProblemsRefusesEachOverride: every way to make a gate
