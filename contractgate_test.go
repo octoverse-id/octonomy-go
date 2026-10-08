@@ -296,28 +296,7 @@ func makeDatabase(makefile, goal string, extraEnv []string) (string, error) {
 	}
 	cmd := exec.Command("make", "-pq", "-f", filepath.Base(makefile), goal)
 	cmd.Dir = filepath.Dir(makefile)
-	for _, kv := range os.Environ() {
-		switch kv[:strings.IndexByte(kv+"=", '=')] {
-		case "MAKEFLAGS", "MFLAGS", "GNUMAKEFLAGS", "MAKELEVEL", "MAKEFILES", "MAKEOVERRIDES":
-			continue
-		}
-		cmd.Env = append(cmd.Env, kv)
-	}
-	// extraEnv entries are NAME=value to set, or a bare NAME to unset -- the
-	// fixtures need both, since make reads an unset SHELL differently from a set one.
-	for _, kv := range extraEnv {
-		name := kv[:strings.IndexByte(kv+"=", '=')]
-		kept := cmd.Env[:0]
-		for _, have := range cmd.Env {
-			if have[:strings.IndexByte(have+"=", '=')] != name {
-				kept = append(kept, have)
-			}
-		}
-		cmd.Env = kept
-		if strings.Contains(kv, "=") {
-			cmd.Env = append(cmd.Env, kv)
-		}
-	}
+	cmd.Env = makeEnv(os.Environ(), extraEnv)
 	out, err := cmd.CombinedOutput()
 	// -q exits 1 for "not up to date", which is not a failure here; 2 is.
 	exit, ok := err.(*exec.ExitError)
@@ -329,6 +308,46 @@ func makeDatabase(makefile, goal string, extraEnv []string) (string, error) {
 		return "", fmt.Errorf("make -pq %s printed no rule database:\n%s", goal, out)
 	}
 	return string(out), nil
+}
+
+// makeEnv is the environment make runs under: base, less the make variables a
+// caller can carry, then extraEnv applied in order -- `NAME=value` sets NAME, a bare
+// `NAME` unsets it. The fixtures need both, since make reads an unset SHELL
+// differently from a set one.
+func makeEnv(base, extraEnv []string) []string {
+	envName := func(kv string) string { return kv[:strings.IndexByte(kv+"=", '=')] }
+	var env []string
+	for _, kv := range base {
+		switch envName(kv) {
+		case "MAKEFLAGS", "MFLAGS", "GNUMAKEFLAGS", "MAKELEVEL", "MAKEFILES", "MAKEOVERRIDES":
+			continue
+		}
+		env = append(env, kv)
+	}
+	for _, kv := range extraEnv {
+		kept := env[:0]
+		for _, have := range env {
+			if envName(have) != envName(kv) {
+				kept = append(kept, have)
+			}
+		}
+		env = kept
+		if strings.Contains(kv, "=") {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
+func TestMakeEnvClearsSetsAndUnsets(t *testing.T) {
+	got := makeEnv(
+		[]string{"PATH=/bin", "SHELL=/bin/bash", "MAKEFLAGS=-n", "MAKEFILES=x.mk", "HOME=/h"},
+		[]string{"SHELL", "HOME=/other", "CONTRACTGATE_FIXTURE_CI=1"},
+	)
+	want := "PATH=/bin HOME=/other CONTRACTGATE_FIXTURE_CI=1"
+	if strings.Join(got, " ") != want {
+		t.Errorf("makeEnv = %v, want %s", got, want)
+	}
 }
 
 // makeDatabaseProblems holds one database to the recipe pins and the baseline.
@@ -344,7 +363,9 @@ func makeDatabaseProblems(db string) []string {
 	// variable's definition is the line after its origin comment.
 	found := map[string]bool{}
 	for i := 1; i < len(lines); i++ {
-		name := lines[i]
+		// A multi-line value is printed as a `define NAME` ... `endef` block, and
+		// is read as that NAME -- and as unreadable, below -- rather than skipped.
+		name := strings.TrimPrefix(lines[i], "define ")
 		if sp := strings.IndexByte(name, ' '); sp > 0 {
 			name = name[:sp]
 		}
@@ -538,6 +559,7 @@ func TestContractGateMakefileProblemsRefusesEachOverride(t *testing.T) {
 		{"SHELL by override, through eval", src + "\n$(eval override SHELL := /bin/true)\n", "make resolves SHELL", nil},
 		{"a dry-run MAKEFLAGS", src + "\nMAKEFLAGS += -n\n", "make resolves MAKEFLAGS", nil},
 		{"a different recipe prefix", src + "\n.RECIPEPREFIX := >\n", "make resolves .RECIPEPREFIX", nil},
+		{"a multi-line SHELL", src + "\ndefine SHELL\n/bin/true\nexit 0\nendef\n", "make prints SHELL as", nil},
 		{"the release gate overridden", src + "\nr := release-check\n$(r): ; @true\n", "the recipe make will run for release-check", nil},
 		{"the release gate dropping the identity check", strings.Replace(src, " contract-identity ## Full pre-release gate", " ## Full pre-release gate", 1), "release-check does not depend on contract-identity", nil},
 		{"a gate target no longer phony", strings.Replace(src, " contract-check contract-test", " contract-test", 1), "does not hold contract-check as phony", nil},
