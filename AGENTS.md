@@ -289,8 +289,11 @@ stays a faithful, ergonomic client.
 - **What runs the gate is pinned from outside it.** CI runs `make contract-test` and `make
   contract-check` in the `test` job and the identity check in `compat-guard`. `contractgate_test.go`
   pins both jobs and ci.yml's `on:` block as text, and the `contract-*` and `release-check` recipes
-  as make's own rule database resolves them under each real goal (`make -pq <target>`), so a step
-  `env`, a checkout `ref`, and a recipe overridden literally or by anything make computes all fail.
+  as make's own rule database resolves them under each real goal (`make -pq <target>`) — each still
+  phony, so a same-named file cannot make it up to date — so a step `env`, a checkout `ref`, and a
+  recipe overridden literally or computed for a real goal all fail. The limits it does not reach
+  (a Makefile branching on the inspector's own `-q`, an earlier step writing `$GITHUB_ENV`) are
+  recorded in the file as adversarial-only.
   It is in the ROOT package on purpose: `go test ./...` runs it in the required jobs without going
   through a make target it guards, where a copy inside the gate's module stopped running the moment
   `contract-test` was overridden. Changing a pinned job or recipe means updating its pin in the same

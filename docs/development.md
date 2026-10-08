@@ -380,7 +380,8 @@ The smoke and isolation suites are what exercise real values against a real serv
   reports `q` and `slug` as documented and unsent until the vocabulary driver sets them.
 - **What runs the gate is pinned from outside it.** `contractgate_test.go`, in the root package,
   pins the `test` and `compat-guard` jobs and ci.yml's `on:` block as text, and the `contract-*` and
-  `release-check` recipes as make's own rule database resolves them under each real goal. It sits
+  `release-check` recipes as make's own rule database resolves them under each real goal, each
+  still phony. The adversarial-only limits it does not reach are recorded in the file. It sits
   in the root package so that `go test ./...` runs it in the required jobs without going through a
   make target it guards — overriding `contract-test` would otherwise stop the very test that refuses
   the override.

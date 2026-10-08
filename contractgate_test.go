@@ -31,6 +31,23 @@ import (
 // edit, so changing a pinned job or recipe means re-checking what it is pinned for
 // -- the gate runs on a pull request into this line, against the pull request's
 // tree, and a failure fails the job -- and updating the pin in the same commit.
+//
+// WHERE IT ENDS -- limits a review classified adversarial-only, recorded so they
+// are decisions rather than discoveries. Each needs an edit made to defeat the
+// gate, not one made in passing:
+//
+//   - An EARLIER step of a pinned job can change the environment of the ones after
+//     it (`echo MAKEFLAGS=-n >> "$GITHUB_ENV"`). The step's text is pinned; what its
+//     shell does is not read.
+//   - A workflow-level `defaults.run.shell` that ignores its script turns every
+//     `run:` step into a no-op -- the `go test ./...` that runs this file included,
+//     so workflowTopLevelProblems, which refuses it, never runs either. It is the
+//     same self-neutralization as deleting this file.
+//   - The recipes are read with `make -pq`, so MAKEFLAGS holds `pq` here and not in
+//     a real run. A Makefile that defines something else only when `q` is absent
+//     shows the pinned recipe to this check and runs another in CI.
+//   - Extra prerequisites of a gate target are not pinned. One that rewrote the
+//     checkout before the pinned recipe ran would defeat the gate on purpose.
 
 // contractGateJobPins are ci.yml's two jobs that run the gate, as workflowJob
 // (smokeprobes_test.go) reads them: comment and blank lines dropped. Pinned whole,
@@ -260,8 +277,11 @@ func contractGateMakefileProblems(makefile string, extraEnv []string) ([]string,
 	return problems, nil
 }
 
-// makeDatabase prints make's rule database for one goal without running any of
-// its recipes: -q only asks whether the goal is up to date. The make variables a
+// makeDatabase prints make's rule database for one goal without running the
+// goal's recipes: -q only asks whether the goal is up to date. (GNU make can still
+// remake a makefile that has a rule of its own under -q; this Makefile has none,
+// and an include, the way one would arrive, is refused by smokeprobes_test.go.)
+// The make variables a
 // caller's environment can carry -- the MAKEFLAGS a parent make exports, a
 // MAKEFILES naming extra makefiles -- are cleared, so the database is the
 // Makefile's alone.
@@ -347,11 +367,14 @@ func makeDatabaseProblems(db string) []string {
 	// effective recipe.
 	files := strings.Index(db, "\n# Files\n")
 	recipes, prereqs := map[string]string{}, map[string][]string{}
+	phony := map[string]bool{}
 	current, inRecipe := "", false
 	for _, line := range strings.Split(db[files:], "\n") {
 		switch {
 		case line == "":
 			current, inRecipe = "", false
+		case line == "#  Phony target (prerequisite of .PHONY).":
+			phony[current] = current != ""
 		case strings.HasPrefix(line, "#  recipe to execute"):
 			inRecipe = current != ""
 		case strings.HasPrefix(line, "\t") && inRecipe:
@@ -387,6 +410,13 @@ func makeDatabaseProblems(db string) []string {
 		}
 	}
 	for _, target := range sortedPinKeys(contractGateRecipePins) {
+		// Phony, or the recipe may never run at all: a target with no
+		// prerequisites that is NOT phony is up to date whenever a file of its
+		// name exists, and make then exits 0 having done nothing -- while printing
+		// the pinned recipe here, unchanged.
+		if !phony[target] {
+			problems = append(problems, fmt.Sprintf("make does not hold %s as phony, so a file named %s makes it up to date and its recipe never runs", target, target))
+		}
 		want := contractGateRecipePins[target] + "\n"
 		if got, ok := recipes[target]; !ok {
 			problems = append(problems, fmt.Sprintf("make's database has no recipe for %s", target))
@@ -447,6 +477,7 @@ func TestContractGateMakefileProblemsRefusesEachOverride(t *testing.T) {
 		{"a different recipe prefix", src + "\n.RECIPEPREFIX := >\n", "make resolves .RECIPEPREFIX", nil},
 		{"the release gate overridden", src + "\nr := release-check\n$(r): ; @true\n", "the recipe make will run for release-check", nil},
 		{"the release gate dropping the identity check", strings.Replace(src, " contract-identity ## Full pre-release gate", " ## Full pre-release gate", 1), "release-check does not depend on contract-identity", nil},
+		{"a gate target no longer phony", strings.Replace(src, " contract-check contract-test", " contract-test", 1), "does not hold contract-check as phony", nil},
 	}
 	for _, tc := range cases {
 		tc := tc // Go 1.13: the loop variable is shared across iterations
@@ -456,6 +487,14 @@ func TestContractGateMakefileProblemsRefusesEachOverride(t *testing.T) {
 			}
 			if err := ioutil.WriteFile(path, []byte(tc.makefile), 0o644); err != nil {
 				t.Fatal(err)
+			}
+			// A file named for each gate target, beside the fixture's Makefile: a
+			// target that is not phony is then up to date, as it would be in a
+			// checkout carrying such a file, and the real tree is what is held.
+			for _, target := range sortedPinKeys(contractGateRecipePins) {
+				if err := ioutil.WriteFile(filepath.Join(dir, target), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			problems, err := contractGateMakefileProblems(path, tc.env)
 			if err != nil {
