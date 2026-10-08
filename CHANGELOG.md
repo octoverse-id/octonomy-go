@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`VocabularyListParams.Query` and `.Slug`**
+  ([#118](https://github.com/octoverse-id/octonomy-go/issues/118), for
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)) — the `q` and `slug` filters on
+  `GET /vocabularies`, ported from `main`'s
+  [#61](https://github.com/octoverse-id/octonomy-go/pull/61). Both vendored specs document them, and
+  until now a caller on this line had to page the whole collection to find a vocabulary by slug.
+  `Slug` is an exact match; `Query` is the free-text `q`, a case-insensitive substring of the name or
+  the slug. Two `*string` fields after `IsActive`: a nil one omits its parameter, so an existing
+  caller's requests do not change.
+  - The contract gate's `get /vocabularies` driver sets both, and the two `unsent_inputs` rows that
+    recorded the gap are gone. `recordedGaps` stays, empty, so a future gap row is still refused
+    unless it is named there — now in the body or a header as well as the query. Only a query row
+    was held before, so an uncarried body row suppressed the gate's finding unheld. A named gap is
+    still held to the absence of the field it names, and now also to a witness that does not trust
+    that name: the operation's SDK method, called with every fixed parameter filled through a
+    recording transport, must not send the input. Neither witness sees an input a `RequestOption`
+    carries, and the comment on `recordedGaps` records that.
+  - `TestVocabularies_List_Params` gains the `q` and `slug` cases of `main`'s at 5e40964, and the
+    `Vocabularies.List` isolation probe narrows by slug, as `main`'s does there, instead of walking
+    every page.
+  - `TestSmoke_RealServer` gains, from `main`'s smoke test at 5e40964, the proof that a real server
+    *reads* both filters — an unknown query parameter is dropped in silence — against a second,
+    decoy vocabulary each filter must exclude.
+  - Unkeyed literals: an *unkeyed* composite literal of `VocabularyListParams` stops compiling — the
+    Go-level caveat `docs/versioning.md`'s MINOR rule describes. Keyed literals are unaffected.
 - **The contract gate, ported** ([#98](https://github.com/octoverse-id/octonomy-go/issues/98), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). Tooling, CI and docs only; no
   exported symbol changes.
@@ -33,8 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     5e40964 —
     `unsent_inputs`, `undocumented_inputs`, `client_headers`, `undocumented_model_fields`, the
     vendored `server_error_codes`, and the two kinds of recorded error constant. The gate found one
-    gap, recorded there rather than closed: `VocabularyListParams` cannot send `q` or `slug`. A
-    gap row is held to its field's absence, so porting the fields forces it out.
+    gap, recorded there rather than closed: `VocabularyListParams` could not send `q` or `slug`. A
+    gap row is held to its field's absence, so porting the fields forced it out (#118, above).
   - **CI**: `make contract-test` and `make contract-check` run in the `test` job, the identity check
     and its tests in `compat guard` (now on full history), and `lint` and `vuln` cover the gate's
     module in steps of their own. `make lint`, `make vuln` and `release-check` cover it too.
@@ -55,8 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     wildcard, and the `403` a merchant-A token gets asking for merchant B) and
     `TestIntegration_IncludeGlobalFailsClosed` (an exact grant that opts into the global rows still
     sees none). A filtered read must decline the one way its endpoint declines — an empty page, a
-    `404`, or resolution's `400` — not merely fail. `Vocabularies.List` has no slug filter on this
-    line, so its probe walks every page and fails unless it saw every row the server counts.
+    `404`, or resolution's `400` — not merely fail. `Vocabularies.List` had no slug filter on this
+    line, so its probe walked every page and failed unless it saw every row the server counts; it
+    narrows by slug since #118 (above).
   - **`scripts/octonomy-harness.sh`** mints an exact grant for each of two merchant namespaces beside
     the wildcard token, proves each one reaches its own namespace (`201`) and is refused in the other's
     (`403`), and exports them as `OCTONOMY_TEST_NAMESPACE_A_*` / `_B_*`; the CI action masks every
@@ -124,12 +150,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     failing tests, which go1.13.15's `vet` does not report, and a guard in the root package would be
     the first thing an early-exiting `TestMain` there skipped. The porting checklist gains the row.
   - **`main`'s test cases this line lacked**: `TestTags_Get`, `TestVocabularies_Get`,
-    `TestVocabularies_List_Params` (without its `q` and `slug` cases — see below),
+    `TestVocabularies_List_Params` (without its `q` and `slug` cases, which #118 added with the
+    fields),
     `TestDoData_UndecodableBodies`, `TestTransport_ErrorsPropagateFromEveryHelper` and
     `TestMetadataIsStillAnAlias`. The `Get` fixtures are raw wire JSON, not marshalled structs.
-  - The table records two capability gaps that no sub-issue owns yet: `VocabularyListParams` has no
-    `Query` or `Slug`, although both vendored specs list the filters, and `DecodeMetadata` has no
-    counterpart here.
+  - The table records two capability gaps that no sub-issue owned: `VocabularyListParams` had no
+    `Query` or `Slug`, although both vendored specs list the filters (closed by #118), and
+    `DecodeMetadata` has no counterpart here.
 - **The six missing resource groups, hand-ported from `main`**
   ([#94](https://github.com/octoverse-id/octonomy-go/issues/94), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). `main`'s `aliases.go`,

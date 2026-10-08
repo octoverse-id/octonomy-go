@@ -1259,13 +1259,13 @@ func isolationSuiteProblems(suite, harnessFile *ast.File) []string {
 func isolationTestProblems(fn *ast.FuncDecl, helpers smokeHelpers, tt typedTests) []string {
 	var problems []string
 	// The seeded rows' teardown is this test's own defer (rules 2 and 3 of the
-	// t.Cleanup model), which holds only while its subtests are sequential; and
-	// the Vocabularies.List walk counts a collection another test running at
-	// the same time would change.
+	// t.Cleanup model), which holds only while its subtests are sequential.
+	// (Until #118 a second reason stood beside it: the Vocabularies.List probe
+	// walked and counted a collection that a concurrent test would change. It
+	// narrows by the fixture's slug now.)
 	if callsParallel(fn, helpers, tt, map[*ast.FuncDecl]bool{}) {
 		problems = append(problems, fn.Name.Name+" calls Parallel, directly or through a helper. The isolation "+
-			"tests run in sequence: a parallel subtest outlives the deferred teardown of the rows it reads, and "+
-			"two isolation tests at once change the collections the Vocabularies.List walk counts")
+			"tests run in sequence: a parallel subtest outlives the deferred teardown of the rows it reads")
 	}
 	for _, why := range skipsIn(fn, helpers) {
 		problems = append(problems, fn.Name.Name+" "+why+"; an isolation test that can skip itself is a "+

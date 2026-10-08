@@ -10,8 +10,10 @@
 // is narrow -- that the client still decodes what a real, current Octonomy server
 // sends. It covers the {data, pagination} envelope (which the vendored spec does
 // not describe, so only a real server can confirm it), a list of each
-// implemented resource, one real error envelope, the bare {"status": ...} body
-// of both health probes, an empty Metadata reaching the server as {}, the
+// implemented resource, the vocabulary list's q and slug filters read by the
+// server rather than merely sent, one real error envelope, the bare
+// {"status": ...} body of both health probes, an empty Metadata reaching the
+// server as {}, the
 // namespace pair decoding off a real /api/v2 response, and every method of the
 // resource groups #94 ported -- the three composite bodies the vendored specs
 // describe wrongly among them, decoded to their real counts. Assertions about what the
@@ -32,6 +34,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,10 +84,43 @@ func newSmokeClient(t *testing.T) *octonomy.Client {
 	return client
 }
 
+// slugSeq distinguishes two slugs the clock cannot. Ported from main's
+// integration_test.go at 5e40964 (#118), where it is an atomic.Uint64; that type
+// needs Go 1.19, so here it is a plain uint64 behind atomic.AddUint64.
+//
+// It is not decoration. The timestamp half used to be `UnixNano() % 1e6`, which
+// is the low six digits of the nanosecond count and therefore REPEATS EVERY
+// MILLISECOND: two calls exactly 1ms apart in one process produce the same
+// string, and a rerun that inherits a recycled pid can collide with the run
+// before it. The server keeps an active row's slug unique within its tenant,
+// application and namespace (and, for a tag, its type), so a collision is a
+// 409 on a create -- or worse, a list filter that matches a row this run did
+// not make and an exact-count assertion that fails for a reason nobody can see
+// from the output. The counter makes two calls in one process distinct by
+// construction; the full nanosecond stamp and the pid separate one process from
+// the next.
+var slugSeq uint64
+
 // uniqueSlug keeps repeat runs against one long-lived harness from colliding on
-// the server's (type, slug) uniqueness constraint.
+// the server's slug uniqueness constraints (see slugSeq for their scope).
+//
+// LENGTH IS BOUNDED BY THE TIGHTEST CONSUMER, not by `slug`. A value is its
+// prefix, three separators, the pid, a nineteen-digit nanosecond stamp (nineteen
+// until the year 2262, where int64 nanoseconds run out) and the counter: under
+// 60 characters for the longest prefix either integration file uses, on a Linux
+// pid_max of 4194304, far inside the contract's 255 on `slug` and `resource_id`.
+// One value is not a slug at all: TestSmoke_APIV2Namespace sends "go113-smoke-"
+// plus a slug as a request id, which the server stores in a 100-CHARACTER column
+// -- an over-long id fails the row insert and comes back as a bare 500. It runs
+// to 51 characters on that pid_max with a two-digit counter, so a longer prefix
+// there is measured against 100.
+//
+// The fixed-width stamp also serves the free-text `q` assertion in
+// TestSmoke_RealServer, which expects exactly one row: no prefix here ends with
+// another, so a value another call made can contain this one only by sharing
+// its prefix, pid and nanosecond stamp.
 func uniqueSlug(prefix string) string {
-	return fmt.Sprintf("%s-%d-%d", prefix, os.Getpid(), time.Now().UnixNano()%1e6)
+	return fmt.Sprintf("%s-%d-%d-%d", prefix, os.Getpid(), time.Now().UnixNano(), atomic.AddUint64(&slugSeq, 1))
 }
 
 func TestSmoke_RealServer(t *testing.T) {
@@ -173,6 +210,78 @@ func TestSmoke_RealServer(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Vocabularies.List returned %d rows, none of them the created %s", len(vocabs.Data), vocab.ID)
+	}
+
+	// The two filters #118 ported, from main's smoke test at 5e40964. Only a
+	// real server can prove either one is READ rather than merely sent: an
+	// unknown query parameter is dropped in silence, so a name the SDK got wrong
+	// -- or one this route never supported -- comes back as a full, plausible
+	// page that looks exactly like a filter that worked. The unit test asserts
+	// the wire, and the contract gate the name against the spec; this asserts
+	// the effect.
+	//
+	// A SECOND ROW IS WHAT MAKES THAT ASSERTION MEAN ANYTHING. On a freshly
+	// booted harness the vocabulary created above may be the only one this
+	// client can see, and then "the filtered page holds only our row" is equally
+	// true of a server that ignored the parameter and returned the entire
+	// collection. With a second visible row present, an ignored filter returns
+	// two and every assertion below fails, which is the point.
+	//
+	// Its slug shares no substring with vocabSlug (`smoke-decoy-` against
+	// `smoke-vocab-`, each with its own pid/nanos suffix), so it cannot be swept
+	// in by the free-text lookup either.
+	decoySlug := uniqueSlug("smoke-decoy")
+	decoy, err := client.Vocabularies.Create(ctx, octonomy.VocabularyCreate{
+		Name:        "Go 1.13 smoke decoy",
+		Slug:        decoySlug,
+		Description: octonomy.String("a second visible vocabulary, so a filtered lookup has something to exclude"),
+	})
+	if err != nil {
+		t.Fatalf("Vocabularies.Create decoy: %v", err)
+	}
+	defer func() {
+		if err := client.Vocabularies.Delete(ctx, decoy.ID); err != nil {
+			t.Errorf("Vocabularies.Delete decoy: %v", err)
+		}
+	}()
+
+	// Each slug returns its OWN row, which is two assertions in one: the filter
+	// includes the match, and it excludes the other row that is provably visible
+	// to this same client -- provably, because the other lookup just returned it.
+	for _, tc := range []struct {
+		slug string
+		want string
+	}{
+		{slug: vocabSlug, want: vocab.ID},
+		{slug: decoySlug, want: decoy.ID},
+	} {
+		page, err := client.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
+			Slug:        octonomy.String(tc.slug),
+			ListOptions: octonomy.ListOptions{Limit: 50},
+		})
+		if err != nil {
+			t.Fatalf("Vocabularies.List(slug=%s): %v", tc.slug, err)
+		}
+		if len(page.Data) != 1 || page.Data[0].ID != tc.want {
+			t.Fatalf("Vocabularies.List(slug=%s) returned %d rows, want only %s: %+v",
+				tc.slug, len(page.Data), tc.want, page.Data)
+		}
+	}
+
+	// `q` is a case-insensitive substring of the name OR the slug on the
+	// server, so the slug in a different case is a match the exact filter above
+	// would miss -- which is what tells the two filters apart from here, rather
+	// than leaving `q` proved by a value `slug` would have matched anyway.
+	byQuery, err := client.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
+		Query:       octonomy.String(strings.ToUpper(vocabSlug)),
+		ListOptions: octonomy.ListOptions{Limit: 50},
+	})
+	if err != nil {
+		t.Fatalf("Vocabularies.List by q: %v", err)
+	}
+	if len(byQuery.Data) != 1 || byQuery.Data[0].ID != vocab.ID {
+		t.Fatalf("Vocabularies.List(q=%s) returned %d rows, want only %s: %+v",
+			strings.ToUpper(vocabSlug), len(byQuery.Data), vocab.ID, byQuery.Data)
 	}
 
 	// A real error envelope from the real server, not a canned httptest body.

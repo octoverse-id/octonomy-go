@@ -38,7 +38,6 @@ package octonomy_test
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	octonomy "github.com/octoverse-id/octonomy-go"
@@ -121,9 +120,12 @@ const (
 // file. A read endpoint nobody probed is the one a cross-merchant leak lives in;
 // what changed is that something says so now.
 //
-// PAGINATION IS NOT AN EXHAUSTIVENESS ARGUMENT. Every list probe below either
-// narrows to the fixture with an exact server-side filter, or walks the whole
-// collection. A single page -- even at the server's 200-row clamp -- proves only
+// PAGINATION IS NOT AN EXHAUSTIVENESS ARGUMENT. Every list probe below narrows
+// to the fixture on the server -- by an exact filter (a slug, an entity id) or
+// by a route that addresses the fixture's own parent row. A collection route
+// whose params struct offered no such filter would have to walk the whole
+// collection and prove the walk complete, as Vocabularies.List did until #118
+// gave it a slug filter on this line. A single page -- even at the server's 200-row clamp -- proves only
 // that the row is not on the FIRST page, and "not on page one" is not "not
 // visible": a long-lived harness, or a run that leaked fixtures, pushes a
 // genuinely leaked row past the boundary and turns the leak into a pass. The
@@ -269,48 +271,26 @@ func readProbes(h harness) []readProbe {
 			name:     "Vocabularies.List",
 			filtered: filteredEmpty,
 			find: func(ctx context.Context, c *octonomy.Client, readNS string, want namespaceFixture, extra ...octonomy.RequestOption) (bool, error) {
-				// WALKED, not filtered. main narrows this probe with a slug
-				// filter, and VocabularyListParams on this line has none -- it
-				// is a gap docs/compat-test-disposition.md records -- so the
-				// only exhaustive answer is every page of the collection.
-				//
-				// The walk proves its own completeness rather than trusting the
-				// page links: it must see as many distinct rows as the server
-				// counts. An unordered or shifting collection would otherwise
-				// repeat one row and skip another, and a skipped row is a leak
-				// read as a pass. The server orders vocabularies by
-				// (name, slug, id), which is total, so a mismatch means
-				// something changed under the walk, and it fails rather than
-				// guessing.
-				seen := map[string]bool{}
-				found := false
-				count := -1
-				for offset := 0; ; {
-					page, err := c.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
-						ListOptions: octonomy.ListOptions{Limit: scopedLimit, Offset: offset},
-					}, h.scoped(readNS, extra...)...)
-					if err != nil {
-						return false, err
-					}
-					if count >= 0 && page.Pagination.Count != count {
-						return false, fmt.Errorf("the collection's count moved from %d to %d during the walk", count, page.Pagination.Count)
-					}
-					count = page.Pagination.Count
-					for _, row := range page.Data {
-						seen[row.ID] = true
-						if row.ID == want.vocabulary.ID {
-							found = true
-						}
-					}
-					if page.Pagination.Next == nil || len(page.Data) == 0 {
-						break
-					}
-					offset += len(page.Data)
+				// Filtered by the fixture's own slug, same reasoning as Tags.List.
+				// This probe used to WALK the collection, and prove the walk
+				// complete, because VocabularyListParams on this line had no slug
+				// filter; #118 ported main's, and with it in place the probe
+				// narrows to the fixture by slug, as main's does at 5e40964. An
+				// empty page means the row is genuinely not visible rather than
+				// merely absent from the page we looked at.
+				page, err := c.Vocabularies.List(ctx, &octonomy.VocabularyListParams{
+					Slug:        octonomy.String(want.vocabulary.Slug),
+					ListOptions: octonomy.ListOptions{Limit: scopedLimit},
+				}, h.scoped(readNS, extra...)...)
+				if err != nil {
+					return false, err
 				}
-				if len(seen) != count {
-					return false, fmt.Errorf("the walk saw %d distinct rows of the %d the server counts, so it cannot say the row is absent", len(seen), count)
+				for _, row := range page.Data {
+					if row.ID == want.vocabulary.ID {
+						return true, nil
+					}
 				}
-				return found, nil
+				return false, nil
 			},
 		},
 		{

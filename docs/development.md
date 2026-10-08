@@ -372,12 +372,23 @@ The smoke and isolation suites are what exercise real values against a real serv
   their pointer fields, so a PATCH driver fills them as a create does; a list method returns its own
   envelope rather than `List[T]`; and every client the gate builds names its `APIVersion`, since
   this line's default surface is not `main`'s.
-- **One gap is recorded rather than closed.** `VocabularyListParams` has no `Query` or `Slug`, so
-  the client cannot send `q` or `slug` on `GET /vocabularies`. The gate found it, and
-  `contract-coverage.yaml` lists both under `unsent_inputs` with the reason. A row like that would
-  hide a field ported and never driven, so `TestRecordedGapsStillHaveNoField` holds each gap row to
-  its field's absence: porting the two fields fails it until both rows come out, and the gate then
-  reports `q` and `slug` as documented and unsent until the vocabulary driver sets them.
+- **A gap row is held to its field's absence.** A documented input the client has no field to send
+  goes under `unsent_inputs` in `contract-coverage.yaml`, with the reason. A row like that would
+  hide a field ported and never driven, so `TestRecordedGapsStillHaveNoField` refuses a gap row
+  that `recordedGaps` (`acceptance_test.go`) does not name — in the query, the body or a header,
+  where a row is a gap unless its `carried_in` or its route says where the input goes instead. A
+  named gap is held twice: to the absence of the struct field the entry names, and — since that
+  trusts the entry's naming — to a call of the method `contract-coverage.yaml` names for the
+  operation, with every fixed parameter filled and no option, through a transport that records
+  the request. The test fails the moment the field exists or the request carries the input; the
+  row comes out, and the gate reports the input as documented and unsent until the driver sets it.
+  Neither is a proof the client cannot send it: an input a `RequestOption` carries is not a gap
+  at all, and passes both, and one fully filled call cannot see a field sent only while another
+  is unset — the comment on `recordedGaps` records both. A header gap names a `Config` field, since
+  no params or write struct sets a header; one that only an option sends — a `RequestOption`, or
+  the health client's `WithHealthUserAgent` — is held by neither witness. None is recorded now. The gate found one, `q` and `slug` on `GET /vocabularies`, and recorded it from
+  #98 until #118 ported `VocabularyListParams.Query` and `.Slug` — which ran that sequence end to
+  end.
 - **What runs the gate is pinned from outside it.** `contractgate_test.go`, in the root package,
   pins the `test` and `compat-guard` jobs and ci.yml's `on:` block as text, and the `contract-*` and
   `release-check` recipes as make's own rule database resolves them under each real goal, each

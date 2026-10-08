@@ -49,12 +49,13 @@ import (
 //
 // Where the client genuinely cannot send a documented parameter, that IS the
 // finding, and it belongs in the YAML's unsent_inputs with a reason -- not in a
-// driver that quietly skips it. On this line the live case is `q` and `slug` on
-// GET /vocabularies: main's VocabularyListParams gained them in #61 and this
-// line's has neither field, so the vocabulary list driver below sets every field
-// the struct HAS, and the two rows say why the rest are missing. Those rows are
-// held to the fields' absence (TestRecordedGapsStillHaveNoField), so porting the
-// fields forces the rows out and this driver to set them.
+// driver that quietly skips it. The worked example used to be `q` and `slug` on
+// GET /vocabularies: main's VocabularyListParams has them at 5e40964 (#61 added
+// them), this line's lacked both, and the gate recorded the pair as a gap from
+// #98 until #118 ported the fields -- at which point
+// TestRecordedGapsStillHaveNoField forced the rows out and the gate held the
+// driver below to setting them. What remains listed is a decision rather than a
+// gap (`application_id` on writes, which travels in the body).
 //
 // THE COMPAT DIALECT, which is why this file is not main's (#98). It is the one
 // file in the gate written against this line's surface rather than copied:
@@ -168,9 +169,8 @@ func Drivers() []Driver {
 				ApplicationID: env.Str("application_id"),
 				IncludeShared: env.Bool("include_shared"),
 				IsActive:      env.Bool("is_active"),
-				// No Query and no Slug: this line's VocabularyListParams has
-				// neither, and docs/contract-coverage.yaml records `q` and `slug`
-				// under unsent_inputs with the reason.
+				Query:         env.Str("q"),
+				Slug:          env.Str("slug"),
 			}, env.ListScope()...)
 		}},
 		{Op: "post /vocabularies", SDK: "VocabularyService.Create", Call: func(ctx context.Context, env *Env) (any, error) {
