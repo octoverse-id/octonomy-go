@@ -111,6 +111,15 @@ with `requires go >= 1.26.0`. It lets the go command fetch the toolchain needed 
 tool; the binary still analyses this module with your own Go, which is what you want, since the
 standard-library advisories it reports are the ones affecting the version you build with.
 
+That makes a local `make vuln` — and so `make release-check` — a verdict about **your** Go. On a
+release upstream no longer patches it cannot pass: since 2026-10-09 go1.25.14 carries nine
+standard-library advisories fixed only in go1.26.9 (#121), and no 1.25.x will follow. CI's `vuln`
+job scans with `oldstable`, the older of the two releases still patched. To get its verdict on a
+laptop, scan with that release (`GOTOOLCHAIN=go1.26.9 make vuln`; `govulncheck -version` prints the
+Go it analysed with) — and with a scanner built by a Go **at least as new** as the one it scans: a
+govulncheck built by go1.26 cannot type-check go1.27's standard library, and fails to load packages
+rather than scanning.
+
 ## Testing approach
 
 Tests use `net/http/httptest` to stand up a fake Octonomy and assert the wire contract:
