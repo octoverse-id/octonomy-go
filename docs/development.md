@@ -379,8 +379,9 @@ can make a selector ambiguous in a caller's struct that embeds the type beside a
 addition is safe from that, so refusing it would refuse every minor release. Two shapes are refused
 rather than compared, since no feature line would describe them: an exported declaration that hands
 a caller a value of a type the caller cannot name (an unexported one, or one from an internal
-package), and a file built in some build contexts and not others (a GOOS or GOARCH suffix, a
-constraint, cgo, a Go version), since every tree is read in one.
+package), and a file built in some build contexts and not others — a GOOS or GOARCH suffix, a
+constraint, cgo, a Go version, or a custom tag no context sets (only `//go:build ignore` is left
+alone) — since every tree is read in one.
 
 ### Comments that describe `main`
 
