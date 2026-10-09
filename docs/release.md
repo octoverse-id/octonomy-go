@@ -39,17 +39,22 @@ standard-library advisories against **the Go it resolves** — which is the poin
 newer standard library than the one under test would hide exactly what the scan is for (the `vuln` job
 in [`ci.yml`](../.github/workflows/ci.yml) explains the same distinction from the other side). So a
 local Go a few patch releases behind fails the gate on findings that have nothing to do with this code
-and that CI, resolving a current patch, does not see. Check both lines before you start:
+and that CI does not see — and so does a Go upstream no longer patches at all, which no patch release
+will fix (go1.25 since 2026-10-09, #123). CI's `vuln` job scans with `oldstable`, the older of the
+two releases still patched; [development.md](development.md#quality-gates) shows how to look up what
+it resolves to today. Check both lines before you start:
 
 ```bash
-go version                 # a current 1.25.x patch, not a months-old version-manager pin
+go version                 # the release `oldstable` resolves to, not a months-old version-manager pin
 govulncheck -version       # its `Go:` line is the one that counts, and it can disagree with the above
 ```
 
 In source mode `govulncheck` takes the scanned standard library from the `go` **it** resolves —
 `GOVERSION` in its environment, else `go env GOVERSION` — so ordinarily putting a patched `go` first
 on `PATH` is all it takes, and the two lines agree. The toolchain that *built* the scanner does not
-enter into it.
+decide which standard library is scanned — but it must be at least as new as that one: a govulncheck
+built by go1.26 cannot type-check go1.27's standard library, and fails to load packages rather than
+scanning.
 
 What breaks that is a version manager's **shim**. A `govulncheck` reached through one (asdf, for
 instance) is re-execed with the manager's selected Go, so the scan uses *that* standard library no

@@ -144,6 +144,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and left alone: its diagram describes only this line, and the generator whose output it was
     flagged against was cut.
 
+### Fixed
+- **The `vuln` CI job had aged into a Go that upstream no longer patches, so it could never pass**
+  ([#123](https://github.com/octoverse-id/octonomy-go/issues/123)). It scanned with
+  `go-version: "1.25"`, and once Go 1.27 shipped, nine standard-library advisories published against
+  go1.25.14 on 2026-10-09 (GO-2026-6603 to GO-2026-6617, in `net/http`, `net/textproto` and
+  `crypto/tls`) were fixed only in go1.26.9. `main`'s CI had not run since 2026-09-30, so the job
+  had not shown it yet; `support/go1.13`, with the same pin, went red on its next push and was fixed
+  first ([#121](https://github.com/octoverse-id/octonomy-go/issues/121)). Nothing in this module was
+  affected: there is no dependency to bump, and a consumer's remedy is a patched Go. The job now
+  scans with `oldstable`, the older of the two releases still patched, because any literal minor
+  repeats the break when it leaves support. It still analyses with the Go it sets up, and now
+  prints which (`govulncheck -version`) before scanning. `docs/development.md` gives a local recipe
+  that looks `oldstable` up rather than pinning a patch, and `docs/release.md` no longer asks for a
+  1.25.x — and corrects its claim that the toolchain which built the scanner does not matter: it
+  does not choose the standard library scanned, but one older than it cannot load it.
+
 ## [2.0.0-rc.1] - 2026-09-22
 
 **The first release candidate of the modern line, and the point at which the API surface is frozen.**
