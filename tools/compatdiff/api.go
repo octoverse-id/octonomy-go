@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
+	"go/build/constraint"
 	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // A module's exported API, as one line per FEATURE: every exported constant
@@ -257,37 +260,27 @@ func (l *loader) importPath(p string) (*types.Package, error) {
 
 // sameInEveryContext refuses a directory whose set of files depends on the
 // build context: a GOOS or GOARCH file name suffix, a build constraint naming
-// one, cgo, or a Go version. This tool reads every tree in ONE context, so an
-// API such a file adds or removes would be compared on one platform, or under
-// one Go, and silently not on another -- the Go 1.13 a consumer of this line
-// builds with among them. Neither line has such a file; a file excluded
-// everywhere (`//go:build ignore`) is no part of any build and is left alone.
+// one, cgo, a Go version, or a custom tag. This tool reads every tree in ONE
+// context, so an API such a file adds or removes would be compared on one
+// platform, or under one Go, or without one tag, and silently not otherwise --
+// the Go 1.13 a consumer of this line builds with among them. Neither line has
+// such a file.
+//
+// A file is compared across every GOOS/GOARCH pair the running toolchain
+// supports (`go tool dist list`), with cgo on and off, and under modern release
+// tags and Go 1.13's. One included in some and not others is refused. One
+// included in none is allowed only when the go command never builds it at all:
+// its name starts with `_` or `.`, or its build constraint is exactly
+// `ignore`. Anything else included nowhere -- `//go:build debug` -- is built by
+// whoever passes that tag, and is refused too.
 func sameInEveryContext(dir string) error {
-	entries, err := os.ReadDir(dir)
+	contexts, err := buildContexts()
 	if err != nil {
 		return err
 	}
-	var go113 []string
-	for i := 1; i <= 13; i++ {
-		go113 = append(go113, fmt.Sprintf("go1.%d", i))
-	}
-	var contexts []build.Context
-	for _, c := range []struct {
-		goos, goarch string
-		cgo          bool
-		tags         []string
-	}{
-		{"linux", "amd64", false, build.Default.ReleaseTags},
-		{"linux", "amd64", true, build.Default.ReleaseTags},
-		{"linux", "amd64", false, go113},
-		{"windows", "arm64", false, build.Default.ReleaseTags},
-		{"darwin", "arm64", false, build.Default.ReleaseTags},
-		{"js", "wasm", false, build.Default.ReleaseTags},
-		{"plan9", "386", false, build.Default.ReleaseTags},
-	} {
-		ctxt := build.Default
-		ctxt.GOOS, ctxt.GOARCH, ctxt.CgoEnabled, ctxt.ReleaseTags = c.goos, c.goarch, c.cgo, c.tags
-		contexts = append(contexts, ctxt)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
 	}
 	for _, e := range entries {
 		name := e.Name()
@@ -306,8 +299,95 @@ func sameInEveryContext(dir string) error {
 				return fmt.Errorf("%s is built in some contexts and not others (GOOS, GOARCH, cgo or the Go version), and this tool reads one", name)
 			}
 		}
+		if first || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
+			continue
+		}
+		ignored, err := constrainedToIgnore(filepath.Join(dir, name))
+		if err != nil {
+			return err
+		}
+		if !ignored {
+			return fmt.Errorf("%s is built in no context this tool reads, and its constraint is not `ignore`: it is built under a tag someone can set, and this tool reads none", name)
+		}
 	}
 	return nil
+}
+
+var (
+	contextsOnce sync.Once
+	contextsList []build.Context
+	contextsErr  error
+)
+
+// buildContexts is every context sameInEveryContext compares a file across.
+func buildContexts() ([]build.Context, error) {
+	contextsOnce.Do(func() {
+		out, err := exec.Command("go", "tool", "dist", "list").Output()
+		if err != nil {
+			contextsErr = fmt.Errorf("list the toolchain's platforms (go tool dist list): %w", err)
+			return
+		}
+		var go113 []string
+		for i := 1; i <= 13; i++ {
+			go113 = append(go113, fmt.Sprintf("go1.%d", i))
+		}
+		add := func(goos, goarch string, cgo bool, tags []string) {
+			ctxt := build.Default
+			ctxt.GOOS, ctxt.GOARCH, ctxt.CgoEnabled, ctxt.ReleaseTags = goos, goarch, cgo, tags
+			contextsList = append(contextsList, ctxt)
+		}
+		add("linux", "amd64", false, build.Default.ReleaseTags)
+		add("linux", "amd64", true, build.Default.ReleaseTags)
+		add("linux", "amd64", false, go113)
+		for _, pair := range strings.Fields(string(out)) {
+			goos, goarch, ok := strings.Cut(pair, "/")
+			if !ok {
+				contextsErr = fmt.Errorf("go tool dist list printed %q", pair)
+				return
+			}
+			add(goos, goarch, false, build.Default.ReleaseTags)
+		}
+		if len(contextsList) < 20 {
+			contextsErr = fmt.Errorf("go tool dist list named %d platforms; that is not a toolchain's list", len(contextsList)-3)
+		}
+	})
+	return contextsList, contextsErr
+}
+
+// constrainedToIgnore reports whether a file's build constraint is exactly the
+// tag `ignore`, the convention for a file no build includes.
+func constrainedToIgnore(file string) (bool, error) {
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return false, err
+	}
+	var plus []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "package ") {
+			break
+		}
+		switch {
+		case constraint.IsGoBuild(line):
+			expr, err := constraint.Parse(line)
+			if err != nil {
+				return false, fmt.Errorf("%s: %w", file, err)
+			}
+			tag, ok := expr.(*constraint.TagExpr)
+			return ok && tag.Tag == "ignore", nil
+		case constraint.IsPlusBuild(line):
+			plus = append(plus, line)
+		}
+	}
+	if len(plus) == 1 {
+		expr, err := constraint.Parse(plus[0])
+		if err != nil {
+			return false, fmt.Errorf("%s: %w", file, err)
+		}
+		tag, ok := expr.(*constraint.TagExpr)
+		return ok && tag.Tag == "ignore", nil
+	}
+	return false, nil
 }
 
 type importerFunc func(path string) (*types.Package, error)
@@ -477,6 +557,11 @@ func (e *emitter) typeName(o *types.TypeName) error {
 // package declares, through methods no feature line lists, so whether T still
 // satisfies it -- what `var p I = T{}` in a caller's code needs -- shows
 // nowhere else.
+//
+// Generic types and generic interfaces are left out: whether one satisfies
+// another depends on the instantiation, which a caller chooses. That is a
+// limitation on main's side only -- Go 1.13 has no generics -- and a generic
+// pair main declares goes unchecked here.
 func (e *emitter) implements(scope *types.Scope) {
 	var ifaces, concrete []*types.TypeName
 	for _, name := range scope.Names() {

@@ -281,6 +281,8 @@ func TestOneBuildContextOrNone(t *testing.T) {
 		{"a Go version only Go 1.13 builds", "old.go", "// +build !go1.14\n\npackage m\nfunc Old() {}\n"},
 		{"a Go version Go 1.13 does not build", "new.go", "//go:build go1.18\n\npackage m\nfunc New() {}\n"},
 		{"cgo", "c.go", "//go:build cgo\n\npackage m\nfunc C() {}\n"},
+		{"a GOOS no fixed context names", "api_freebsd.go", "package m\nfunc BSD() {}\n"},
+		{"a GOARCH no fixed context names", "api_s390x.go", "package m\nfunc Z() {}\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := loadFixture(t, s, map[string]string{"m.go": "package m\n", tc.file: tc.src})
@@ -289,9 +291,21 @@ func TestOneBuildContextOrNone(t *testing.T) {
 			}
 		})
 	}
-	a := mustLoad(t, s, map[string]string{"m.go": "package m\n", "gen.go": "//go:build ignore\n\npackage main\nfunc main() {}\n"})
+	for _, tag := range []string{"//go:build debug", "// +build debug", "//go:build ignore && debug"} {
+		_, err := loadFixture(t, s, map[string]string{"m.go": "package m\n", "d.go": tag + "\n\npackage m\nfunc Debug() {}\n"})
+		if err == nil || !strings.Contains(err.Error(), "built in no context this tool reads") {
+			t.Errorf("%s: err = %v", tag, err)
+		}
+	}
+	a := mustLoad(t, s, map[string]string{
+		"m.go":       "package m\n",
+		"gen.go":     "//go:build ignore\n\npackage main\nfunc main() {}\n",
+		"old.go":     "// +build ignore\n\npackage main\nfunc main() {}\n",
+		"_skip.go":   "package m\nfunc Skipped() {}\n",
+		".hidden.go": "package m\nfunc Hidden() {}\n",
+	})
 	if got := a.packages["."]; len(got) != 1 || got[0] != "package name m" {
-		t.Errorf("an ignored file was read: %v", got)
+		t.Errorf("a file no build includes was read: %v", got)
 	}
 }
 
