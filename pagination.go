@@ -39,17 +39,18 @@ type Pagination struct {
 // "pagination": {...}} -- is declared once per resource on this line, as TagList
 // (tags.go), VocabularyList (vocabularies.go), TagAliasList (aliases.go),
 // ResourceTagList and TagResourceList (resources.go) and AuditLogList
-// (audit.go), rather than once as a generic List[T]. Type parameters need Go 1.18 and this line targets Go 1.13, so a new
-// resource repeats the two-field struct instead of instantiating a shared one.
-// Only the Data field differs; Pagination and ListOptions above carry no type
-// parameter and so needed no such treatment.
+// (audit.go), rather than once as a generic list type with a type parameter for
+// the row, as main has. Type parameters need Go 1.18 and this line targets Go
+// 1.13, so a new resource repeats the two-field struct instead of instantiating
+// a shared one. Only the Data field differs; Pagination and ListOptions above
+// carry no type parameter and so needed no such treatment.
 
 // Page is one page of a list endpoint, as Each walks it.
 //
-// It stands where List[T] stood in main's Each at 5e40964: the page function
-// returns a Page and Each hands each of its rows to the callback as an
-// interface{}. Every list envelope above implements it, so a list method's
-// result is returned from a page function as it is.
+// It stands where main's generic list type stood in main's Each at 5e40964: the
+// page function returns a Page and Each hands each of its rows to the callback
+// as an interface{}. Every list envelope above implements it, so a list
+// method's result is returned from a page function as it is.
 //
 // Its one method is unexported, which keeps a caller from writing a Page of its
 // own but does NOT seal the interface: a caller's struct that embeds a Page or
@@ -136,11 +137,11 @@ func pageRows(p Page) (rows []interface{}, pagination *Pagination, ok bool) {
 //
 // # The callback receives interface{}
 //
-// main's Each, at 5e40964, is generic -- Each[T] over a List[T] -- and hands fn
-// a T. Type parameters need Go 1.18, so on this line fn receives each row as an
-// interface{} holding the list's element VALUE: a Tag for a *TagList, a
-// Vocabulary for a *VocabularyList, a ResourceTag for a *ResourceTagList, never
-// a pointer. Assert it back with the two-value form shown above. The one-value
+// main's Each, at 5e40964, is generic -- one type parameter for the row, over
+// its generic list type -- and hands fn a row of that type. Type parameters
+// need Go 1.18, so on this line fn receives each row as an interface{} holding
+// the list's element VALUE: a Tag for a *TagList, a Vocabulary for a
+// *VocabularyList, a ResourceTag for a *ResourceTagList, never a pointer. Assert it back with the two-value form shown above. The one-value
 // form, item.(octonomy.Tag), panics in your callback when the page function
 // returns a different list type than the assertion names, and the two closures
 // are easy to edit apart. A failed assertion returned as an error stops the

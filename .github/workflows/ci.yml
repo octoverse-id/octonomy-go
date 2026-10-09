@@ -52,6 +52,14 @@ jobs:
           version: latest
           working-directory: tools/contractdrift
           args: --config ../../.golangci.yml
+      # The parity checks (tools/compatdiff, #100) are a third module, for the
+      # same reason and with the same config.
+      - name: golangci-lint (parity checks)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          working-directory: tools/compatdiff
+          args: --config ../../.golangci.yml
 
   test:
     runs-on: ubuntu-latest
@@ -167,7 +175,9 @@ jobs:
   compat-guard:
     name: compat guard
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Five minutes held the shell checks alone. The parity checks (#100) add a
+    # Go download and an uncached `go test -race` of their module.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -195,6 +205,25 @@ jobs:
         run: make contract-identity
       - name: The identity check's own tests
         run: make contract-identity-test
+      # This line's exported API against main's at a pinned commit, and against
+      # every published release of this line (#100). The same kind of check as
+      # the two above -- what this line may and may not differ from main in --
+      # and it needs the same full history, to read main's commit and each
+      # release tag. The first Go this job sets up: the steps above are shell.
+      #
+      # A modern Go, because the tool type-checks main's source, which uses type
+      # parameters. Its own module declares go 1.24; "1.25" is the newest the
+      # test matrix runs, and the LIBRARY's Go 1.13 floor is the go1.13 job's
+      # business, not this one's.
+      - name: Set up Go for the parity checks
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache: false
+      - name: This line's API against main's and every published release's
+        run: make compat-diff
+      - name: The parity checks' own tests
+        run: make compat-diff-test
 
   vuln:
     runs-on: ubuntu-latest
@@ -264,10 +293,10 @@ jobs:
       # failed install would report a green scan that never happened. Calling the
       # binary directly makes a missing one a failing step.
       #
-      # Two invocations, because `./...` stops at a go.mod boundary and this
-      # line has two modules since #98: the SDK, and the contract gate in
-      # tools/contractdrift. A third module would need a third step -- nothing
-      # about either command reports one it did not reach.
+      # One invocation per module, because `./...` stops at a go.mod boundary:
+      # the SDK, the contract gate in tools/contractdrift (#98) and the parity
+      # checks in tools/compatdiff (#100). A fourth module would need a fourth
+      # step -- nothing about any of these commands reports one it did not reach.
       - name: govulncheck
         run: govulncheck ./...
       # The gate's module carries the repository's only third-party dependency
@@ -276,6 +305,12 @@ jobs:
       # unscanned.
       - name: govulncheck (contract gate)
         working-directory: tools/contractdrift
+        run: govulncheck ./...
+      # The parity checks' module (#100) is standard-library only, so this scan
+      # is about the standard library it builds against -- which is still a
+      # third `./...` that the two above do not reach.
+      - name: govulncheck (parity checks)
+        working-directory: tools/compatdiff
         run: govulncheck ./...
 
   # THE COMPAT LINE'S ONLY CHECK AGAINST A REAL SERVER.

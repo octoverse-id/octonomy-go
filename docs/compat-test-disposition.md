@@ -58,7 +58,7 @@ every file also meets `any` → `interface{}`.
 | `smokeprobes_test.go` | 720 | **REWRITTEN** here (#95) | `smokeprobes_test.go` | `doData[T]` / `doList[T]` resolution; `List[…]`; and a `smokeProbes()` table this line does not have. See *The three rewrites* |
 | `tags_test.go` | 241 | **PRESERVE** this line's own; `TestTags_Get` **PORTED** here | `tags_test.go` | `io.ReadAll`; `Optional`. The fixture is raw wire JSON rather than a marshalled `Tag`, and every field it expects a value in is sent a non-zero one — `main`'s sent `"parent_id": null`, which a misspelled tag also decodes to — so a misspelled tag on one of them fails. The null case is `TestTags_Get_NullParentStaysNil` |
 | `tagtree_test.go` | 738 | **PORTED** here (#99) | `tagtree_test.go` | `slices.*` ×13: `Equal` ×10 and `Contains` → `equalStrings` and `containsNode`; `DeleteFunc` and `SortFunc` → the loop and `sort.Slice` that `BuildTagTree`'s doc comment shows, so the tests run the code a reader copies. Range-over-int (`for i := range 50`) → a C-style loop; it captures no `i`, so no shadow. Three of `main`'s assertions are strengthened, since a mutant survived each on `main` too: a linked child must not report `IsOrphan`, `Walk` must return the callback's error by identity rather than through `errors.Is`, and a cycle label must carry the slug (`TestBuildTagTree_CycleMessageNamesIDAndSlug`; the `tag` helper's slug equals its id). Two compat-only tests pin the local `slices.Reverse`: `TestReverseHelpers` and `TestBuildTagTree_CycleMessageReadsParentToChild` — `main`'s tests do not see the direction of the cycle message |
-| `types_test.go` | 369 | Mixed — per test below | `types_test.go` | `Optional` ×11; `io.ReadAll`; `DecodeMetadata[T]` |
+| `types_test.go` | 369 | Mixed — per test below | `types_test.go` | `Optional` ×11; `io.ReadAll`; `DecodeMetadata[T]` → `DecodeMetadata(m, &v)` (#100) |
 | `vocabularies_test.go` | 278 | **PRESERVE** this line's own; two of `main`'s tests **PORTED** here | `vocabularies_test.go` | `io.ReadAll`; `Optional`. Per test below |
 
 ## Outside the root package
@@ -94,7 +94,7 @@ stays. `main`'s cases went to `transport_test.go`.
 | ----------- | ------- |
 | `TestMetadataIsStillAnAlias` | **PORTED** here. On this line the reason is this line's first release: it declared `Metadata` an alias, and a defined type would break a caller's type switch, which no major can carry |
 | `TestUpdateMetadata_OmitClearAndReplaceOnEveryPatchBody` | Covered by `update_test.go` (#112): the absent, `{}` and populated states on every `Metadata` field of every `*Update` body in `updateBodies` (#96). `main`'s fourth state, an explicit `null`, needs `Optional` and does not exist here |
-| `TestDecodeMetadata`, `…_AbsentMetadataIsTheZeroValueForEveryT`, `…_MismatchIsAnErrorNotAPanic`, `…_UnmarshalableValue`, `…_LargeIntegerPrecision` | **Wait on a port of `DecodeMetadata`**, which this line lacks. No issue owns that port yet — see *Gaps* |
+| `TestDecodeMetadata`, `…_AbsentMetadataIsTheZeroValueForEveryT`, `…_MismatchIsAnErrorNotAPanic`, `…_UnmarshalableValue`, `…_LargeIntegerPrecision` | **PORTED** here with `DecodeMetadata` (#100). This line's takes a pointer where `main`'s takes a type argument, so each test's target starts **non-zero**: "the zero value" has to be something the call wrote, and a straight port of a test of a returned value passes against a `DecodeMetadata` that writes nothing. Two compat-only tests pin the pointer contract (`…_RefusesAnythingButANonNilPointer`) and the replace-never-merge rule `main`'s returned value gives for free (`…_ReplacesTheTargetRatherThanMergingIntoIt`); `jsondepth_test.go`'s cyclic-body test gains a `decode-metadata` case |
 
 ### `vocabularies_test.go`
 
@@ -278,14 +278,15 @@ one of them is a comment in `integration_harness_test.go`, so the call sites num
 
 ## Gaps this table found
 
-One of `main`'s test files reaches exported surface this line lacks, and no sub-issue of #88 owns
-porting it. It is a capability gap, not a test one, so it is recorded here rather than ported in a
-test change. The table found a second, `VocabularyListParams.Query` and `.Slug`; #118 closed it.
+Two of `main`'s test files reached exported surface this line lacked. Each was a capability gap, not
+a test one, so it was recorded here rather than ported in a test change, and both are closed:
 
-- **`DecodeMetadata`** — generic on `main`, with no counterpart here. Its compat signature is an
-  open question the epic's design doc records (finding 6A, "define the `Each` / `DecodeMetadata`
-  compat signatures"). #99 settled `Each`'s — a `Page` and an `interface{}` callback — and when it
-  landed no sub-issue of #88 owned `DecodeMetadata`'s. Five tests in `types_test.go` wait on it.
+- **`VocabularyListParams.Query` and `.Slug`**, which both vendored specs list — closed by #118.
+- **`DecodeMetadata`**, generic on `main` — closed by #100, which settled its compat signature
+  (finding 6A of the epic's design doc, "define the `Each` / `DecodeMetadata` compat signatures"):
+  a pointer to decode into, as `json.Unmarshal` takes, where #99 had settled `Each`'s as a `Page`
+  and an `interface{}` callback. #100's parity check found it too, as the one difference from
+  `main` no carve-out explained.
 
 ## Test files with no `main` counterpart
 
@@ -299,6 +300,8 @@ test change. The table found a second, `VocabularyListParams.Query` and `.Slug`;
 | `sourceguard_test.go` | #95 | The AST readers the rewritten guards share: the two of #95, and `readprobes_test.go` (#97) |
 | `transport_test.go` | #112 (#91) | Holds `main`'s `octonomy_test.go` cases, since this line's own `octonomy_test.go` is kept |
 | `update_test.go` | #112 (#91) | The `*Update` value-receiver `MarshalJSON` (#37), and the per-field wire round-trip of every `*Update` type |
+| `doccomment_test.go` | #100 | No comment in a file a consumer compiles carries a token only `main`'s dialect has — `omitzero`, type-parameter syntax, the `/v2` module's path where a reader would build with it, a Go version at `main`'s floor or later, an `octonomy.Name` this package does not declare, or a post-1.13 standard-library name in a code example — with a fixture of `main`'s own comment forms |
+| `tools/compatdiff/*_test.go` | #100 | The parity and compatibility checks behind `COMPAT.md`: every kind of declaration change is a difference and no spelling change is; an unlisted difference and a stale carve-out line each fail; each way a published release's caller stops compiling fails Check B; the pins are what they claim; and the command end to end on throwaway repositories — the work tree read rather than `HEAD`, an ignored file left out, a shallow clone refused, a stale `COMPAT.md` refused |
 | `contractgate_test.go` | #98 | What runs the contract gate: ci.yml's `test` and `compat-guard` jobs and `on:` block pinned as text, and the `contract-*` and `release-check` recipes pinned as make's rule database resolves them under each real goal, each still phony. In this package, so `go test ./...` runs it outside the make targets it guards |
 | `tools/contractdrift/acceptance_test.go` | #98 | `make contract-check` itself fails on a removed query parameter, a dropped schema field, a retyped property and a rerouted method — one staged copy of the repository per case, broken in the client's source or the specs, run through the real target; and every recorded-gap `unsent_inputs` row held to its field's absence |
 | `updateguard_test.go` | #96 | The source half of the `*Update` checks: no shipped struct tag names `omitzero`, which Go 1.13's `encoding/json` ignores; every `*Update` field can be left out; every PATCH body is a `*Update`; `updateBodies` names every `*Update` type |

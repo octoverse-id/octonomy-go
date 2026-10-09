@@ -137,11 +137,14 @@ $ go list -m github.com/octoverse-id/octonomy-go/v2@latest
 Every resource group the vendored contracts publish is on this tree. What remains are deliberate
 differences from the modern line — permanent, or not planned — and the second column says which;
 [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88) tracks the rest of the parity work.
+The table is the reasons, in brief; [`COMPAT.md`](../COMPAT.md) is the complete list, declaration by
+declaration, and `make compat-diff` fails on a difference it does not list.
 
 | Difference | Why | Workaround |
 | ------- | --- | ---------- |
 | `List[T]` | Type parameters need Go 1.18 — **never**, since the floor never moves | A per-resource type (`TagList`, `TagAliasList`, `AuditLogList`, …) — same fields |
 | `Each[T]`, generic | Type parameters need Go 1.18 — **never** | `Each`, whose page function returns a `Page` (every list type is one) and whose callback takes an `interface{}` holding the row's value |
+| `DecodeMetadata[T]`, generic | Type parameters need Go 1.18 — **never** | `DecodeMetadata(m, &v)`, which decodes into a pointer as `json.Unmarshal` does, and replaces what it points at rather than merging into it |
 | `/api/v2` **by default** | **Never** — this line cannot change a default under a caller, so `DefaultAPIVersion` is `APIV1` here, where `main` had `APIV2` when the selector was ported | Set `Config.APIVersion = APIV2` |
 | A webhook receiver | **Never** — policy, above | Move to the `/v2` module |
 | Clearing a nullable field with PATCH | **Not planned** — a named carve-out of the epic: the `*Update` fields stay pointers, since `main`'s `Optional[T]` would change their types (no major, above). `Metadata` is not affected: `Metadata{}` sends `{}` and empties it | Move to the `/v2` module |
@@ -190,6 +193,12 @@ Backward-compatible **additions** to the exported API.
   while a line is on prereleases, a necessary breaking change may ride a prerelease bump with a
   CHANGELOG entry, and that stops the moment a stable release of that major ships. Whether the modern
   line is still in that state is [its versioning policy](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md) to say.
+- **On the compat line, `make compat-diff` holds every release to every one before it.** It compares
+  the tree's exported declarations with each published release that `tools/compatdiff/baselines.pin`
+  names — constant values, signatures, field types and struct tags, comparability, interface method
+  sets — and fails on any declaration a release exported that is not still here unchanged. It has no
+  exception list. It does not see the unkeyed-literal caveat above, which an added field causes and
+  which this rule already accepts, nor a change of behaviour behind an unchanged declaration.
 - **On the compat line a minor is the only way an addition ships**, and the parity work does ship
   this way. The line took no minors until [#89](https://github.com/octoverse-id/octonomy-go/issues/89)
   withdrew the freeze, and `v1.0.x` was the only shape a release could take; `scripts/compat-guard.sh`
