@@ -114,11 +114,23 @@ standard-library advisories it reports are the ones affecting the version you bu
 That makes a local `make vuln` — and so `make release-check` — a verdict about **your** Go. On a
 release upstream no longer patches it cannot pass: since 2026-10-09 go1.25.14 carries nine
 standard-library advisories fixed only in go1.26.9 (#121), and no 1.25.x will follow. CI's `vuln`
-job scans with `oldstable`, the older of the two releases still patched. To get its verdict on a
-laptop, scan with that release (`GOTOOLCHAIN=go1.26.9 make vuln`; `govulncheck -version` prints the
-Go it analysed with) — and with a scanner built by a Go **at least as new** as the one it scans: a
-govulncheck built by go1.26 cannot type-check go1.27's standard library, and fails to load packages
-rather than scanning.
+job scans with `oldstable`, which setup-go resolves at run time to the latest patch of the older of
+the two releases still patched — so it moves with every patch release and every new minor. To get
+its verdict on a laptop, look the release up rather than writing one down; a pinned patch goes stale
+at the next security release, and then reports advisories CI no longer sees:
+
+```bash
+v=$(curl -fsS 'https://go.dev/dl/?mode=json' | grep -o '"go1\.[0-9.]*"' | sort -u | head -1 | tr -d '"')
+GOTOOLCHAIN=$v+auto go install golang.org/x/vuln/cmd/govulncheck@latest
+GOTOOLCHAIN=$v make vuln
+```
+
+go.dev lists exactly the two supported releases, and the older is the one `oldstable` names. In the
+hours after a release it can be a patch ahead of the manifest setup-go reads; the record is the
+`vuln` job's `Scanner and the Go it analyzes with` step, which prints `Go: go1.X.Y`. The second line
+matters as much as the third: a govulncheck built by an older Go than the one it scans cannot
+type-check that standard library (go1.26's build fails to load go1.27's packages rather than
+scanning), and `$v+auto` builds it with `$v`, or with a newer Go if x/vuln requires one.
 
 ## Testing approach
 
