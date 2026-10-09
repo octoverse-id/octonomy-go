@@ -64,14 +64,18 @@ text The three `MarshalJSON` methods are this line's half of the same decision. 
 text left a plain map under `omitempty`, `Metadata{}` would be dropped from the body, and they are
 text what still sends it as `{}`, emptying the stored object
 text ([#37](https://github.com/octoverse-id/octonomy-go/issues/37)).
-main func Null[T any]() Optional[T]
-main func Set[T any](T) Optional[T]
-main type Optional[T any] struct
-main method (Optional[T]) Get() (T, bool)
-main method (Optional[T]) IsNull() bool
-main method (Optional[T]) IsZero() bool
-main method (Optional[T]) MarshalJSON() ([]uint8, error)
-main method (*Optional[T]) UnmarshalJSON([]uint8) error
+main func Null[$0 any]() Optional[$0]
+main func Set[$0 any]($0) Optional[$0]
+main type Optional[$0 any] struct
+main method (Optional[$0]) Get() ($0, bool)
+main method (Optional[$0]) IsNull() bool
+main method (Optional[$0]) IsZero() bool
+main method (Optional[$0]) MarshalJSON() ([]uint8, error)
+main method (*Optional[$0]) Get() ($0, bool)
+main method (*Optional[$0]) IsNull() bool
+main method (*Optional[$0]) IsZero() bool
+main method (*Optional[$0]) MarshalJSON() ([]uint8, error)
+main method (*Optional[$0]) UnmarshalJSON([]uint8) error
 main type TagAliasUpdate struct, ApplicationID Optional[string] `json:"application_id,omitzero"`
 main type TagAliasUpdate struct, IsActive Optional[bool] `json:"is_active,omitzero"`
 main type TagAliasUpdate struct, Metadata Optional[map[string]interface{}] `json:"metadata,omitzero"`
@@ -117,6 +121,9 @@ compat type VocabularyUpdate struct, Slug *string `json:"slug,omitempty"`
 compat method (TagAliasUpdate) MarshalJSON() ([]uint8, error)
 compat method (TagUpdate) MarshalJSON() ([]uint8, error)
 compat method (VocabularyUpdate) MarshalJSON() ([]uint8, error)
+compat method (*TagAliasUpdate) MarshalJSON() ([]uint8, error)
+compat method (*TagUpdate) MarshalJSON() ([]uint8, error)
+compat method (*VocabularyUpdate) MarshalJSON() ([]uint8, error)
 
 section carveout default-api-version
 title `Config.APIVersion` defaults to `/api/v1`
@@ -133,10 +140,16 @@ title JSON depth guards that only Go 1.13 needs
 text Go 1.13's `encoding/json` has no cycle detection when it encodes and no depth limit when it
 text decodes: a `Metadata` that contains itself hangs the process, and a response nested deeply
 text enough exhausts the stack, which is a fatal runtime error rather than a panic. This line refuses
-text both at 10,000 levels before `encoding/json` sees them ([`jsondepth.go`](jsondepth.go),
-text [#91](https://github.com/octoverse-id/octonomy-go/issues/91)); a modern standard library
-text refuses both itself, so `main` carries no such guard. On either line such a body is an error.
-text What differs is the code that refuses it and the message it returns.
+text both before `encoding/json` sees them -- a request body whose Go values (maps, slices, structs,
+text pointers) nest past 10,000 levels, a cycle among them included, and a response nested past
+text 10,000 levels ([`jsondepth.go`](jsondepth.go),
+text [#91](https://github.com/octoverse-id/octonomy-go/issues/91)). A modern standard library refuses
+text both itself, so `main` carries no such guard; on either line each is an error, and what differs
+text is the code that refuses it and the message it returns.
+text
+text One request differs in outcome. A `json.RawMessage` in a request body is the caller's own
+text bytes: the guard does not enter it, and Go 1.13's encoder copies it without recursing, so one
+text nested past 10,000 levels is sent from this line, where a modern encoder refuses it.
 
 section dialect generics
 title Type parameters, spelled per type
@@ -146,15 +159,15 @@ text
 text - `main`'s `List[T]` is one list envelope per resource here -- `TagList`, `VocabularyList`,
 text   `TagAliasList`, `AuditLogList`, `ResourceTagList` and `TagResourceList` -- each with the same
 text   `Data` and `Pagination` fields, and every `List` method returns its own resource's envelope.
-text - `Each` walks a `Page`, an interface every list envelope here implements, and hands its
-text   callback each row as an `interface{}` holding the row's value.
+text - `Each` walks a `Page`, an interface every list envelope here implements through its pointer,
+text   and hands its callback each row as an `interface{}` holding the row's value.
 text - `DecodeMetadata` takes a pointer to decode into rather than a type argument, as
 text   `json.Unmarshal` does.
-main func DecodeMetadata[T any](map[string]interface{}) (T, error)
-main func Each[T any](context.Context, ListOptions, func(context.Context, ListOptions) (*List[T], error), func(T) error) (int, error)
-main type List[T any] struct
-main type List[T any] struct, Data []T `json:"data"`
-main type List[T any] struct, Pagination Pagination `json:"pagination"`
+main func DecodeMetadata[$0 any](map[string]interface{}) ($0, error)
+main func Each[$0 any](context.Context, ListOptions, func(context.Context, ListOptions) (*List[$0], error), func($0) error) (int, error)
+main type List[$0 any] struct
+main type List[$0 any] struct, Data []$0 `json:"data"`
+main type List[$0 any] struct, Pagination Pagination `json:"pagination"`
 main method (*AliasService) List(context.Context, *TagAliasListParams, ...RequestOption) (*List[TagAlias], error)
 main method (*AuditLogService) List(context.Context, *AuditLogListParams, ...RequestOption) (*List[AuditLog], error)
 main method (*ResourceService) ListAuditLogs(context.Context, string, string, *ResourceListAuditLogsParams, ...RequestOption) (*List[AuditLog], error)
@@ -166,7 +179,13 @@ main method (*TagService) ListResources(context.Context, string, *TagListResourc
 main method (*VocabularyService) List(context.Context, *VocabularyListParams, ...RequestOption) (*List[Vocabulary], error)
 compat func DecodeMetadata(map[string]interface{}, interface{}) error
 compat func Each(context.Context, ListOptions, func(context.Context, ListOptions) (Page, error), func(interface{}) error) (int, error)
-compat type Page interface{unexported contents}
+compat type Page interface{unexported contents() ([]interface{}, *Pagination)}
+compat type *AuditLogList implements Page
+compat type *ResourceTagList implements Page
+compat type *TagAliasList implements Page
+compat type *TagList implements Page
+compat type *TagResourceList implements Page
+compat type *VocabularyList implements Page
 compat type AuditLogList struct
 compat type AuditLogList struct, Data []AuditLog `json:"data"`
 compat type AuditLogList struct, Pagination Pagination `json:"pagination"`

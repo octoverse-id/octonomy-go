@@ -340,10 +340,12 @@ required `compat guard` job — runs both and fails when either finds something,
 
 - **A — parity with `main`** at the commit
   [`tools/compatdiff/baselines.pin`](../tools/compatdiff/baselines.pin) names. Both trees' exported
-  declarations are printed as *features* — a constant with its type and value, a function or method
-  with its signature, a type with its kind and comparability, a struct field with its type and
-  struct tag, an interface with its whole method set — compared by type identity, so `any` against
-  `interface{}` is no difference and a changed tag is one. Every difference must be listed in
+  declarations are printed as *features* — the package's name, a constant with its type and value,
+  a function or method with its signature (the method sets of `T` and `*T` both), a type with its
+  kind and comparability, a struct field with its type and struct tag, an interface with its whole
+  method set, and each of the package's types that satisfies one of its interfaces — compared by
+  type identity, so `any` against `interface{}` is no difference, nor is a renamed type parameter
+  (they print by position, `$0`), and a changed tag is one. Every difference must be listed in
   [`tools/compatdiff/carveouts.txt`](../tools/compatdiff/carveouts.txt), under the section that
   explains it, and every listed difference must still exist.
 - **B — compatibility with this line's published releases**, each one the pin file names. Every
@@ -371,9 +373,14 @@ the same pull request. **A new release** adds a `release` line once its tag exis
 **What it cannot see.** Behaviour behind an unchanged declaration — a default inside a function, an
 error mapping, a guard — is invisible to both checks; a carve-out of that kind is prose in
 `carveouts.txt` with no features under it, as current as the pull request that last edited it.
-Unexported declarations are not compared. And an exported declaration that hands a caller a value of
-an unexported type with exported fields or methods is refused rather than compared, since no feature
-line would describe what the caller can reach through it.
+Unexported declarations are not compared, and neither is `Version`'s value, which changes on every
+release by definition. An addition is never a Check B finding, although an added field or method
+can make a selector ambiguous in a caller's struct that embeds the type beside another — no
+addition is safe from that, so refusing it would refuse every minor release. Two shapes are refused
+rather than compared, since no feature line would describe them: an exported declaration that hands
+a caller a value of a type the caller cannot name (an unexported one, or one from an internal
+package), and a file built in some build contexts and not others (a GOOS or GOARCH suffix, a
+constraint, cgo, a Go version), since every tree is read in one.
 
 ### Comments that describe `main`
 

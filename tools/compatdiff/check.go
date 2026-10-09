@@ -117,11 +117,14 @@ func matchCarveouts(diffs []diff, sections []*section, file string) []string {
 // this line can never publish a major, so a break has no version to ride
 // (AGENTS.md).
 //
-// Additions are not findings. An added struct field breaks only an unkeyed
-// struct literal, which docs/versioning.md's MINOR rule already sets aside, and
-// an added method breaks nothing a caller of this package can write -- except
-// on an interface, whose whole method set is one line and so changes as a
-// whole.
+// Additions are not findings, and that is a limitation as well as a policy.
+// An interface's whole method set is one line, so a method added to one does
+// change it. But an added struct field breaks an unkeyed struct literal, which
+// docs/versioning.md's MINOR rule already sets aside, and an added field or
+// method can also make a selector AMBIGUOUS in a caller's struct that embeds
+// this type beside another declaring the same name. No addition is safe from
+// that, so a check that refused it would refuse every minor release; it is
+// accepted here, as golang.org/x/exp/apidiff accepts it.
 func compatibilityFindings(release string, rel, current *api) []string {
 	var findings []string
 	var rels []string

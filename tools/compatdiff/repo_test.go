@@ -1,6 +1,7 @@
 package main
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -36,6 +37,38 @@ func TestTheCarveOutsAreTheEpicsDefinitionOfDone(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("carveouts.txt sections:\n%s\nwant the epic's definition of done:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	// And each section lists only what its reason covers. Matching is by side
+	// and feature, so a difference moved to another section would still pass
+	// `make compat-diff` -- and COMPAT.md would then explain it with the wrong
+	// reason. Each pattern is the shape of that section's features.
+	shape := map[string]*regexp.Regexp{
+		"no-webhook-receiver": regexp.MustCompile(`^main package webhook$`),
+		"default-api-version": regexp.MustCompile(`^(main|compat) const DefaultAPIVersion APIVersion = "v[12]"$`),
+		"json-depth-guards":   regexp.MustCompile(`^$`), // prose only: no line matches
+		"update-fields-cannot-clear": regexp.MustCompile(`^(main func (Null|Set)\[` +
+			`|main type Optional\[` +
+			`|main method \(\*?Optional\[` +
+			`|(main|compat) type (Tag|Vocabulary|TagAlias)Update struct, ` +
+			`|compat method \(\*?(Tag|Vocabulary|TagAlias)Update\) MarshalJSON\(\) )`),
+		"generics": regexp.MustCompile(`^((main|compat) func (Each|DecodeMetadata)[\[(]` +
+			`|main type List\[` +
+			`|compat type \w+List struct` +
+			`|compat type Page interface` +
+			`|compat type \*\w+List implements Page$` +
+			`|(main|compat) method \(\*\w+Service\) List\w*\()`),
+	}
+	for _, s := range sections {
+		re, ok := shape[s.id]
+		if !ok {
+			continue // the section list above already failed
+		}
+		for _, e := range s.lines {
+			if line := e.side + " " + e.feature; !re.MatchString(line) {
+				t.Errorf("carveouts.txt:%d: %q is listed under %s, which does not explain it", e.line, line, s.id)
+			}
+		}
 	}
 }
 

@@ -13,19 +13,22 @@ something this file does not account for:
 
 1. **Parity with `main`**, at [`5e409641e3df`](https://github.com/octoverse-id/octonomy-go/tree/5e409641e3dfafb83227e02efee3d8a50ec5602c), the commit `tools/compatdiff/baselines.pin`
    names. Every importable package on each side is compared declaration by declaration, by type
-   identity rather than spelling: constants with their types and values, variables, function and
-   method signatures, each type's kind and comparability, struct fields with their types and
-   struct tags, and each interface's whole method set (585 features on `main` at that commit). A
-   difference not listed below fails the check, and so does a listed one that no longer exists.
+   identity rather than spelling: each package's name, constants with their types and values,
+   variables, function and method signatures (the method sets of T and of *T), each type's kind
+   and comparability, struct fields with their types and struct tags, each interface's whole
+   method set, and which of a package's types satisfy its interfaces (593 features on `main` at
+   that commit). A difference not listed below fails the check, and so does a listed one that no
+   longer exists.
 2. **Compatibility with this line's published releases.** Every feature each one exported is
    still here, unchanged, so code that compiled against it compiles against this line -- except
    an unkeyed struct literal, which any minor release may break ([`docs/versioning.md`](docs/versioning.md),
    the MINOR rule). This check has no exceptions:
 
-   - [`v1.0.0`](https://github.com/octoverse-id/octonomy-go/tree/v1.0.0) (`ad3ced172994`): 149 features.
+   - [`v1.0.0`](https://github.com/octoverse-id/octonomy-go/tree/v1.0.0) (`ad3ced172994`): 150 features.
 
 Not compared: each line's module path and the value of `Version`, which name the line rather
-than describe it; unexported declarations; and behaviour that changes no declaration. A
+than describe it; parameter and type-parameter names (a type parameter prints by position,
+`$0`); unexported declarations; and behaviour that changes no declaration. A
 difference of that last kind appears below as prose with no features under it, and no check
 holds it true -- it is as current as the pull request that last edited it.
 
@@ -67,14 +70,18 @@ what still sends it as `{}`, emptying the stored object
 Only on `main`:
 
 ```text
-func Null[T any]() Optional[T]
-func Set[T any](T) Optional[T]
-type Optional[T any] struct
-method (Optional[T]) Get() (T, bool)
-method (Optional[T]) IsNull() bool
-method (Optional[T]) IsZero() bool
-method (Optional[T]) MarshalJSON() ([]uint8, error)
-method (*Optional[T]) UnmarshalJSON([]uint8) error
+func Null[$0 any]() Optional[$0]
+func Set[$0 any]($0) Optional[$0]
+type Optional[$0 any] struct
+method (Optional[$0]) Get() ($0, bool)
+method (Optional[$0]) IsNull() bool
+method (Optional[$0]) IsZero() bool
+method (Optional[$0]) MarshalJSON() ([]uint8, error)
+method (*Optional[$0]) Get() ($0, bool)
+method (*Optional[$0]) IsNull() bool
+method (*Optional[$0]) IsZero() bool
+method (*Optional[$0]) MarshalJSON() ([]uint8, error)
+method (*Optional[$0]) UnmarshalJSON([]uint8) error
 type TagAliasUpdate struct, ApplicationID Optional[string] `json:"application_id,omitzero"`
 type TagAliasUpdate struct, IsActive Optional[bool] `json:"is_active,omitzero"`
 type TagAliasUpdate struct, Metadata Optional[map[string]interface{}] `json:"metadata,omitzero"`
@@ -125,6 +132,9 @@ type VocabularyUpdate struct, Slug *string `json:"slug,omitempty"`
 method (TagAliasUpdate) MarshalJSON() ([]uint8, error)
 method (TagUpdate) MarshalJSON() ([]uint8, error)
 method (VocabularyUpdate) MarshalJSON() ([]uint8, error)
+method (*TagAliasUpdate) MarshalJSON() ([]uint8, error)
+method (*TagUpdate) MarshalJSON() ([]uint8, error)
+method (*VocabularyUpdate) MarshalJSON() ([]uint8, error)
 ```
 
 ### 3. `Config.APIVersion` defaults to `/api/v1`
@@ -152,10 +162,16 @@ const DefaultAPIVersion APIVersion = "v1"
 Go 1.13's `encoding/json` has no cycle detection when it encodes and no depth limit when it
 decodes: a `Metadata` that contains itself hangs the process, and a response nested deeply
 enough exhausts the stack, which is a fatal runtime error rather than a panic. This line refuses
-both at 10,000 levels before `encoding/json` sees them ([`jsondepth.go`](jsondepth.go),
-[#91](https://github.com/octoverse-id/octonomy-go/issues/91)); a modern standard library
-refuses both itself, so `main` carries no such guard. On either line such a body is an error.
-What differs is the code that refuses it and the message it returns.
+both before `encoding/json` sees them -- a request body whose Go values (maps, slices, structs,
+pointers) nest past 10,000 levels, a cycle among them included, and a response nested past
+10,000 levels ([`jsondepth.go`](jsondepth.go),
+[#91](https://github.com/octoverse-id/octonomy-go/issues/91)). A modern standard library refuses
+both itself, so `main` carries no such guard; on either line each is an error, and what differs
+is the code that refuses it and the message it returns.
+
+One request differs in outcome. A `json.RawMessage` in a request body is the caller's own
+bytes: the guard does not enter it, and Go 1.13's encoder copies it without recursing, so one
+nested past 10,000 levels is sent from this line, where a modern encoder refuses it.
 
 No declaration differs.
 
@@ -169,19 +185,19 @@ the types it is used with.
 - `main`'s `List[T]` is one list envelope per resource here -- `TagList`, `VocabularyList`,
   `TagAliasList`, `AuditLogList`, `ResourceTagList` and `TagResourceList` -- each with the same
   `Data` and `Pagination` fields, and every `List` method returns its own resource's envelope.
-- `Each` walks a `Page`, an interface every list envelope here implements, and hands its
-  callback each row as an `interface{}` holding the row's value.
+- `Each` walks a `Page`, an interface every list envelope here implements through its pointer,
+  and hands its callback each row as an `interface{}` holding the row's value.
 - `DecodeMetadata` takes a pointer to decode into rather than a type argument, as
   `json.Unmarshal` does.
 
 Only on `main`:
 
 ```text
-func DecodeMetadata[T any](map[string]interface{}) (T, error)
-func Each[T any](context.Context, ListOptions, func(context.Context, ListOptions) (*List[T], error), func(T) error) (int, error)
-type List[T any] struct
-type List[T any] struct, Data []T `json:"data"`
-type List[T any] struct, Pagination Pagination `json:"pagination"`
+func DecodeMetadata[$0 any](map[string]interface{}) ($0, error)
+func Each[$0 any](context.Context, ListOptions, func(context.Context, ListOptions) (*List[$0], error), func($0) error) (int, error)
+type List[$0 any] struct
+type List[$0 any] struct, Data []$0 `json:"data"`
+type List[$0 any] struct, Pagination Pagination `json:"pagination"`
 method (*AliasService) List(context.Context, *TagAliasListParams, ...RequestOption) (*List[TagAlias], error)
 method (*AuditLogService) List(context.Context, *AuditLogListParams, ...RequestOption) (*List[AuditLog], error)
 method (*ResourceService) ListAuditLogs(context.Context, string, string, *ResourceListAuditLogsParams, ...RequestOption) (*List[AuditLog], error)
@@ -198,7 +214,13 @@ Only on this line:
 ```text
 func DecodeMetadata(map[string]interface{}, interface{}) error
 func Each(context.Context, ListOptions, func(context.Context, ListOptions) (Page, error), func(interface{}) error) (int, error)
-type Page interface{unexported contents}
+type Page interface{unexported contents() ([]interface{}, *Pagination)}
+type *AuditLogList implements Page
+type *ResourceTagList implements Page
+type *TagAliasList implements Page
+type *TagList implements Page
+type *TagResourceList implements Page
+type *VocabularyList implements Page
 type AuditLogList struct
 type AuditLogList struct, Data []AuditLog `json:"data"`
 type AuditLogList struct, Pagination Pagination `json:"pagination"`

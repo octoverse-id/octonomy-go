@@ -36,8 +36,8 @@ func isZeroShipping(s shipping) bool {
 	return s.Carrier == "" && s.Priority == 0 && !s.Express && s.Regions == nil
 }
 
-// stale is what every DecodeMetadata target starts as: every field set, so a
-// field the call failed to write is visible.
+// stale is what a shipping target starts as: every field set, so a field the
+// call failed to write is visible.
 func stale() shipping {
 	return shipping{Carrier: "stale", Priority: 99, Express: true, Regions: []string{"stale"}}
 }
@@ -220,7 +220,7 @@ func TestDecodeMetadata_LargeIntegerPrecision(t *testing.T) {
 				t.Fatalf("amount is %T, want float64 -- the premise of the caveat", meta["amount"])
 			}
 
-			var got ledger
+			got := ledger{Amount: -1, AmountAs: "stale"}
 			if err := DecodeMetadata(meta, &got); err != nil {
 				t.Fatalf("DecodeMetadata: %v", err)
 			}
@@ -270,7 +270,7 @@ func TestDecodeMetadata_LargeIntegerPrecision(t *testing.T) {
 
 	// A Metadata the CALLER built is not on the lossy path at all: nothing
 	// rounded it, so an int64 marshals and decodes exactly.
-	var built ledger
+	built := ledger{Amount: -1, AmountAs: "stale"}
 	if err := DecodeMetadata(Metadata{"amount": unsafe}, &built); err != nil {
 		t.Fatalf("DecodeMetadata on a caller-built map: %v", err)
 	}

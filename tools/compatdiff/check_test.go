@@ -93,10 +93,17 @@ func F(int) error { return nil }
 		t.Fatalf("an unchanged tree has findings: %v", f)
 	}
 
-	additions := base + "\nfunc G() {}\n\nfunc (T) Added() {}\n\ntype New struct{}\n"
+	additions := base + "\nfunc G() {}\n\nfunc (T) Added() {}\n\ntype New struct{}\n\nfunc (*T) Moved() {}\n"
 	additions = strings.Replace(additions, "type K struct{ A int }", "type K struct{ A int; B int }", 1)
 	if f := compatibilityFindings("v1.0.0", release, mustLoad(t, s, rootOnly(additions))); len(f) != 0 {
 		t.Errorf("additions were reported as breaks: %v", f)
+	}
+	// A method moving from the pointer receiver to the value one keeps every
+	// call through *T compiling, so it is no break.
+	withMoved := mustLoad(t, s, rootOnly(additions))
+	movedToValue := strings.Replace(additions, "func (*T) Moved() {}", "func (T) Moved() {}", 1)
+	if f := compatibilityFindings("v1.1.0", withMoved, mustLoad(t, s, rootOnly(movedToValue))); len(f) != 0 {
+		t.Errorf("a method moved to the value receiver was reported as a break: %v", f)
 	}
 
 	for _, tc := range []struct{ name, old, new string }{
@@ -168,6 +175,11 @@ func TestParseCarveoutsRefuses(t *testing.T) {
 	if _, err := parseCarveoutsString(t, "section carveout a\ntitle A\ntext why\n"); err != nil {
 		t.Errorf("a prose-only carve-out was refused: %v", err)
 	}
+	// A CRLF checkout reads as the file it is.
+	crlf, err := parseCarveoutsString(t, strings.ReplaceAll(ok, "\n", "\r\n"))
+	if err != nil || crlf[0].id != "a" || crlf[0].lines[0].feature != "func F()" {
+		t.Errorf("a CRLF carve-out file: %+v, %v", crlf, err)
+	}
 }
 
 func parseCarveoutsString(t *testing.T, body string) ([]*section, error) {
@@ -188,6 +200,9 @@ func TestParsePinsRefuses(t *testing.T) {
 	}
 	if p, err := parse("# c\n" + ok + "release v1.1.0 " + sha + "\n"); err != nil || p.main != sha || len(p.releases) != 2 {
 		t.Fatalf("the valid fixture: %+v, %v", p, err)
+	}
+	if p, err := parse(strings.ReplaceAll(ok, "\n", "\r\n")); err != nil || p.main != sha {
+		t.Errorf("a CRLF pin file: %+v, %v", p, err)
 	}
 	for _, tc := range []struct{ name, body, want string }{
 		{"no main", "release v1.0.0 " + sha2 + "\n", "no main line"},
@@ -233,7 +248,7 @@ func TestRenderCompat(t *testing.T) {
 		"## The irreducible type-name delta\n\n### Dialect\n",
 		"## Open gaps\n\nNone.",
 		"(`ad3ced172994`): 3 features.",
-		"(7 features on `main` at that commit)",
+		"(7 features on `main` at\n   that commit)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("COMPAT.md lacks %q:\n%s", want, out)

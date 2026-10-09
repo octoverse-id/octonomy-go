@@ -62,6 +62,7 @@ func parseCarveouts(file string) ([]*section, error) {
 	features := map[string]int{}
 	for i, line := range strings.Split(string(raw), "\n") {
 		n := i + 1
+		line = strings.TrimSuffix(line, "\r") // a CRLF checkout
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
 			continue
 		}

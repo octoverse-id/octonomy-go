@@ -48,6 +48,7 @@ func parsePins(file string) (*pins, error) {
 	tags := map[string]bool{}
 	for i, line := range strings.Split(string(raw), "\n") {
 		n := i + 1
+		line = strings.TrimSuffix(line, "\r") // a CRLF checkout
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -123,7 +124,10 @@ func openRepo(dir, remote, mainBranch string) (*repo, error) {
 	for _, name := range strings.Fields(out) {
 		drop[name] = true
 	}
-	var env []string
+	// GIT_NO_REPLACE_OBJECTS too: a refs/replace/ entry would make every read
+	// below return other content under the very commit id the pins validate.
+	drop["GIT_NO_REPLACE_OBJECTS"] = true
+	env := []string{"GIT_NO_REPLACE_OBJECTS=1"}
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		if !drop[name] {
@@ -190,6 +194,11 @@ func (r *repo) ensureCommit(sha, what string) error {
 // pinOnMain reports whether sha is one of main's commits. Only ancestry is
 // read from the branch, and ancestry is monotonic: once the pin is on main it
 // stays there, so main moving on cannot turn an unchanged tree here red.
+//
+// It trusts the LOCAL ref when that already answers yes, as tagCommit trusts a
+// local tag, so a clone whose refs were rewritten by hand can pass here. That is
+// a limitation of a laptop, not of the gate: CI checks out fresh, from the
+// remote, on every run.
 func (r *repo) pinOnMain(sha string) (bool, error) {
 	ref := "refs/remotes/" + r.remote + "/" + r.mainBranch
 	isAncestor := func() bool {

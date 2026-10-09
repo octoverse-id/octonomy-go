@@ -75,7 +75,7 @@ main package hook
 section dialect generics
 title Generics
 text Per type.
-main func Each[T any](T)
+main func Each[$0 any]($0)
 compat func Each(interface{})
 `
 
@@ -165,7 +165,7 @@ func TestCommandOnAFixtureRepository(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"```text\npackage hook\n```", "(`" + f.relSHA[:12] + "`): 3 features."} {
+		for _, want := range []string{"```text\npackage hook\n```", "(`" + f.relSHA[:12] + "`): 4 features."} {
 			if !strings.Contains(string(compat), want) {
 				t.Errorf("COMPAT.md lacks %q:\n%s", want, compat)
 			}
@@ -310,6 +310,15 @@ func TestCommandOnAFixtureRepository(t *testing.T) {
 	t.Run("a hook's GIT_DIR does not redirect the reads", func(t *testing.T) {
 		t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), "elsewhere.git"))
 		t.Setenv("GIT_INDEX_FILE", filepath.Join(t.TempDir(), "index"))
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 0)
+	})
+
+	t.Run("a replace ref does not change what a pinned commit holds", func(t *testing.T) {
+		// Replaced, main's pinned commit would read as the release's tree and
+		// every difference from main would vanish into a stale carve-out file.
+		git(t, f.work, "replace", f.mainSHA, f.relSHA)
+		defer git(t, f.work, "replace", "-d", f.mainSHA)
 		code, out := runIn(t, f.work, "check")
 		expect(t, code, out, 0)
 	})

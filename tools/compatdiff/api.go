@@ -25,10 +25,17 @@ import (
 // depend on, written so that two of them can be compared as strings.
 //
 // What a line does NOT carry is what a caller cannot depend on: parameter
-// names, unexported declarations, the order of declarations, and the spelling
-// of a type rather than its identity. `any` and `interface{}` are one type, as
-// are `byte` and `uint8` and an alias and what it names, so each prints as the
-// same text; a difference in a line is a difference a caller can see.
+// names, type parameter names (they print by position, $0, $1, ...), unexported
+// declarations, the order of declarations, and the spelling of a type rather
+// than its identity. `any` and `interface{}` are one type, as are `byte` and
+// `uint8` and an alias and what it names, so each prints as the same text; a
+// difference in a line is a difference a caller can see.
+//
+// Each package also carries its NAME (the identifier a caller's code uses
+// without an import alias), and a line per exported type of the package that
+// satisfies an exported interface of the package, since an interface with an
+// unexported method is satisfied only by types its own package declares and
+// whether one still is shows in no method line.
 
 // api is one tree's exported surface, keyed by package path relative to the
 // module root ("." for the root package).
@@ -79,7 +86,7 @@ func (s *shared) loadAPI(dir string) (*api, error) {
 		if pkg == nil {
 			continue
 		}
-		features, err := featuresOf(pkg, rel)
+		features, err := featuresOf(pkg, rel, modPath)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", relDisplay(rel), err)
 		}
@@ -180,6 +187,9 @@ func (l *loader) load(rel string) (*types.Package, error) {
 	defer delete(l.busy, rel)
 
 	abs := filepath.Join(l.root, filepath.FromSlash(rel))
+	if err := sameInEveryContext(abs); err != nil {
+		return nil, fmt.Errorf("%s: %w", relDisplay(rel), err)
+	}
 	ctxt := build.Default
 	ctxt.CgoEnabled = false
 	bp, err := ctxt.ImportDir(abs, 0)
@@ -245,6 +255,61 @@ func (l *loader) importPath(p string) (*types.Package, error) {
 	return l.std.Import(p)
 }
 
+// sameInEveryContext refuses a directory whose set of files depends on the
+// build context: a GOOS or GOARCH file name suffix, a build constraint naming
+// one, cgo, or a Go version. This tool reads every tree in ONE context, so an
+// API such a file adds or removes would be compared on one platform, or under
+// one Go, and silently not on another -- the Go 1.13 a consumer of this line
+// builds with among them. Neither line has such a file; a file excluded
+// everywhere (`//go:build ignore`) is no part of any build and is left alone.
+func sameInEveryContext(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var go113 []string
+	for i := 1; i <= 13; i++ {
+		go113 = append(go113, fmt.Sprintf("go1.%d", i))
+	}
+	var contexts []build.Context
+	for _, c := range []struct {
+		goos, goarch string
+		cgo          bool
+		tags         []string
+	}{
+		{"linux", "amd64", false, build.Default.ReleaseTags},
+		{"linux", "amd64", true, build.Default.ReleaseTags},
+		{"linux", "amd64", false, go113},
+		{"windows", "arm64", false, build.Default.ReleaseTags},
+		{"darwin", "arm64", false, build.Default.ReleaseTags},
+		{"js", "wasm", false, build.Default.ReleaseTags},
+		{"plan9", "386", false, build.Default.ReleaseTags},
+	} {
+		ctxt := build.Default
+		ctxt.GOOS, ctxt.GOARCH, ctxt.CgoEnabled, ctxt.ReleaseTags = c.goos, c.goarch, c.cgo, c.tags
+		contexts = append(contexts, ctxt)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		var first bool
+		for i, ctxt := range contexts {
+			match, err := ctxt.MatchFile(dir, name)
+			if err != nil {
+				return err
+			}
+			if i == 0 {
+				first = match
+			} else if match != first {
+				return fmt.Errorf("%s is built in some contexts and not others (GOOS, GOARCH, cgo or the Go version), and this tool reads one", name)
+			}
+		}
+	}
+	return nil
+}
+
 type importerFunc func(path string) (*types.Package, error)
 
 func (f importerFunc) Import(path string) (*types.Package, error) { return f(path) }
@@ -252,8 +317,9 @@ func (f importerFunc) Import(path string) (*types.Package, error) { return f(pat
 // featuresOf lists one package's exported features, sorted. Lines of a package
 // other than the root carry its path as a prefix, so the features of two
 // packages can never be mistaken for each other.
-func featuresOf(pkg *types.Package, rel string) ([]string, error) {
-	e := &emitter{p: &printer{local: pkg}, rel: rel}
+func featuresOf(pkg *types.Package, rel, modulePath string) ([]string, error) {
+	e := &emitter{p: &printer{local: pkg, modulePath: modulePath}, rel: rel}
+	e.add("package name %s", pkg.Name())
 	scope := pkg.Scope()
 	for _, name := range scope.Names() {
 		obj := scope.Lookup(name)
@@ -264,6 +330,7 @@ func featuresOf(pkg *types.Package, rel string) ([]string, error) {
 			return nil, err
 		}
 	}
+	e.implements(scope)
 	if err := e.p.err; err != nil {
 		return nil, err
 	}
@@ -288,11 +355,15 @@ func (e *emitter) add(format string, args ...any) {
 	e.out = append(e.out, line)
 }
 
-// versionConst is the one declaration whose VALUE is not compared. Each line
-// carries its own release version in it -- v2.x on main, v1.x here -- so its
-// value differs by construction and changes on every release of either line.
-// Its type is still compared, and `make version-check` holds its value to the
-// CHANGELOG.
+// versionConst is the one declaration whose VALUE is not compared, in either
+// check. Each line carries its own release version in it -- v2.x on main, v1.x
+// here -- so its value differs by construction, and it changes on every release
+// of either line: comparing it would make Check B fail every release PR, which
+// is a check nobody can keep green rather than a stricter one. A caller who
+// builds a constant expression out of it (an array length, say) depends on
+// which release they compiled against, not on the API, and that is the one
+// dependency this leaves unchecked. Its type is still compared, and `make
+// version-check` holds its value to the CHANGELOG.
 const versionConst = "Version"
 
 func (e *emitter) object(obj types.Object) error {
@@ -371,11 +442,15 @@ func (e *emitter) typeName(o *types.TypeName) error {
 	if tps := named.TypeParams(); tps.Len() > 0 {
 		var ns []string
 		for i := 0; i < tps.Len(); i++ {
-			ns = append(ns, tps.At(i).Obj().Name())
+			ns = append(ns, fmt.Sprintf("$%d", i))
 		}
 		recv += "[" + strings.Join(ns, ", ") + "]"
 	}
-	valueSet := types.NewMethodSet(named)
+	// Both method sets in full, so *T lists the value methods too. Then a method
+	// moving from (*T) to (T) leaves every line *T had in place -- it is
+	// compatible: pointer calls, method expressions and interface assignments
+	// through *T all still compile -- and moving from (T) to (*T) removes the
+	// (T) line, which is the break it is.
 	for _, ptr := range []bool{false, true} {
 		var t types.Type = named
 		r := recv
@@ -389,42 +464,66 @@ func (e *emitter) typeName(o *types.TypeName) error {
 			if !m.Exported() {
 				continue
 			}
-			if ptr && valueSet.Lookup(m.Pkg(), m.Name()) != nil {
-				continue
-			}
 			e.add("method (%s) %s%s", r, m.Name(), e.p.signature(m.Type().(*types.Signature)))
 		}
 	}
 	return nil
 }
 
-// reachedUnexported refuses an exported line that hands a caller a value of an
-// unexported type with exported members. A caller can call those methods and
-// read those fields, so they are API, and no line above describes them. Better
-// to fail than to compare a surface with a hole in it.
-func (e *emitter) reachedUnexported() error {
-	var reached []*types.Named
-	for n := range e.p.unexported {
-		reached = append(reached, n)
+// implements adds a line for each exported non-generic type T of the package
+// that satisfies an exported non-generic interface I of the package: `type T
+// implements I`, or `type *T implements I` when only the pointer does. An
+// interface with an unexported method can be satisfied only by types its own
+// package declares, through methods no feature line lists, so whether T still
+// satisfies it -- what `var p I = T{}` in a caller's code needs -- shows
+// nowhere else.
+func (e *emitter) implements(scope *types.Scope) {
+	var ifaces, concrete []*types.TypeName
+	for _, name := range scope.Names() {
+		tn, ok := scope.Lookup(name).(*types.TypeName)
+		if !ok || !tn.Exported() || tn.IsAlias() {
+			continue
+		}
+		named, ok := tn.Type().(*types.Named)
+		if !ok || named.TypeParams().Len() > 0 {
+			continue
+		}
+		if types.IsInterface(named) {
+			ifaces = append(ifaces, tn)
+		} else {
+			concrete = append(concrete, tn)
+		}
 	}
-	sort.Slice(reached, func(i, j int) bool { return reached[i].Obj().Name() < reached[j].Obj().Name() })
-	for _, n := range reached {
-		name := n.Obj().Name()
-		if st, ok := n.Underlying().(*types.Struct); ok {
-			for i := 0; i < st.NumFields(); i++ {
-				if st.Field(i).Exported() {
-					return fmt.Errorf("an exported declaration reaches the unexported %s, whose exported field %s this tool does not describe", name, st.Field(i).Name())
-				}
+	for _, i := range ifaces {
+		it := i.Type().Underlying().(*types.Interface)
+		for _, c := range concrete {
+			switch {
+			case types.Implements(c.Type(), it):
+				e.add("type %s implements %s", c.Name(), i.Name())
+			case types.Implements(types.NewPointer(c.Type()), it):
+				e.add("type *%s implements %s", c.Name(), i.Name())
 			}
 		}
-		for _, t := range []types.Type{n, types.NewPointer(n)} {
-			ms := types.NewMethodSet(t)
-			for i := 0; i < ms.Len(); i++ {
-				if ms.At(i).Obj().Exported() {
-					return fmt.Errorf("an exported declaration reaches the unexported %s, whose exported method %s this tool does not describe", name, ms.At(i).Obj().Name())
-				}
-			}
-		}
+	}
+}
+
+// reachedUnexported refuses an exported declaration that hands a caller a
+// value of a type the caller cannot name -- an unexported type of the package,
+// or a type of one of the module's internal packages. Such a value has an
+// underlying type, a comparability and possibly methods and fields, all usable
+// by the caller (`len(pkg.New())`, `pkg.New().M()`), and no line describes them.
+// Better to fail than to compare a surface with a hole in it. Where the value
+// only goes the other way -- into a parameter, at any depth -- the caller
+// cannot hold one: to receive it they would have to write a function whose
+// signature names the type, so `type Option func(*options)` is fine.
+func (e *emitter) reachedUnexported() error {
+	var names []string
+	for n := range e.p.unexported {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	if len(names) > 0 {
+		return fmt.Errorf("an exported declaration hands a caller a value of %s, a type the caller cannot name, and this tool does not describe what they can do with it", strings.Join(names, ", "))
 	}
 	return nil
 }
@@ -442,25 +541,38 @@ func tagSuffix(tag string) string {
 // printer writes a type by IDENTITY, not by spelling: every alias is resolved
 // (so `any`, `interface{}` and an alias of either print alike), `byte` and
 // `rune` print as the types they are, parameter names are dropped, and a type
-// from another package is qualified by that package's name. An interface prints
+// from another package is qualified by that package's IMPORT PATH (a package of
+// the same module by its path within the module, `{module}/sub`, so main's /v2
+// suffix is no difference). An interface prints
 // its whole method set, embedded interfaces expanded, since two interfaces with
 // the same methods are the same type however they were written.
 type printer struct {
 	local      *types.Package
+	modulePath string
 	err        error
-	unexported map[*types.Named]bool
-	// negative counts the function parameter lists the type being written is
-	// inside. An odd count is a value the CALLER supplies, an even one a value
-	// the caller can come to hold -- and only the second hands a caller the
-	// methods of an unexported type. `type HandlerOption func(*handler)` gives
-	// a caller no *handler to call anything on; `func New() *handler` does.
-	negative int
+	unexported map[string]bool
+	// inParams counts the parameter lists the type being written is inside,
+	// and quiet the unexported interface methods. A hidden type met at either
+	// is one a caller cannot come to hold; see reachedUnexported.
+	inParams, quiet int
 }
 
 func (p *printer) fail(format string, args ...any) {
 	if p.err == nil {
 		p.err = fmt.Errorf(format, args...)
 	}
+}
+
+// hidden records a type a caller cannot name, met where the caller can come to
+// hold a value of it.
+func (p *printer) hidden(name string) {
+	if p.inParams > 0 || p.quiet > 0 {
+		return
+	}
+	if p.unexported == nil {
+		p.unexported = map[string]bool{}
+	}
+	p.unexported[name] = true
 }
 
 func (p *printer) str(t types.Type) string {
@@ -543,15 +655,20 @@ func (p *printer) write(b *strings.Builder, t types.Type) {
 		case obj.Pkg() == nil:
 			b.WriteString(obj.Name())
 		case obj.Pkg() == p.local:
-			if !obj.Exported() && p.negative%2 == 0 {
-				if p.unexported == nil {
-					p.unexported = map[*types.Named]bool{}
-				}
-				p.unexported[t.Origin()] = true
+			if !obj.Exported() {
+				p.hidden(obj.Name())
 			}
 			b.WriteString(obj.Name())
 		default:
-			b.WriteString(obj.Pkg().Name() + "." + obj.Name())
+			path := obj.Pkg().Path()
+			if path == p.modulePath || strings.HasPrefix(path, p.modulePath+"/") {
+				rel := strings.TrimPrefix(path, p.modulePath)
+				if !obj.Exported() || strings.Contains(rel+"/", "/internal/") {
+					p.hidden("{module}" + rel + "." + obj.Name())
+				}
+				path = "{module}" + rel
+			}
+			b.WriteString(path + "." + obj.Name())
 		}
 		if args := t.TypeArgs(); args.Len() > 0 {
 			b.WriteString("[")
@@ -564,7 +681,8 @@ func (p *printer) write(b *strings.Builder, t types.Type) {
 			b.WriteString("]")
 		}
 	case *types.TypeParam:
-		b.WriteString(t.Obj().Name())
+		// By position: a renamed type parameter is no difference to a caller.
+		fmt.Fprintf(b, "$%d", t.Index())
 	case *types.Union:
 		for i := 0; i < t.Len(); i++ {
 			if i > 0 {
@@ -587,10 +705,13 @@ func (p *printer) iface(b *strings.Builder, t *types.Interface) {
 		for i := 0; i < t.NumMethods(); i++ {
 			m := t.Method(i)
 			if !m.Exported() {
-				// A caller can neither call nor implement it, so only its
-				// presence is API: it is what stops a type outside the package
-				// from satisfying the interface except by embedding.
-				elems = append(elems, "unexported "+m.Name())
+				// A caller can neither call nor implement it, but its signature
+				// still decides which of the package's own types satisfy the
+				// interface (the implements lines), so it is printed -- without
+				// counting a hidden type in it as one a caller holds.
+				p.quiet++
+				elems = append(elems, "unexported "+m.Name()+p.signature(m.Type().(*types.Signature)))
+				p.quiet--
 				continue
 			}
 			elems = append(elems, m.Name()+p.signature(m.Type().(*types.Signature)))
@@ -618,8 +739,7 @@ func (p *printer) signature(sig *types.Signature) string {
 	var b strings.Builder
 	b.WriteString("(")
 	params := sig.Params()
-	p.negative++
-	defer func() { p.negative-- }()
+	p.inParams++
 	for i := 0; i < params.Len(); i++ {
 		if i > 0 {
 			b.WriteString(", ")
@@ -634,8 +754,7 @@ func (p *printer) signature(sig *types.Signature) string {
 		p.write(&b, t)
 	}
 	b.WriteString(")")
-	p.negative--
-	defer func() { p.negative++ }()
+	p.inParams--
 	results := sig.Results()
 	switch results.Len() {
 	case 0:
@@ -672,7 +791,7 @@ func (p *printer) typeParams(tps *types.TypeParamList) string {
 		} else {
 			cs = p.str(c)
 		}
-		parts = append(parts, tp.Obj().Name()+" "+cs)
+		parts = append(parts, fmt.Sprintf("$%d %s", i, cs))
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
 }

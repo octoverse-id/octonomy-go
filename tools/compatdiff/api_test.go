@@ -59,6 +59,8 @@ func TestSpellingIsNotADifference(t *testing.T) {
 		{"an embedded interface against its methods", "package m\nimport \"io\"\ntype I interface{ io.Reader; Close() error }\n", "package m\ntype I interface{ Close() error; Read([]byte) (int, error) }\n"},
 		{"unexported declarations", "package m\nfunc F() {}\nfunc g() {}\ntype T struct{ A int; b int }\n", "package m\nfunc F() {}\ntype T struct{ A int; c string }\n"},
 		{"the root package's Version value", "package m\nconst Version = \"one\"\n", "package m\nconst Version = \"two\"\n"},
+		{"a type parameter's name", "package m\nfunc F[T any](T) {}\ntype L[T any] struct{ D []T }\nfunc (l L[T]) Get() T { var t T; return t }\n", "package m\nfunc F[U any](U) {}\ntype L[E any] struct{ D []E }\nfunc (l L[E]) Get() E { var e E; return e }\n"},
+		{"a parameter's type spelled as a function type", "package m\ntype H func(int) error\nfunc F(h func(int) error) {}\n", "package m\ntype H func(n int) error\nfunc F(f func(x int) error) {}\n"},
 	}
 	for _, p := range pairs {
 		t.Run(p.name, func(t *testing.T) {
@@ -93,6 +95,11 @@ func TestEveryKindOfChangeIsADifference(t *testing.T) {
 		{"an embedded field", "package m\ntype O struct{ L int }\ntype P struct{ O }\n", "package m\ntype O struct{ L int }\ntype P struct{ O O }\n"},
 		{"a variable's type", "package m\nvar V int\n", "package m\nvar V int64\n"},
 		{"Version's type", "package m\nconst Version = \"1\"\n", "package m\nconst Version = 1\n"},
+		{"the package's name", "package m\nfunc F() {}\n", "package renamed\nfunc F() {}\n"},
+		{"two packages with one name", "package m\nimport \"html/template\"\nvar V *template.Template\n", "package m\nimport \"text/template\"\nvar V *template.Template\n"},
+		{"an unexported interface method's signature", "package m\ntype I interface{ seal() }\n", "package m\ntype I interface{ seal(int) }\n"},
+		{"a type no longer satisfying a sealed interface", "package m\ntype I interface{ seal() }\ntype T struct{}\nfunc (T) seal() {}\n", "package m\ntype I interface{ seal() }\ntype T struct{}\nfunc (T) seal(int) {}\n"},
+		{"satisfying it only through the pointer", "package m\ntype I interface{ seal() }\ntype T struct{}\nfunc (T) seal() {}\n", "package m\ntype I interface{ seal() }\ntype T struct{}\nfunc (*T) seal() {}\n"},
 	}
 	for _, p := range pairs {
 		t.Run(p.name, func(t *testing.T) {
@@ -139,20 +146,24 @@ func Each[T any](ctx context.Context, page func(context.Context) (*List[T], erro
 
 func (l *List[T]) Len() int { return len(l.Data) }
 func (Params) String() string { return "" }
+func (*Params) contents() []any { return nil }
 `))
 	want := []string{
 		"const Default APIVersion = \"v1\"",
 		"const Version untyped string",
-		"func Each[T any](context.Context, func(context.Context) (*List[T], error), func(T) error) (int, error)",
-		"method (*List[T]) Len() int",
+		"func Each[$0 any](context.Context, func(context.Context) (*List[$0], error), func($0) error) (int, error)",
+		"method (*List[$0]) Len() int",
+		"method (*Params) String() string",
 		"method (Params) String() string",
+		"package name m",
+		"type *Params implements Page",
 		"type APIVersion string",
-		"type List[T any] struct",
-		"type List[T any] struct, Data []T `json:\"data\"`",
+		"type List[$0 any] struct",
+		"type List[$0 any] struct, Data []$0 `json:\"data\"`",
 		"type Opts struct",
 		"type Opts struct, Limit int",
 		"type Opts struct, comparable",
-		"type Page interface{unexported contents}",
+		"type Page interface{unexported contents() []interface{}}",
 		"type Params struct",
 		"type Params struct, Q *string `json:\"q,omitempty\"`",
 		"type Params struct, comparable",
@@ -182,7 +193,7 @@ func TestWhatCountsAsAPackage(t *testing.T) {
 		"onlytests/x_test.go":       "package onlytests\n",
 		"ignored/ignored.go":        "//go:build ignore\n\npackage ignored\nfunc Ignored() {}\n",
 		"sub/deeper/deeper.go":      "package deeper\nfunc Deeper() {}\n",
-		"sub/deeper/notbuilt_x.go":  "//go:build never\n\npackage deeper\nfunc NotBuilt() {}\n",
+		"sub/deeper/notbuilt_x.go":  "//go:build ignore\n\npackage deeper\nfunc NotBuilt() {}\n",
 		"sub/deeper/also_ignore.go": "//go:build ignore\n\npackage other\n",
 	})
 	var got []string
@@ -192,9 +203,12 @@ func TestWhatCountsAsAPackage(t *testing.T) {
 		}
 	}
 	want := map[string]bool{
-		". | func Root()":                        true,
-		"sub | sub: func Sub()":                  true,
-		"sub/deeper | sub/deeper: func Deeper()": true,
+		". | func Root()":                              true,
+		". | package name m":                           true,
+		"sub | sub: func Sub()":                        true,
+		"sub | sub: package name sub":                  true,
+		"sub/deeper | sub/deeper: func Deeper()":       true,
+		"sub/deeper | sub/deeper: package name deeper": true,
 	}
 	if len(got) != len(want) {
 		t.Errorf("got %d features, want %d:\n%s", len(got), len(want), strings.Join(got, "\n"))
@@ -212,10 +226,14 @@ func TestShapesItCannotDescribeFailClosed(t *testing.T) {
 	s := newShared()
 	for _, tc := range []struct{ name, src, want string }{
 		{"an unexported embedded type promotes fields", "package m\ntype inner struct{ F int }\ntype T struct{ inner }\n", "embeds the unexported inner"},
-		{"a result of an unexported type with a method", "package m\ntype client struct{}\nfunc (client) Do() {}\nfunc New() client { return client{} }\n", "unexported client, whose exported method Do"},
-		{"a field of an unexported type with a field", "package m\ntype cfg struct{ URL string }\ntype T struct{ C *cfg }\n", "unexported cfg, whose exported field URL"},
-		{"a variable of an unexported type", "package m\ntype st struct{}\nfunc (*st) Reset() {}\nvar S = &st{}\n", "unexported st, whose exported method Reset"},
-		{"a result of a function-typed result", "package m\ntype h struct{}\nfunc (h) X() {}\nfunc F() func() h { return nil }\n", "unexported h, whose exported method X"},
+		{"a result of an unexported type with a method", "package m\ntype client struct{}\nfunc (client) Do() {}\nfunc New() client { return client{} }\n", "a value of client, a type the caller cannot name"},
+		{"a field of an unexported type with a field", "package m\ntype cfg struct{ URL string }\ntype T struct{ C *cfg }\n", "a value of cfg"},
+		{"a variable of an unexported type", "package m\ntype st struct{}\nfunc (*st) Reset() {}\nvar S = &st{}\n", "a value of st"},
+		{"a result of a function-typed result", "package m\ntype h struct{}\nfunc (h) X() {}\nfunc F() func() h { return nil }\n", "a value of h"},
+		// No member at all, and still usable: len(pkg.New()) compiles, and
+		// changes meaning when hidden becomes an int.
+		{"an unexported type with no members", "package m\ntype hidden string\nfunc New() hidden { return \"\" }\n", "a value of hidden"},
+		{"a pointer to one", "package m\ntype h struct{}\nfunc New() *h { return nil }\n", "a value of h"},
 		{"a generic alias", "package m\ntype A[T any] = []T\n", "generic alias"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,18 +243,55 @@ func TestShapesItCannotDescribeFailClosed(t *testing.T) {
 			}
 		})
 	}
-	// A caller who can only SUPPLY a value of the type -- a parameter -- holds
-	// nothing to call its methods on, and neither does one handed a function
-	// that takes it. Refusing these would refuse every functional option.
+	// A type of one of the module's internal packages is as unnameable to a
+	// caller as an unexported one.
+	_, err := loadFixture(t, s, map[string]string{
+		"m.go":            "package m\nimport \"example.com/m/internal/x\"\nfunc New() x.T { return x.T{} }\n",
+		"internal/x/x.go": "package x\ntype T struct{}\nfunc (T) M() {}\n",
+	})
+	if err == nil || !strings.Contains(err.Error(), "{module}/internal/x.T") {
+		t.Errorf("an internal package's type reached from the root: err = %v", err)
+	}
+	// A caller who can only SUPPLY a value of the type -- a parameter, at any
+	// depth -- holds nothing to use. To receive one they would have to write a
+	// function whose signature names the type. Refusing these would refuse
+	// every functional option.
 	for _, src := range []string{
 		"package m\ntype h struct{}\nfunc (h) X() {}\ntype Option func(*h)\n",
 		"package m\ntype h struct{ F int }\nfunc Apply(*h) {}\n",
 		"package m\ntype h struct{}\nfunc (h) X() {}\nfunc WithX() func(*h) { return nil }\n",
-		"package m\ntype h struct{}\nfunc New() *h { return nil }\n", // no exported members to describe
+		"package m\ntype h struct{}\nfunc (h) X() {}\nfunc Register(func(*h)) {}\n",
+		"package m\ntype h struct{}\nfunc Register(func() *h) {}\n",
+		"package m\ntype h struct{}\ntype I interface{ seal(*h) }\n",
 	} {
 		if _, err := loadFixture(t, s, rootOnly(src)); err != nil {
 			t.Errorf("refused a surface that hands a caller nothing undescribed:\n%s\nerr = %v", src, err)
 		}
+	}
+}
+
+// TestOneBuildContextOrNone: a file that is in some builds and not others would
+// be compared in one of them only, so it is refused; a file in none is left out.
+func TestOneBuildContextOrNone(t *testing.T) {
+	s := newShared()
+	for _, tc := range []struct{ name, file, src string }{
+		{"a GOOS file name", "api_windows.go", "package m\nfunc Windows() {}\n"},
+		{"a GOARCH file name", "api_arm64.go", "package m\nfunc Arm() {}\n"},
+		{"a GOOS constraint", "w.go", "//go:build windows\n\npackage m\nfunc Windows() {}\n"},
+		{"a Go version only Go 1.13 builds", "old.go", "// +build !go1.14\n\npackage m\nfunc Old() {}\n"},
+		{"a Go version Go 1.13 does not build", "new.go", "//go:build go1.18\n\npackage m\nfunc New() {}\n"},
+		{"cgo", "c.go", "//go:build cgo\n\npackage m\nfunc C() {}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadFixture(t, s, map[string]string{"m.go": "package m\n", tc.file: tc.src})
+			if err == nil || !strings.Contains(err.Error(), "built in some contexts and not others") {
+				t.Errorf("err = %v", err)
+			}
+		})
+	}
+	a := mustLoad(t, s, map[string]string{"m.go": "package m\n", "gen.go": "//go:build ignore\n\npackage main\nfunc main() {}\n"})
+	if got := a.packages["."]; len(got) != 1 || got[0] != "package name m" {
+		t.Errorf("an ignored file was read: %v", got)
 	}
 }
 

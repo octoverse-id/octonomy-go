@@ -43,10 +43,14 @@ import (
 //     ignores it, so a field tagged with it is sent as null on every PATCH that
 //     does not set it (updateguard_test.go guards the tags themselves).
 //   - Type-parameter syntax: an identifier followed by bracketed type
-//     arguments, such as Optional[string], List[T] or doData[Tag], and a type
-//     parameter list such as [T any]. Go 1.13 has neither. An index expression
-//     -- rows[i], data[0], m["k"] -- is not refused: what is inside the
-//     brackets has to read as a type.
+//     arguments, such as Optional[string], List[T] or doData[Tag](ctx), and a
+//     type parameter list such as [T any]. Go 1.13 has neither. An index
+//     expression -- rows[i], data[0], m["k"], seen[t.ID] -- is not refused:
+//     what is inside the brackets has to read as a type, and after a lowercase
+//     identifier, which is how a variable is spelled, the brackets must also be
+//     followed by a call or a composite literal, so counts[Tag]++ is kept.
+//   - `any` written as a type -- map[string]any, []any, ...any, (v any) -- which
+//     Go 1.13 spells interface{}. The word in a sentence is not refused.
 //   - The /v2 module's path where a reader would copy it into a build: inside
 //     quotes, as an import path is written, or after `go get` or `go install`,
 //     or with an @version. In prose it is the pointer this line's carve-outs
@@ -78,6 +82,7 @@ var (
 	// comma-separated arguments are allowed. `map` is the one keyword spelled
 	// this way, and map[string]interface{} is Go 1.13.
 	typeArgs      = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\[(\*?(?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*)((?:\s*,\s*\*?(?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*)*)\]`)
+	anyAsType     = regexp.MustCompile(`(?:\]|\*|\.\.\.|\bchan\s+)any\b|\(\s*[A-Za-z_][A-Za-z0-9_]*\s+any\s*[,)]`)
 	typeParamList = regexp.MustCompile(`\[[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*\s+(?:any|comparable|interface\s*\{|~)`)
 	predeclared   = map[string]bool{
 		"any": true, "bool": true, "byte": true, "comparable": true, "complex64": true, "complex128": true,
@@ -188,10 +193,23 @@ func commentLineProblems(line string, rules commentRules) []string {
 	if omitzeroToken.MatchString(line) {
 		why = append(why, "names omitzero, a struct tag option Go 1.13's encoding/json ignores")
 	}
-	for _, m := range typeArgs.FindAllStringSubmatch(line, -1) {
-		if m[1] != "map" && rules.readsAsType(m[2]) {
-			why = append(why, fmt.Sprintf("%s is type-parameter syntax, which Go 1.13 does not have", m[0]))
+	for _, loc := range typeArgs.FindAllStringSubmatchIndex(line, -1) {
+		ident, arg := line[loc[2]:loc[3]], line[loc[4]:loc[5]]
+		if ident == "map" || !rules.readsAsType(arg) {
+			continue
 		}
+		// A lowercase identifier is how a variable is spelled, so counts[Tag] is
+		// an index unless a call or a literal follows: doData[Tag](ctx, ...).
+		if c := ident[0]; c >= 'a' && c <= 'z' {
+			rest := strings.TrimLeft(line[loc[1]:], " ")
+			if !strings.HasPrefix(rest, "(") && !strings.HasPrefix(rest, "{") {
+				continue
+			}
+		}
+		why = append(why, fmt.Sprintf("%s is type-parameter syntax, which Go 1.13 does not have", line[loc[0]:loc[1]]))
+	}
+	if m := anyAsType.FindString(line); m != "" {
+		why = append(why, fmt.Sprintf("%q spells interface{} as any, which Go 1.13 does not have", m))
 	}
 	if m := typeParamList.FindString(line); m != "" {
 		why = append(why, fmt.Sprintf("%q opens a type parameter list, which Go 1.13 does not have", m))
@@ -353,6 +371,12 @@ func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 		{" Each[T] over a List[T]", "type-parameter syntax"},
 		{" an Optional[octonomy.Metadata] holds it", "type-parameter syntax"},
 		{" an Optional[json.RawMessage] holds it", "type-parameter syntax"},
+		// main's comments at 5e40964 spell the empty interface its own way.
+		{" Metadata is map[string]any. DecodeMetadata reads it into a struct without", "spells interface{} as any"},
+		{"\tvar rows []any", "spells interface{} as any"},
+		{"\tfunc log(args ...any)", "spells interface{} as any"},
+		{"\tfunc Each(fn func(v any) error)", "spells interface{} as any"},
+		{"\tx := doData[Tag](ctx, c, req)", "type-parameter syntax"},
 		{" func Pair[K comparable, V any]()", "type parameter list"},
 	}
 	for _, tc := range refused {
@@ -376,6 +400,10 @@ func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 		" octonomy.Each walks every page",
 		" a generic [T] in prose is a doc link, not syntax",
 		" rows[r.i] indexes by a field",
+		"\tcounts[Tag]++",
+		"\tcount := counts[Tag]",
+		" any caller, for any reason, at any time",
+		" Metadata is map[string]interface{}; any value in it is one of six types",
 		"\tif !seen[t.ID] {",
 	}
 	for _, line := range kept {

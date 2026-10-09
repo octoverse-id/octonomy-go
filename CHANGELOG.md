@@ -25,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     can never publish a major.
 
   `make compat-diff` runs both, and fails on a `COMPAT.md` that is not what they produce; `make
-  compat-md` regenerates it, and writes nothing unless both pass. Both targets, and the tool's own
-  tests (`make compat-diff-test`), run in the required `compat guard` job and in `release-check`.
+  compat-md` regenerates it, and writes nothing unless both pass. `make compat-diff` and the tool's
+  own tests (`make compat-diff-test`) run in the required `compat guard` job and in
+  `release-check`.
 - **`DecodeMetadata`**, ported from `main`'s `types.go` at 5e40964
   ([#100](https://github.com/octoverse-id/octonomy-go/issues/100)): it decodes a resource's
   `Metadata` into a struct of the caller's own shape, so reading it needs no type assertion that
@@ -35,8 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replaced, never merged into: absent metadata, and any error, leave it at its zero value rather
   than half-filled. A caller-built `Metadata` that contains itself is refused rather than hanging
   Go 1.13's encoder. It was the one difference from `main` the parity check found that no carve-out
-  explained; `main`'s five tests for it are ported, with each target starting non-zero so that "the
-  zero value" is something the call wrote.
+  explained; `main`'s five tests for it are ported, with each decode target starting non-zero so
+  that "the zero value" is something the call wrote.
 - **A guard against `main`'s dialect in comments** (`TestNoCommentCarriesAMainOnlyToken`, #100). A
   port brings `main`'s comments with its code, and a comment compiles whatever it says. Every comment
   in the package and the examples is refused if it carries `omitzero`, type-parameter syntax, the
