@@ -911,8 +911,14 @@ func (c *Client) doData(ctx context.Context, method, path string, query url.Valu
 // interface{}. Making it the parameter TYPE, rather than asserting it at
 // runtime, is what keeps a new list type from skipping the check silently --
 // one that does not implement it does not compile as doList's argument.
+//
+// It embeds Page for the same reason, one step further out: a new list
+// envelope without a contents method fails to compile here rather than at the
+// first caller who tries to walk it. Each also has to name it in pageRows
+// (pagination.go), which a test over identityLists holds to the source.
 type identifiedList interface {
 	rows() []identifiedResource
+	Page
 }
 
 // doList performs a call whose 2xx body is a list envelope --

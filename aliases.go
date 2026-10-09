@@ -217,6 +217,18 @@ func (l *TagAliasList) rows() []identifiedResource {
 	return rows
 }
 
+// contents hands Each the page's TagAlias values and its pagination block; see Page.
+func (l *TagAliasList) contents() ([]interface{}, *Pagination) {
+	if l == nil {
+		return nil, nil
+	}
+	rows := make([]interface{}, len(l.Data))
+	for i := range l.Data {
+		rows[i] = l.Data[i]
+	}
+	return rows, &l.Pagination
+}
+
 // AliasService accesses the /tag-aliases endpoints. Reach it via Client.Aliases.
 type AliasService struct {
 	client *Client

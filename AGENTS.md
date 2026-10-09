@@ -159,7 +159,16 @@ stays a faithful, ergonomic client.
   must not appear on a `*Create` / `*Update`.
 - List methods return a **per-resource** envelope (`*TagList`, `*VocabularyList`) decoding
   `{data, pagination}` — this line has no `List[T]`, because type parameters need Go 1.18. Embed
-  `ListOptions` in each resource's `*ListParams`.
+  `ListOptions` in each resource's `*ListParams`. Each envelope also implements `Page`'s
+  `contents()` beside its `rows()`, which is what `Each` walks: `main`'s `Each[T]` at 5e40964
+  takes a `*List[T]` and a `func(T) error`, and this line's takes a `Page` and a `func(interface{}) error`
+  holding the row's **value**. `doList`'s parameter type embeds `Page`, so a new list type without
+  `contents()` does not compile, and `contents()` reports a nil receiver as a nil block, because a
+  nil `*TagList` returned as a `Page` is a non-nil interface: `p == nil` is false for it. **The
+  unexported method does not seal `Page`** — a caller's struct embedding a `Page` or a list type
+  satisfies it by promotion, and a call through a nil embedded value panics — so `Each` calls
+  `contents()` only through `pageRows`, a type switch over the six list pointers. A new list type
+  joins that case; the tests over `identityLists()` fail until it does.
 - Pick the transport helper by response shape: `client.doData` for a single resource (unwraps the
   server's `{"data": {...}}`), `client.doList` for a list envelope, `client.do` for a call with no
   payload to decode (DELETE's 204, which it asserts). The wrong choice compiles, and is caught only
@@ -375,6 +384,22 @@ stays a faithful, ergonomic client.
   touching a method's parameters, a write struct, a model or the coverage file, run `make
   contract-check`; for anything under `tools/contractdrift`, `make contract-test contract-identity`.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
+- **An example is RUN, not written.** Every program under `examples/` is exercised before it is
+  committed, and it must demonstrate a semantic a caller can get wrong rather than only a create
+  call — a comment in an example is documentation a reader will copy, and one the server contradicts
+  is worse than no example at all. Writing `examples/resolution` is how the `ambiguous_resolution`
+  claim in `TagResolveParams` was found to be unreachable (#19). Every example calls the API, so
+  every one is run against a real server through `make dev-server`, which prints the export block
+  they all read, and its output goes in the PR. Ported from `main` with the examples (#99), less
+  `main`'s exception for `examples/webhook`, which this line never carries. **A port of one is a
+  semantic rewrite, not a dialect one:** `main`'s at 5e40964 clear a field with `Null`, read
+  metadata with `DecodeMetadata` and rely on the `/api/v2` default, and a comment carried over
+  from any of them describes behaviour this line does not have. Run it here, on this line's
+  default surface, and read every comment against the output.
+- **Examples repeat their configuration block rather than sharing one.** An example is copied whole,
+  and a helper package would move the one part a reader has to adapt — how the client gets its
+  credentials — out of the file they are reading. `make examples` compile-checks every one and fails
+  when it finds none; it runs inside `release-check`, and the `go1.13` CI job runs it under go1.13.15.
 - **Describe `main` with a link, or with the commit a comparison was made at — never by restating
   its current state.** A sentence about what `main` has *now* rots on `main`'s schedule, and nothing
   on this branch can catch it; a relative link resolves to this branch's own stale copy, so link to

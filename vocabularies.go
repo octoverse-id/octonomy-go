@@ -148,6 +148,18 @@ func (l *VocabularyList) rows() []identifiedResource {
 	return rows
 }
 
+// contents hands Each the page's Vocabulary values and its pagination block; see Page.
+func (l *VocabularyList) contents() ([]interface{}, *Pagination) {
+	if l == nil {
+		return nil, nil
+	}
+	rows := make([]interface{}, len(l.Data))
+	for i := range l.Data {
+		rows[i] = l.Data[i]
+	}
+	return rows, &l.Pagination
+}
+
 // VocabularyService accesses the /vocabularies endpoints. Reach it via
 // Client.Vocabularies.
 type VocabularyService struct {

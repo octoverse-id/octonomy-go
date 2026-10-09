@@ -594,13 +594,15 @@ type identityListCase struct {
 	want []string
 }
 
+// Two rows per list, so a rows() or contents() that reordered them -- not only
+// one that dropped them -- reads back the wrong order (#99).
 func identityLists() []identityListCase {
 	return []identityListCase{
 		{&TagList{Data: []Tag{{ID: "a"}, {ID: "b"}}}, []string{"a", "b"}},
-		{&VocabularyList{Data: []Vocabulary{{ID: "c"}}}, []string{"c"}},
-		{&TagAliasList{Data: []TagAlias{{ID: "d"}}}, []string{"d"}},
-		{&ResourceTagList{Data: []ResourceTag{{AssignmentID: "e"}}}, []string{"e"}},
-		{&TagResourceList{Data: []TagResource{{ResourceID: "f"}}}, []string{"f"}},
+		{&VocabularyList{Data: []Vocabulary{{ID: "c"}, {ID: "c2"}}}, []string{"c", "c2"}},
+		{&TagAliasList{Data: []TagAlias{{ID: "d"}, {ID: "d2"}}}, []string{"d", "d2"}},
+		{&ResourceTagList{Data: []ResourceTag{{AssignmentID: "e"}, {AssignmentID: "e2"}}}, []string{"e", "e2"}},
+		{&TagResourceList{Data: []TagResource{{ResourceID: "f"}, {ResourceID: "f2"}}}, []string{"f", "f2"}},
 		{&AuditLogList{Data: []AuditLog{{ID: "g"}, {ID: "h"}}}, []string{"g", "h"}},
 	}
 }

@@ -33,7 +33,8 @@ Copy `tags.go` and `tags_test.go` as the template, then:
    populated, or `make contract-check` reports an operation nothing exercises.
 2. Create `<resource>.go` with: the model struct and its value-receiver `identityFields()`,
    `*Create`/`*Update` write structs (pointer + `omitempty`, and a value-receiver `MarshalJSON` on a
-   `*Update` carrying `Metadata`), a `*List` type with `rows()`, `*ListParams` with a `query()`
+   `*Update` carrying `Metadata`), a `*List` type with `rows()` and `contents()` (the `Page` method
+   `Each` walks; `doList` will not compile without it), `*ListParams` with a `query()`
    method, and a `*Service` whose methods take `context.Context` first and `...RequestOption` last
    and delegate to the transport helper matching the response shape: `client.doData` for a single
    resource, `client.doList` for a list, `client.do` for a call with no payload (DELETE). The wrong
@@ -50,7 +51,12 @@ Copy `tags.go` and `tags_test.go` as the template, then:
    function in `integration_test.go`, and run it with
    `make dev-server && make smoke`. `TestEveryResponseTypeHasASmokeProbe` fails in a plain `make test`
    until a smoke test decodes the new type.
-6. Add a `## [Unreleased]` CHANGELOG entry and update [`api.md`](api.md).
+6. **Add a runnable example under `examples/`** for a new resource group, or extend the existing
+   one for a new method on a group that has one. `make examples` compile-checks every program, and
+   each one is **run against a real server** through `make dev-server` before it lands — a comment
+   in an example is documentation a reader will copy, and one the server contradicts is worse than no
+   example at all. Each example repeats its own configuration block rather than sharing one.
+7. Add a `## [Unreleased]` CHANGELOG entry and update [`api.md`](api.md).
 
 The recipe is this line's, and it is here to explain the shape of the code you are reading. A resource
 new to *both* lines is work for `main` first, so a new resource issue belongs there, against `main`'s

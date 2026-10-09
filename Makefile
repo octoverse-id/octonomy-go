@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check version-check \
-	dev-server dev-server-down dev-server-logs compat-guard compat-guard-test smoke test-integration test-go113 \
+	dev-server dev-server-env dev-server-down dev-server-logs compat-guard compat-guard-test smoke test-integration test-go113 \
 	tools-check contract-check contract-test contract-identity contract-identity-test contract-report
 
 # A real go1.13 toolchain, for the one gate a modern toolchain cannot provide.
@@ -69,10 +69,29 @@ vuln: ## Run govulncheck on the SDK and on the contract gate's module (skipped i
 		echo "govulncheck not installed; skipping. Install: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest"; \
 	fi
 
-examples: ## Compile-check the runnable examples (no binaries emitted)
-	@find examples -name main.go -exec dirname {} \; | sort -u | while read -r dir; do \
-		echo "build ./$$dir"; go build -o /dev/null "./$$dir" || exit 1; \
-	done
+# Ported from main's at 5e40964 (#99), with one fix. The loop this replaced read
+# `find` through a pipe, so an examples/ with no main.go in it compiled nothing
+# and exited 0 -- a release gate that passes having checked nothing. Three
+# things make it fail closed: `find` runs in an assignment of its own, so under
+# `set -e` its exit status is the assignment's (main's ran it inside
+# `find | sort`, whose status is sort's, so a traversal error that still printed
+# some directories passed with the rest unchecked); the empty check runs before
+# any build; and every build runs under `set -e`. The count printed at the end is
+# for a reader, not a check.
+examples: ## Compile-check the runnable examples (no binaries emitted); fails if there are none
+	@set -e; \
+	found=$$(find examples -name main.go -exec dirname {} \;); \
+	dirs=$$(printf '%s\n' "$$found" | sort -u); \
+	[ -n "$$dirs" ] || { \
+		echo "examples: no main.go found under examples/."; \
+		echo "examples: this target would otherwise report success having compiled nothing."; \
+		exit 1; }; \
+	count=0; \
+	for dir in $$dirs; do \
+		echo "build ./$$dir"; go build -o /dev/null "./$$dir"; \
+		count=$$((count + 1)); \
+	done; \
+	echo "examples: $$count compiled"
 
 tools-check: ## Fail unless the optional gate tools are actually installed
 	@missing=""; \
@@ -113,8 +132,72 @@ test-go113: ## Build, vet and test with a REAL go1.13 toolchain (override GO113=
 
 check: fmt-check vet build compat-guard compat-guard-test ## Fast pre-push gate (format, vet, build, line guard)
 
-dev-server: ## Boot a real Octonomy (Postgres + GHCR container) and write .octonomy-harness.env
+dev-server: ## Boot a real Octonomy (Postgres + GHCR container), write .octonomy-harness.env, and print the examples' env
 	@scripts/octonomy-harness.sh up
+	@$(MAKE) --no-print-directory dev-server-env
+
+# The bridge between the harness and the examples, and the reason it exists is
+# that the two use different variable names on purpose. The harness writes
+# OCTONOMY_TEST_* because the integration suites GATE on those names -- an empty
+# OCTONOMY_TEST_BASE_URL is what makes them skip instead of fail -- while an
+# example is a program a reader copies, and a consumer's program reads
+# OCTONOMY_*. Renaming either set to match the other would break one of those
+# two properties.
+#
+# It is a target rather than a paragraph in the README because the value that
+# matters is a freshly minted token: something to copy, never to retype. It is
+# also separate from `dev-server` so the block can be reprinted into a second
+# terminal without rebooting the container.
+#
+# IT PRINTS A SECRET, deliberately and to a developer's own terminal. Nothing in
+# CI calls it -- the workflows drive scripts/octonomy-harness.sh directly and the
+# composite action masks every token it exports -- and nothing should: a job log
+# is not a terminal, and this target does no masking of its own.
+#
+# Values are single-quoted so a copied line survives a space, and the env file is
+# sourced through an explicit ./ prefix when it is relative -- POSIX `.` searches
+# PATH for a bare name, which would source something else entirely.
+#
+# Every value is checked for emptiness before anything is printed, which is the
+# vacuous-green rule the smoke target states at length, in this target's shape: a
+# file that exists proves nothing, and an interrupted boot leaves a stale or
+# partial one behind. Printing OCTONOMY_TOKEN='' and exiting 0 would say the
+# examples can run while handing over credentials that cannot authenticate, and
+# the failure would surface three commands later as a blanket 401.
+dev-server-env: ## Print the export block the API examples read (needs a booted dev-server)
+	@set -e; \
+	env_file=$$(scripts/octonomy-harness.sh env); \
+	case "$$env_file" in /*) ;; *) env_file="./$$env_file" ;; esac; \
+	[ -f "$$env_file" ] || { \
+		echo "dev-server-env: $$env_file does not exist -- run \`make dev-server\` first."; \
+		exit 1; }; \
+	set -a; . "$$env_file"; set +a; \
+	missing=""; \
+	for var in OCTONOMY_TEST_BASE_URL OCTONOMY_TEST_TOKEN OCTONOMY_TEST_TENANT_ID \
+		OCTONOMY_TEST_APPLICATION_ID OCTONOMY_TEST_NAMESPACE_TYPE OCTONOMY_TEST_NAMESPACE_ID; do \
+		eval "value=\$$$$var"; \
+		[ -n "$$value" ] || missing="$$missing $$var"; \
+	done; \
+	[ -z "$$missing" ] || { \
+		echo "dev-server-env: $$env_file is missing a value for:$$missing"; \
+		echo "dev-server-env: printing the block anyway would hand you blank credentials and a"; \
+		echo "dev-server-env: green exit -- the examples would then fail somewhere else. The file"; \
+		echo "dev-server-env: is written whole at the end of a successful boot, so a partial one"; \
+		echo "dev-server-env: means an interrupted or stale run: \`make dev-server\` again."; \
+		exit 1; }; \
+	echo; \
+	echo "Run any example against this server:"; \
+	echo; \
+	echo "  export OCTONOMY_BASE_URL='$$OCTONOMY_TEST_BASE_URL'"; \
+	echo "  export OCTONOMY_TOKEN='$$OCTONOMY_TEST_TOKEN'"; \
+	echo "  export OCTONOMY_TENANT_ID='$$OCTONOMY_TEST_TENANT_ID'"; \
+	echo "  export OCTONOMY_APPLICATION_ID='$$OCTONOMY_TEST_APPLICATION_ID'"; \
+	echo "  export OCTONOMY_NAMESPACE_TYPE='$$OCTONOMY_TEST_NAMESPACE_TYPE'"; \
+	echo "  export OCTONOMY_NAMESPACE_ID='$$OCTONOMY_TEST_NAMESPACE_ID'"; \
+	echo; \
+	echo "  go run ./examples/quickstart"; \
+	echo
+
 
 dev-server-down: ## Tear down the Octonomy container harness
 	@scripts/octonomy-harness.sh down

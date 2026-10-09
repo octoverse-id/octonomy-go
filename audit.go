@@ -129,6 +129,18 @@ func (l *AuditLogList) rows() []identifiedResource {
 	return rows
 }
 
+// contents hands Each the page's AuditLog values and its pagination block; see Page.
+func (l *AuditLogList) contents() ([]interface{}, *Pagination) {
+	if l == nil {
+		return nil, nil
+	}
+	rows := make([]interface{}, len(l.Data))
+	for i := range l.Data {
+		rows[i] = l.Data[i]
+	}
+	return rows, &l.Pagination
+}
+
 // AuditLogListParams filters and pages the audit log collection. A nil *params
 // lists with server defaults.
 //

@@ -65,6 +65,18 @@ func (l *ResourceTagList) rows() []identifiedResource {
 	return rows
 }
 
+// contents hands Each the page's ResourceTag values and its pagination block; see Page.
+func (l *ResourceTagList) contents() ([]interface{}, *Pagination) {
+	if l == nil {
+		return nil, nil
+	}
+	rows := make([]interface{}, len(l.Data))
+	for i := range l.Data {
+		rows[i] = l.Data[i]
+	}
+	return rows, &l.Pagination
+}
+
 // TagResource is one resource as seen FROM a tag -- the mirror of ResourceTag,
 // and the reason the two exist separately. It carries no tag, because the tag is
 // what you started from, and no assignment id, because the route answers "what
@@ -104,6 +116,18 @@ func (l *TagResourceList) rows() []identifiedResource {
 		rows[i] = l.Data[i]
 	}
 	return rows
+}
+
+// contents hands Each the page's TagResource values and its pagination block; see Page.
+func (l *TagResourceList) contents() ([]interface{}, *Pagination) {
+	if l == nil {
+		return nil, nil
+	}
+	rows := make([]interface{}, len(l.Data))
+	for i := range l.Data {
+		rows[i] = l.Data[i]
+	}
+	return rows, &l.Pagination
 }
 
 // ResourceReplace is the request body for replacing a resource's whole tag set.

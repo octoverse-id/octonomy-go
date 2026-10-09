@@ -14,7 +14,8 @@ existing resource file and changing the types and paths.
 | `jsondepth.go` | Compat-only: the nesting guards Go 1.13's `encoding/json` lacks — `checkBodyDepth` before every request is encoded, `decodeJSON` around every response decode. |
 | `errors.go` | `APIError`, error `Code*` constants, and `Is*` / `AsAPIError` helpers. |
 | `health.go` | `HealthService`, `NewHealthClient`, and the bare `{"status": …}` decoder. |
-| `pagination.go` | `ListOptions` and `Pagination`. The list envelope itself is per-resource on this line (`TagList`, `VocabularyList`, `TagAliasList`, `ResourceTagList`, `TagResourceList`, `AuditLogList`) because `List[T]` needs Go 1.18. |
+| `pagination.go` | `ListOptions`, `Pagination`, `Page` and `Each` — the offset walk. The list envelope itself is per-resource on this line (`TagList`, `VocabularyList`, `TagAliasList`, `ResourceTagList`, `TagResourceList`, `AuditLogList`) because `List[T]` needs Go 1.18; each implements `Page` beside its `rows()`, so `Each` takes a `Page` and hands its callback each row as an `interface{}`. |
+| `tagtree.go` | `BuildTagTree`, `TagTree`, `TagNode`, `ErrTagCycle`, `ErrDuplicateTagID` — client-side assembly of a fetched slice into the `ParentID` hierarchy. Makes no request. |
 | `types.go` | Shared `Metadata` alias and the `String`/`Bool`/`Int` pointer helpers. |
 | `tags.go`, `vocabularies.go`, `aliases.go` | The three resources with a `*Update`, each with a value-receiver `MarshalJSON` so `Metadata{}` reaches the server as `{}`. |
 | `resolution.go`, `assignments.go`, `resources.go`, `audit.go` | Tag resolution, assignments (with the two bulk composites), resource tags (with the replace composite), and the list-only audit log. |
