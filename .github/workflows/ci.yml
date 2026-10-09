@@ -126,7 +126,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          # The scan's verdict is about THIS Go's standard library, so it has to
+          # be a Go that upstream still patches -- the one Go version in this
+          # file that must move by itself. A literal minor ages into a release no
+          # fix will ever reach: this job pinned "1.25", and once 1.27 shipped,
+          # nine stdlib advisories against go1.25.14 (GO-2026-6603..6617, fixed
+          # only in go1.26.9) made it unpassable on every run from 2026-10-09
+          # (#123; support/go1.13 hit it first, #121). "1.26" would repeat that
+          # when 1.28 ships. `oldstable` is the older of the two patched
+          # releases, the supported one nearest the test matrix above.
+          go-version: oldstable
           cache: true
       # Installed and run as two explicit steps rather than through
       # golang/govulncheck-action, which cannot express the one thing this job
@@ -150,17 +159,28 @@ jobs:
         # GOTOOLCHAIN=local that setup-go exports into the job environment.
         #
         # It applies to the install ONLY, which is the whole point: the binary it
-        # produces still analyzes this module with the Go pinned above (verified
-        # -- govulncheck -version reports `Go: go1.25.x` alongside
-        # `Scanner: govulncheck@v1.8.0`). Scanning with a newer stdlib than the
+        # produces still analyzes this module with the Go set up above (the step
+        # after this one prints which). Scanning with a newer stdlib than the
         # one under test would hide exactly the standard-library advisories this
         # job exists to surface.
+        #
+        # The other direction fails loudly rather than quietly: a scanner built
+        # by an OLDER Go than the stdlib it loads cannot type-check it (a go1.26
+        # build loading go1.27's stdlib fails with `method must have no type
+        # parameters`, among others). This step cannot produce one -- the
+        # toolchain it builds with is the job's Go or newer -- but a laptop's
+        # installed binary can.
         #
         # @latest, not a pin: a pinned scanner ages into the same failure from
         # the other direction, and the vulnerability database is fetched from
         # vuln.go.dev at run time regardless, so a newer tool is strictly better
         # here. With GOTOOLCHAIN=auto the version ratchet can no longer break it.
         run: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest
+      # `oldstable` resolves at run time, so the log has to say what it resolved
+      # to: a verdict is about one Go's stdlib, and a reader of a red (or green)
+      # run needs to know which. Prints `Go: go1.X.Y` and the scanner's version.
+      - name: Scanner and the Go it analyzes with
+        run: govulncheck -version
       # Deliberately NOT `make vuln`: that target SKIPS when the binary is absent,
       # which is right on a laptop and is exactly the wrong behavior here -- a
       # failed install would report a green scan that never happened. Calling the
