@@ -509,6 +509,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   go1.25.13, and CI resolves `"1.25"` to a later patch. Same one-line fix applied to the install
   hints in `docs/development.md` and the `Makefile`, which reproduce the identical error on a go1.25
   toolchain. Ports [#45](https://github.com/octoverse-id/octonomy-go/pull/45) to this line (#70).
+- **The `vuln` CI job had aged into a Go that upstream no longer patches, so it could never pass**
+  ([#121](https://github.com/octoverse-id/octonomy-go/issues/121)). It scanned with
+  `go-version: "1.25"`, and once Go 1.27 shipped, nine standard-library advisories published against
+  go1.25.14 on 2026-10-09 (GO-2026-6603 to GO-2026-6617, in `net/http`, `net/textproto` and
+  `crypto/tls`) were fixed only in go1.26.9. The job went red on the merge commit of #120 a day after
+  that PR's own scan passed on the same patch, and since `vuln` is required here it blocked every
+  merge into the line. Nothing in this module was affected: there is no dependency to bump, and a
+  consumer's remedy is a patched Go. The job now scans with `oldstable`, the older of the two
+  releases still patched, because any literal minor repeats the break when it leaves support —
+  `"1.26"` would when 1.28 ships, before this line's sunset. It still analyses with the Go it sets
+  up, and now prints which (`govulncheck -version`) before scanning. Both modules scan clean on
+  go1.26.9 and on go1.27.2. `docs/development.md` and `docs/release.md` say why a local
+  `make release-check` on go1.25 now fails `vuln`, and how to get CI's verdict on a laptop.
 - **Documentation only; no code change, and no version bump or tag is planned for it.** This branch
   carried its own copies of `main`'s documentation, written when `main` was a `/api/v1`-only client
   with two resource groups, and they had aged into false statements about it — most harmfully a line

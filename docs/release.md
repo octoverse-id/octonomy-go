@@ -18,6 +18,11 @@ This runs `tools-check`, `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vul
 `version-check`, `compat-guard` and its tests, and the contract gate: `contract-test`,
 `contract-check` and `contract-identity`. All must pass.
 
+Run it on a Go that upstream still patches. `vuln` scans with whatever Go it finds, so on a release
+past its support window it fails on standard-library advisories no patch will fix, and says nothing
+about this module. CI's `vuln` job uses `oldstable`; see
+[development.md](development.md#the-go-113-floor-read-before-touching-code) for scanning with it locally.
+
 **On the compat line (`support/go1.13`), `release-check` is not sufficient.** It runs on a modern
 toolchain, which cannot see a stdlib-floor violation, and it never talks to a real server. Two more
 gates are mandatory before a `v1.x` tag, both of which need something the runner has and your laptop
