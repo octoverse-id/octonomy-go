@@ -268,6 +268,37 @@ func TestCommandOnAFixtureRepository(t *testing.T) {
 		expect(t, code, out, 1, "says v1.0.0 is "+f.headSHA+", and the tag names "+f.relSHA)
 	})
 
+	t.Run("a release of another module", func(t *testing.T) {
+		// Built with plumbing, so the work tree never leaves the compat branch:
+		// a commit whose go.mod names another module, tagged as a release.
+		blob := func(content string) string {
+			cmd := exec.Command("git", "-C", f.work, "hash-object", "-w", "--stdin")
+			cmd.Stdin = strings.NewReader(content)
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		entries := "100644 blob " + blob("module example.com/other\n\ngo 1.13\n") + "\tgo.mod\n" +
+			"100644 blob " + blob("package m\n\nconst Default = \"v1\"\n\nfunc Shared() {}\n\nfunc Each(interface{}) {}\n") + "\tm.go\n"
+		mk := exec.Command("git", "-C", f.work, "mktree")
+		mk.Stdin = strings.NewReader(entries)
+		tree, err := mk.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		other := git(t, f.work, "commit-tree", strings.TrimSpace(string(tree)), "-m", "another module")
+		git(t, f.work, "tag", "v1.0.1", other)
+		defer git(t, f.work, "tag", "-d", "v1.0.1")
+		p := "tools/compatdiff/baselines.pin"
+		good := "main " + f.mainSHA + "\nrelease v1.0.0 " + f.relSHA + "\n"
+		defer f.write(t, p, good)
+		f.write(t, p, good+"release v1.0.1 "+other+"\n")
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "v1.0.1 is module example.com/other and this tree is example.com/m")
+	})
+
 	t.Run("a missing tag and main ref are fetched", func(t *testing.T) {
 		git(t, f.work, "tag", "-d", "v1.0.0")
 		git(t, f.work, "update-ref", "-d", "refs/remotes/origin/main")
