@@ -22,7 +22,7 @@ There are **no runtime dependencies** — keep `go.mod` free of a runtime `requi
 ```bash
 make fmt-check      # gofmt -l . (no output = clean)
 make vet            # go vet ./...
-make lint           # golangci-lint on both modules (if installed)
+make lint           # golangci-lint on every module (if installed)
 make test           # go test -race -cover ./...
 make cover          # prints total coverage
 make examples       # compile-check every example; fails if examples/ holds none
@@ -38,6 +38,9 @@ make contract-check    # the contract gate: what this client sends and decodes v
 make contract-test     # the gate's own tests -- proves it can still fail
 make contract-identity # the gate's shared files are main's, byte for byte, at the pinned commit
 make contract-report   # advisory: how the gate's other files differ from main's at the pin
+make compat-diff       # this line's API vs main's at the pin (as COMPAT.md lists) and vs every release
+make compat-md         # regenerate COMPAT.md (writes only when both checks pass)
+make compat-diff-test  # the parity checks' own tests -- proves each can still fail
 ```
 
 ## The Go 1.13 floor (read before touching code)
@@ -325,6 +328,81 @@ script above for the one, the marker for the other — never one off the other.
 - Port 8000 already taken: `OCTONOMY_HARNESS_PORT=8100 make dev-server`.
 - A failed boot prints container logs automatically and tears itself down. To inspect a *running*
   harness, use `make dev-server-logs`.
+
+## Parity with `main` (`COMPAT.md`)
+
+[`COMPAT.md`](../COMPAT.md) is every difference between this line's exported API and `main`'s, with
+the reason for each — the parity epic's ([#88](https://github.com/octoverse-id/octonomy-go/issues/88))
+acceptance artifact. `tools/compatdiff` writes it from two checks
+([#100](https://github.com/octoverse-id/octonomy-go/issues/100)), and `make compat-diff` — in the
+required `compat guard` job — runs both and fails when either finds something, or when the committed
+`COMPAT.md` is not what they produce:
+
+- **A — parity with `main`** at the commit
+  [`tools/compatdiff/baselines.pin`](../tools/compatdiff/baselines.pin) names. Both trees' exported
+  declarations are printed as *features* — the package's name, a constant with its type and value,
+  a function or method with its signature (the method sets of `T` and `*T` both), a type with its
+  kind and comparability, a struct field with its type and struct tag, an interface with its whole
+  method set, and each of the package's types that satisfies one of its interfaces — compared by
+  type identity, so `any` against `interface{}` is no difference, nor is a renamed type parameter
+  (they print by position, `$0`), and a changed tag is one. Every difference must be listed in
+  [`tools/compatdiff/carveouts.txt`](../tools/compatdiff/carveouts.txt), under the section that
+  explains it, and every listed difference must still exist.
+- **B — compatibility with this line's published releases**, each one the pin file names. Every
+  feature a release exported must still be here unchanged, and so must the relative order of each
+  struct's exported fields, which a caller converting the struct to one of the same fields relies on
+  (an inserted field keeps every pair it found, so it is still an addition). Parity does not read
+  field order: the two lines are different modules. There is no exception list: this line can
+  never publish a major (`docs/versioning.md`), so a break has no version to ride.
+
+It is a nested Go 1.24 module, like the contract gate and for a sharper reason: it type-checks
+`main`'s source, which go1.13.15's parser cannot read. It reads `main` and the releases out of git,
+so it needs the full history; a shallow clone is refused rather than guessed about. The work tree is
+read as `git ls-files --cached --others --exclude-standard` lists it, so a new file is checked before
+it is committed and an ignored one never is. It exits 1 on a finding and 2 when it could not compare.
+
+**When it fails on a port.** A difference it reports is one of three things. Port what `main` has
+and this line lacks. List a deliberate difference under its `carveout` or `dialect` section, copying
+the feature line exactly as the check printed it. Or, for a capability nobody has ported yet, add a
+`gap` section naming the issue that owns it. Then run `make compat-md` and commit `COMPAT.md`; it is
+generated, so an edit made to it by hand fails the check. `TestTheCarveOutsAreTheEpicsDefinitionOfDone`
+holds the carve-out file's sections to the epic's definition of done, so a new section is a change
+to that test too — the place to say why.
+
+**Advancing `main`'s pin** is a port: every difference the newer commit brings is ported or listed in
+the same pull request. **A new release** adds a `release` line once its tag exists
+([`release.md`](release.md), *Cutting a release*); a release's line is never removed, and every
+`v1.*` tag in the clone must have one — `make compat-diff` fails on a tag the pin file does not
+name, except in the CI run that pushing the tag starts, which checks the release itself.
+
+**What it cannot see.** Behaviour behind an unchanged declaration — a default inside a function, an
+error mapping, a guard — is invisible to both checks; a carve-out of that kind is prose in
+`carveouts.txt` with no features under it, as current as the pull request that last edited it.
+Unexported declarations are not compared, and neither is `Version`'s value, which changes on every
+release by definition. An addition is never a Check B finding, although an added field or method
+can make a selector ambiguous in a caller's struct that embeds the type beside another — no
+addition is safe from that, so refusing it would refuse every minor release. Three shapes are refused
+rather than compared, since no feature line would describe them: an exported declaration that hands
+a caller a value of a type the caller cannot name (an unexported one, or one from an internal
+package); a sealed interface (one with an unexported method) declared beside a generic type, since
+whether a generic type satisfies it depends on the instantiation; and any file a build context
+could add or remove — one with a build constraint, a GOOS or GOARCH file name suffix, or an import
+of `"C"` — since every tree is read in one context and so would compare such a file in that one
+only. A constraint of exactly `ignore` is the exception, the convention for a file no build is
+meant to include: it is left out, and only the convention keeps it out of a build.
+
+### Comments that describe `main`
+
+A port brings `main`'s comments with its code, and a comment compiles whatever it says.
+`TestNoCommentCarriesAMainOnlyToken` (`doccomment_test.go`, #100) reads every comment in every file
+a consumer compiles — the package and the examples — and refuses a token only `main`'s dialect has:
+`omitzero`, type-parameter syntax, `any` as a type (anywhere in a code example; in prose only where
+the word cannot be English, as in `map[string]any`), the `/v2` module's path where a reader would
+build with it, a Go version at `main`'s floor or later, an `octonomy.Name` this package does not
+declare, and, in a code example, a standard-library name added after Go 1.13 (read from the running
+toolchain's `$GOROOT/api`, so that rule has nothing to refuse under go1.13.15). It refuses the token
+even where a sentence only contrasts `main` with this line; name `main`'s construct in words
+instead. A signature written inline in a sentence is not read for `any`: put it in a code block.
 
 ## Keeping the contract current
 

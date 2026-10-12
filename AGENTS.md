@@ -73,10 +73,28 @@ on `main`.
   - **Doc comments.** Strip `Optional[T]`, `omitzero`, a Go 1.24 floor, and post-1.13 standard
     library in examples (`slices.*`). Rewrite the **module** path `.../octonomy-go/v2` to the
     unsuffixed one — but never strip `/api/v2`, which is a REST route and the capability being
-    ported.
+    ported. `TestNoCommentCarriesAMainOnlyToken` (`doccomment_test.go`, #100) refuses those tokens,
+    `any` as a type (in a code example, or in prose as `map[string]any`), and an `octonomy.Name`
+    the package does not declare, in every comment a consumer compiles — even in a sentence that
+    only contrasts `main` with this line, so name `main`'s construct in words. It cannot see a
+    `main`-only claim made in ordinary words, nor a signature written inline in a sentence; read
+    for those, and put signatures in a code block.
   - **A default.** Copy a value from `main` and its default comes with it. `DefaultAPIVersion` was
     `APIV2` there at 5e40964 and is `APIV1` here, and it is not the last default the port will meet:
     a default on this line never changes, so read each one against `v1.0.0`, not against `main`.
+- **Every difference from `main`'s exported API is ported or written down (#100).** `make
+  compat-diff`, in the required `compat guard` job, compares every exported declaration with
+  `main`'s at the commit `tools/compatdiff/baselines.pin` names — constant values, signatures, field
+  types and struct tags, comparability, interface method sets — and fails on a difference
+  `tools/compatdiff/carveouts.txt` does not list, on a listed one that no longer exists, and on any
+  declaration a published release of this line exported that is not still here unchanged. That last
+  check has **no exception list**: it is the no-major rule above, checked. `COMPAT.md` is written
+  from the result by `make compat-md` and is the epic's acceptance artifact; never edit it by hand,
+  and regenerate it in the PR that changes what it says. A port that leaves a difference either
+  closes it, lists it under the `carveout` or `dialect` section that explains it, or records a
+  `gap` naming the issue that owns it — and `TestTheCarveOutsAreTheEpicsDefinitionOfDone` makes a
+  new section a change you have to argue for. Advancing the pin is a port of everything the newer
+  commit brings, in the same PR.
 - **Port a rule with the code it governs.** Several rules in this file describe the tree as it is —
   every request tenant-scoped, every method taking `...RequestOption` — and `main`'s `AGENTS.md`
   records exceptions to them that arrive with the code: the health probes are unversioned,
@@ -260,7 +278,10 @@ stays a faithful, ergonomic client.
   `go 1.24` and requires `gopkg.in/yaml.v3`, behind its own `go.mod` with a `replace ../..` onto this
   checkout, so neither reaches a consumer's build: Go's `./...` stops at a nested `go.mod`, and so do
   the go1.13 job's build and vet. Never lower it to Go 1.13 or move its dependency into the root
-  module. A root test that walks the tree must stop at a nested `go.mod` too — go1.13.15's parser
+  module. **`tools/compatdiff` (#100) is a second module on a modern Go**, for a sharper reason: it
+  type-checks `main`'s source, which go1.13.15's parser cannot read. It is standard-library only. A
+  tool module is a module for every root target that has to reach it — `make lint`, `make vuln` and
+  their CI steps each name both, and `TestBothModuleScansPropagateFailure` drives every one. A root test that walks the tree must stop at a nested `go.mod` too — go1.13.15's parser
   cannot read the gate's generics (`shippedSourceIn` in `updateguard_test.go` does this) — or, if it
   walks into one on purpose, must not need this toolchain to parse what it finds there
   (`testFileProblems` in `internal/testmainguard` reads such a file lexically).
@@ -383,6 +404,8 @@ stays a faithful, ergonomic client.
   `make test-integration` beside it for anything touching scoping or a read method. For anything
   touching a method's parameters, a write struct, a model or the coverage file, run `make
   contract-check`; for anything under `tools/contractdrift`, `make contract-test contract-identity`.
+  For anything touching an exported declaration, `make compat-diff` (then `make compat-md` when it
+  says `COMPAT.md` is stale); for anything under `tools/compatdiff`, `make compat-diff-test`.
 - Keep the README quickstart, `examples/`, and `Makefile` current with the public API.
 - **An example is RUN, not written.** Every program under `examples/` is exercised before it is
   committed, and it must demonstrate a semantic a caller can get wrong rather than only a create
@@ -393,8 +416,9 @@ stays a faithful, ergonomic client.
   they all read, and its output goes in the PR. Ported from `main` with the examples (#99), less
   `main`'s exception for `examples/webhook`, which this line never carries. **A port of one is a
   semantic rewrite, not a dialect one:** `main`'s at 5e40964 clear a field with `Null`, read
-  metadata with `DecodeMetadata` and rely on the `/api/v2` default, and a comment carried over
-  from any of them describes behaviour this line does not have. Run it here, on this line's
+  metadata with the generic `DecodeMetadata` (this line's takes a pointer) and rely on the `/api/v2`
+  default, and a comment carried over from any of them describes behaviour this line does not
+  have. Run it here, on this line's
   default surface, and read every comment against the output.
 - **Examples repeat their configuration block rather than sharing one.** An example is copied whole,
   and a helper package would move the one part a reader has to adapt — how the client gets its

@@ -1,7 +1,8 @@
 .DEFAULT_GOAL := help
 .PHONY: help tidy build fmt fmt-check vet lint test cover vuln examples check release-check version-check \
 	dev-server dev-server-env dev-server-down dev-server-logs compat-guard compat-guard-test smoke test-integration test-go113 \
-	tools-check contract-check contract-test contract-identity contract-identity-test contract-report
+	tools-check contract-check contract-test contract-identity contract-identity-test contract-report \
+	compat-diff compat-md compat-diff-test
 
 # A real go1.13 toolchain, for the one gate a modern toolchain cannot provide.
 # Override with the path to any go1.13.x binary:
@@ -30,16 +31,17 @@ fmt-check: ## Fail if any file is not gofmt-clean
 vet: ## Run go vet
 	go vet ./...
 
-# Both modules, and both statuses, for the reasons spelled out over `vuln` below.
-# The SDK is one module and the contract gate (tools/contractdrift, #98) another,
-# and `golangci-lint run` stops at the nested go.mod exactly as `go vet ./...`
-# does -- so a target that linted only the root would let release-check pass on a
-# gate CI rejects.
-lint: ## Run golangci-lint on the SDK and on the contract gate's module (skipped if not installed; CI runs it)
+# Every module, and every status, for the reasons spelled out over `vuln` below.
+# The SDK is one module, the contract gate (tools/contractdrift, #98) another and
+# the parity checks (tools/compatdiff, #100) a third, and `golangci-lint run` stops
+# at a nested go.mod exactly as `go vet ./...` does -- so a target that linted only
+# the root would let release-check pass on a tool CI rejects.
+lint: ## Run golangci-lint on the SDK and on each tool module (skipped if not installed; CI runs it)
 	@if command -v golangci-lint >/dev/null 2>&1; then \
 		status=0; \
 		golangci-lint run || status=$$?; \
 		(cd tools/contractdrift && golangci-lint run --config ../../.golangci.yml) || status=$$?; \
+		(cd tools/compatdiff && golangci-lint run --config ../../.golangci.yml) || status=$$?; \
 		exit $$status; \
 	else \
 		echo "golangci-lint not installed; skipping. Install: https://golangci-lint.run/welcome/install/"; \
@@ -52,18 +54,19 @@ cover: ## Run tests and print total coverage
 	go test -race -coverprofile=coverage.out ./...
 	go tool cover -func=coverage.out | tail -1
 
-# Two modules, two scans, and BOTH statuses. main's first version of this put the
-# second scan under the first inside the `if` body, and `sh` gives an `if` body
-# the status of the command that ended it -- so a root scan that found a
+# Three modules, three scans, and EVERY status. main's first version of this put
+# the second scan under the first inside the `if` body, and `sh` gives an `if`
+# body the status of the command that ended it -- so a root scan that found a
 # vulnerability left `make vuln` exiting 0 (main's #56). Captured rather than
-# chained with `&&`, so one run reports everything both scans found.
+# chained with `&&`, so one run reports everything every scan found.
 # TestBothModuleScansPropagateFailure (tools/contractdrift) drives both targets
 # with a failing stub in each module in turn.
-vuln: ## Run govulncheck on the SDK and on the contract gate's module (skipped if not installed; CI runs it)
+vuln: ## Run govulncheck on the SDK and on each tool module (skipped if not installed; CI runs it)
 	@if command -v govulncheck >/dev/null 2>&1; then \
 		status=0; \
 		govulncheck ./... || status=$$?; \
 		(cd tools/contractdrift && govulncheck ./...) || status=$$?; \
+		(cd tools/compatdiff && govulncheck ./...) || status=$$?; \
 		exit $$status; \
 	else \
 		echo "govulncheck not installed; skipping. Install: GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@latest"; \
@@ -260,5 +263,37 @@ contract-identity-test: ## Run the identity check's fixture tests
 contract-report: ## Print the diff of the gate's compat-only files against main at the pin (advisory)
 	@scripts/contract-identity.sh report
 
-release-check: tools-check fmt-check vet lint test vuln examples version-check compat-guard compat-guard-test contract-test contract-check contract-identity ## Full pre-release gate
+# --- Parity with main and compatibility with every release (#100) ---------------
+#
+# tools/compatdiff: Check A compares this tree's exported API with main's at the
+# commit tools/compatdiff/baselines.pin names, and every difference must be listed
+# in tools/compatdiff/carveouts.txt; Check B holds the tree to every published
+# release the pin file names, with no exceptions. COMPAT.md is written from their
+# answer and is the parity epic's (#88) acceptance artifact. A nested Go 1.24
+# module, like the gate, and for a sharper reason: it type-checks main's source,
+# which go1.13.15's parser cannot read. It reads main and the releases from git,
+# so it needs full history -- the compat guard job checks out with fetch-depth: 0.
+#
+# Built then run, never `go run`, for the exit-code reason contract-check gives:
+# 1 is a finding, 2 a comparison that could not be made.
+compat-diff: ## Fail unless this line's API differs from main's only as COMPAT.md says, and keeps every published release's
+	@set -e; \
+	dir=$$(mktemp -d); trap 'rm -rf "$$dir"' EXIT; \
+	(cd tools/compatdiff && go build -o "$$dir/compatdiff" .); \
+	"$$dir/compatdiff" -repo . check
+
+# The one target that writes COMPAT.md. It writes nothing unless both checks pass,
+# so the file is never the record of a comparison that failed.
+compat-md: ## Regenerate COMPAT.md from tools/compatdiff/carveouts.txt (writes only when both checks pass)
+	@set -e; \
+	dir=$$(mktemp -d); trap 'rm -rf "$$dir"' EXIT; \
+	(cd tools/compatdiff && go build -o "$$dir/compatdiff" .); \
+	"$$dir/compatdiff" -repo . write
+
+# vet for the reason contract-test gives: the root `go vet ./...` stops at the
+# nested go.mod. These are the tests that prove each check can still FAIL.
+compat-diff-test: ## Run the parity checks' own tests (proves each check can still fail)
+	@cd tools/compatdiff && go vet ./... && go test -race ./...
+
+release-check: tools-check fmt-check vet lint test vuln examples version-check compat-guard compat-guard-test contract-test contract-check contract-identity compat-diff-test compat-diff ## Full pre-release gate
 	@echo "release-check passed"

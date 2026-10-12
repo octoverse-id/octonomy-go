@@ -3349,31 +3349,27 @@ func TestBothModuleScansPropagateFailure(t *testing.T) {
 		{"vuln", "govulncheck"},
 		{"lint", "golangci-lint"},
 	} {
-		for _, failing := range []string{"root", "nested"} {
+		// Since #100 there are three modules: the parity checks in
+		// tools/compatdiff are the third, and the LAST command in each recipe.
+		for _, failing := range []string{"root", "contractdrift", "compatdiff"} {
 			t.Run(target.name+"/"+failing, func(t *testing.T) {
-				// A stub that fails in one module and succeeds in the other. Which
+				// A stub that fails in one module and succeeds in every other. Which
 				// one matters: the last command's status propagated on its own, so
-				// only the earlier one was ever silently dropped -- and a test that
-				// exercised just the nested module would have passed against the bug.
-				// The stub SUCCEEDS in the module that is not the failing one.
-				// Polarity matters and was wrong first time round: `nested` is 1 in
-				// tools/contractdrift, so failing the ROOT means succeeding when
-				// nested. Written the other way, the root subtest actually failed the
-				// nested scan -- the last command, whose status propagated even
-				// through the bug -- and the test passed against the very defect it
-				// was written for.
-				succeedWhenNested := "!="
-				if failing == "nested" {
-					succeedWhenNested = "="
-				}
+				// only an earlier one was ever silently dropped -- and a test that
+				// exercised just the last module would have passed against the bug.
+				// Polarity matters and was wrong first time round: written so that
+				// the "root" case failed a NESTED scan -- then the last command, whose
+				// status propagated even through the bug -- the test passed against
+				// the very defect it was written for. So the stub names the module it
+				// is in and fails in exactly the one under test.
 				dir := t.TempDir()
 				write(t, filepath.Join(dir, target.tool), fmt.Sprintf(
 					// `pwd -P`, never $PWD: `make -C` calls chdir() and leaves the
 					// inherited PWD variable pointing at the test's own directory,
 					// which is tools/contractdrift -- so the stub read every scan as
-					// the nested one and the test passed against the bug.
-					"#!/bin/sh\ncase \"$(pwd -P)\" in */tools/contractdrift) nested=1 ;; *) nested=0 ;; esac\n"+
-						"[ \"$nested\" %s 0 ] && exit 0\necho \"stub: %s failed in $PWD\"\nexit 3\n", succeedWhenNested, target.tool))
+					// that module's and the test passed against the bug.
+					"#!/bin/sh\ncase \"$(pwd -P)\" in */tools/contractdrift) here=contractdrift ;; */tools/compatdiff) here=compatdiff ;; *) here=root ;; esac\n"+
+						"[ \"$here\" != %q ] && exit 0\necho \"stub: %s failed in $PWD\"\nexit 3\n", failing, target.tool))
 				if err := os.Chmod(filepath.Join(dir, target.tool), 0o755); err != nil {
 					t.Fatal(err)
 				}

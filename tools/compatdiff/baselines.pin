@@ -1,0 +1,32 @@
+# The baselines tools/compatdiff compares this tree with (#100).
+#
+# Read by `make compat-diff` and `make compat-md`, and by the required `compat
+# guard` CI job on every pull request into this line. Read strictly: a line that
+# is not one of the two below, separated by single spaces, is an error.
+#
+#   main <sha>             Check A, parity: main's commit this line's exported
+#                          API is compared with. Forty hex digits, and it must
+#                          be on main -- a pin into this line's own history would
+#                          compare the line with itself.
+#   release <tag> <sha>    Check B, compatibility: a published release of this
+#                          line. Every feature it exported must still be here,
+#                          unchanged. The tag must name exactly that commit.
+#                          One line per release, and a line is never removed:
+#                          a published release has callers forever.
+#
+# WHY PINS, and not main's tip or the newest tag: a check that read either would
+# let an unchanged commit here turn red because of a merge somewhere else. Both
+# move by a reviewable change to this file. Advancing main's pin is a port: every
+# difference the new commit brings is either ported or listed in carveouts.txt,
+# in the same pull request. A release's line is added once its tag exists, in
+# the pull request after the release (docs/release.md), and `make compat-diff`
+# fails on any v1.x tag in the clone that this file does not name -- except, in
+# the CI run that pushing a tag starts, that tag, which names the release itself.
+#
+# 5e40964 is the commit the whole parity epic (#88) ports from, and the one
+# tools/contractdrift/main.pin names. The two pins are separate on purpose: each
+# advances with the work that has to come with it, which for one is the
+# contract gate's files and for the other is this line's API.
+
+main 5e409641e3dfafb83227e02efee3d8a50ec5602c
+release v1.0.0 ad3ced172994940edaccfa3e52e2d76060e4e9c4

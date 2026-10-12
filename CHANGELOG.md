@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`COMPAT.md`, and the two checks that write it**
+  ([#100](https://github.com/octoverse-id/octonomy-go/issues/100), the acceptance criterion of
+  [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). `COMPAT.md` lists every
+  difference between this line's exported API and the `/v2` line's, declaration by declaration, and
+  why each exists: four deliberate ones — no webhook receiver, a PATCH that cannot clear a nullable
+  field, the `/api/v1` default, the Go 1.13-only JSON depth guards — and the irreducible type-name
+  delta. `tools/compatdiff`, a new standard-library-only tool module, writes it from two checks:
+  - **Parity with `main`** at the commit `tools/compatdiff/baselines.pin` names. Every exported
+    declaration on each side is compared by type identity — constant values, signatures, field types
+    and struct tags, comparability, interface method sets — so it sees a changed default or a
+    changed tag that a symbol-name diff would report as parity. A difference not listed in
+    `tools/compatdiff/carveouts.txt` fails, and so does a listed one that no longer exists.
+  - **Compatibility with every published release of this line** — `v1.0.0` today. Every
+    declaration it exported must still be here unchanged, with no exception list, since this line
+    can never publish a major. Every `v1.*` tag must be named in the pin file, so a release's
+    follow-up pin cannot be forgotten.
+
+  `make compat-diff` runs both, and fails on a `COMPAT.md` that is not what they produce; `make
+  compat-md` regenerates it, and writes nothing unless both pass. `make compat-diff` and the tool's
+  own tests (`make compat-diff-test`) run in the required `compat guard` job and in
+  `release-check`.
+- **`DecodeMetadata`**, ported from `main`'s `types.go` at 5e40964
+  ([#100](https://github.com/octoverse-id/octonomy-go/issues/100)): it decodes a resource's
+  `Metadata` into a struct of the caller's own shape, so reading it needs no type assertion that
+  panics when the stored shape changes. `main`'s is generic; this line's takes a pointer to decode
+  into, as `json.Unmarshal` does — `DecodeMetadata(tag.Metadata, &cfg)`. What it points at is
+  replaced, never merged into: absent metadata, and any error, leave it at its zero value rather
+  than half-filled. A caller-built `Metadata` that contains itself is refused rather than hanging
+  Go 1.13's encoder. It was the one difference from `main` the parity check found that no carve-out
+  explained; `main`'s five tests for it are ported, with each decode target starting non-zero so
+  that "the zero value" is something the call wrote.
+- **A guard against `main`'s dialect in comments** (`TestNoCommentCarriesAMainOnlyToken`, #100). A
+  port brings `main`'s comments with its code, and a comment compiles whatever it says. Every comment
+  in the package and the examples is refused if it carries `omitzero`, type-parameter syntax, the
+  `/v2` module's path where a reader would build with it, a Go version at `main`'s floor or later, an
+  `octonomy.Name` this package does not declare, or — in a code example — a standard-library name
+  added after Go 1.13. Five comments in `pagination.go` and `tags.go` that named `main`'s generic
+  types in its syntax now name them in words.
 - **`Each`, `BuildTagTree`, and ten runnable examples**
   ([#99](https://github.com/octoverse-id/octonomy-go/issues/99), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)) — the parity residuals, ported
@@ -32,8 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     per resource group plus the quickstart; `main`'s `webhook` is out by policy. Each was run against
     a booted `make dev-server`. They target this line's default `/api/v1`, except `namespaces`, which
     shows the `APIV2` opt-in and the refusal a v1 client gives `WithNamespace`. Where `main`'s
-    clear a field with `Null` or read metadata with `DecodeMetadata`, these show what this line
-    does instead.
+    clear a field with `Null`, these show what this line does instead, and where they read
+    metadata with `main`'s generic `DecodeMetadata`, these read it with a checked type assertion.
   - **`make examples` fails when it finds none**, and **`make dev-server` prints the export block**
     the examples read, through the new `make dev-server-env`, ported from `main`.
   - `pagination_test.go` and `tagtree_test.go` are `main`'s, ported, plus the compat tests the
@@ -189,7 +227,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `TestMetadataIsStillAnAlias`. The `Get` fixtures are raw wire JSON, not marshalled structs.
   - The table records two capability gaps that no sub-issue owned: `VocabularyListParams` had no
     `Query` or `Slug`, although both vendored specs list the filters (closed by #118), and
-    `DecodeMetadata` has no counterpart here.
+    `DecodeMetadata` had no counterpart here (closed by #100, with a pointer in place of `main`'s
+    type argument).
 - **The six missing resource groups, hand-ported from `main`**
   ([#94](https://github.com/octoverse-id/octonomy-go/issues/94), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). `main`'s `aliases.go`,

@@ -15,9 +15,10 @@ import (
 //
 // The gate (tools/contractdrift) runs in CI as four `make` steps: contract-test and
 // contract-check in the `test` job, contract-identity and its fixture tests in
-// `compat-guard`. These tests hold those RUNNERS -- the two jobs, the trigger that
-// brings a pull request into them, and the recipes behind the targets -- to what
-// they were reviewed as.
+// `compat-guard`. The parity checks (tools/compatdiff, #100) run as two more in
+// `compat-guard`: compat-diff and compat-diff-test. These tests hold those
+// RUNNERS -- the two jobs, the trigger that brings a pull request into them, and
+// the recipes behind the targets -- to what they were reviewed as.
 //
 // They live HERE, in the root package, for one reason: `go test ./...` runs them
 // directly, in the required `test` jobs and the `go1.13` job, and never through a
@@ -85,7 +86,7 @@ var contractGateJobPins = map[string]string{
 	"compat-guard": `  compat-guard:
     name: compat guard
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -97,7 +98,16 @@ var contractGateJobPins = map[string]string{
       - name: The contract gate's shared files match main at the pin
         run: make contract-identity
       - name: The identity check's own tests
-        run: make contract-identity-test`,
+        run: make contract-identity-test
+      - name: Set up Go for the parity checks
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache: false
+      - name: This line's API against main's and every published release's
+        run: make compat-diff
+      - name: The parity checks' own tests
+        run: make compat-diff-test`,
 }
 
 // contractGateTriggerPin is ci.yml's `on:` block: the gate runs on a pull request
@@ -226,6 +236,18 @@ var contractGateRecipePins = map[string]string{
 	"contract-identity-test": "\t@scripts/contract-identity-test.sh",
 	"contract-report":        "\t@scripts/contract-identity.sh report",
 	"release-check":          "\t@echo \"release-check passed\"",
+	// The parity checks (#100) run in the same job as contract-identity and are
+	// pinned for the same reason: CI trusts the target's status, so the recipe
+	// behind it is what was reviewed.
+	"compat-diff": "\t@set -e; \\\n" +
+		"\tdir=$$(mktemp -d); trap 'rm -rf \"$$dir\"' EXIT; \\\n" +
+		"\t(cd tools/compatdiff && go build -o \"$$dir/compatdiff\" .); \\\n" +
+		"\t\"$$dir/compatdiff\" -repo . check",
+	"compat-md": "\t@set -e; \\\n" +
+		"\tdir=$$(mktemp -d); trap 'rm -rf \"$$dir\"' EXIT; \\\n" +
+		"\t(cd tools/compatdiff && go build -o \"$$dir/compatdiff\" .); \\\n" +
+		"\t\"$$dir/compatdiff\" -repo . write",
+	"compat-diff-test": "\t@cd tools/compatdiff && go vet ./... && go test -race ./...",
 }
 
 // contractGateMakeBaseline is what make's database says, under `make -pq` with the
@@ -468,7 +490,7 @@ func makeDatabaseProblems(db string) []string {
 			problems = append(problems, fmt.Sprintf("the recipe make will run for %s is not the pinned one:\n got:\n%s\nwant:\n%s", target, got, want))
 		}
 	}
-	for _, want := range []string{"contract-test", "contract-check", "contract-identity"} {
+	for _, want := range []string{"contract-test", "contract-check", "contract-identity", "compat-diff-test", "compat-diff"} {
 		if !containsWord(prereqs["release-check"], want) {
 			problems = append(problems, fmt.Sprintf("release-check does not depend on %s", want))
 		}
@@ -561,7 +583,10 @@ func TestContractGateMakefileProblemsRefusesEachOverride(t *testing.T) {
 		{"a different recipe prefix", src + "\n.RECIPEPREFIX := >\n", "make resolves .RECIPEPREFIX", nil},
 		{"a multi-line SHELL", src + "\ndefine SHELL\n/bin/true\nexit 0\nendef\n", "make prints SHELL as", nil},
 		{"the release gate overridden", src + "\nr := release-check\n$(r): ; @true\n", "the recipe make will run for release-check", nil},
-		{"the release gate dropping the identity check", strings.Replace(src, " contract-identity ## Full pre-release gate", " ## Full pre-release gate", 1), "release-check does not depend on contract-identity", nil},
+		{"the release gate dropping the identity check", strings.Replace(src, " contract-identity compat-diff-test", " compat-diff-test", 1), "release-check does not depend on contract-identity", nil},
+		{"the release gate dropping the parity checks", strings.Replace(src, " compat-diff ## Full pre-release gate", " ## Full pre-release gate", 1), "release-check does not depend on compat-diff", nil},
+		{"the parity recipe edited", strings.Replace(src, "\"$$dir/compatdiff\" -repo . check", "\"$$dir/compatdiff\" -repo . write", 1), "the recipe make will run for compat-diff", nil},
+		{"a parity target no longer phony", strings.Replace(src, "\tcompat-diff compat-md compat-diff-test", "\tcompat-md compat-diff-test", 1), "does not hold compat-diff as phony", nil},
 		{"a gate target no longer phony", strings.Replace(src, " contract-check contract-test", " contract-test", 1), "does not hold contract-check as phony", nil},
 	}
 	for _, tc := range cases {

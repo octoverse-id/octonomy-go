@@ -418,6 +418,12 @@ tree. An `Each` walk can deliver a row twice, so de-duplicate on id first — th
 
 ### Differences from the `/v2` line you may hit
 
+[`COMPAT.md`](COMPAT.md) is the complete list, declaration by declaration, with the reason for each.
+`make compat-md` writes it, and `make compat-diff` — in CI on every pull request — compares this
+line's exported API with `main`'s and fails on a difference the file does not list, or on a
+`COMPAT.md` that is not what it would write; the same check holds this line to every declaration
+each of its published releases exported. The ones a caller meets first:
+
 - **No `List[T]`.** Type parameters need Go 1.18. A per-resource type replaces each instantiation —
   `TagList`, `VocabularyList`, `TagAliasList`, `ResourceTagList`, `TagResourceList`, `AuditLogList`;
   the fields are identical.
@@ -430,12 +436,18 @@ tree. An `Each` walk can deliver a row twice, so de-duplicate on id first — th
   "leave it alone", and the `/v2` module's `Optional[T]` is not ported because changing a published
   field's type would break `v1.0.0` callers. `Metadata` is the exception: `Metadata{}` sends `{}` and
   empties the stored object, while a nil `Metadata` leaves it alone.
-- **JSON nests at most 10,000 levels**, in a request body and in a response. Go 1.13's
-  `encoding/json` has no limit of its own, so a self-containing `Metadata` would hang it and a deeply
-  nested response would exhaust the stack; this line refuses both with an error. A modern toolchain's
-  `encoding/json` enforces the same response limit itself.
+- **JSON nests at most 10,000 levels** in a response, and a request body's Go values — maps,
+  slices, structs, pointers — at most 10,000 levels too. Go 1.13's `encoding/json` has no limit of
+  its own, so a self-containing `Metadata` would hang it and a deeply nested response would exhaust
+  the stack; this line refuses both with an error. The `/v2` line differs in two cases: it sends an
+  acyclic request body nested past 10,000 levels, which this line refuses, and it refuses a
+  `json.RawMessage` nested past 10,000 levels, which this line sends as the caller's bytes (Go
+  1.13's encoder copies it without recursing, so it cannot exhaust the stack).
 - **`Metadata` is `map[string]interface{}`**, not `map[string]any` — the same type, spelled the way
   Go 1.13 spells it.
+- **`DecodeMetadata` takes a pointer**, as `json.Unmarshal` does — `DecodeMetadata(tag.Metadata,
+  &cfg)` — where the `/v2` line's takes a type argument. What it points at is replaced, never merged
+  into, and a mismatch leaves it at its zero value.
 
 ## Common commands
 
@@ -445,8 +457,10 @@ make check        # gofmt check + go vet + build + release-line guard + its test
 make test-go113   # the same build and tests on a REAL go1.13 toolchain
 make smoke        # integration smoke test against a booted server (see make dev-server)
 make test-integration # namespace isolation suite against a booted server
-make lint         # golangci-lint on both modules (if installed)
+make lint         # golangci-lint on every module (if installed)
 make contract-check # the contract gate: what this client sends and decodes vs the vendored specs
+make compat-diff  # this line's API vs main's (as COMPAT.md lists) and vs every published release
+make compat-md    # regenerate COMPAT.md from tools/compatdiff/carveouts.txt
 make examples     # compile-check every runnable example (fails if there are none)
 make help         # list all targets
 ```
@@ -465,6 +479,8 @@ version from `go.mod` but not the stdlib version, so `io.ReadAll` (Go 1.16) comp
 - [Roadmap](docs/roadmap.md) — the parity policy and where its remaining work is tracked; it links to
   [`main`'s API mapping](https://github.com/octoverse-id/octonomy-go/blob/main/docs/api.md#implemented)
   for what the `/v2` line implements.
+- [COMPAT.md](COMPAT.md) — every difference between this line's exported API and the `/v2` line's,
+  and why; generated, and checked on every pull request.
 - [Porting checklist](docs/porting-checklist.md) — the rewrites a port from `main` makes, each marked
   by whether a miss fails the go1.13 build or compiles and is wrong.
 - [Test disposition](docs/compat-test-disposition.md) — what became of each of `main`'s test files on

@@ -193,7 +193,7 @@ func walkBodyDepth(v reflect.Value, depth int) error {
 	enter := func() error {
 		depth++
 		if depth > maxJSONDepth {
-			return fmt.Errorf("request body nests deeper than %d levels; a Metadata map that contains itself, directly or through another, does so without end, and Go 1.13's encoding/json has no cycle detection", maxJSONDepth)
+			return fmt.Errorf("the value nests deeper than %d levels; a Metadata map that contains itself, directly or through another, does so without end, and Go 1.13's encoding/json has no cycle detection", maxJSONDepth)
 		}
 		return nil
 	}

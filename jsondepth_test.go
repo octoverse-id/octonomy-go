@@ -330,6 +330,7 @@ func TestCyclicMetadataIsRefusedRatherThanHanging(t *testing.T) {
 		for _, s := range []string{
 			"tag-create", "tag-update", "vocabulary-create", "vocabulary-update",
 			"walk-mutual-maps", "walk-pointer-to-body", "walk-self-pointer",
+			"decode-metadata",
 		} {
 			s := s
 			t.Run(s, func(t *testing.T) { runDepthChild(t, s) })
@@ -375,6 +376,11 @@ func TestCyclicMetadataIsRefusedRatherThanHanging(t *testing.T) {
 		_, err = c.Vocabularies.Create(ctx, VocabularyCreate{Name: "N", Slug: "n", Metadata: m})
 	case "vocabulary-update":
 		_, err = c.Vocabularies.Update(ctx, "v1", VocabularyUpdate{Metadata: m})
+	case "decode-metadata":
+		// No request at all: DecodeMetadata marshals the caller's map itself,
+		// so it needs the request side's guard of its own.
+		var out map[string]interface{}
+		err = DecodeMetadata(m, &out)
 	default:
 		fmt.Printf("child: unknown scenario %q\n", scenario)
 		return

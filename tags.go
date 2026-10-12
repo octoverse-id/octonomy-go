@@ -63,9 +63,10 @@ type TagCreate struct {
 // so the server updates exactly what you set.
 //
 // A pointer field cannot be cleared to null: nil means "leave it alone", and
-// there is no third state. The /v2 module's Optional[T], which carries that
-// state, is not ported here: changing a published field's type would break
-// every v1.0.0 caller that sets one.
+// there is no third state. The /v2 module's generic optional field type, which
+// carries that state, is not ported here: changing a published field's type
+// would break every v1.0.0 caller that sets one. COMPAT.md lists the fields
+// that therefore cannot be cleared on this line.
 //
 // Metadata REPLACES the stored object rather than merging into it, and is the
 // one field with three states, because a nil map and an empty one are different

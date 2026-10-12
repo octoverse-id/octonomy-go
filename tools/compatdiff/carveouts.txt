@@ -1,0 +1,217 @@
+# Every difference between main's exported API and this line's, and why (#100).
+#
+# `make compat-diff` compares main at the commit baselines.pin names with this
+# tree, feature by feature, and fails on a difference this file does not list
+# AND on a line here that matches no difference. `make compat-md` writes
+# COMPAT.md from this file once both checks pass, so the prose below is what a
+# reader of COMPAT.md sees. Edit here, never there.
+#
+# The format, read strictly -- an unknown keyword is an error, not a comment:
+#
+#   section <kind> <id>   starts a section. <id> is lowercase-words-with-hyphens.
+#                         <kind> is one of:
+#                           carveout  a deliberate difference, by decision
+#                           dialect   the irreducible type-name delta: what main
+#                                     spells with type parameters, which Go 1.13
+#                                     does not have
+#                           gap       a difference nobody decided -- something
+#                                     main has that this line has not ported. It
+#                                     must name the issue that owns the port.
+#   title <text>          the section's heading in COMPAT.md. Required.
+#   issue #N              a gap's owning issue. Required on a gap, refused on
+#                         anything else.
+#   text <markdown>       one line of the section's prose; a bare `text` ends a
+#                         paragraph. Required. Links resolve from COMPAT.md, at
+#                         the repository root.
+#   main <feature>        a feature main has and this line does not,
+#   compat <feature>      or this line has and main does not, written EXACTLY as
+#                         `make compat-diff` prints it -- run it and copy the
+#                         line. A changed declaration is a pair: its main form
+#                         and its form here.
+#
+# A carveout may list no features: some differences change behaviour and no
+# declaration, and are recorded here so COMPAT.md carries them. Nothing checks
+# such a section; it is as current as the pull request that last edited it.
+#
+# The parity epic (#88) is done when this file holds only carveout and dialect
+# sections. A gap section is how a pull request that advances main's pin before
+# porting everything says so in the open, rather than leaving the pin behind.
+
+section carveout no-webhook-receiver
+title No webhook receiver
+text This line has no `webhook` package, and that is policy rather than a porting gap: a consumer
+text that needs a webhook receiver moves to the `/v2` module ([`AGENTS.md`](AGENTS.md)). The
+text receiver's typed event payloads are built from `/v2`'s generic optional field type, which this
+text line does not have (the next section).
+main package webhook
+
+section carveout update-fields-cannot-clear
+title A PATCH cannot clear a nullable field
+text Every field of a `*Update` struct here is a pointer, or `Metadata`, tagged `omitempty` -- the
+text shape this line's first release published. On `main` each is `Optional`, a generic type with a
+text third state, tagged `omitzero`; Go 1.13 has neither type parameters nor that tag option.
+text Changing a published field's type breaks every caller that sets the field, and this line can
+text never publish a major to carry a break, so the pointers stay ([`AGENTS.md`](AGENTS.md),
+text *Porting from `main`*).
+text
+text A nil pointer means "leave it alone" and a non-nil one "set it"; neither says "clear it". So
+text on this line a PATCH cannot set `TagUpdate.ParentID`, `TagUpdate.VocabularyID`,
+text `TagUpdate.Description` or `VocabularyUpdate.Description` to null
+text ([#64](https://github.com/octoverse-id/octonomy-go/issues/64)). A consumer that must clear one
+text moves to `/v2`.
+text
+text The three `MarshalJSON` methods are this line's half of the same decision. With `Metadata`
+text left a plain map under `omitempty`, `Metadata{}` would be dropped from the body, and they are
+text what still sends it as `{}`, emptying the stored object
+text ([#37](https://github.com/octoverse-id/octonomy-go/issues/37)).
+main func Null[$0 any]() Optional[$0]
+main func Set[$0 any]($0) Optional[$0]
+main type Optional[$0 any] struct
+main method (Optional[$0]) Get() ($0, bool)
+main method (Optional[$0]) IsNull() bool
+main method (Optional[$0]) IsZero() bool
+main method (Optional[$0]) MarshalJSON() ([]uint8, error)
+main method (*Optional[$0]) Get() ($0, bool)
+main method (*Optional[$0]) IsNull() bool
+main method (*Optional[$0]) IsZero() bool
+main method (*Optional[$0]) MarshalJSON() ([]uint8, error)
+main method (*Optional[$0]) UnmarshalJSON([]uint8) error
+main type TagAliasUpdate struct, ApplicationID Optional[string] `json:"application_id,omitzero"`
+main type TagAliasUpdate struct, IsActive Optional[bool] `json:"is_active,omitzero"`
+main type TagAliasUpdate struct, Metadata Optional[map[string]interface{}] `json:"metadata,omitzero"`
+main type TagAliasUpdate struct, Name Optional[string] `json:"name,omitzero"`
+main type TagAliasUpdate struct, Slug Optional[string] `json:"slug,omitzero"`
+main type TagAliasUpdate struct, TagID Optional[string] `json:"tag_id,omitzero"`
+main type TagUpdate struct, ApplicationID Optional[string] `json:"application_id,omitzero"`
+main type TagUpdate struct, Description Optional[string] `json:"description,omitzero"`
+main type TagUpdate struct, IsActive Optional[bool] `json:"is_active,omitzero"`
+main type TagUpdate struct, Metadata Optional[map[string]interface{}] `json:"metadata,omitzero"`
+main type TagUpdate struct, Name Optional[string] `json:"name,omitzero"`
+main type TagUpdate struct, ParentID Optional[string] `json:"parent_id,omitzero"`
+main type TagUpdate struct, Slug Optional[string] `json:"slug,omitzero"`
+main type TagUpdate struct, Type Optional[string] `json:"type,omitzero"`
+main type TagUpdate struct, VocabularyID Optional[string] `json:"vocabulary_id,omitzero"`
+main type VocabularyUpdate struct, ApplicationID Optional[string] `json:"application_id,omitzero"`
+main type VocabularyUpdate struct, Description Optional[string] `json:"description,omitzero"`
+main type VocabularyUpdate struct, IsActive Optional[bool] `json:"is_active,omitzero"`
+main type VocabularyUpdate struct, Metadata Optional[map[string]interface{}] `json:"metadata,omitzero"`
+main type VocabularyUpdate struct, Name Optional[string] `json:"name,omitzero"`
+main type VocabularyUpdate struct, Slug Optional[string] `json:"slug,omitzero"`
+compat type TagAliasUpdate struct, ApplicationID *string `json:"application_id,omitempty"`
+compat type TagAliasUpdate struct, IsActive *bool `json:"is_active,omitempty"`
+compat type TagAliasUpdate struct, Metadata map[string]interface{} `json:"metadata,omitempty"`
+compat type TagAliasUpdate struct, Name *string `json:"name,omitempty"`
+compat type TagAliasUpdate struct, Slug *string `json:"slug,omitempty"`
+compat type TagAliasUpdate struct, TagID *string `json:"tag_id,omitempty"`
+compat type TagUpdate struct, ApplicationID *string `json:"application_id,omitempty"`
+compat type TagUpdate struct, Description *string `json:"description,omitempty"`
+compat type TagUpdate struct, IsActive *bool `json:"is_active,omitempty"`
+compat type TagUpdate struct, Metadata map[string]interface{} `json:"metadata,omitempty"`
+compat type TagUpdate struct, Name *string `json:"name,omitempty"`
+compat type TagUpdate struct, ParentID *string `json:"parent_id,omitempty"`
+compat type TagUpdate struct, Slug *string `json:"slug,omitempty"`
+compat type TagUpdate struct, Type *string `json:"type,omitempty"`
+compat type TagUpdate struct, VocabularyID *string `json:"vocabulary_id,omitempty"`
+compat type VocabularyUpdate struct, ApplicationID *string `json:"application_id,omitempty"`
+compat type VocabularyUpdate struct, Description *string `json:"description,omitempty"`
+compat type VocabularyUpdate struct, IsActive *bool `json:"is_active,omitempty"`
+compat type VocabularyUpdate struct, Metadata map[string]interface{} `json:"metadata,omitempty"`
+compat type VocabularyUpdate struct, Name *string `json:"name,omitempty"`
+compat type VocabularyUpdate struct, Slug *string `json:"slug,omitempty"`
+compat method (TagAliasUpdate) MarshalJSON() ([]uint8, error)
+compat method (TagUpdate) MarshalJSON() ([]uint8, error)
+compat method (VocabularyUpdate) MarshalJSON() ([]uint8, error)
+compat method (*TagAliasUpdate) MarshalJSON() ([]uint8, error)
+compat method (*TagUpdate) MarshalJSON() ([]uint8, error)
+compat method (*VocabularyUpdate) MarshalJSON() ([]uint8, error)
+
+section carveout default-api-version
+title `Config.APIVersion` defaults to `/api/v1`
+text `DefaultAPIVersion` is `APIV1` here and `APIV2` on `main`, and `New` selects it when
+text `Config.APIVersion` is empty. This line's first release sent every request to `/api/v1`, and
+text moving an existing caller's requests to another surface on an in-range upgrade is a break with
+text no version to carry it. So `/api/v2`, and the namespace axis with it, is opt-in here: set
+text `Config.APIVersion` to `octonomy.APIV2`.
+main const DefaultAPIVersion APIVersion = "v2"
+compat const DefaultAPIVersion APIVersion = "v1"
+
+section carveout json-depth-guards
+title JSON depth guards that only Go 1.13 needs
+text Go 1.13's `encoding/json` has no cycle detection when it encodes and no depth limit when it
+text decodes: a `Metadata` that contains itself hangs the process, and a response nested deeply
+text enough exhausts the stack, which is a fatal runtime error rather than a panic. This line refuses
+text both before `encoding/json` sees them -- a request body whose Go values (maps, slices, structs,
+text pointers) nest past 10,000 levels, a cycle among them included, and a response nested past
+text 10,000 levels ([`jsondepth.go`](jsondepth.go),
+text [#91](https://github.com/octoverse-id/octonomy-go/issues/91)). A modern standard library refuses
+text a cycle and an over-deep response itself, so `main` carries no such guard; on either line each
+text of those is an error, and what differs is the code that refuses it and the message it returns.
+text
+text Two requests differ in outcome. A request body whose Go values nest past 10,000 levels WITHOUT
+text a cycle is refused here and sent by `main`: a modern encoder detects cycles but sets no depth
+text limit on the values it encodes. And a `json.RawMessage` in a request body is the caller's own
+text bytes: the guard does not enter it, and Go 1.13's encoder copies it without recursing, so one
+text nested past 10,000 levels is sent from this line, where a modern encoder refuses it.
+
+section dialect generics
+title Type parameters, spelled per type
+text Go 1.13 has no type parameters, so each of `main`'s generic declarations is written here for
+text the types it is used with.
+text
+text - `main`'s `List[T]` is one list envelope per resource here -- `TagList`, `VocabularyList`,
+text   `TagAliasList`, `AuditLogList`, `ResourceTagList` and `TagResourceList` -- each with the same
+text   `Data` and `Pagination` fields, and every `List` method returns its own resource's envelope.
+text - `Each` walks a `Page`, an interface every list envelope here implements through its pointer,
+text   and hands its callback each row as an `interface{}` holding the row's value.
+text - `DecodeMetadata` takes a pointer to decode into rather than a type argument, as
+text   `json.Unmarshal` does.
+main func DecodeMetadata[$0 any](map[string]interface{}) ($0, error)
+main func Each[$0 any](context.Context, ListOptions, func(context.Context, ListOptions) (*List[$0], error), func($0) error) (int, error)
+main type List[$0 any] struct
+main type List[$0 any] struct, Data []$0 `json:"data"`
+main type List[$0 any] struct, Pagination Pagination `json:"pagination"`
+main method (*AliasService) List(context.Context, *TagAliasListParams, ...RequestOption) (*List[TagAlias], error)
+main method (*AuditLogService) List(context.Context, *AuditLogListParams, ...RequestOption) (*List[AuditLog], error)
+main method (*ResourceService) ListAuditLogs(context.Context, string, string, *ResourceListAuditLogsParams, ...RequestOption) (*List[AuditLog], error)
+main method (*ResourceService) ListTags(context.Context, string, string, *ResourceListTagsParams, ...RequestOption) (*List[ResourceTag], error)
+main method (*TagService) List(context.Context, *TagListParams, ...RequestOption) (*List[Tag], error)
+main method (*TagService) ListAliases(context.Context, string, *TagListAliasesParams, ...RequestOption) (*List[TagAlias], error)
+main method (*TagService) ListAuditLogs(context.Context, string, *TagListAuditLogsParams, ...RequestOption) (*List[AuditLog], error)
+main method (*TagService) ListResources(context.Context, string, *TagListResourcesParams, ...RequestOption) (*List[TagResource], error)
+main method (*VocabularyService) List(context.Context, *VocabularyListParams, ...RequestOption) (*List[Vocabulary], error)
+compat func DecodeMetadata(map[string]interface{}, interface{}) error
+compat func Each(context.Context, ListOptions, func(context.Context, ListOptions) (Page, error), func(interface{}) error) (int, error)
+compat type Page interface{unexported contents() ([]interface{}, *Pagination)}
+compat type *AuditLogList implements Page
+compat type *ResourceTagList implements Page
+compat type *TagAliasList implements Page
+compat type *TagList implements Page
+compat type *TagResourceList implements Page
+compat type *VocabularyList implements Page
+compat type AuditLogList struct
+compat type AuditLogList struct, Data []AuditLog `json:"data"`
+compat type AuditLogList struct, Pagination Pagination `json:"pagination"`
+compat type ResourceTagList struct
+compat type ResourceTagList struct, Data []ResourceTag `json:"data"`
+compat type ResourceTagList struct, Pagination Pagination `json:"pagination"`
+compat type TagAliasList struct
+compat type TagAliasList struct, Data []TagAlias `json:"data"`
+compat type TagAliasList struct, Pagination Pagination `json:"pagination"`
+compat type TagList struct
+compat type TagList struct, Data []Tag `json:"data"`
+compat type TagList struct, Pagination Pagination `json:"pagination"`
+compat type TagResourceList struct
+compat type TagResourceList struct, Data []TagResource `json:"data"`
+compat type TagResourceList struct, Pagination Pagination `json:"pagination"`
+compat type VocabularyList struct
+compat type VocabularyList struct, Data []Vocabulary `json:"data"`
+compat type VocabularyList struct, Pagination Pagination `json:"pagination"`
+compat method (*AliasService) List(context.Context, *TagAliasListParams, ...RequestOption) (*TagAliasList, error)
+compat method (*AuditLogService) List(context.Context, *AuditLogListParams, ...RequestOption) (*AuditLogList, error)
+compat method (*ResourceService) ListAuditLogs(context.Context, string, string, *ResourceListAuditLogsParams, ...RequestOption) (*AuditLogList, error)
+compat method (*ResourceService) ListTags(context.Context, string, string, *ResourceListTagsParams, ...RequestOption) (*ResourceTagList, error)
+compat method (*TagService) List(context.Context, *TagListParams, ...RequestOption) (*TagList, error)
+compat method (*TagService) ListAliases(context.Context, string, *TagListAliasesParams, ...RequestOption) (*TagAliasList, error)
+compat method (*TagService) ListAuditLogs(context.Context, string, *TagListAuditLogsParams, ...RequestOption) (*AuditLogList, error)
+compat method (*TagService) ListResources(context.Context, string, *TagListResourcesParams, ...RequestOption) (*TagResourceList, error)
+compat method (*VocabularyService) List(context.Context, *VocabularyListParams, ...RequestOption) (*VocabularyList, error)

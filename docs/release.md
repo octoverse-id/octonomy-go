@@ -15,8 +15,10 @@ make release-check
 ```
 
 This runs `tools-check`, `fmt-check`, `vet`, `lint`, `test` (with `-race`), `vuln`, `examples`,
-`version-check`, `compat-guard` and its tests, and the contract gate: `contract-test`,
-`contract-check` and `contract-identity`. All must pass.
+`version-check`, `compat-guard` and its tests, the contract gate (`contract-test`, `contract-check`
+and `contract-identity`), and the parity checks (`compat-diff-test` and `compat-diff`: this line's
+exported API against `main`'s at the pin, as `COMPAT.md` lists, and against every published release
+of this line). All must pass.
 
 Run it on a Go that upstream still patches. `vuln` scans with whatever Go it finds, so on a release
 past its support window it fails on standard-library advisories no patch will fix, and says nothing
@@ -124,7 +126,18 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
    ```
    A path-mismatch error here means the tag landed on the wrong branch. It cannot be fixed by
    retagging — publish a corrected version instead.
-9. Close the milestone/issue and delete the release branch.
+9. **On the compat line, add the release to Check B.** `make compat-diff` holds the tree to every
+   release `tools/compatdiff/baselines.pin` names, and the release PR cannot name its own tag's commit
+   — the tag is cut on its merge. So open one more PR into `BASE`, adding
+   ```text
+   release TAG <the tagged commit's full sha>
+   ```
+   to the pin file and regenerating `COMPAT.md` with `make compat-md`. Open it straight after the
+   tag: until it merges, `make compat-diff` fails on every other pull request into `BASE`, naming
+   the tag, because a tag the pin file does not name is a release nothing holds the tree to. (The
+   CI run the tag push starts passes: it is exempt for the tag it was pushed for.) Never remove a
+   release's line: its callers exist for as long as the tag does.
+10. Close the milestone/issue and delete the release branch.
 
 **A third major (`/v3`)** would append `/v3` to the module path in `go.mod` and to all import
 statements. Do that only for a deliberate breaking release — see [versioning.md](versioning.md).
