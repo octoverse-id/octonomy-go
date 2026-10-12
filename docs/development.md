@@ -389,11 +389,12 @@ no context sets (only `//go:build ignore` is left alone) — since every tree is
 A port brings `main`'s comments with its code, and a comment compiles whatever it says.
 `TestNoCommentCarriesAMainOnlyToken` (`doccomment_test.go`, #100) reads every comment in every file
 a consumer compiles — the package and the examples — and refuses a token only `main`'s dialect has:
-`omitzero`, type-parameter syntax, the `/v2` module's path where a reader would build with it, a Go
-version at `main`'s floor or later, an `octonomy.Name` this package does not declare, and, in a code
-example, a standard-library name added after Go 1.13 (read from the running toolchain's
-`$GOROOT/api`, so that rule has nothing to refuse under go1.13.15). It refuses the token even where a
-sentence only contrasts `main` with this line; name `main`'s construct in words instead.
+`omitzero`, type-parameter syntax, `any` written as a type, the `/v2` module's path where a reader
+would build with it, a Go version at `main`'s floor or later, an `octonomy.Name` this package does
+not declare, and, in a code example, a standard-library name added after Go 1.13 (read from the
+running toolchain's `$GOROOT/api`, so that rule has nothing to refuse under go1.13.15). It refuses
+the token even where a sentence only contrasts `main` with this line; name `main`'s construct in
+words instead.
 
 ## Keeping the contract current
 
