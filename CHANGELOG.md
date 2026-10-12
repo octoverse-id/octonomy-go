@@ -70,8 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     per resource group plus the quickstart; `main`'s `webhook` is out by policy. Each was run against
     a booted `make dev-server`. They target this line's default `/api/v1`, except `namespaces`, which
     shows the `APIV2` opt-in and the refusal a v1 client gives `WithNamespace`. Where `main`'s
-    clear a field with `Null` or read metadata with `DecodeMetadata`, these show what this line
-    does instead.
+    clear a field with `Null`, these show what this line does instead, and where they read
+    metadata with `main`'s generic `DecodeMetadata`, these read it with a checked type assertion.
   - **`make examples` fails when it finds none**, and **`make dev-server` prints the export block**
     the examples read, through the new `make dev-server-env`, ported from `main`.
   - `pagination_test.go` and `tagtree_test.go` are `main`'s, ported, plus the compat tests the
@@ -227,7 +227,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `TestMetadataIsStillAnAlias`. The `Get` fixtures are raw wire JSON, not marshalled structs.
   - The table records two capability gaps that no sub-issue owned: `VocabularyListParams` had no
     `Query` or `Slug`, although both vendored specs list the filters (closed by #118), and
-    `DecodeMetadata` has no counterpart here.
+    `DecodeMetadata` had no counterpart here (closed by #100, with a pointer in place of `main`'s
+    type argument).
 - **The six missing resource groups, hand-ported from `main`**
   ([#94](https://github.com/octoverse-id/octonomy-go/issues/94), for
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)). `main`'s `aliases.go`,

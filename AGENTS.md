@@ -416,8 +416,9 @@ stays a faithful, ergonomic client.
   they all read, and its output goes in the PR. Ported from `main` with the examples (#99), less
   `main`'s exception for `examples/webhook`, which this line never carries. **A port of one is a
   semantic rewrite, not a dialect one:** `main`'s at 5e40964 clear a field with `Null`, read
-  metadata with `DecodeMetadata` and rely on the `/api/v2` default, and a comment carried over
-  from any of them describes behaviour this line does not have. Run it here, on this line's
+  metadata with the generic `DecodeMetadata` (this line's takes a pointer) and rely on the `/api/v2`
+  default, and a comment carried over from any of them describes behaviour this line does not
+  have. Run it here, on this line's
   default surface, and read every comment against the output.
 - **Examples repeat their configuration block rather than sharing one.** An example is copied whole,
   and a helper package would move the one part a reader has to adapt — how the client gets its

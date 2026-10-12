@@ -124,13 +124,14 @@ var (
 		"uint16": true, "uint32": true, "uint64": true, "uintptr": true,
 	}
 	// Quoted as an import path; after go get or go install; with an @version;
-	// in a go.mod require or replace directive; or followed by a full version,
-	// as a line of a require block is.
+	// in a go.mod require or replace directive; or followed by a full version
+	// or a =>, as a line of a require or replace block is.
 	v2ModuleImport = regexp.MustCompile(`"github\.com/octoverse-id/octonomy-go/v2(?:/[^"]*)?"` +
 		`|\bgo\s+(?:get|install)\s+\S*octonomy-go/v2\b` +
 		`|octonomy-go/v2(?:/\S*)?@` +
 		`|\b(?:require|replace)\s+(?:\(\s*)?\S*octonomy-go/v2\b` +
-		`|octonomy-go/v2\s+v[0-9]+\.[0-9]+\.[0-9]+`)
+		`|octonomy-go/v2\s+v[0-9]+\.[0-9]+\.[0-9]+` +
+		`|octonomy-go/v2(?:\s+v\S+)?\s*=>`)
 	typeParamName = regexp.MustCompile(`^[A-Z][0-9]?$`)
 	mainGoFloor   = regexp.MustCompile(`(?i)\bgo\s?1\.(\d+)\b`)
 	qualifiedName = regexp.MustCompile(`\boctonomy\.([A-Z][A-Za-z0-9_]*)`)
@@ -482,6 +483,7 @@ func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 		{" Each[row] walks it", "instantiates a generic"},
 		{"\trequire github.com/octoverse-id/octonomy-go/v2", "/v2 module's path"},
 		{"\treplace github.com/octoverse-id/octonomy-go/v2 => ../v2", "/v2 module's path"},
+		{"\t\tgithub.com/octoverse-id/octonomy-go/v2 => ../v2", "/v2 module's path"},
 		{"\t\tgithub.com/octoverse-id/octonomy-go/v2 " + fmt.Sprintf("v%d.%d.%d", 2, 1, 3), "/v2 module's path"},
 		{" a Set[map[string]int] holds counts", "opens type arguments"},
 		{" a *List[TagAlias] of aliases", "type-parameter syntax"},
