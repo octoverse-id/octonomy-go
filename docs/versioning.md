@@ -195,8 +195,9 @@ Backward-compatible **additions** to the exported API.
   line is still in that state is [its versioning policy](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md) to say.
 - **On the compat line, `make compat-diff` holds every release to every one before it.** It compares
   the tree's exported declarations with each published release that `tools/compatdiff/baselines.pin`
-  names — constant values, signatures, field types and struct tags, comparability, interface method
-  sets — and fails on any declaration a release exported that is not still here unchanged. It has no
+  names — constant values, signatures, field types, struct tags and the order of exported fields,
+  comparability, interface method sets — and fails on any declaration a release exported that is
+  not still here unchanged. It has no
   exception list. It does not see the unkeyed-literal caveat above, which an added field causes and
   which this rule already accepts, nor a change of behaviour behind an unchanged declaration.
 - **On the compat line a minor is the only way an addition ships**, and the parity work does ship

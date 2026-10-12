@@ -20,7 +20,8 @@ something this file does not account for:
    that commit). A difference not listed below fails the check, and so does a listed one that no
    longer exists.
 2. **Compatibility with this line's published releases.** Every feature each one exported is
-   still here, unchanged, so code that compiled against it compiles against this line -- except
+   still here, unchanged, and so is the order of each struct's exported fields, so code that
+   compiled against it compiles against this line -- except
    an unkeyed struct literal, which any minor release may break ([`docs/versioning.md`](docs/versioning.md),
    the MINOR rule). This check has no exceptions:
 

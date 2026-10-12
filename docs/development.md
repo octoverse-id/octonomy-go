@@ -349,7 +349,10 @@ required `compat guard` job — runs both and fails when either finds something,
   [`tools/compatdiff/carveouts.txt`](../tools/compatdiff/carveouts.txt), under the section that
   explains it, and every listed difference must still exist.
 - **B — compatibility with this line's published releases**, each one the pin file names. Every
-  feature a release exported must still be here unchanged. There is no exception list: this line can
+  feature a release exported must still be here unchanged, and so must the relative order of each
+  struct's exported fields, which a caller converting the struct to one of the same fields relies on
+  (an inserted field keeps every pair it found, so it is still an addition). Parity does not read
+  field order: the two lines are different modules. There is no exception list: this line can
   never publish a major (`docs/versioning.md`), so a break has no version to ride.
 
 It is a nested Go 1.24 module, like the contract gate and for a sharper reason: it type-checks

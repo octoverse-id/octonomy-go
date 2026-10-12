@@ -43,6 +43,14 @@ import (
 type api struct {
 	modulePath string
 	packages   map[string][]string
+	// orders holds, per package, a line for each pair of a struct's exported
+	// fields in declaration order: `type T struct, field A before B`. Only
+	// Check B reads them. Reordering two fields breaks a caller's conversion
+	// between T and a struct type of the same fields, and every pair an
+	// inserted field leaves in place is still a line, so an addition stays an
+	// addition. Parity does not read them: the two lines are different modules,
+	// and no caller converts between them.
+	orders map[string][]string
 }
 
 // shared holds the one FileSet and the one standard-library importer every
@@ -78,7 +86,7 @@ func (s *shared) loadAPI(dir string) (*api, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &api{modulePath: modPath, packages: map[string][]string{}}
+	out := &api{modulePath: modPath, packages: map[string][]string{}, orders: map[string][]string{}}
 	for _, rel := range rels {
 		pkg, err := l.load(rel)
 		if err != nil {
@@ -92,6 +100,7 @@ func (s *shared) loadAPI(dir string) (*api, error) {
 			return nil, fmt.Errorf("%s: %w", relDisplay(rel), err)
 		}
 		out.packages[rel] = features
+		out.orders[rel] = fieldOrders(pkg, rel)
 	}
 	if _, ok := out.packages["."]; !ok {
 		return nil, fmt.Errorf("%s has no importable root package", dir)
@@ -408,6 +417,39 @@ func buildConstraint(file string) (string, error) {
 type importerFunc func(path string) (*types.Package, error)
 
 func (f importerFunc) Import(path string) (*types.Package, error) { return f(path) }
+
+// fieldOrders is the `field A before B` lines of a package's exported structs.
+func fieldOrders(pkg *types.Package, rel string) []string {
+	var out []string
+	scope := pkg.Scope()
+	for _, name := range scope.Names() {
+		tn, ok := scope.Lookup(name).(*types.TypeName)
+		if !ok || !tn.Exported() || tn.IsAlias() {
+			continue
+		}
+		st, ok := tn.Type().Underlying().(*types.Struct)
+		if !ok {
+			continue
+		}
+		var fields []string
+		for i := 0; i < st.NumFields(); i++ {
+			if f := st.Field(i); f.Exported() {
+				fields = append(fields, f.Name())
+			}
+		}
+		for i := range fields {
+			for j := i + 1; j < len(fields); j++ {
+				line := fmt.Sprintf("type %s struct, field %s before %s", name, fields[i], fields[j])
+				if rel != "." {
+					line = rel + ": " + line
+				}
+				out = append(out, line)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // featuresOf lists one package's exported features, sorted. Lines of a package
 // other than the root carry its path as a prefix, so the features of two

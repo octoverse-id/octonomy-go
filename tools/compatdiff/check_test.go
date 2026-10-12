@@ -155,6 +155,20 @@ func F(int) error { return nil }
 		t.Error("an interface embedding another package's sealed interface changed and nothing was reported")
 	}
 
+	// Field order: a reorder breaks a caller's conversion to a struct type of
+	// the same fields; an insertion anywhere keeps every pair it found.
+	twoFields := mustLoad(t, s, rootOnly("package m\ntype K struct{ A int; B string }\n"))
+	if f := compatibilityFindings("a later release", twoFields, mustLoad(t, s, rootOnly("package m\ntype K struct{ B string; A int }\n"))); len(f) == 0 || !strings.Contains(f[0], "field A before B") {
+		t.Errorf("two fields reordered: %v", f)
+	}
+	if f := compatibilityFindings("a later release", twoFields, mustLoad(t, s, rootOnly("package m\ntype K struct{ A int; C bool; B string; D int }\n"))); len(f) != 0 {
+		t.Errorf("fields inserted between and after were reported as a break: %v", f)
+	}
+	// Parity does not read order: the lines are different modules.
+	if d := parityDiffs(twoFields, mustLoad(t, s, rootOnly("package m\ntype K struct{ B string; A int }\n"))); len(d) != 0 {
+		t.Errorf("field order reached the parity check: %v", d)
+	}
+
 	withSub := mustLoad(t, s, map[string]string{"m.go": base, "sub/s.go": "package sub\nfunc S() {}\n"})
 	if f := compatibilityFindings("v1.0.0", withSub, release); len(f) != 1 || !strings.Contains(f[0], "no such package") {
 		t.Errorf("a removed package: got %v", f)

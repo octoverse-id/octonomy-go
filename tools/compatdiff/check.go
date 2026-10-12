@@ -145,6 +145,11 @@ func compatibilityFindings(release string, rel, current *api) []string {
 				"compatibility: %s exports `%s`, and this tree does not -- a caller that compiled against %s would not compile against it.",
 				release, f, release))
 		}
+		for _, o := range minus(rel.orders[p], current.orders[p]) {
+			findings = append(findings, fmt.Sprintf(
+				"compatibility: in %s, `%s`, and no longer here -- a caller converting between that struct and one of the same fields would not compile.",
+				release, o))
+		}
 	}
 	return findings
 }
