@@ -311,44 +311,42 @@ func TestShapesItCannotDescribeFailClosed(t *testing.T) {
 	}
 }
 
-// TestOneBuildContextOrNone: a file that is in some builds and not others would
-// be compared in one of them only, so it is refused; a file in none is left out.
+// TestOneBuildContextOrNone: a file another build context could add or remove
+// is refused outright -- whatever its constraint says -- since a tree read in
+// one context would compare it in that one only. A file meant for no build is
+// left out.
 func TestOneBuildContextOrNone(t *testing.T) {
 	s := newShared()
-	for _, tc := range []struct{ name, file, src string }{
-		{"a GOOS file name", "api_windows.go", "package m\nfunc Windows() {}\n"},
-		{"a GOARCH file name", "api_arm64.go", "package m\nfunc Arm() {}\n"},
-		{"a GOOS constraint", "w.go", "//go:build windows\n\npackage m\nfunc Windows() {}\n"},
-		{"a Go version only Go 1.13 builds", "old.go", "// +build !go1.14\n\npackage m\nfunc Old() {}\n"},
-		{"a Go version Go 1.13 does not build", "new.go", "//go:build go1.18\n\npackage m\nfunc New() {}\n"},
-		{"cgo", "c.go", "//go:build cgo\n\npackage m\nfunc C() {}\n"},
-		{"a GOOS no fixed context names", "api_freebsd.go", "package m\nfunc BSD() {}\n"},
-		{"a GOARCH no fixed context names", "api_s390x.go", "package m\nfunc Z() {}\n"},
-		{"a GOOS and GOARCH pair", "api_linux_arm64.go", "package m\nfunc ARM64() {}\n"},
+	for _, tc := range []struct{ name, file, src, want string }{
+		{"a GOOS file name", "api_windows.go", "package m\nfunc Windows() {}\n", "built only for the GOOS or GOARCH"},
+		{"a GOARCH file name", "api_s390x.go", "package m\nfunc Z() {}\n", "built only for the GOOS or GOARCH"},
+		{"a GOOS and GOARCH pair", "api_linux_arm64.go", "package m\nfunc ARM64() {}\n", "built only for the GOOS or GOARCH"},
+		{"a GOOS no toolchain builds any more", "api_nacl.go", "package m\nfunc NaCl() {}\n", "built only for the GOOS or GOARCH"},
+		{"a GOOS constraint", "w.go", "//go:build windows\n\npackage m\nfunc Windows() {}\n", `build constraint "windows"`},
+		{"a Go version only Go 1.13 builds", "old.go", "// +build !go1.14\n\npackage m\nfunc Old() {}\n", `"!go1.14"`},
+		{"a Go version Go 1.13 does not build", "new.go", "//go:build go1.18\n\npackage m\nfunc New() {}\n", `"go1.18"`},
+		{"cgo", "c.go", "//go:build cgo\n\npackage m\nfunc C() {}\n", `"cgo"`},
+		{"a custom tag", "d.go", "//go:build debug\n\npackage m\nfunc Debug() {}\n", `"debug"`},
+		{"a negated custom tag", "d.go", "//go:build !debug\n\npackage m\nfunc NoDebug() {}\n", `"!debug"`},
+		{"a disjunction every sampled context would admit", "d.go", "//go:build !cgo || (linux && amd64)\n\npackage m\nfunc X() {}\n", "build constraint"},
+		{"a tool tag", "v.go", "//go:build amd64.v1\n\npackage m\nfunc V1() {}\n", `"amd64.v1"`},
+		{"a compiler tag", "g.go", "//go:build gc\n\npackage m\nfunc GC() {}\n", `"gc"`},
+		{"ignore with something else", "i.go", "//go:build ignore && debug\n\npackage m\nfunc X() {}\n", `"ignore && debug"`},
+		{"two +build lines", "p.go", "// +build linux\n// +build amd64\n\npackage m\nfunc X() {}\n", `"linux && amd64"`},
+		{"cgo by import", "c.go", "package m\n\nimport \"C\"\n\nfunc CgoOnly() {}\n", `imports "C"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := loadFixture(t, s, map[string]string{"m.go": "package m\n", tc.file: tc.src})
-			if err == nil || !strings.Contains(err.Error(), "built in some contexts and not others") {
-				t.Errorf("err = %v", err)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want one containing %q", err, tc.want)
 			}
 		})
-	}
-	// A platform today's toolchain no longer lists is built by no context here,
-	// and its file is still refused: only `ignore` is let through.
-	if _, err := loadFixture(t, s, map[string]string{"m.go": "package m\n", "api_nacl.go": "package m\nfunc NaCl() {}\n"}); err == nil || !strings.Contains(err.Error(), "built in no context") {
-		t.Errorf("a file for a retired GOOS: err = %v", err)
-	}
-	for _, tag := range []string{"//go:build debug", "// +build debug", "//go:build ignore && debug"} {
-		_, err := loadFixture(t, s, map[string]string{"m.go": "package m\n", "d.go": tag + "\n\npackage m\nfunc Debug() {}\n"})
-		if err == nil || !strings.Contains(err.Error(), "built in no context this tool reads") {
-			t.Errorf("%s: err = %v", tag, err)
-		}
 	}
 	a := mustLoad(t, s, map[string]string{
 		"m.go":       "package m\n",
 		"gen.go":     "//go:build ignore\n\npackage main\nfunc main() {}\n",
 		"old.go":     "// +build ignore\n\npackage main\nfunc main() {}\n",
-		"_skip.go":   "package m\nfunc Skipped() {}\n",
+		"_skip.go":   "//go:build windows\n\npackage m\nfunc Skipped() {}\n",
 		".hidden.go": "package m\nfunc Hidden() {}\n",
 	})
 	if got := a.packages["."]; len(got) != 1 || got[0] != "package name m" {

@@ -11,13 +11,11 @@ import (
 	"go/token"
 	"go/types"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 // A module's exported API, as one line per FEATURE: every exported constant
@@ -190,7 +188,7 @@ func (l *loader) load(rel string) (*types.Package, error) {
 	defer delete(l.busy, rel)
 
 	abs := filepath.Join(l.root, filepath.FromSlash(rel))
-	if err := sameInEveryContext(abs); err != nil {
+	if err := contextFree(abs); err != nil {
 		return nil, fmt.Errorf("%s: %w", relDisplay(rel), err)
 	}
 	ctxt := build.Default
@@ -258,108 +256,77 @@ func (l *loader) importPath(p string) (*types.Package, error) {
 	return l.std.Import(p)
 }
 
-// sameInEveryContext refuses a directory whose set of files depends on the
-// build context: a GOOS or GOARCH file name suffix, a build constraint naming
-// one, cgo, a Go version, or a custom tag. This tool reads every tree in ONE
-// context, so an API such a file adds or removes would be compared on one
-// platform, or under one Go, or without one tag, and silently not otherwise --
-// the Go 1.13 a consumer of this line builds with among them. Neither line has
-// such a file.
+// contextFree refuses a directory any of whose files the build context could
+// add or remove: a file with a build constraint, a GOOS or GOARCH file name
+// suffix, or an import of "C". This tool reads every tree in ONE context, so
+// an API such a file adds or removes would be compared on one platform, under
+// one Go or one set of tags, and silently not otherwise -- the Go 1.13 a
+// consumer of this line builds with among them. Neither line has such a file.
 //
-// A file is compared across every GOOS/GOARCH pair the running toolchain
-// supports (`go tool dist list`), with cgo on and off, and under modern release
-// tags and Go 1.13's. One included in some and not others is refused. One
-// included in none is allowed only when the go command never builds it at all:
-// its name starts with `_` or `.`, or its build constraint is exactly
-// `ignore`. Anything else included nowhere -- `//go:build debug` -- is built by
-// whoever passes that tag, and is refused too.
-func sameInEveryContext(dir string) error {
-	contexts, err := buildContexts()
-	if err != nil {
-		return err
-	}
+// It refuses rather than evaluates. Deciding which contexts a constraint
+// admits means enumerating platforms, cgo, release tags, tool tags, compilers
+// and custom tags in every combination, and a sample of them is a check with
+// holes in it (`!debug`, `!cgo || (linux && amd64)`, `amd64.v1`, `gc` each slip
+// past one). A tree with none of these files has one file set everywhere, so
+// one context describes it exactly.
+//
+// The single exception is a constraint of exactly `ignore`, the convention for
+// a file no build is meant to include, such as a generator. It is left out of
+// the comparison, and the convention is all that keeps it out of a build:
+// `go build -tags ignore` would include it. A file whose name starts with `_`
+// or `.` is ignored by the go command and is not read either.
+func contextFree(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
+	// A context naming no platform: a file excluded under it is excluded by a
+	// GOOS or GOARCH suffix this toolchain's go/build recognizes -- the same
+	// go/build the go command of this toolchain uses.
+	noPlatform := build.Default
+	noPlatform.GOOS, noPlatform.GOARCH = "nonesuch", "nonesuch"
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") ||
+			strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
 			continue
 		}
-		var first bool
-		for i, ctxt := range contexts {
-			match, err := ctxt.MatchFile(dir, name)
-			if err != nil {
-				return err
-			}
-			if i == 0 {
-				first = match
-			} else if match != first {
-				return fmt.Errorf("%s is built in some contexts and not others (GOOS, GOARCH, cgo or the Go version), and this tool reads one", name)
-			}
-		}
-		if first || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
-			continue
-		}
-		ignored, err := constrainedToIgnore(filepath.Join(dir, name))
+		file := filepath.Join(dir, name)
+		expr, err := buildConstraint(file)
 		if err != nil {
 			return err
 		}
-		if !ignored {
-			return fmt.Errorf("%s is built in no context this tool reads, and its constraint is not `ignore`: it is built under a tag someone can set, and this tool reads none", name)
+		if expr != "" {
+			if expr == "ignore" {
+				continue
+			}
+			return fmt.Errorf("%s has the build constraint %q; this tool reads one build context and refuses a file another could add or remove", name, expr)
+		}
+		if match, err := noPlatform.MatchFile(dir, name); err != nil {
+			return err
+		} else if !match {
+			return fmt.Errorf("%s is built only for the GOOS or GOARCH its name ends in; this tool reads one build context and refuses a file another could add or remove", name)
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, imp := range f.Imports {
+			if imp.Path.Value == `"C"` {
+				return fmt.Errorf("%s imports \"C\", so cgo decides whether it is built; this tool reads one build context and refuses it", name)
+			}
 		}
 	}
 	return nil
 }
 
-var (
-	contextsOnce sync.Once
-	contextsList []build.Context
-	contextsErr  error
-)
-
-// buildContexts is every context sameInEveryContext compares a file across.
-func buildContexts() ([]build.Context, error) {
-	contextsOnce.Do(func() {
-		out, err := exec.Command("go", "tool", "dist", "list").Output()
-		if err != nil {
-			contextsErr = fmt.Errorf("list the toolchain's platforms (go tool dist list): %w", err)
-			return
-		}
-		var go113 []string
-		for i := 1; i <= 13; i++ {
-			go113 = append(go113, fmt.Sprintf("go1.%d", i))
-		}
-		add := func(goos, goarch string, cgo bool, tags []string) {
-			ctxt := build.Default
-			ctxt.GOOS, ctxt.GOARCH, ctxt.CgoEnabled, ctxt.ReleaseTags = goos, goarch, cgo, tags
-			contextsList = append(contextsList, ctxt)
-		}
-		add("linux", "amd64", false, build.Default.ReleaseTags)
-		add("linux", "amd64", true, build.Default.ReleaseTags)
-		add("linux", "amd64", false, go113)
-		for _, pair := range strings.Fields(string(out)) {
-			goos, goarch, ok := strings.Cut(pair, "/")
-			if !ok {
-				contextsErr = fmt.Errorf("go tool dist list printed %q", pair)
-				return
-			}
-			add(goos, goarch, false, build.Default.ReleaseTags)
-		}
-		if len(contextsList) < 20 {
-			contextsErr = fmt.Errorf("go tool dist list named %d platforms; that is not a toolchain's list", len(contextsList)-3)
-		}
-	})
-	return contextsList, contextsErr
-}
-
-// constrainedToIgnore reports whether a file's build constraint is exactly the
-// tag `ignore`, the convention for a file no build includes.
-func constrainedToIgnore(file string) (bool, error) {
+// buildConstraint is a file's build constraint as its expression's text, or
+// "" when it has none: a //go:build line, or the // +build lines Go 1.13 reads,
+// before the package clause.
+func buildConstraint(file string) (string, error) {
 	raw, err := os.ReadFile(file)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	var plus []string
 	for _, line := range strings.Split(string(raw), "\n") {
@@ -371,23 +338,22 @@ func constrainedToIgnore(file string) (bool, error) {
 		case constraint.IsGoBuild(line):
 			expr, err := constraint.Parse(line)
 			if err != nil {
-				return false, fmt.Errorf("%s: %w", file, err)
+				return "", fmt.Errorf("%s: %w", file, err)
 			}
-			tag, ok := expr.(*constraint.TagExpr)
-			return ok && tag.Tag == "ignore", nil
+			return expr.String(), nil
 		case constraint.IsPlusBuild(line):
 			plus = append(plus, line)
 		}
 	}
-	if len(plus) == 1 {
-		expr, err := constraint.Parse(plus[0])
+	var parts []string
+	for _, line := range plus {
+		expr, err := constraint.Parse(line)
 		if err != nil {
-			return false, fmt.Errorf("%s: %w", file, err)
+			return "", fmt.Errorf("%s: %w", file, err)
 		}
-		tag, ok := expr.(*constraint.TagExpr)
-		return ok && tag.Tag == "ignore", nil
+		parts = append(parts, expr.String())
 	}
-	return false, nil
+	return strings.Join(parts, " && "), nil
 }
 
 type importerFunc func(path string) (*types.Package, error)
@@ -598,7 +564,7 @@ func (e *emitter) implements(scope *types.Scope) error {
 		}
 	}
 	if len(sealed) > 0 && len(generic) > 0 {
-		return fmt.Errorf("the package declares the sealed interface %s beside the generic %s, and whether a generic type satisfies an interface depends on its instantiation, which this tool does not describe",
+		return fmt.Errorf("the package declares the sealed interface %s beside the generic %s, and whether a generic type satisfies an interface depends on its instantiation, which this tool does not describe -- extend tools/compatdiff's implements() to model it before comparing this tree",
 			strings.Join(sealed, ", "), generic[0].Name())
 	}
 	for _, i := range ifaces {

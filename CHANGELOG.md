@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `tools/compatdiff/carveouts.txt` fails, and so does a listed one that no longer exists.
   - **Compatibility with every published release of this line** — `v1.0.0` today. Every
     declaration it exported must still be here unchanged, with no exception list, since this line
-    can never publish a major.
+    can never publish a major. Every `v1.*` tag must be named in the pin file, so a release's
+    follow-up pin cannot be forgotten.
 
   `make compat-diff` runs both, and fails on a `COMPAT.md` that is not what they produce; `make
   compat-md` regenerates it, and writes nothing unless both pass. `make compat-diff` and the tool's

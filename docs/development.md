@@ -368,7 +368,9 @@ to that test too — the place to say why.
 
 **Advancing `main`'s pin** is a port: every difference the newer commit brings is ported or listed in
 the same pull request. **A new release** adds a `release` line once its tag exists
-([`release.md`](release.md), *Cutting a release*); a release's line is never removed.
+([`release.md`](release.md), *Cutting a release*); a release's line is never removed, and every
+`v1.*` tag in the clone must have one — `make compat-diff` fails on a tag the pin file does not
+name, except one naming the commit being checked, which is the release itself.
 
 **What it cannot see.** Behaviour behind an unchanged declaration — a default inside a function, an
 error mapping, a guard — is invisible to both checks; a carve-out of that kind is prose in
@@ -380,9 +382,11 @@ addition is safe from that, so refusing it would refuse every minor release. Thr
 rather than compared, since no feature line would describe them: an exported declaration that hands
 a caller a value of a type the caller cannot name (an unexported one, or one from an internal
 package); a sealed interface (one with an unexported method) declared beside a generic type, since
-whether a generic type satisfies it depends on the instantiation; and a file built in some build
-contexts and not others — a GOOS or GOARCH suffix, a constraint, cgo, a Go version, or a custom tag
-no context sets (only `//go:build ignore` is left alone) — since every tree is read in one.
+whether a generic type satisfies it depends on the instantiation; and any file a build context
+could add or remove — one with a build constraint, a GOOS or GOARCH file name suffix, or an import
+of `"C"` — since every tree is read in one context and so would compare such a file in that one
+only. A constraint of exactly `ignore` is the exception, the convention for a file no build is
+meant to include: it is left out, and only the convention keeps it out of a build.
 
 ### Comments that describe `main`
 

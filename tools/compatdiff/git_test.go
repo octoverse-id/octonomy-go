@@ -299,6 +299,27 @@ func TestCommandOnAFixtureRepository(t *testing.T) {
 		expect(t, code, out, 1, "v1.0.1 is module example.com/other and this tree is example.com/m")
 	})
 
+	t.Run("a release tag the pin file does not name", func(t *testing.T) {
+		git(t, f.work, "tag", "v1.0.1-rc.1", f.headSHA)
+		defer git(t, f.work, "tag", "-d", "v1.0.1-rc.1")
+		git(t, f.work, "tag", "v2.0.0", f.headSHA) // another line's; not this pin file's business
+		defer git(t, f.work, "tag", "-d", "v2.0.0")
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "the release tag v1.0.1-rc.1 exists and tools/compatdiff/baselines.pin does not name it")
+		if strings.Contains(out, "v2.0.0") {
+			t.Errorf("a tag of another major was held to this pin file:\n%s", out)
+		}
+	})
+
+	t.Run("the release being tagged is not held to its own pin", func(t *testing.T) {
+		// The tag-push run checks out the tagged commit, which cannot name
+		// its own tag in the pin file.
+		git(t, f.work, "tag", "v1.0.1", "HEAD")
+		defer git(t, f.work, "tag", "-d", "v1.0.1")
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 0)
+	})
+
 	t.Run("a missing tag and main ref are fetched", func(t *testing.T) {
 		git(t, f.work, "tag", "-d", "v1.0.0")
 		git(t, f.work, "update-ref", "-d", "refs/remotes/origin/main")

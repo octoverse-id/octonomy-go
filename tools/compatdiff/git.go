@@ -235,6 +235,22 @@ func (r *repo) tagCommit(tag string) (string, error) {
 	return sha, nil
 }
 
+// releaseTags lists this clone's tags that name a release of this line --
+// every v1.x tag, prereleases included, since a published one has callers.
+func (r *repo) releaseTags() ([]string, error) {
+	out, err := r.run("for-each-ref", "--format=%(refname:strip=2)", "refs/tags/v1.*")
+	if err != nil {
+		return nil, cannot("%v", err)
+	}
+	var tags []string
+	for _, t := range strings.Fields(out) {
+		if releaseTagPattern.MatchString(t) {
+			tags = append(tags, t)
+		}
+	}
+	return tags, nil
+}
+
 // wanted is what a tree is materialized with: the Go files and go.mod files,
 // which are everything loadAPI reads.
 func wanted(p string) bool {
