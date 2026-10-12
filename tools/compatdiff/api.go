@@ -188,6 +188,14 @@ func (l *loader) load(rel string) (*types.Package, error) {
 	defer delete(l.busy, rel)
 
 	abs := filepath.Join(l.root, filepath.FromSlash(rel))
+	// A directory of commands is nobody's import, whatever its files' build
+	// constraints say: a runnable example for one platform is not API.
+	if commands, err := onlyPackageMain(abs); err != nil {
+		return nil, fmt.Errorf("%s: %w", relDisplay(rel), err)
+	} else if commands {
+		l.done[rel] = nil
+		return nil, nil
+	}
 	if err := contextFree(abs); err != nil {
 		return nil, fmt.Errorf("%s: %w", relDisplay(rel), err)
 	}
@@ -270,11 +278,14 @@ func (l *loader) importPath(p string) (*types.Package, error) {
 // past one). A tree with none of these files has one file set everywhere, so
 // one context describes it exactly.
 //
-// The single exception is a constraint of exactly `ignore`, the convention for
-// a file no build is meant to include, such as a generator. It is left out of
-// the comparison, and the convention is all that keeps it out of a build:
-// `go build -tags ignore` would include it. A file whose name starts with `_`
-// or `.` is ignored by the go command and is not read either.
+// The single exception is a constraint of exactly `ignore` that Go 1.13 reads
+// too -- a `// +build ignore` line, beside a `//go:build ignore` or alone --
+// the convention for a file no build is meant to include, such as a generator.
+// It is left out of the comparison, and the convention is all that keeps it out
+// of a build: `go build -tags ignore` would include it. `//go:build ignore`
+// alone is refused, since Go 1.13 reads only `// +build` and so compiles the
+// file. A file whose name starts with `_` or `.` is ignored by the go command
+// and is not read either.
 func contextFree(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -320,15 +331,45 @@ func contextFree(dir string) error {
 	return nil
 }
 
+// onlyPackageMain reports whether every Go file in dir that the go command
+// does not ignore by name declares `package main`, test files included. Such
+// a directory holds commands, which no caller imports.
+func onlyPackageMain(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	seen := false
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, parser.PackageClauseOnly)
+		if err != nil {
+			return false, err
+		}
+		if f.Name.Name != "main" && f.Name.Name != "main_test" {
+			return false, nil
+		}
+		seen = true
+	}
+	return seen, nil
+}
+
 // buildConstraint is a file's build constraint as its expression's text, or
-// "" when it has none: a //go:build line, or the // +build lines Go 1.13 reads,
-// before the package clause.
+// "" when it has none. Both forms count -- //go:build, which modern Go reads,
+// and // +build, which Go 1.13 reads -- before the package clause, and where
+// they disagree the expression says so: "//go:build ignore" with no +build line
+// reads as ignore to modern Go and as nothing to Go 1.13, which builds the
+// file, so it is reported as `go:build(ignore) / +build()` and refused.
 func buildConstraint(file string) (string, error) {
 	raw, err := os.ReadFile(file)
 	if err != nil {
 		return "", err
 	}
 	var plus []string
+	goBuild := ""
 	for _, line := range strings.Split(string(raw), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "package ") {
@@ -340,7 +381,7 @@ func buildConstraint(file string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("%s: %w", file, err)
 			}
-			return expr.String(), nil
+			goBuild = expr.String()
 		case constraint.IsPlusBuild(line):
 			plus = append(plus, line)
 		}
@@ -353,7 +394,15 @@ func buildConstraint(file string) (string, error) {
 		}
 		parts = append(parts, expr.String())
 	}
-	return strings.Join(parts, " && "), nil
+	plusBuild := strings.Join(parts, " && ")
+	switch {
+	case goBuild == "" || goBuild == plusBuild:
+		return plusBuild, nil
+	case plusBuild == "" && goBuild != "ignore":
+		return goBuild, nil // refused whatever Go 1.13 makes of it
+	default:
+		return fmt.Sprintf("go:build(%s) / +build(%s)", goBuild, plusBuild), nil
+	}
 }
 
 type importerFunc func(path string) (*types.Package, error)

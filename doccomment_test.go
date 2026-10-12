@@ -54,12 +54,17 @@ import (
 //     composite literal, so counts[Tag]++ is kept.
 //     An exported name instantiated and then called or built in one breath --
 //     DecodeMetadata[shipping](m), List[[]string]{} -- is refused whatever
-//     the argument looks like.
+//     the argument looks like, and so is any identifier whose brackets open
+//     on a composite type -- DecodeMetadata[[]string], Set[map[string]int],
+//     F[func()] -- which an index expression does only by indexing a
+//     composite literal in place.
 //   - `any` written as a type, which Go 1.13 spells interface{}: anywhere in a
 //     code example's code (not its strings or trailing comment), and in prose
-//     in a type position -- after ] * ... or chan, as a parameter, an
-//     assertion or a result (func(any) error, func() any), or in a var, type
-//     or = declaration. The word in a sentence is not refused.
+//     only where it cannot be English -- after ] * ... or chan, as in
+//     map[string]any or []any. A signature written inline in a sentence,
+//     "func(v any) error", is NOT caught: telling it from "(if any)" is the
+//     prose classifier this guard declines to be. Put signatures in a code
+//     block, where the rule above applies.
 //   - The /v2 module's path where a reader would copy it into a build: inside
 //     quotes, as an import path is written, or after `go get` or `go install`,
 //     or with an @version. In prose it is the pointer this line's carve-outs
@@ -91,15 +96,12 @@ var (
 	// comma-separated arguments are allowed. `map` is the one keyword spelled
 	// this way, and map[string]interface{} is Go 1.13.
 	typeArgs = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\[(\*?(?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*)((?:\s*,\s*\*?(?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*)*)\]`)
-	// Each alternative is a type position: after ] * ... or chan; a named or
-	// unnamed parameter or an assertion, (v any) (any) , any); a result,
-	// func(...) any; and a declaration, var v any, type T any, = any.
-	anyAsType = regexp.MustCompile(`(?:\]|\*|\.\.\.|\bchan\s+)any\b` +
-		`|\(\s*[A-Za-z_][A-Za-z0-9_]*\s+any\s*[,)]` +
-		`|[(,]\s*any\s*[,)]` +
-		`|\bfunc\s*\([^()]*\)\s*\(?any\b` +
-		`|\b(?:var|type)\s+[A-Za-z_][A-Za-z0-9_]*\s+any\b` +
-		`|=\s*any\b`)
+	// The type positions prose cannot mean in English: after ] * ... or chan.
+	anyAsType = regexp.MustCompile(`(?:\]|\*|\.\.\.|\bchan\s+)any\b`)
+	// Brackets opening on a composite type: type arguments. An index starting
+	// with a composite literal indexed in place, rows[[]int{1}[0]], spells the
+	// same way and is refused too; nobody writes one in a comment.
+	compositeTypeArg = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\[(?:\[\]|map\[|chan\s|func\(|struct\s*\{|interface\s*\{)`)
 	// An exported name instantiated and called or built at once, whatever the
 	// type argument looks like: DecodeMetadata[shipping](m), List[[]string]{}.
 	// Indexing an exported map and calling the result spells the same way and
@@ -239,6 +241,9 @@ func commentLineProblems(line string, rules commentRules) []string {
 	}
 	if m := genericUse.FindString(line); m != "" && len(why) == 0 {
 		why = append(why, fmt.Sprintf("%s instantiates a generic, which Go 1.13 does not have", m))
+	}
+	if m := compositeTypeArg.FindString(line); m != "" && len(why) == 0 {
+		why = append(why, fmt.Sprintf("%s opens type arguments, which Go 1.13 does not have", m))
 	}
 	if m := anyAsType.FindString(line); m != "" {
 		why = append(why, fmt.Sprintf("%q spells interface{} as any, which Go 1.13 does not have", m))
@@ -435,22 +440,20 @@ func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 		{" Metadata is map[string]any. DecodeMetadata reads it into a struct without", "spells interface{} as any"},
 		{"\tvar rows []any", "spells interface{} as any"},
 		{"\tfunc log(args ...any)", "spells interface{} as any"},
-		{"\tfunc Each(fn func(v any) error)", "spells interface{} as any"},
+		{"\tfunc Each(fn func(v any) error)", "interface{}"},
 		{"\tx := doData[Tag](ctx, c, req)", "type-parameter syntax"},
 		{"\tvar v any", "interface{}"},
 		{"\ttype Decoder func(any) error", "interface{}"},
 		{"\tif s, ok := v.(any); ok {", "interface{}"},
 		{"\tdo(x, any(y)) // converted", "code example uses any"},
+		{"\ttype Callback func(left, right any) error", "any"},
+		{" DecodeMetadata[[]string] is useful as a decoder.", "opens type arguments"},
+		{" a Set[map[string]int] holds counts", "opens type arguments"},
 		{" a *List[TagAlias] of aliases", "type-parameter syntax"},
 		// main's types.go at 5e40964, verbatim.
 		{"\tcfg, err := octonomy.DecodeMetadata[shipping](tag.Metadata)", "instantiates a generic"},
 		{"\tnames, err := octonomy.DecodeMetadata[[]string](tag.Metadata)", "instantiates a generic"},
 		{"\tl := octonomy.List[shipping]{}", "instantiates a generic"},
-		{" The callback has type func(any) error.", "spells interface{} as any"},
-		{" a page function returns func() any", "spells interface{} as any"},
-		{" assert it with v.(any) first", "spells interface{} as any"},
-		{" declare it as var v any", "spells interface{} as any"},
-		{" or type Value = any", "spells interface{} as any"},
 		{" func Pair[K comparable, V any]()", "type parameter list"},
 	}
 	for _, tc := range refused {
@@ -484,6 +487,8 @@ func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 		" (any caller), any time, in any order",
 		" it returns, if any, the first error",
 		" Handlers(key) is any handler",
+		" It returns the request ID (if any).",
+		" the first error, if any, and the rest",
 		"\tif !seen[t.ID] {",
 	}
 	for _, line := range kept {

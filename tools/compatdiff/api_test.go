@@ -223,10 +223,10 @@ func TestWhatCountsAsAPackage(t *testing.T) {
 		"nested/go.mod":             "module example.com/m/nested\n",
 		"nested/n.go":               "package nested\nfunc Nested() {}\n",
 		"onlytests/x_test.go":       "package onlytests\n",
-		"ignored/ignored.go":        "//go:build ignore\n\npackage ignored\nfunc Ignored() {}\n",
+		"ignored/ignored.go":        "//go:build ignore\n// +build ignore\n\npackage ignored\nfunc Ignored() {}\n",
 		"sub/deeper/deeper.go":      "package deeper\nfunc Deeper() {}\n",
-		"sub/deeper/notbuilt_x.go":  "//go:build ignore\n\npackage deeper\nfunc NotBuilt() {}\n",
-		"sub/deeper/also_ignore.go": "//go:build ignore\n\npackage other\n",
+		"sub/deeper/notbuilt_x.go":  "//go:build ignore\n// +build ignore\n\npackage deeper\nfunc NotBuilt() {}\n",
+		"sub/deeper/also_ignore.go": "//go:build ignore\n// +build ignore\n\npackage other\n",
 	})
 	var got []string
 	for rel, fs := range a.packages {
@@ -333,6 +333,9 @@ func TestOneBuildContextOrNone(t *testing.T) {
 		{"a compiler tag", "g.go", "//go:build gc\n\npackage m\nfunc GC() {}\n", `"gc"`},
 		{"ignore with something else", "i.go", "//go:build ignore && debug\n\npackage m\nfunc X() {}\n", `"ignore && debug"`},
 		{"two +build lines", "p.go", "// +build linux\n// +build amd64\n\npackage m\nfunc X() {}\n", `"linux && amd64"`},
+		// Go 1.13 reads no //go:build line, so it builds this file.
+		{"ignore that only modern Go reads", "gen.go", "//go:build ignore\n\npackage m\nfunc Generated() {}\n", "go:build(ignore) / +build()"},
+		{"the two forms disagreeing", "gen.go", "//go:build ignore\n// +build linux\n\npackage m\nfunc X() {}\n", "go:build(ignore) / +build(linux)"},
 		{"cgo by import", "c.go", "package m\n\nimport \"C\"\n\nfunc CgoOnly() {}\n", `imports "C"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -344,13 +347,24 @@ func TestOneBuildContextOrNone(t *testing.T) {
 	}
 	a := mustLoad(t, s, map[string]string{
 		"m.go":       "package m\n",
-		"gen.go":     "//go:build ignore\n\npackage main\nfunc main() {}\n",
+		"gen.go":     "//go:build ignore\n// +build ignore\n\npackage main\nfunc main() {}\n",
 		"old.go":     "// +build ignore\n\npackage main\nfunc main() {}\n",
 		"_skip.go":   "//go:build windows\n\npackage m\nfunc Skipped() {}\n",
 		".hidden.go": "package m\nfunc Hidden() {}\n",
 	})
 	if got := a.packages["."]; len(got) != 1 || got[0] != "package name m" {
 		t.Errorf("a file no build includes was read: %v", got)
+	}
+	// A directory of commands is nobody's import, so its platform files are
+	// none of this tool's business.
+	b := mustLoad(t, s, map[string]string{
+		"m.go":                         "package m\n",
+		"examples/win/main.go":         "package main\nfunc main() {}\n",
+		"examples/win/main_windows.go": "//go:build windows\n// +build windows\n\npackage main\nfunc init() {}\n",
+		"examples/win/main_test.go":    "package main\n",
+	})
+	if len(b.packages) != 1 {
+		t.Errorf("a command directory was read: %v", b.packages)
 	}
 }
 

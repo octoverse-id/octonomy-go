@@ -174,9 +174,12 @@ func evaluate(dir, remote, mainBranch string) (findings []string, rendered, top 
 	// cannot name the commit its tag is cut on, so its line arrives in the PR
 	// after -- and without this, forgetting that PR would leave Check B
 	// holding the tree to every release but the newest, with nothing failing.
-	// A fresh CI checkout has every tag. A tag naming HEAD is exempt: that is
-	// the tag-push run checking the release itself, whose tree cannot name its
-	// own tag, and the release it would hold the tree to is the tree.
+	// A fresh CI checkout has every tag. One tag is exempt: the one a CI run
+	// was started for by its push (GITHUB_REF_TYPE=tag), when it names HEAD --
+	// that run checks the release itself, whose tree cannot name its own tag,
+	// and the release it would hold the tree to is the tree. On any other run,
+	// a branch commit that a tag happens to name included, the tag needs its
+	// line like any other.
 	tags, err := r.releaseTags()
 	if err != nil {
 		return nil, "", "", err
@@ -190,8 +193,10 @@ func evaluate(dir, remote, mainBranch string) (findings []string, rendered, top 
 		pinned[rel.tag] = true
 	}
 	for _, tag := range tags {
-		if at, err := r.tagCommit(tag); err == nil && at == head {
-			continue
+		if os.Getenv("GITHUB_REF_TYPE") == "tag" && os.Getenv("GITHUB_REF_NAME") == tag {
+			if at, err := r.tagCommit(tag); err == nil && at == head {
+				continue
+			}
 		}
 		if !pinned[tag] {
 			findings = append(findings, fmt.Sprintf("pin: the release tag %s exists and %s does not name it -- add `release %s <its commit>` (docs/release.md), or Check B never holds this line to it.", tag, pinFile, tag))

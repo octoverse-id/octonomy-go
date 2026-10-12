@@ -74,10 +74,11 @@ on `main`.
     library in examples (`slices.*`). Rewrite the **module** path `.../octonomy-go/v2` to the
     unsuffixed one — but never strip `/api/v2`, which is a REST route and the capability being
     ported. `TestNoCommentCarriesAMainOnlyToken` (`doccomment_test.go`, #100) refuses those tokens,
-    `any` written as a type, and an `octonomy.Name` the package does not declare, in every comment
-    a consumer compiles — even
-    in a sentence that only contrasts `main` with this line, so name `main`'s construct in words.
-    It cannot see a `main`-only claim made in ordinary words; read for those.
+    `any` as a type (in a code example, or in prose as `map[string]any`), and an `octonomy.Name`
+    the package does not declare, in every comment a consumer compiles — even in a sentence that
+    only contrasts `main` with this line, so name `main`'s construct in words. It cannot see a
+    `main`-only claim made in ordinary words, nor a signature written inline in a sentence; read
+    for those, and put signatures in a code block.
   - **A default.** Copy a value from `main` and its default comes with it. `DefaultAPIVersion` was
     `APIV2` there at 5e40964 and is `APIV1` here, and it is not the last default the port will meet:
     a default on this line never changes, so read each one against `v1.0.0`, not against `main`.

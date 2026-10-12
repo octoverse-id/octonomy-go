@@ -370,7 +370,7 @@ to that test too — the place to say why.
 the same pull request. **A new release** adds a `release` line once its tag exists
 ([`release.md`](release.md), *Cutting a release*); a release's line is never removed, and every
 `v1.*` tag in the clone must have one — `make compat-diff` fails on a tag the pin file does not
-name, except one naming the commit being checked, which is the release itself.
+name, except in the CI run that pushing the tag starts, which checks the release itself.
 
 **What it cannot see.** Behaviour behind an unchanged declaration — a default inside a function, an
 error mapping, a guard — is invisible to both checks; a carve-out of that kind is prose in
@@ -393,12 +393,13 @@ meant to include: it is left out, and only the convention keeps it out of a buil
 A port brings `main`'s comments with its code, and a comment compiles whatever it says.
 `TestNoCommentCarriesAMainOnlyToken` (`doccomment_test.go`, #100) reads every comment in every file
 a consumer compiles — the package and the examples — and refuses a token only `main`'s dialect has:
-`omitzero`, type-parameter syntax, `any` written as a type, the `/v2` module's path where a reader
-would build with it, a Go version at `main`'s floor or later, an `octonomy.Name` this package does
-not declare, and, in a code example, a standard-library name added after Go 1.13 (read from the
-running toolchain's `$GOROOT/api`, so that rule has nothing to refuse under go1.13.15). It refuses
-the token even where a sentence only contrasts `main` with this line; name `main`'s construct in
-words instead.
+`omitzero`, type-parameter syntax, `any` as a type (anywhere in a code example; in prose only where
+the word cannot be English, as in `map[string]any`), the `/v2` module's path where a reader would
+build with it, a Go version at `main`'s floor or later, an `octonomy.Name` this package does not
+declare, and, in a code example, a standard-library name added after Go 1.13 (read from the running
+toolchain's `$GOROOT/api`, so that rule has nothing to refuse under go1.13.15). It refuses the token
+even where a sentence only contrasts `main` with this line; name `main`'s construct in words
+instead. A signature written inline in a sentence is not read for `any`: put it in a code block.
 
 ## Keeping the contract current
 

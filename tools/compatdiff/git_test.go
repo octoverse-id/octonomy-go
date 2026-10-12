@@ -31,6 +31,8 @@ func hermeticGit(t *testing.T) {
 		"GITHUB_ACTIONS":      "",
 		"COMPATDIFF_REMOTE":   "",
 		"COMPATDIFF_MAIN":     "",
+		"GITHUB_REF_TYPE":     "",
+		"GITHUB_REF_NAME":     "",
 	} {
 		t.Setenv(k, v)
 	}
@@ -314,12 +316,22 @@ func TestCommandOnAFixtureRepository(t *testing.T) {
 	})
 
 	t.Run("the release being tagged is not held to its own pin", func(t *testing.T) {
-		// The tag-push run checks out the tagged commit, which cannot name
-		// its own tag in the pin file.
 		git(t, f.work, "tag", "v1.0.1", "HEAD")
 		defer git(t, f.work, "tag", "-d", "v1.0.1")
+		// On the branch, the tagged commit is no exemption: the follow-up pin
+		// is still owed.
 		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "the release tag v1.0.1 exists")
+		// The tag-push run checks out the tagged commit, which cannot name its
+		// own tag in the pin file.
+		t.Setenv("GITHUB_REF_TYPE", "tag")
+		t.Setenv("GITHUB_REF_NAME", "v1.0.1")
+		code, out = runIn(t, f.work, "check")
 		expect(t, code, out, 0)
+		// And only for the tag it was pushed for.
+		t.Setenv("GITHUB_REF_NAME", "v1.0.2")
+		code, out = runIn(t, f.work, "check")
+		expect(t, code, out, 1, "the release tag v1.0.1 exists")
 	})
 
 	t.Run("a missing tag and main ref are fetched", func(t *testing.T) {

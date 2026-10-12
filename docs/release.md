@@ -135,7 +135,7 @@ Four placeholders, substituted throughout. `VERSION` is **unprefixed**; `TAG` al
    to the pin file and regenerating `COMPAT.md` with `make compat-md`. Open it straight after the
    tag: until it merges, `make compat-diff` fails on every other pull request into `BASE`, naming
    the tag, because a tag the pin file does not name is a release nothing holds the tree to. (The
-   tag-push run itself passes: a tag naming the commit being checked is exempt.) Never remove a
+   CI run the tag push starts passes: it is exempt for the tag it was pushed for.) Never remove a
    release's line: its callers exist for as long as the tag does.
 10. Close the milestone/issue and delete the release branch.
 

@@ -20,8 +20,8 @@
 # difference the new commit brings is either ported or listed in carveouts.txt,
 # in the same pull request. A release's line is added once its tag exists, in
 # the pull request after the release (docs/release.md), and `make compat-diff`
-# fails on any v1.x tag in the clone that this file does not name -- except one
-# naming the commit being checked, which is the release itself.
+# fails on any v1.x tag in the clone that this file does not name -- except, in
+# the CI run that pushing a tag starts, that tag, which names the release itself.
 #
 # 5e40964 is the commit the whole parity epic (#88) ports from, and the one
 # tools/contractdrift/main.pin names. The two pins are separate on purpose: each
