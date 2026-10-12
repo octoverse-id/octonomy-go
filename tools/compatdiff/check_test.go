@@ -102,7 +102,7 @@ func F(int) error { return nil }
 	// call through *T compiling, so it is no break.
 	withMoved := mustLoad(t, s, rootOnly(additions))
 	movedToValue := strings.Replace(additions, "func (*T) Moved() {}", "func (T) Moved() {}", 1)
-	if f := compatibilityFindings("v1.1.0", withMoved, mustLoad(t, s, rootOnly(movedToValue))); len(f) != 0 {
+	if f := compatibilityFindings("a later release", withMoved, mustLoad(t, s, rootOnly(movedToValue))); len(f) != 0 {
 		t.Errorf("a method moved to the value receiver was reported as a break: %v", f)
 	}
 
@@ -131,6 +131,28 @@ func F(int) error { return nil }
 				}
 			}
 		})
+	}
+
+	// Nor does it break *T's satisfaction of a sealed interface.
+	sealedPtr := mustLoad(t, s, rootOnly("package m\ntype I interface{ seal() }\ntype T struct{}\nfunc (*T) seal() {}\n"))
+	sealedValue := mustLoad(t, s, rootOnly("package m\ntype I interface{ seal() }\ntype T struct{}\nfunc (T) seal() {}\n"))
+	if f := compatibilityFindings("a later release", sealedPtr, sealedValue); len(f) != 0 {
+		t.Errorf("a sealing method moved to the value receiver was reported as a break: %v", f)
+	}
+	if f := compatibilityFindings("a later release", sealedValue, sealedPtr); len(f) == 0 {
+		t.Error("a sealing method moved to the pointer receiver was not reported: T no longer satisfies I")
+	}
+	// An unexported method is its package's own, so embedding another
+	// package's sealed interface is another interface.
+	sibling := func(which string) *api {
+		return mustLoad(t, s, map[string]string{
+			"m.go":   "package m\nimport \"example.com/m/" + which + "\"\ntype I interface{ " + which + ".Seal }\n",
+			"a/a.go": "package a\ntype Seal interface{ seal() }\n",
+			"b/b.go": "package b\ntype Seal interface{ seal() }\n",
+		})
+	}
+	if f := compatibilityFindings("a later release", sibling("a"), sibling("b")); len(f) == 0 {
+		t.Error("an interface embedding another package's sealed interface changed and nothing was reported")
 	}
 
 	withSub := mustLoad(t, s, map[string]string{"m.go": base, "sub/s.go": "package sub\nfunc S() {}\n"})

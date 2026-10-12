@@ -100,6 +100,7 @@ func TestEveryKindOfChangeIsADifference(t *testing.T) {
 		{"an unexported interface method's signature", "package m\ntype I interface{ seal() }\n", "package m\ntype I interface{ seal(int) }\n"},
 		{"a type no longer satisfying a sealed interface", "package m\ntype I interface{ seal() }\ntype T struct{}\nfunc (T) seal() {}\n", "package m\ntype I interface{ seal() }\ntype T struct{}\nfunc (T) seal(int) {}\n"},
 		{"satisfying it only through the pointer", "package m\ntype I interface{ seal() }\ntype T struct{}\nfunc (T) seal() {}\n", "package m\ntype I interface{ seal() }\ntype T struct{}\nfunc (*T) seal() {}\n"},
+		{"an embedded field renamed through an alias", "package m\ntype Base struct{}\ntype A = Base\ntype B = Base\ntype S struct{ A }\n", "package m\ntype Base struct{}\ntype A = Base\ntype B = Base\ntype S struct{ B }\n"},
 	}
 	for _, p := range pairs {
 		t.Run(p.name, func(t *testing.T) {
@@ -138,15 +139,12 @@ type Params struct {
 	Q *string `+"`json:\"q,omitempty\"`"+`
 }
 
-type Page interface{ contents() []any }
-
 func Each[T any](ctx context.Context, page func(context.Context) (*List[T], error), fn func(T) error) (int, error) {
 	return 0, nil
 }
 
 func (l *List[T]) Len() int { return len(l.Data) }
 func (Params) String() string { return "" }
-func (*Params) contents() []any { return nil }
 `))
 	want := []string{
 		"const Default APIVersion = \"v1\"",
@@ -156,21 +154,55 @@ func (*Params) contents() []any { return nil }
 		"method (*Params) String() string",
 		"method (Params) String() string",
 		"package name m",
-		"type *Params implements Page",
 		"type APIVersion string",
 		"type List[$0 any] struct",
 		"type List[$0 any] struct, Data []$0 `json:\"data\"`",
 		"type Opts struct",
 		"type Opts struct, Limit int",
 		"type Opts struct, comparable",
-		"type Page interface{unexported contents() []interface{}}",
 		"type Params struct",
 		"type Params struct, Q *string `json:\"q,omitempty\"`",
 		"type Params struct, comparable",
-		"type Params struct, embedded Opts",
+		"type Params struct, embedded Opts Opts",
 	}
 	if got := a.packages["."]; !reflect.DeepEqual(got, want) {
 		t.Errorf("features:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestImplementsLines: a package's types against its own interfaces, each fact
+// a line -- the value's, and the pointer's, which a value's satisfaction
+// implies.
+func TestImplementsLines(t *testing.T) {
+	s := newShared()
+	a := mustLoad(t, s, rootOnly(`package m
+
+type Page interface{ contents() []any }
+
+type ByValue struct{}
+
+func (ByValue) contents() []any { return nil }
+
+type ByPointer struct{}
+
+func (*ByPointer) contents() []any { return nil }
+
+type Neither struct{}
+`))
+	var got []string
+	for _, f := range a.packages["."] {
+		if strings.Contains(f, "implements") || strings.HasPrefix(f, "type Page") {
+			got = append(got, f)
+		}
+	}
+	want := []string{
+		"type *ByPointer implements Page",
+		"type *ByValue implements Page",
+		"type ByValue implements Page",
+		"type Page interface{unexported contents() []interface{}}",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 
@@ -243,6 +275,15 @@ func TestShapesItCannotDescribeFailClosed(t *testing.T) {
 			}
 		})
 	}
+	// Whether a generic type satisfies a sealed interface depends on the
+	// instantiation, which no line describes.
+	_, err0 := loadFixture(t, s, rootOnly("package m\ntype I interface{ seal() }\ntype G[T any] struct{}\nfunc (G[T]) seal() {}\n"))
+	if err0 == nil || !strings.Contains(err0.Error(), "sealed interface I beside the generic G") {
+		t.Errorf("a generic type beside a sealed interface: err = %v", err0)
+	}
+	if _, err := loadFixture(t, s, rootOnly("package m\ntype I interface{ M() }\ntype G[T any] struct{}\nfunc (G[T]) M() {}\n")); err != nil {
+		t.Errorf("an unsealed interface beside a generic type was refused: %v", err)
+	}
 	// A type of one of the module's internal packages is as unnameable to a
 	// caller as an unexported one.
 	_, err := loadFixture(t, s, map[string]string{
@@ -283,6 +324,7 @@ func TestOneBuildContextOrNone(t *testing.T) {
 		{"cgo", "c.go", "//go:build cgo\n\npackage m\nfunc C() {}\n"},
 		{"a GOOS no fixed context names", "api_freebsd.go", "package m\nfunc BSD() {}\n"},
 		{"a GOARCH no fixed context names", "api_s390x.go", "package m\nfunc Z() {}\n"},
+		{"a GOOS and GOARCH pair", "api_linux_arm64.go", "package m\nfunc ARM64() {}\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := loadFixture(t, s, map[string]string{"m.go": "package m\n", tc.file: tc.src})
@@ -290,6 +332,11 @@ func TestOneBuildContextOrNone(t *testing.T) {
 				t.Errorf("err = %v", err)
 			}
 		})
+	}
+	// A platform today's toolchain no longer lists is built by no context here,
+	// and its file is still refused: only `ignore` is let through.
+	if _, err := loadFixture(t, s, map[string]string{"m.go": "package m\n", "api_nacl.go": "package m\nfunc NaCl() {}\n"}); err == nil || !strings.Contains(err.Error(), "built in no context") {
+		t.Errorf("a file for a retired GOOS: err = %v", err)
 	}
 	for _, tag := range []string{"//go:build debug", "// +build debug", "//go:build ignore && debug"} {
 		_, err := loadFixture(t, s, map[string]string{"m.go": "package m\n", "d.go": tag + "\n\npackage m\nfunc Debug() {}\n"})

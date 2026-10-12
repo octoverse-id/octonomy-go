@@ -45,12 +45,17 @@ import (
 //   - Type-parameter syntax: an identifier followed by bracketed type
 //     arguments, such as Optional[string], List[T] or doData[Tag](ctx), and a
 //     type parameter list such as [T any]. Go 1.13 has neither. An index
-//     expression -- rows[i], data[0], m["k"], seen[t.ID] -- is not refused:
-//     what is inside the brackets has to read as a type, and after a lowercase
-//     identifier, which is how a variable is spelled, the brackets must also be
-//     followed by a call or a composite literal, so counts[Tag]++ is kept.
-//   - `any` written as a type -- map[string]any, []any, ...any, (v any) -- which
-//     Go 1.13 spells interface{}. The word in a sentence is not refused.
+//     expression -- rows[i], data[0], m["k"], seen[t.ID],
+//     handlers[http.MethodGet]() -- is not refused: what is inside the brackets
+//     has to be a TYPE (a predeclared one, one this package declares, a single
+//     capital as type parameters are named, or a standard-library type by the
+//     API record's own kinds), and after a lowercase identifier, which is how a
+//     variable is spelled, the brackets must also be followed by a call or a
+//     composite literal, so counts[Tag]++ is kept.
+//   - `any` written as a type, which Go 1.13 spells interface{}: anywhere in a
+//     code example's code (not its strings or trailing comment), and in prose
+//     where it reads as a type -- map[string]any, []any, ...any, (v any). The
+//     word in a sentence is not refused.
 //   - The /v2 module's path where a reader would copy it into a build: inside
 //     quotes, as an import path is written, or after `go get` or `go install`,
 //     or with an @version. In prose it is the pointer this line's carve-outs
@@ -83,6 +88,7 @@ var (
 	// this way, and map[string]interface{} is Go 1.13.
 	typeArgs      = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\[(\*?(?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*)((?:\s*,\s*\*?(?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*)*)\]`)
 	anyAsType     = regexp.MustCompile(`(?:\]|\*|\.\.\.|\bchan\s+)any\b|\(\s*[A-Za-z_][A-Za-z0-9_]*\s+any\s*[,)]`)
+	anyWord       = regexp.MustCompile(`\bany\b`)
 	typeParamList = regexp.MustCompile(`\[[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*\s+(?:any|comparable|interface\s*\{|~)`)
 	predeclared   = map[string]bool{
 		"any": true, "bool": true, "byte": true, "comparable": true, "complex64": true, "complex128": true,
@@ -91,6 +97,7 @@ var (
 		"uint16": true, "uint32": true, "uint64": true, "uintptr": true,
 	}
 	v2ModuleImport = regexp.MustCompile(`"github\.com/octoverse-id/octonomy-go/v2(?:/[^"]*)?"|\bgo\s+(?:get|install)\s+\S*octonomy-go/v2\b|octonomy-go/v2(?:/\S*)?@`)
+	typeParamName  = regexp.MustCompile(`^[A-Z][0-9]?$`)
 	mainGoFloor    = regexp.MustCompile(`(?i)\bgo\s?1\.(\d+)\b`)
 	qualifiedName  = regexp.MustCompile(`\boctonomy\.([A-Z][A-Za-z0-9_]*)`)
 	packageMember  = regexp.MustCompile(`\b([a-z][a-z0-9]*)\.([A-Z][A-Za-z0-9_]*)`)
@@ -102,7 +109,7 @@ const mainGoFloorMinor = 24
 
 func TestNoCommentCarriesAMainOnlyToken(t *testing.T) {
 	rules := commentRules{}
-	rules.newer, rules.packages = stdlibRecord(t)
+	rules.newer, rules.packages, rules.stdTypes = stdlibRecord(t)
 	fset := token.NewFileSet()
 	files := map[string]*ast.File{}
 	for rel := range shippedSourceIn(t, ".") {
@@ -112,7 +119,7 @@ func TestNoCommentCarriesAMainOnlyToken(t *testing.T) {
 		}
 		files[rel] = f
 	}
-	rules.declared = packageLevelNames(files)
+	rules.declared, rules.types = packageLevelNames(files)
 	if !rules.declared["TagUpdate"] || !rules.declared["DecodeMetadata"] {
 		t.Fatalf("read %d files and found no TagUpdate or DecodeMetadata: the walk is not reading this package", len(files))
 	}
@@ -128,8 +135,8 @@ func TestNoCommentCarriesAMainOnlyToken(t *testing.T) {
 // packageLevelNames is every name the root package declares at package level --
 // what octonomy.Name can resolve to. Files in a subdirectory are another
 // package (the examples are package main) and declare nothing it can name.
-func packageLevelNames(files map[string]*ast.File) map[string]bool {
-	names := map[string]bool{}
+func packageLevelNames(files map[string]*ast.File) (names, typeNames map[string]bool) {
+	names, typeNames = map[string]bool{}, map[string]bool{}
 	for rel, f := range files {
 		if strings.Contains(rel, "/") {
 			continue
@@ -145,6 +152,7 @@ func packageLevelNames(files map[string]*ast.File) map[string]bool {
 					switch s := s.(type) {
 					case *ast.TypeSpec:
 						names[s.Name.Name] = true
+						typeNames[s.Name.Name] = true
 					case *ast.ValueSpec:
 						for _, n := range s.Names {
 							names[n.Name] = true
@@ -154,14 +162,18 @@ func packageLevelNames(files map[string]*ast.File) map[string]bool {
 			}
 		}
 	}
-	return names
+	return names, typeNames
 }
 
 // commentRules is what the rules read besides the line: the names this
 // package declares, the standard library's post-1.13 additions, and the
 // standard library's package names.
 type commentRules struct {
-	declared, newer, packages map[string]bool
+	// declared and types: every package-level name of this package, and its
+	// type names. newer: "pkg.Name" for the standard library's post-1.13
+	// package-level additions. packages and stdTypes: the standard library's
+	// package names, and "pkg.Name" for each of its types in any release.
+	declared, types, newer, packages, stdTypes map[string]bool
 }
 
 // commentProblems checks every comment in one file, line by line.
@@ -210,6 +222,10 @@ func commentLineProblems(line string, rules commentRules) []string {
 	}
 	if m := anyAsType.FindString(line); m != "" {
 		why = append(why, fmt.Sprintf("%q spells interface{} as any, which Go 1.13 does not have", m))
+	} else if strings.HasPrefix(line, "\t") && anyWord.MatchString(codeOnly(line)) {
+		// In a code example `any` is the type in every position -- var v any,
+		// func(any), x.(any) -- and code rarely names a variable `any`.
+		why = append(why, "a code example uses any, which Go 1.13 spells interface{}")
 	}
 	if m := typeParamList.FindString(line); m != "" {
 		why = append(why, fmt.Sprintf("%q opens a type parameter list, which Go 1.13 does not have", m))
@@ -237,17 +253,32 @@ func commentLineProblems(line string, rules commentRules) []string {
 	return why
 }
 
+// codeOnly is a code line without its string literals and trailing comment,
+// so `x := f() // any caller` and `fmt.Println("any")` say nothing about any.
+func codeOnly(line string) string {
+	line = regexp.MustCompile("\"(?:[^\"\\\\]|\\\\.)*\"|`[^`]*`").ReplaceAllString(line, `""`)
+	if i := strings.Index(line, "//"); i >= 0 {
+		line = line[:i]
+	}
+	return line
+}
+
 // readsAsType: bracket contents that read as a type argument rather than an
-// index -- an exported name, a predeclared type, or an exported name qualified
-// by a PACKAGE. seen[t.ID] indexes by a field: t is no package, so it is kept,
-// where List[octonomy.Tag] and Optional[json.RawMessage] are not.
+// index -- a predeclared type, a type this package declares (List[Tag]), a
+// type parameter's single capital (List[T]), or a TYPE of the standard library
+// or of this package, qualified (Optional[json.RawMessage], List[octonomy.Tag]).
+// A constant or a variable indexes: handlers[http.MethodGet]() and seen[t.ID]
+// are kept, since the record says MethodGet is a constant and t is no package.
 func (r commentRules) readsAsType(arg string) bool {
 	arg = strings.TrimPrefix(arg, "*")
 	if i := strings.LastIndex(arg, "."); i >= 0 {
 		qualifier, name := arg[:i], arg[i+1:]
-		return (qualifier == "octonomy" || r.packages[qualifier]) && name != "" && name[0] >= 'A' && name[0] <= 'Z'
+		if qualifier == "octonomy" {
+			return r.types[name]
+		}
+		return r.stdTypes[qualifier+"."+name]
 	}
-	return predeclared[arg] || (arg[0] >= 'A' && arg[0] <= 'Z')
+	return predeclared[arg] || r.types[arg] || typeParamName.MatchString(arg)
 }
 
 // stdlibRecord reads the running toolchain's API record. newer is "pkg.Name"
@@ -255,7 +286,7 @@ func (r commentRules) readsAsType(arg string) bool {
 // added in Go 1.14 or later and in no release up to 1.13; packages is every
 // package it names. Both are keyed by the package's NAME, which is how a comment
 // spells it (math/rand/v2 is "rand").
-func stdlibRecord(t *testing.T) (newer, packages map[string]bool) {
+func stdlibRecord(t *testing.T) (newer, packages, types map[string]bool) {
 	t.Helper()
 	dir := filepath.Join(toolchainRoot(t), "api")
 	entries, err := ioutil.ReadDir(dir)
@@ -263,8 +294,8 @@ func stdlibRecord(t *testing.T) (newer, packages map[string]bool) {
 		t.Fatalf("read the toolchain's API record: %v", err)
 	}
 	release := regexp.MustCompile(`^go1(?:\.(\d+))?\.txt$`)
-	feature := regexp.MustCompile(`^pkg ([^ ,]+)(?: \([^)]*\))?, (?:func|type|const|var) ([A-Za-z_][A-Za-z0-9_]*)`)
-	old, added, packages := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	feature := regexp.MustCompile(`^pkg ([^ ,]+)(?: \([^)]*\))?, (func|type|const|var) ([A-Za-z_][A-Za-z0-9_]*)`)
+	old, added, packages, types := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	newest := 0
 	for _, e := range entries {
 		m := release.FindStringSubmatch(e.Name())
@@ -295,10 +326,14 @@ func stdlibRecord(t *testing.T) (newer, packages map[string]bool) {
 				name = elems[len(elems)-2]
 			}
 			packages[name] = true
+			key := name + "." + fm[3]
+			if fm[2] == "type" {
+				types[key] = true
+			}
 			if minor <= 13 {
-				old[name+"."+fm[2]] = true
+				old[key] = true
 			} else {
-				added[name+"."+fm[2]] = true
+				added[key] = true
 			}
 		}
 		err = scanner.Err()
@@ -322,7 +357,10 @@ func stdlibRecord(t *testing.T) (newer, packages map[string]bool) {
 	if !packages["json"] || !packages["http"] {
 		t.Fatalf("%s names no json or http package: the record is not being read", dir)
 	}
-	return added, packages
+	if !types["json.RawMessage"] || types["http.MethodGet"] {
+		t.Fatalf("%s: json.RawMessage is not a type or http.MethodGet is: the record's kinds are not being read", dir)
+	}
+	return added, packages, types
 }
 
 // toolchainRoot is the running toolchain's GOROOT. runtime.GOROOT is empty in
@@ -344,9 +382,11 @@ func toolchainRoot(t *testing.T) string {
 // each kept. Passing on the real tree is not its only evidence.
 func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 	rules := commentRules{
-		declared: map[string]bool{"TagUpdate": true, "String": true, "Metadata": true, "APIV2": true, "Each": true},
+		declared: map[string]bool{"TagUpdate": true, "String": true, "Metadata": true, "APIV2": true, "Each": true, "Tag": true, "TagAlias": true},
+		types:    map[string]bool{"TagUpdate": true, "Metadata": true, "Tag": true, "TagAlias": true},
 		newer:    map[string]bool{"slices.DeleteFunc": true, "strings.Cut": true},
-		packages: map[string]bool{"json": true, "context": true, "slices": true, "strings": true},
+		packages: map[string]bool{"json": true, "context": true, "slices": true, "strings": true, "http": true},
+		stdTypes: map[string]bool{"json.RawMessage": true, "context.Context": true, "http.Header": true},
 	}
 	refused := []struct{ line, want string }{
 		// main's comments at 5e40964, verbatim or nearly.
@@ -377,6 +417,10 @@ func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 		{"\tfunc log(args ...any)", "spells interface{} as any"},
 		{"\tfunc Each(fn func(v any) error)", "spells interface{} as any"},
 		{"\tx := doData[Tag](ctx, c, req)", "type-parameter syntax"},
+		{"\tvar v any", "code example uses any"},
+		{"\ttype Decoder func(any) error", "code example uses any"},
+		{"\tif s, ok := v.(any); ok {", "code example uses any"},
+		{" a *List[TagAlias] of aliases", "type-parameter syntax"},
 		{" func Pair[K comparable, V any]()", "type parameter list"},
 	}
 	for _, tc := range refused {
@@ -401,6 +445,9 @@ func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 		" a generic [T] in prose is a doc link, not syntax",
 		" rows[r.i] indexes by a field",
 		"\tcounts[Tag]++",
+		"\thandlers[http.MethodGet]()",
+		"\tfns[Key](ctx)",
+		"\tfmt.Println(\"any value\") // any caller",
 		"\tcount := counts[Tag]",
 		" any caller, for any reason, at any time",
 		" Metadata is map[string]interface{}; any value in it is one of six types",

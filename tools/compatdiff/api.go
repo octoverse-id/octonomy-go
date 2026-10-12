@@ -410,7 +410,9 @@ func featuresOf(pkg *types.Package, rel, modulePath string) ([]string, error) {
 			return nil, err
 		}
 	}
-	e.implements(scope)
+	if err := e.implements(scope); err != nil {
+		return nil, err
+	}
 	if err := e.p.err; err != nil {
 		return nil, err
 	}
@@ -502,7 +504,11 @@ func (e *emitter) typeName(o *types.TypeName) error {
 				if !f.Exported() {
 					return fmt.Errorf("%s embeds the unexported %s, whose promoted fields this tool does not describe", name, f.Name())
 				}
-				e.add("type %s struct, embedded %s%s", head, e.p.str(f.Type()), tag)
+				// The field's NAME as well as its type: embedding an alias names
+				// the field after the alias, so `struct{ A }` and `struct{ B }`
+				// over aliases of one type are the same type to a caller and
+				// different fields -- s.A against s.B.
+				e.add("type %s struct, embedded %s %s%s", head, f.Name(), e.p.str(f.Type()), tag)
 				continue
 			}
 			if f.Exported() {
@@ -550,46 +556,72 @@ func (e *emitter) typeName(o *types.TypeName) error {
 	return nil
 }
 
-// implements adds a line for each exported non-generic type T of the package
-// that satisfies an exported non-generic interface I of the package: `type T
-// implements I`, or `type *T implements I` when only the pointer does. An
-// interface with an unexported method can be satisfied only by types its own
-// package declares, through methods no feature line lists, so whether T still
-// satisfies it -- what `var p I = T{}` in a caller's code needs -- shows
-// nowhere else.
+// implements adds a line for each exported type T of the package that
+// satisfies an exported interface I of the package: `type T implements I`
+// when T does -- and then `type *T implements I` too, since *T's method set
+// holds T's -- or only `type *T implements I` when only the pointer does. Each
+// fact is its own line, so a method moving from (*T) to (T) leaves the *T line
+// in place, as it leaves every pointer caller compiling. An interface with an
+// unexported method can be satisfied only by types its own package declares,
+// through methods no feature line lists, so whether T still satisfies it --
+// what `var p I = T{}` in a caller's code needs -- shows nowhere else.
 //
-// Generic types and generic interfaces are left out: whether one satisfies
-// another depends on the instantiation, which a caller chooses. That is a
-// limitation on main's side only -- Go 1.13 has no generics -- and a generic
-// pair main declares goes unchecked here.
-func (e *emitter) implements(scope *types.Scope) {
-	var ifaces, concrete []*types.TypeName
+// A generic type or interface is where this stops: whether G[X] satisfies I
+// depends on the X a caller picks. So a package declaring a SEALED interface
+// (one with an unexported method, which only its own types can satisfy) beside
+// any exported generic type, or a sealed generic interface, is refused rather
+// than compared with that relation left out. Go 1.13 has no generics, so only
+// main's side could ever be refused.
+func (e *emitter) implements(scope *types.Scope) error {
+	var ifaces, concrete, generic []*types.TypeName
+	var sealed []string
 	for _, name := range scope.Names() {
 		tn, ok := scope.Lookup(name).(*types.TypeName)
 		if !ok || !tn.Exported() || tn.IsAlias() {
 			continue
 		}
 		named, ok := tn.Type().(*types.Named)
-		if !ok || named.TypeParams().Len() > 0 {
+		if !ok {
 			continue
 		}
-		if types.IsInterface(named) {
+		isIface := types.IsInterface(named)
+		if isIface && hasUnexportedMethod(named.Underlying().(*types.Interface)) {
+			sealed = append(sealed, tn.Name())
+		}
+		switch {
+		case named.TypeParams().Len() > 0:
+			generic = append(generic, tn)
+		case isIface:
 			ifaces = append(ifaces, tn)
-		} else {
+		default:
 			concrete = append(concrete, tn)
 		}
+	}
+	if len(sealed) > 0 && len(generic) > 0 {
+		return fmt.Errorf("the package declares the sealed interface %s beside the generic %s, and whether a generic type satisfies an interface depends on its instantiation, which this tool does not describe",
+			strings.Join(sealed, ", "), generic[0].Name())
 	}
 	for _, i := range ifaces {
 		it := i.Type().Underlying().(*types.Interface)
 		for _, c := range concrete {
-			switch {
-			case types.Implements(c.Type(), it):
+			if types.Implements(c.Type(), it) {
 				e.add("type %s implements %s", c.Name(), i.Name())
-			case types.Implements(types.NewPointer(c.Type()), it):
+			}
+			if types.Implements(types.NewPointer(c.Type()), it) {
 				e.add("type *%s implements %s", c.Name(), i.Name())
 			}
 		}
 	}
+	return nil
+}
+
+func hasUnexportedMethod(it *types.Interface) bool {
+	for i := 0; i < it.NumMethods(); i++ {
+		if !it.Method(i).Exported() {
+			return true
+		}
+	}
+	return false
 }
 
 // reachedUnexported refuses an exported declaration that hands a caller a
@@ -646,6 +678,17 @@ func (p *printer) fail(format string, args ...any) {
 	if p.err == nil {
 		p.err = fmt.Errorf(format, args...)
 	}
+}
+
+// pkgPath is how a package other than the one being described is written: its
+// import path, or a package of the same module by its path within the module,
+// `{module}/sub`, so main's /v2 suffix is no difference.
+func (p *printer) pkgPath(pkg *types.Package) string {
+	path := pkg.Path()
+	if path == p.modulePath || strings.HasPrefix(path, p.modulePath+"/") {
+		return "{module}" + strings.TrimPrefix(path, p.modulePath)
+	}
+	return path
 }
 
 // hidden records a type a caller cannot name, met where the caller can come to
@@ -745,13 +788,9 @@ func (p *printer) write(b *strings.Builder, t types.Type) {
 			}
 			b.WriteString(obj.Name())
 		default:
-			path := obj.Pkg().Path()
-			if path == p.modulePath || strings.HasPrefix(path, p.modulePath+"/") {
-				rel := strings.TrimPrefix(path, p.modulePath)
-				if !obj.Exported() || strings.Contains(rel+"/", "/internal/") {
-					p.hidden("{module}" + rel + "." + obj.Name())
-				}
-				path = "{module}" + rel
+			path := p.pkgPath(obj.Pkg())
+			if strings.HasPrefix(path, "{module}") && (!obj.Exported() || strings.Contains(path+"/", "/internal/")) {
+				p.hidden(path + "." + obj.Name())
 			}
 			b.WriteString(path + "." + obj.Name())
 		}
@@ -795,7 +834,14 @@ func (p *printer) iface(b *strings.Builder, t *types.Interface) {
 				// interface (the implements lines), so it is printed -- without
 				// counting a hidden type in it as one a caller holds.
 				p.quiet++
-				elems = append(elems, "unexported "+m.Name()+p.signature(m.Type().(*types.Signature)))
+				// An unexported name is its package's own: a.seal and b.seal
+				// are different methods, and only types of that package (or
+				// embedding one of its interfaces) can have it.
+				name := m.Name()
+				if m.Pkg() != nil && m.Pkg() != p.local {
+					name = p.pkgPath(m.Pkg()) + "." + name
+				}
+				elems = append(elems, "unexported "+name+p.signature(m.Type().(*types.Signature)))
 				p.quiet--
 				continue
 			}

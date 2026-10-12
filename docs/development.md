@@ -376,12 +376,13 @@ error mapping, a guard — is invisible to both checks; a carve-out of that kind
 Unexported declarations are not compared, and neither is `Version`'s value, which changes on every
 release by definition. An addition is never a Check B finding, although an added field or method
 can make a selector ambiguous in a caller's struct that embeds the type beside another — no
-addition is safe from that, so refusing it would refuse every minor release. Two shapes are refused
+addition is safe from that, so refusing it would refuse every minor release. Three shapes are refused
 rather than compared, since no feature line would describe them: an exported declaration that hands
 a caller a value of a type the caller cannot name (an unexported one, or one from an internal
-package), and a file built in some build contexts and not others — a GOOS or GOARCH suffix, a
-constraint, cgo, a Go version, or a custom tag no context sets (only `//go:build ignore` is left
-alone) — since every tree is read in one.
+package); a sealed interface (one with an unexported method) declared beside a generic type, since
+whether a generic type satisfies it depends on the instantiation; and a file built in some build
+contexts and not others — a GOOS or GOARCH suffix, a constraint, cgo, a Go version, or a custom tag
+no context sets (only `//go:build ignore` is left alone) — since every tree is read in one.
 
 ### Comments that describe `main`
 
