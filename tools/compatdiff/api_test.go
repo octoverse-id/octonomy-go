@@ -60,6 +60,7 @@ func TestSpellingIsNotADifference(t *testing.T) {
 		{"unexported declarations", "package m\nfunc F() {}\nfunc g() {}\ntype T struct{ A int; b int }\n", "package m\nfunc F() {}\ntype T struct{ A int; c string }\n"},
 		{"the root package's Version value", "package m\nconst Version = \"one\"\n", "package m\nconst Version = \"two\"\n"},
 		{"a type parameter's name", "package m\nfunc F[T any](T) {}\ntype L[T any] struct{ D []T }\nfunc (l L[T]) Get() T { var t T; return t }\n", "package m\nfunc F[U any](U) {}\ntype L[E any] struct{ D []E }\nfunc (l L[E]) Get() E { var e E; return e }\n"},
+		{"a union's term order", "package m\nfunc F[T ~int | ~string](T) {}\ntype C interface{ ~int | ~string | float64 }\n", "package m\nfunc F[T ~string | ~int](T) {}\ntype C interface{ float64 | ~string | ~int }\n"},
 		{"a parameter's type spelled as a function type", "package m\ntype H func(int) error\nfunc F(h func(int) error) {}\n", "package m\ntype H func(n int) error\nfunc F(f func(x int) error) {}\n"},
 	}
 	for _, p := range pairs {
@@ -92,6 +93,8 @@ func TestEveryKindOfChangeIsADifference(t *testing.T) {
 		{"an alias becoming a defined type", "package m\ntype M = map[string]any\n", "package m\ntype M map[string]any\n"},
 		{"a type's underlying type", "package m\ntype V string\n", "package m\ntype V int\n"},
 		{"a type parameter", "package m\nfunc F[T any](T) {}\n", "package m\nfunc F(any) {}\n"},
+		{"a union's term", "package m\nfunc F[T ~int | ~string](T) {}\n", "package m\nfunc F[T ~int | ~float64](T) {}\n"},
+		{"a union term's tilde", "package m\nfunc F[T ~int | ~string](T) {}\n", "package m\nfunc F[T int | ~string](T) {}\n"},
 		{"an embedded field", "package m\ntype O struct{ L int }\ntype P struct{ O }\n", "package m\ntype O struct{ L int }\ntype P struct{ O O }\n"},
 		{"a variable's type", "package m\nvar V int\n", "package m\nvar V int64\n"},
 		{"Version's type", "package m\nconst Version = \"1\"\n", "package m\nconst Version = 1\n"},

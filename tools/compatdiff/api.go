@@ -865,15 +865,18 @@ func (p *printer) write(b *strings.Builder, t types.Type) {
 		// By position: a renamed type parameter is no difference to a caller.
 		fmt.Fprintf(b, "$%d", t.Index())
 	case *types.Union:
-		for i := 0; i < t.Len(); i++ {
-			if i > 0 {
-				b.WriteString(" | ")
-			}
+		// Sorted: a union's type set is the union of its terms', so
+		// ~int | ~string and ~string | ~int are one constraint to a caller.
+		terms := make([]string, t.Len())
+		for i := range terms {
+			term := p.str(t.Term(i).Type())
 			if t.Term(i).Tilde() {
-				b.WriteString("~")
+				term = "~" + term
 			}
-			p.write(b, t.Term(i).Type())
+			terms[i] = term
 		}
+		sort.Strings(terms)
+		b.WriteString(strings.Join(terms, " | "))
 	default:
 		p.fail("a type of kind %T, which this tool does not describe", t)
 		fmt.Fprintf(b, "<%T>", t)
