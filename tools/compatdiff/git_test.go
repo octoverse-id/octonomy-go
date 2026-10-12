@@ -304,10 +304,12 @@ func TestCommandOnAFixtureRepository(t *testing.T) {
 		defer git(t, f.work, "tag", "-d", "v1.0.1-rc.1")
 		git(t, f.work, "tag", "v2.0.0", f.headSHA) // another line's; not this pin file's business
 		defer git(t, f.work, "tag", "-d", "v2.0.0")
+		git(t, f.work, "tag", "v1.backup", f.headSHA) // no version at all
+		defer git(t, f.work, "tag", "-d", "v1.backup")
 		code, out := runIn(t, f.work, "check")
 		expect(t, code, out, 1, "the release tag v1.0.1-rc.1 exists and tools/compatdiff/baselines.pin does not name it")
-		if strings.Contains(out, "v2.0.0") {
-			t.Errorf("a tag of another major was held to this pin file:\n%s", out)
+		if strings.Contains(out, "v2.0.0") || strings.Contains(out, "v1.backup") {
+			t.Errorf("a tag naming no release of this line was held to the pin file:\n%s", out)
 		}
 	})
 
