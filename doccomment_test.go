@@ -57,7 +57,11 @@ import (
 //     the argument looks like, and so is any identifier whose brackets open
 //     on a composite type -- DecodeMetadata[[]string], Set[map[string]int],
 //     F[func()] -- which an index expression does only by indexing a
-//     composite literal in place.
+//     composite literal in place. And a function or type this package
+//     declares, followed by brackets, is type arguments whatever they hold --
+//     Go 1.13 can index neither -- so decode := octonomy.DecodeMetadata[shipping]
+//     is refused; a field reached through a selector (page.Metadata["k"]) or
+//     brackets opening on a literal are not.
 //   - `any` written as a type, which Go 1.13 spells interface{}: anywhere in a
 //     code example's code (not its strings or trailing comment), and in prose
 //     only where it cannot be English -- after ] * ... or chan, as in
@@ -66,8 +70,8 @@ import (
 //     prose classifier this guard declines to be. Put signatures in a code
 //     block, where the rule above applies.
 //   - The /v2 module's path where a reader would copy it into a build: inside
-//     quotes, as an import path is written, or after `go get` or `go install`,
-//     or with an @version. In prose it is the pointer this line's carve-outs
+//     quotes, as an import path is written, after `go get` or `go install`,
+//     with an @version, or in a go.mod require or replace directive. In prose it is the pointer this line's carve-outs
 //     need -- a consumer needing a webhook receiver moves to the /v2 module --
 //     and /api/v2 is a REST route this line serves, never refused.
 //   - A Go version at or above main's floor, 1.24, which is what main's comments
@@ -101,6 +105,10 @@ var (
 	// Brackets opening on a composite type: type arguments. An index starting
 	// with a composite literal indexed in place, rows[[]int{1}[0]], spells the
 	// same way and is refused too; nobody writes one in a comment.
+	// A name not reached through a selector -- page.Metadata[k] is a field --
+	// unless the selector is this package's own name, then brackets that do
+	// not open on a literal (a string or a number indexes; a type cannot).
+	declaredIndexed  = regexp.MustCompile(`(?:^|[^.\w])(?:octonomy\.)?([A-Za-z_][A-Za-z0-9_]*)\[[^"'\x60\]0-9]`)
 	compositeTypeArg = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\[(?:\[\]|map\[|chan\s|func\(|struct\s*\{|interface\s*\{)`)
 	// An exported name instantiated and called or built at once, whatever the
 	// type argument looks like: DecodeMetadata[shipping](m), List[[]string]{}.
@@ -115,11 +123,18 @@ var (
 		"int32": true, "int64": true, "rune": true, "string": true, "uint": true, "uint8": true,
 		"uint16": true, "uint32": true, "uint64": true, "uintptr": true,
 	}
-	v2ModuleImport = regexp.MustCompile(`"github\.com/octoverse-id/octonomy-go/v2(?:/[^"]*)?"|\bgo\s+(?:get|install)\s+\S*octonomy-go/v2\b|octonomy-go/v2(?:/\S*)?@`)
-	typeParamName  = regexp.MustCompile(`^[A-Z][0-9]?$`)
-	mainGoFloor    = regexp.MustCompile(`(?i)\bgo\s?1\.(\d+)\b`)
-	qualifiedName  = regexp.MustCompile(`\boctonomy\.([A-Z][A-Za-z0-9_]*)`)
-	packageMember  = regexp.MustCompile(`\b([a-z][a-z0-9]*)\.([A-Z][A-Za-z0-9_]*)`)
+	// Quoted as an import path; after go get or go install; with an @version;
+	// in a go.mod require or replace directive; or followed by a full version,
+	// as a line of a require block is.
+	v2ModuleImport = regexp.MustCompile(`"github\.com/octoverse-id/octonomy-go/v2(?:/[^"]*)?"` +
+		`|\bgo\s+(?:get|install)\s+\S*octonomy-go/v2\b` +
+		`|octonomy-go/v2(?:/\S*)?@` +
+		`|\b(?:require|replace)\s+(?:\(\s*)?\S*octonomy-go/v2\b` +
+		`|octonomy-go/v2\s+v[0-9]+\.[0-9]+\.[0-9]+`)
+	typeParamName = regexp.MustCompile(`^[A-Z][0-9]?$`)
+	mainGoFloor   = regexp.MustCompile(`(?i)\bgo\s?1\.(\d+)\b`)
+	qualifiedName = regexp.MustCompile(`\boctonomy\.([A-Z][A-Za-z0-9_]*)`)
+	packageMember = regexp.MustCompile(`\b([a-z][a-z0-9]*)\.([A-Z][A-Za-z0-9_]*)`)
 )
 
 // mainGoFloorMinor is main's Go floor at 5e40964, the commit this line ports
@@ -138,7 +153,7 @@ func TestNoCommentCarriesAMainOnlyToken(t *testing.T) {
 		}
 		files[rel] = f
 	}
-	rules.declared, rules.types = packageLevelNames(files)
+	rules.declared, rules.types, rules.funcsAndTypes = packageLevelNames(files)
 	if !rules.declared["TagUpdate"] || !rules.declared["DecodeMetadata"] {
 		t.Fatalf("read %d files and found no TagUpdate or DecodeMetadata: the walk is not reading this package", len(files))
 	}
@@ -154,8 +169,8 @@ func TestNoCommentCarriesAMainOnlyToken(t *testing.T) {
 // packageLevelNames is every name the root package declares at package level --
 // what octonomy.Name can resolve to. Files in a subdirectory are another
 // package (the examples are package main) and declare nothing it can name.
-func packageLevelNames(files map[string]*ast.File) (names, typeNames map[string]bool) {
-	names, typeNames = map[string]bool{}, map[string]bool{}
+func packageLevelNames(files map[string]*ast.File) (names, typeNames, funcsAndTypes map[string]bool) {
+	names, typeNames, funcsAndTypes = map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for rel, f := range files {
 		if strings.Contains(rel, "/") {
 			continue
@@ -165,6 +180,7 @@ func packageLevelNames(files map[string]*ast.File) (names, typeNames map[string]
 			case *ast.FuncDecl:
 				if d.Recv == nil {
 					names[d.Name.Name] = true
+					funcsAndTypes[d.Name.Name] = true
 				}
 			case *ast.GenDecl:
 				for _, s := range d.Specs {
@@ -172,6 +188,7 @@ func packageLevelNames(files map[string]*ast.File) (names, typeNames map[string]
 					case *ast.TypeSpec:
 						names[s.Name.Name] = true
 						typeNames[s.Name.Name] = true
+						funcsAndTypes[s.Name.Name] = true
 					case *ast.ValueSpec:
 						for _, n := range s.Names {
 							names[n.Name] = true
@@ -181,7 +198,7 @@ func packageLevelNames(files map[string]*ast.File) (names, typeNames map[string]
 			}
 		}
 	}
-	return names, typeNames
+	return names, typeNames, funcsAndTypes
 }
 
 // commentRules is what the rules read besides the line: the names this
@@ -193,6 +210,9 @@ type commentRules struct {
 	// package-level additions. packages and stdTypes: the standard library's
 	// package names, and "pkg.Name" for each of its types in any release.
 	declared, types, newer, packages, stdTypes map[string]bool
+	// funcsAndTypes: this package's package-level functions and types, the
+	// names Go 1.13 can never follow with brackets.
+	funcsAndTypes map[string]bool
 }
 
 // commentProblems checks every comment in one file, line by line.
@@ -244,6 +264,14 @@ func commentLineProblems(line string, rules commentRules) []string {
 	}
 	if m := compositeTypeArg.FindString(line); m != "" && len(why) == 0 {
 		why = append(why, fmt.Sprintf("%s opens type arguments, which Go 1.13 does not have", m))
+	}
+	// A function or a type of this package followed by brackets is type
+	// arguments whatever is inside them -- Go 1.13 can index neither -- so
+	// decode := octonomy.DecodeMetadata[shipping] is refused too.
+	for _, m := range declaredIndexed.FindAllStringSubmatch(line, -1) {
+		if rules.funcsAndTypes[m[1]] && len(why) == 0 {
+			why = append(why, fmt.Sprintf("%s[...] instantiates a generic, which Go 1.13 does not have", m[1]))
+		}
 	}
 	if m := anyAsType.FindString(line); m != "" {
 		why = append(why, fmt.Sprintf("%q spells interface{} as any, which Go 1.13 does not have", m))
@@ -409,6 +437,8 @@ func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 	rules := commentRules{
 		declared: map[string]bool{"TagUpdate": true, "String": true, "Metadata": true, "APIV2": true, "Each": true, "Tag": true, "TagAlias": true},
 		types:    map[string]bool{"TagUpdate": true, "Metadata": true, "Tag": true, "TagAlias": true},
+		funcsAndTypes: map[string]bool{"TagUpdate": true, "Metadata": true, "Tag": true, "TagAlias": true,
+			"String": true, "Each": true, "DecodeMetadata": true},
 		newer:    map[string]bool{"slices.DeleteFunc": true, "strings.Cut": true},
 		packages: map[string]bool{"json": true, "context": true, "slices": true, "strings": true, "http": true},
 		stdTypes: map[string]bool{"json.RawMessage": true, "context.Context": true, "http.Header": true},
@@ -448,6 +478,11 @@ func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 		{"\tdo(x, any(y)) // converted", "code example uses any"},
 		{"\ttype Callback func(left, right any) error", "any"},
 		{" DecodeMetadata[[]string] is useful as a decoder.", "opens type arguments"},
+		{"\tdecode := octonomy.DecodeMetadata[shipping]", "instantiates a generic"},
+		{" Each[row] walks it", "instantiates a generic"},
+		{"\trequire github.com/octoverse-id/octonomy-go/v2", "/v2 module's path"},
+		{"\treplace github.com/octoverse-id/octonomy-go/v2 => ../v2", "/v2 module's path"},
+		{"\t\tgithub.com/octoverse-id/octonomy-go/v2 " + fmt.Sprintf("v%d.%d.%d", 2, 1, 3), "/v2 module's path"},
 		{" a Set[map[string]int] holds counts", "opens type arguments"},
 		{" a *List[TagAlias] of aliases", "type-parameter syntax"},
 		// main's types.go at 5e40964, verbatim.
@@ -488,6 +523,9 @@ func TestTheCommentGuardRefusesMainOnlyTokens(t *testing.T) {
 		" it returns, if any, the first error",
 		" Handlers(key) is any handler",
 		" It returns the request ID (if any).",
+		"\tpage.Data[1].Metadata[\"label\"] = \"changed\"",
+		"\ttag.Metadata[k] = v",
+		"\tm := octonomy.Metadata{}; m[\"k\"] = 1",
 		" the first error, if any, and the rest",
 		"\tif !seen[t.ID] {",
 	}

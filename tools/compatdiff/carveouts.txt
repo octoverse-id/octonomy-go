@@ -144,10 +144,12 @@ text both before `encoding/json` sees them -- a request body whose Go values (ma
 text pointers) nest past 10,000 levels, a cycle among them included, and a response nested past
 text 10,000 levels ([`jsondepth.go`](jsondepth.go),
 text [#91](https://github.com/octoverse-id/octonomy-go/issues/91)). A modern standard library refuses
-text both itself, so `main` carries no such guard; on either line each is an error, and what differs
-text is the code that refuses it and the message it returns.
+text a cycle and an over-deep response itself, so `main` carries no such guard; on either line each
+text of those is an error, and what differs is the code that refuses it and the message it returns.
 text
-text One request differs in outcome. A `json.RawMessage` in a request body is the caller's own
+text Two requests differ in outcome. A request body whose Go values nest past 10,000 levels WITHOUT
+text a cycle is refused here and sent by `main`: a modern encoder detects cycles but sets no depth
+text limit on the values it encodes. And a `json.RawMessage` in a request body is the caller's own
 text bytes: the guard does not enter it, and Go 1.13's encoder copies it without recursing, so one
 text nested past 10,000 levels is sent from this line, where a modern encoder refuses it.
 

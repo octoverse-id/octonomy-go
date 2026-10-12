@@ -439,10 +439,10 @@ each of its published releases exported. The ones a caller meets first:
 - **JSON nests at most 10,000 levels** in a response, and a request body's Go values — maps,
   slices, structs, pointers — at most 10,000 levels too. Go 1.13's `encoding/json` has no limit of
   its own, so a self-containing `Metadata` would hang it and a deeply nested response would exhaust
-  the stack; this line refuses both with an error. A modern toolchain's `encoding/json` enforces the
-  same limits itself, and one more: a `json.RawMessage` nested past 10,000 levels, which this line
-  sends as the caller's bytes (Go 1.13's encoder copies it without recursing, so it cannot exhaust
-  the stack).
+  the stack; this line refuses both with an error. The `/v2` line differs in two cases: it sends an
+  acyclic request body nested past 10,000 levels, which this line refuses, and it refuses a
+  `json.RawMessage` nested past 10,000 levels, which this line sends as the caller's bytes (Go
+  1.13's encoder copies it without recursing, so it cannot exhaust the stack).
 - **`Metadata` is `map[string]interface{}`**, not `map[string]any` — the same type, spelled the way
   Go 1.13 spells it.
 - **`DecodeMetadata` takes a pointer**, as `json.Unmarshal` does — `DecodeMetadata(tag.Metadata,
