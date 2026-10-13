@@ -165,6 +165,15 @@
       "outcome": {"reason": "ok", "ids": ["t-1", "t-2"]}
     },
     {
+      "name": "list-page-accepted-not-ok",
+      "description": "Any 2xx answers a list call too; 203 decodes as 200 does.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "status": 203,
+      "body": "{\"data\":[{\"id\":\"t-1\",\"slug\":\"a\"}],\"pagination\":{\"limit\":50,\"offset\":0,\"count\":1,\"next\":null}}",
+      "outcome": {"reason": "ok", "ids": ["t-1"]}
+    },
+    {
       "name": "list-empty-page",
       "description": "An empty page is an answer, not an error.",
       "surfaces": ["v1", "v2"],
@@ -235,6 +244,24 @@
       "status": 200,
       "body": "{\"data\":[{\"id\":\"t-1\",\"slug\":\"a\"}],\"pagination\":{\"limit\":0,\"offset\":0,\"count\":1,\"next\":null}}",
       "outcome": {"reason": "pagination_unusable"}
+    },
+    {
+      "name": "list-pagination-limit-negative",
+      "description": "Below 1 includes negative limits, not only zero.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "status": 200,
+      "body": "{\"data\":[],\"pagination\":{\"limit\":-1,\"offset\":0,\"count\":0,\"next\":null}}",
+      "outcome": {"reason": "pagination_unusable"}
+    },
+    {
+      "name": "list-pagination-limit-one",
+      "description": "The bound itself: a limit of 1 is usable.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "status": 200,
+      "body": "{\"data\":[{\"id\":\"t-1\",\"slug\":\"a\"}],\"pagination\":{\"limit\":1,\"offset\":0,\"count\":5,\"next\":\"https://octonomy.example/api/v1/tags?limit=1&offset=1\"}}",
+      "outcome": {"reason": "ok", "ids": ["t-1"]}
     },
     {
       "name": "list-pagination-wrong-type",
@@ -455,7 +482,7 @@
     {
       "name": "body-at-the-ceiling",
       "description": "A body of exactly 32 MiB (33554432 bytes) is read and decoded. The size is the behaviour: a binding must not substitute a smaller test ceiling here.",
-      "surfaces": ["v1"],
+      "surfaces": ["v1", "v2"],
       "call": "get",
       "status": 200,
       "body": "{\"data\":{\"id\":\"t-1\",\"slug\":\"summer-sale\"}}",
@@ -465,7 +492,7 @@
     {
       "name": "body-over-the-ceiling",
       "description": "One byte past 32 MiB is refused rather than read without bound or truncated.",
-      "surfaces": ["v1"],
+      "surfaces": ["v1", "v2"],
       "call": "get",
       "status": 200,
       "body": "{\"data\":{\"id\":\"t-1\",\"slug\":\"summer-sale\"}}",
@@ -475,7 +502,7 @@
     {
       "name": "error-body-over-the-ceiling",
       "description": "A non-2xx whose body is over the ceiling is still an API error, carrying its status, and the size refusal is reachable through it.",
-      "surfaces": ["v1"],
+      "surfaces": ["v1", "v2"],
       "call": "get",
       "status": 503,
       "body": "<html>",
@@ -485,7 +512,7 @@
     {
       "name": "nesting-at-the-limit",
       "description": "A response nested exactly 10000 levels deep, counting the outermost object as level 1, is decoded. @NEST@ becomes 9997 opening brackets followed by 9997 closing ones.",
-      "surfaces": ["v1"],
+      "surfaces": ["v1", "v2"],
       "call": "get",
       "status": 200,
       "body": "{\"data\":{\"id\":\"t-1\",\"metadata\":{\"deep\":@NEST@}}}",
@@ -495,11 +522,31 @@
     {
       "name": "nesting-past-the-limit",
       "description": "One level deeper, 10001, is refused before it is decoded.",
-      "surfaces": ["v1"],
+      "surfaces": ["v1", "v2"],
       "call": "get",
       "status": 200,
       "body": "{\"data\":{\"id\":\"t-1\",\"metadata\":{\"deep\":@NEST@}}}",
       "nest": {"placeholder": "@NEST@", "depth": 9998},
+      "outcome": {"reason": "depth_exceeded"}
+    },
+    {
+      "name": "health-nesting-at-the-limit",
+      "description": "The probe decodes under the same limit: a status body nested exactly 10000 levels deep (here 9998 brackets inside the outer object and a key) is decoded.",
+      "surfaces": ["v1", "v2"],
+      "call": "health",
+      "status": 200,
+      "body": "{\"status\":\"ok\",\"extra\":@NEST@}",
+      "nest": {"placeholder": "@NEST@", "depth": 9999},
+      "outcome": {"reason": "ok", "health_status": "ok"}
+    },
+    {
+      "name": "health-nesting-past-the-limit",
+      "description": "And one level deeper is refused.",
+      "surfaces": ["v1", "v2"],
+      "call": "health",
+      "status": 200,
+      "body": "{\"status\":\"ok\",\"extra\":@NEST@}",
+      "nest": {"placeholder": "@NEST@", "depth": 10000},
       "outcome": {"reason": "depth_exceeded"}
     },
     {
@@ -512,6 +559,15 @@
       "outcome": {"reason": "ok", "health_status": "ok"}
     },
     {
+      "name": "health-ok-accepted-not-ok",
+      "description": "Any 2xx answers a probe as well.",
+      "surfaces": ["v1", "v2"],
+      "call": "health",
+      "status": 202,
+      "body": "{\"status\":\"ok\"}",
+      "outcome": {"reason": "ok", "health_status": "ok"}
+    },
+    {
       "name": "health-other-word",
       "description": "Whatever word the server sends reaches the caller verbatim, case and surrounding space included: only a status that is blank once trimmed is refused, and the word itself is never rewritten.",
       "surfaces": ["v1", "v2"],
@@ -519,6 +575,15 @@
       "status": 200,
       "body": "{\"status\":\" DeGrAdEd \"}",
       "outcome": {"reason": "ok", "health_status": " DeGrAdEd "}
+    },
+    {
+      "name": "health-2xx-saying-unavailable",
+      "description": "The status decides, not the word: a 2xx probe whose body says unavailable is a successful probe carrying that word.",
+      "surfaces": ["v1", "v2"],
+      "call": "health",
+      "status": 200,
+      "body": "{\"status\":\"unavailable\"}",
+      "outcome": {"reason": "ok", "health_status": "unavailable"}
     },
     {
       "name": "health-unavailable",
@@ -537,6 +602,15 @@
       "status": 500,
       "body": "{\"status\":\"unavailable\"}",
       "outcome": {"reason": "api_error", "status": 500, "code": "not_ready"}
+    },
+    {
+      "name": "health-status-body-with-another-word",
+      "description": "Any non-blank word in the health view's body on a non-2xx is not_ready, not only the word the server uses today.",
+      "surfaces": ["v1", "v2"],
+      "call": "health",
+      "status": 503,
+      "body": "{\"status\":\"starting\"}",
+      "outcome": {"reason": "api_error", "status": 503, "code": "not_ready"}
     },
     {
       "name": "health-bare-503",
@@ -568,7 +642,7 @@
     {
       "name": "health-error-body-over-the-ceiling",
       "description": "The probes read under the same ceiling as the API, by their own request path: an oversized non-2xx probe answer is still an API error, with the size refusal reachable through it.",
-      "surfaces": ["v1"],
+      "surfaces": ["v1", "v2"],
       "call": "health",
       "status": 503,
       "body": "{\"status\":\"unavailable\"}",
@@ -578,12 +652,22 @@
     {
       "name": "health-body-over-the-ceiling",
       "description": "A 2xx probe over the ceiling is refused like any other 2xx, and is not an API error.",
-      "surfaces": ["v1"],
+      "surfaces": ["v1", "v2"],
       "call": "health",
       "status": 200,
       "body": "{\"status\":\"ok\"}",
       "pad_to_bytes": 33554433,
       "outcome": {"reason": "response_too_large"}
+    },
+    {
+      "name": "health-body-at-the-ceiling",
+      "description": "The probe reads by its own request path and to the same bound: exactly 32 MiB is read and decoded.",
+      "surfaces": ["v1", "v2"],
+      "call": "health",
+      "status": 200,
+      "body": "{\"status\":\"ok\"}",
+      "pad_to_bytes": 33554432,
+      "outcome": {"reason": "ok", "health_status": "ok"}
     },
     {
       "name": "health-empty-object",
@@ -660,6 +744,14 @@
       "surfaces": ["v2"],
       "call": "list",
       "options": [{"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "sent", "namespace": ["merchant", "m-1"], "application_id": "storefront", "include_global": false}
+    },
+    {
+      "name": "v2-namespaced-read-application-first",
+      "description": "Option order does not matter to coherence: the application may come before the namespace.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "options": [{"application": "storefront"}, {"namespace": ["merchant", "m-1"]}],
       "outcome": {"reason": "sent", "namespace": ["merchant", "m-1"], "application_id": "storefront", "include_global": false}
     },
     {
@@ -749,7 +841,7 @@
     {
       "name": "namespace-type-blank",
       "description": "A namespace with no type.",
-      "surfaces": ["v2"],
+      "surfaces": ["v1", "v2"],
       "call": "list",
       "options": [{"namespace": ["", "m-1"]}, {"application": "storefront"}],
       "outcome": {"reason": "namespace_type_required"}
@@ -757,7 +849,7 @@
     {
       "name": "namespace-type-whitespace",
       "description": "A namespace type of only whitespace names no type.",
-      "surfaces": ["v2"],
+      "surfaces": ["v1", "v2"],
       "call": "list",
       "options": [{"namespace": ["  ", "m-1"]}, {"application": "storefront"}],
       "outcome": {"reason": "namespace_type_required"}
@@ -765,7 +857,7 @@
     {
       "name": "namespace-id-blank",
       "description": "A namespace type with no id: half a pair.",
-      "surfaces": ["v2"],
+      "surfaces": ["v1", "v2"],
       "call": "list",
       "options": [{"namespace": ["merchant", "  "]}, {"application": "storefront"}],
       "outcome": {"reason": "namespace_id_required"}
@@ -773,7 +865,7 @@
     {
       "name": "namespace-type-reserved",
       "description": "global is the reserved namespace type: the global namespace is selected by sending no namespace at all.",
-      "surfaces": ["v2"],
+      "surfaces": ["v1", "v2"],
       "call": "list",
       "options": [{"namespace": ["global", "g-1"]}, {"application": "storefront"}],
       "outcome": {"reason": "namespace_type_reserved"}
@@ -789,7 +881,7 @@
     {
       "name": "two-namespaces",
       "description": "Two different namespaces on one request are a contradiction, never last-wins: last-wins on this axis is a cross-merchant read.",
-      "surfaces": ["v2"],
+      "surfaces": ["v1", "v2"],
       "call": "list",
       "options": [{"namespace": ["merchant", "m-1"]}, {"namespace": ["merchant", "m-2"]}, {"application": "storefront"}],
       "outcome": {"reason": "namespace_contradiction"}
@@ -797,7 +889,7 @@
     {
       "name": "two-namespaces-differing-in-type",
       "description": "Two namespaces with the same id and different types are as contradictory as two ids.",
-      "surfaces": ["v2"],
+      "surfaces": ["v1", "v2"],
       "call": "list",
       "options": [{"namespace": ["merchant", "m-1"]}, {"namespace": ["store", "m-1"]}, {"application": "storefront"}],
       "outcome": {"reason": "namespace_contradiction"}
@@ -805,7 +897,7 @@
     {
       "name": "two-namespaces-differing-in-case",
       "description": "Namespace values are compared exactly, as the server compares them: a type that differs only in case is a different namespace, so naming both is a contradiction rather than a match.",
-      "surfaces": ["v2"],
+      "surfaces": ["v1", "v2"],
       "call": "list",
       "options": [{"namespace": ["Merchant", "m-1"]}, {"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
       "outcome": {"reason": "namespace_contradiction"}
@@ -813,9 +905,25 @@
     {
       "name": "two-namespace-ids-differing-in-case",
       "description": "The same for an id that differs only in case.",
-      "surfaces": ["v2"],
+      "surfaces": ["v1", "v2"],
       "call": "list",
       "options": [{"namespace": ["merchant", "M-1"]}, {"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "namespace_contradiction"}
+    },
+    {
+      "name": "two-namespaces-differing-in-space",
+      "description": "Exact means exact in space too: a type that differs only by surrounding space is a different value, and naming both contradicts.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "options": [{"namespace": ["merchant ", "m-1"]}, {"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "namespace_contradiction"}
+    },
+    {
+      "name": "two-namespace-ids-differing-in-space",
+      "description": "The same for an id.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "options": [{"namespace": ["merchant", " m-1"]}, {"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
       "outcome": {"reason": "namespace_contradiction"}
     },
     {
@@ -843,6 +951,14 @@
       "outcome": {"reason": "sent", "namespace": ["merchant", "m-2"], "application_id": "storefront", "include_global": false}
     },
     {
+      "name": "global-namespace-keeps-the-rest",
+      "description": "Clearing the namespace clears only the namespace: an application and include_global set before it are still sent.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "options": [{"application": "storefront"}, {"include_global": true}, {"namespace": ["merchant", "m-1"]}, {"global_namespace": true}],
+      "outcome": {"reason": "sent", "namespace": null, "application_id": "storefront", "include_global": true}
+    },
+    {
       "name": "application-blank",
       "description": "An application option naming no application.",
       "surfaces": ["v1", "v2"],
@@ -864,6 +980,14 @@
       "surfaces": ["v1", "v2"],
       "call": "get",
       "options": [{"application": "Storefront"}, {"application": "storefront"}],
+      "outcome": {"reason": "application_contradiction"}
+    },
+    {
+      "name": "two-applications-differing-in-space",
+      "description": "Two application ids that differ only by surrounding space contradict each other; the server keeps an id as sent.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "options": [{"application": " storefront"}, {"application": "storefront"}],
       "outcome": {"reason": "application_contradiction"}
     },
     {
@@ -890,6 +1014,15 @@
       "call": "list",
       "params": {"application_id": "storefront"},
       "options": [{"application": "Storefront"}],
+      "outcome": {"reason": "application_contradiction"}
+    },
+    {
+      "name": "application-contradicts-params-in-space",
+      "description": "And an option that differs from the parameter only by surrounding space.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "params": {"application_id": "storefront"},
+      "options": [{"application": "storefront "}],
       "outcome": {"reason": "application_contradiction"}
     },
     {
@@ -972,6 +1105,14 @@
       "surfaces": ["v2"],
       "call": "list",
       "options": [{"namespace": ["merchant", "m-1"]}, {"application": "storefront"}, {"include_global": true}],
+      "outcome": {"reason": "sent", "namespace": ["merchant", "m-1"], "application_id": "storefront", "include_global": true}
+    },
+    {
+      "name": "v2-namespaced-read-including-global-first",
+      "description": "Nor does include_global need to come last.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "options": [{"include_global": true}, {"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
       "outcome": {"reason": "sent", "namespace": ["merchant", "m-1"], "application_id": "storefront", "include_global": true}
     },
     {

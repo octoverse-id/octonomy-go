@@ -931,6 +931,17 @@ func TestBehaviorVectorsFileIsStrict(t *testing.T) {
 		t.Errorf("a file with no request vectors was not refused for being empty: %v", err)
 	}
 
+	// Retiring a reason from every vector that names it leaves the binding
+	// recognising a reason nothing exercises, which must be refused. Every
+	// occurrence, since a reason may have several vectors.
+	retired := bytes.ReplaceAll(raw, []byte(`"outcome": {"reason": "depth_exceeded"}`), []byte(`"outcome": {"reason": "malformed_json"}`))
+	if bytes.Equal(retired, raw) {
+		t.Fatal("no vector names depth_exceeded any more; update the retired-reason case")
+	}
+	if _, err := decodeBehaviorVectors(retired); err == nil || !strings.Contains(err.Error(), "no vector names it") {
+		t.Errorf("a file in which no vector names depth_exceeded was not refused for it: %v", err)
+	}
+
 	mutations := []struct{ name, from, to string }{
 		{"a misspelled field", `"outcome": {"reason": "envelope_missing"}`, `"outcome": {"reason": "envelope_missing", "resaon": "x"}`},
 		// pagination_missing has two vectors, so the other still names it and only
@@ -958,7 +969,6 @@ func TestBehaviorVectorsFileIsStrict(t *testing.T) {
 		{"ids missing from a list", `"outcome": {"reason": "ok", "ids": []}`, `"outcome": {"reason": "ok"}`},
 		{"id missing from a get", `"outcome": {"reason": "ok", "id": "t-1"}`, `"outcome": {"reason": "ok"}`},
 		{"the retired rows field", `"outcome": {"reason": "ok", "ids": []}`, `"outcome": {"reason": "ok", "ids": [], "rows": 0}`},
-		{"a reason nothing names", `"outcome": {"reason": "depth_exceeded"}`, `"outcome": {"reason": "malformed_json"}`},
 	}
 	for _, m := range mutations {
 		t.Run(m.name, func(t *testing.T) {

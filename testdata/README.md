@@ -27,14 +27,45 @@ does not make is drift with no other signal, since each line's own tests keep
 passing against its own implementation. A rule written here is checked on every
 line that runs the file.
 
+## What the vectors sample
+
+They sample; they cannot enumerate every status or every spelling. What they do
+promise is this rule, and a rule the file does not meet is a gap to close:
+
+- **Every boundary on every path it has.** A rule that both the versioned API and
+  the readiness probe apply — the size ceiling, the nesting limit, error mapping
+  — is tried on both, and every vector that is about a client runs on both
+  surfaces unless the rule exists on one.
+- **Every numeric bound at the bound and one past it**, and a lower bound below
+  zero as well: the 32 MiB ceiling, the 10000-level nesting limit, a pagination
+  `limit` of 1, 0 and -1.
+- **Every comparison between two values the caller supplied** — two namespaces,
+  two applications, an application option and the call's own parameter — with a
+  difference only in case and one only in surrounding space, since each is
+  compared exactly.
+- **Every value said to arrive "verbatim"** with a fixture a normalisation would
+  change: mixed case, and surrounding space where the value keeps it.
+- **Every decoder that accepts a success** with `200` and with another 2xx; the
+  delete with `204` and with the 2xx statuses it refuses.
+- **Every status this SDK's first release mapped to a code** (400, 401, 403, 404,
+  409) with a bare response, so that mapping cannot come back for one of them.
+- **Each scope rule with its options in more than one order** where order could
+  plausibly matter.
+
+What they do not pin, deliberately: which of two defects in one response is
+reported first; an error's message and details, and the fields of a decoded page
+other than its rows' identities (the contract gate holds those); statuses beyond
+the ones named above; and the client's own grammar checks that need no server
+behaviour to explain them.
+
 ## Changing a covered behaviour
 
 Change the vector in the same pull request. The binding runs in the root
 package, so a change to a behaviour a vector pins fails `go test ./...` — and
 with it the required test jobs — until the file says what the code now does.
 That is the point: a behaviour change has to be written down where every line
-reads it. A behaviour no vector pins is not protected, which is why the vectors
-try each rule at more than one point.
+reads it. A behaviour no vector pins is not protected, which is what the
+sampling rule above is for: a new vector meets it too.
 
 Add a vector when you add a refusal or change what a response decodes to. A new
 reason needs a binding for it in the same change; the binding refuses a reason it
