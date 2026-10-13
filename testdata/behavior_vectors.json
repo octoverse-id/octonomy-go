@@ -328,12 +328,12 @@
     },
     {
       "name": "error-envelope-not-found",
-      "description": "An Octonomy error envelope keeps the server's code, status and request id.",
+      "description": "An Octonomy error envelope keeps the server's code, status and request id, the request id exactly as sent.",
       "surfaces": ["v1", "v2"],
       "call": "get",
       "status": 404,
-      "body": "{\"error\":{\"code\":\"not_found\",\"message\":\"Tag not found.\",\"details\":{},\"request_id\":\"req_4f1c\"}}",
-      "outcome": {"reason": "api_error", "status": 404, "code": "not_found", "request_id": "req_4f1c"}
+      "body": "{\"error\":{\"code\":\"not_found\",\"message\":\"Tag not found.\",\"details\":{},\"request_id\":\"req_4F1c-Xy\"}}",
+      "outcome": {"reason": "api_error", "status": 404, "code": "not_found", "request_id": "req_4F1c-Xy"}
     },
     {
       "name": "error-envelope-validation",
@@ -417,6 +417,24 @@
       "outcome": {"reason": "api_error", "status": 401, "code": "unexpected_status"}
     },
     {
+      "name": "bare-403-text",
+      "description": "A proxy's 403 is not an Octonomy forbidden. 403 is one of the five statuses this SDK's first release mapped to a code (400, 401, 403, 404, 409); each has a bare vector, so a mapping restored for any one of them fails.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 403,
+      "body": "Forbidden",
+      "outcome": {"reason": "api_error", "status": 403, "code": "unexpected_status"}
+    },
+    {
+      "name": "bare-400-text",
+      "description": "A load balancer's 400 is not a validation error.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 400,
+      "body": "<html><body>Bad Request</body></html>",
+      "outcome": {"reason": "api_error", "status": 400, "code": "unexpected_status"}
+    },
+    {
       "name": "bare-500-empty",
       "description": "A 500 with nothing in it.",
       "surfaces": ["v1", "v2"],
@@ -495,12 +513,12 @@
     },
     {
       "name": "health-other-word",
-      "description": "Whatever word the server sends reaches the caller verbatim.",
+      "description": "Whatever word the server sends reaches the caller verbatim, case and surrounding space included: only a status that is blank once trimmed is refused, and the word itself is never rewritten.",
       "surfaces": ["v1", "v2"],
       "call": "health",
       "status": 200,
-      "body": "{\"status\":\"degraded\"}",
-      "outcome": {"reason": "ok", "health_status": "degraded"}
+      "body": "{\"status\":\" DeGrAdEd \"}",
+      "outcome": {"reason": "ok", "health_status": " DeGrAdEd "}
     },
     {
       "name": "health-unavailable",
@@ -785,6 +803,22 @@
       "outcome": {"reason": "namespace_contradiction"}
     },
     {
+      "name": "two-namespaces-differing-in-case",
+      "description": "Namespace values are compared exactly, as the server compares them: a type that differs only in case is a different namespace, so naming both is a contradiction rather than a match.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "options": [{"namespace": ["Merchant", "m-1"]}, {"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "namespace_contradiction"}
+    },
+    {
+      "name": "two-namespace-ids-differing-in-case",
+      "description": "The same for an id that differs only in case.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "options": [{"namespace": ["merchant", "M-1"]}, {"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "namespace_contradiction"}
+    },
+    {
       "name": "same-namespace-twice",
       "description": "Naming the same namespace twice contradicts nothing.",
       "surfaces": ["v2"],
@@ -825,6 +859,14 @@
       "outcome": {"reason": "application_contradiction"}
     },
     {
+      "name": "two-applications-differing-in-case",
+      "description": "Application ids are compared exactly too: two that differ only in case contradict each other.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "options": [{"application": "Storefront"}, {"application": "storefront"}],
+      "outcome": {"reason": "application_contradiction"}
+    },
+    {
       "name": "same-application-twice",
       "description": "The same application twice contradicts nothing.",
       "surfaces": ["v1", "v2"],
@@ -839,6 +881,15 @@
       "call": "list",
       "params": {"application_id": "backoffice"},
       "options": [{"application": "storefront"}],
+      "outcome": {"reason": "application_contradiction"}
+    },
+    {
+      "name": "application-contradicts-params-in-case",
+      "description": "And an option that differs from the call's own parameter only in case contradicts it.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "params": {"application_id": "storefront"},
+      "options": [{"application": "Storefront"}],
       "outcome": {"reason": "application_contradiction"}
     },
     {

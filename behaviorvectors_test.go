@@ -943,7 +943,7 @@ func TestBehaviorVectorsFileIsStrict(t *testing.T) {
 		{"a name used twice", `"name": "single-resource-empty-body",`, `"name": "single-resource",`},
 		{"trailing data after the object", "  ]\n}", "  ]\n}\n{}"},
 		{"a health ok without its word", `"outcome": {"reason": "ok", "health_status": "ok"}`, `"outcome": {"reason": "ok"}`},
-		{"an api_error status that is not the response's", `"code": "not_found", "request_id": "req_4f1c"}`, `"code": "not_found", "request_id": "req_4f1c", "status": 403}`},
+		{"an api_error status that is not the response's", `"code": "not_found", "request_id": "req_4F1c-Xy"}`, `"code": "not_found", "request_id": "req_4F1c-Xy", "status": 403}`},
 		{"a 204 with a body", "\"status\": 204,\n      \"body\": \"\",", "\"status\": 204,\n      \"body\": \"x\","},
 		{"a body with no body field", "\"status\": 204,\n      \"body\": \"\",", "\"status\": 204,"},
 		{"padding shorter than the body", `"pad_to_bytes": 33554432,`, `"pad_to_bytes": 3,`},

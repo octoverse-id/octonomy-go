@@ -83,7 +83,7 @@ application/json`, and the body — none on a `204`.
 | `malformed_json` | a body that is not JSON |
 | `depth_exceeded` | a body nested past 10000 levels, the outermost value counting as level 1 |
 | `response_too_large` | a 2xx body over 32 MiB (33554432 bytes) |
-| `unexpected_delete_response` | a delete answered with a 2xx other than `204` with no body (a non-2xx is an `api_error`, as on any call) |
+| `unexpected_delete_response` | a delete answered with a 2xx other than `204`, whatever its body, or with a `204` that carries one (a non-2xx is an `api_error`, as on any call) |
 | `health_status_missing` | a 2xx probe response with no non-blank `status` |
 
 ### Request vectors
