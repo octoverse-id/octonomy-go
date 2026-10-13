@@ -919,7 +919,7 @@ func TestBehaviorVectorsFileIsStrict(t *testing.T) {
 	if _, err := decodeBehaviorVectors(raw); err != nil {
 		t.Fatalf("the real file must decode: %v", err)
 	}
-	// An empty list cannot be written as an edit to the real file, so it is
+	// An empty list is awkward to write as one edit to the real file, so it is
 	// built: a file with no request vectors at all must be refused.
 	vf, err := decodeBehaviorVectors(raw)
 	if err != nil {
