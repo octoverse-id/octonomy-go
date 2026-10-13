@@ -924,8 +924,11 @@ func TestBehaviorVectorsFileIsStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (&behaviorVectorFile{Version: 1, Response: vf.Response}).validate(); err == nil {
-		t.Error("a file with no request vectors was accepted")
+	// The unused-reason check also refuses such a file, so the case asserts the
+	// complaint that is about the empty list, or it would pass without it.
+	if err := (&behaviorVectorFile{Version: 1, Response: vf.Response}).validate(); err == nil ||
+		!strings.Contains(err.Error(), "must be non-empty") {
+		t.Errorf("a file with no request vectors was not refused for being empty: %v", err)
 	}
 
 	mutations := []struct{ name, from, to string }{
