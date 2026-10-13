@@ -23,9 +23,10 @@ guards against a response that decodes to nothing. It is the first minor this li
   `Config.APIVersion: octonomy.APIV2`, which needs an Octonomy server of 2.0 or later.
 - **`/api/v2` and namespace scoping are available, opt-in.** `WithNamespace`, `WithGlobalNamespace`,
   `WithApplication` and `WithIncludeGlobal` are request options, each with the domain its doc
-  comment states (`WithApplication` on a request with no body, `WithIncludeGlobal` on a read, both
-  namespace options on `/api/v2`). A request whose own scoping contradicts itself or the client's
-  API version is refused before it is sent — a namespace on an `APIV1` client among them.
+  comment states: `WithNamespace` only on an `APIV2` client, `WithIncludeGlobal` only on a read from
+  one, `WithApplication` only on a request with no body, and `WithGlobalNamespace` on either
+  surface. A request whose own scoping contradicts itself or the client's API version is refused
+  before it is sent — a namespace on an `APIV1` client among them.
 - **Nothing `1.0.0` exported was removed or changed, except `Version`'s value.** Every declaration
   it exported is here with the same type and signature, and every constant with the same value
   (`make compat-diff` checks each one); the exported API only adds. `Version` names the release, so
@@ -38,14 +39,14 @@ guards against a response that decodes to nothing. It is the first minor this li
   `VocabularyListParams`, or `APIError` — stops compiling, and so does a conversion between one of
   those structs and a caller's own struct of its old shape; keyed literals are unaffected.
 - **What an existing caller can see change, on `/api/v1` as well** — each fix among them is
-  described in full in this entry's *Fixed* section:
+  described in full in the *Fixed* section of `CHANGELOG.md`'s `1.1.0` entry:
   - **`IsNotFound` is no longer true for a bare 404.** The status-to-code mapping
     (`codeFromStatus`) is removed on **both** API versions, not only on `/api/v2`: a non-2xx with no
     Octonomy error envelope now carries `CodeUnexpectedStatus`, and `IsValidation`, `IsAuthError`,
     `IsForbidden` and `IsConflict` stop inferring their codes the same way. An Octonomy error
     envelope's code is still reported verbatim, so a real `not_found` is still `IsNotFound`.
-  - **A decoded resource with a blank identity is an error**, not a zero value (#40's guard): a
-    `{"data": {}}`, a null or renamed `id`, or an id-less list row.
+  - **A decoded resource with a blank identity is an error**, not a zero value (#40's guard) — a
+    `{"data": {}}`, an `id` that is null, empty or renamed, and an id-less list row among them.
   - **Response bodies are bounded at 32 MiB**, reported as `ErrResponseTooLarge`.
   - **A non-2xx whose body cannot be read is an `*APIError`** carrying `CodeUnexpectedStatus` and
     the status, where `1.0.0` returned a plain `read response body` error; the read failure is
@@ -143,8 +144,9 @@ guards against a response that decodes to nothing. It is the first minor this li
     error. `slices.Reverse` became two local helpers, and the doc comment's `slices.DeleteFunc` and
     `slices.SortFunc` examples are a loop and `sort.Slice`.
   - **`examples/`** gains `vocabularies`, `tags`, `aliases`, `resolution`, `assignments`,
-    `resources`, `audit-logs`, `health` and `namespaces`, and `quickstart` is rewritten — ten, one
-    per resource group plus the quickstart; `main`'s `webhook` is out by policy. Each was run against
+    `resources`, `audit-logs`, `health` and `namespaces`, and `quickstart` is rewritten — ten: one
+    per resource group, `namespaces`, and the quickstart. `main`'s `webhook` is out by policy. Each
+    was run against
     a booted `make dev-server`. They target this line's default `/api/v1`, except `namespaces`, which
     shows the `APIV2` opt-in and the refusal a v1 client gives `WithNamespace`. Where `main`'s
     clear a field with `Null`, these show what this line does instead, and where they read

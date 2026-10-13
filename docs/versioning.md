@@ -184,9 +184,11 @@ Backward-compatible **additions** to the exported API.
   promise sets aside for any addition**. The one a caller is likely to meet: adding a
   field to an exported struct breaks a caller who wrote an *unkeyed* composite literal, because such
   a literal must supply exactly one value per field, in order. It applies to every exported struct
-  whose fields are all exported — among them `Config`, `ListOptions`, `Pagination`, `APIError`, the
-  models, and the `*Create` / `*Update` / `*ListParams` / `*List` types — and so to the parity work,
-  which adds `Config.APIVersion` and the namespace fields on the models. It does not apply to
+  whose fields are all exported — among them `Config`, `ListOptions`, `Pagination`, the models, and
+  the `*Create` / `*Update` / `*ListParams` / `*List` types — and so to the parity work, which adds
+  `Config.APIVersion` and the namespace fields on the models. It applies too to a struct that gains
+  its first unexported field, since an unkeyed literal that compiled before it named every field:
+  `APIError` gained one with the parity work. It does not apply to
   `Client` or the `*Service` types, which carry unexported fields and cannot be written unkeyed from
   outside the package. `go vet`'s `composites` check flags unkeyed literals of imported types, so
   the practical exposure is low; it is not zero, which is what "backward-compatible" would otherwise

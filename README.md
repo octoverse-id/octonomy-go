@@ -98,10 +98,10 @@ A complete, runnable program lives in [`examples/quickstart`](examples/quickstar
 
 ### Runnable examples
 
-Ten of them, one per resource group plus the quickstart, each a single `main.go`, and every one calls
-the API. You can be running them against a real Octonomy in about five minutes: `make dev-server`
-boots one — Postgres, the published container, migrations, a minted service token — and ends by
-printing the export block they read.
+Ten of them — one per resource group, `namespaces`, and the quickstart — each a single `main.go`,
+and every one calls the API. You can be running them against a real Octonomy in about five minutes:
+`make dev-server` boots one — Postgres, the published container, migrations, a minted service token —
+and ends by printing the export block they read.
 
 ```bash
 make dev-server          # boots, then prints the exports; `make dev-server-env` reprints them
