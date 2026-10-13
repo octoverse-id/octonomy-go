@@ -373,8 +373,9 @@ third is a decision, not a convenience.
   not the other fails on the one that missed it. `behaviorvectors_test.go` is this module's binding
   and runs in the root package, so a change to a behaviour a vector pins fails the required test
   jobs until the file says what the code does — and a behaviour no vector pins is not protected, so
-  try a rule at more than one point. Add a vector when you add a refusal or change what a response
-  decodes to; a new reason needs its binding in the
+  every vector meets the sampling rule `testdata/README.md` states (each boundary on every path and
+  surface it has, case- and space-only differences for exact comparisons, and so on). Add a vector
+  when you add a refusal or change what a response decodes to; a new reason needs its binding in the
   same change, and the binding refuses a reason it does not know and one no vector names. Each
   vector carries exactly one defect — which of two a response reports first is not pinned. The
   reasons stay language-neutral strings: never a Go sentinel name, a message, or a type.

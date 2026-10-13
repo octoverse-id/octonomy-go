@@ -28,8 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     response ceiling by one byte and the client's API version, without touching the file, and
     requires the vectors that cover each to stop matching — including two the route check alone
     can notice. A wider mutation run against the transport is recorded in the pull request.
-  - `testdata/README.md` documents the format for any binding, and `AGENTS.md` makes a change to a
-    covered behaviour change the file in the same pull request.
+  - `testdata/README.md` documents the format for any binding, and the **sampling rule** the vectors
+    meet — every boundary on every path and surface it has, at the bound and one past it; case- and
+    space-only differences for every comparison of caller-supplied values; a normalising fixture for
+    every verbatim value; 200 and another 2xx for every success decoder; a bare vector for every
+    status this SDK's first release mapped — and what they deliberately do not pin. `AGENTS.md` makes
+    a change to a covered behaviour change the file in the same pull request.
 - **The prose that names the vendored contract is enforced by something that fails**
   ([#86](https://github.com/octoverse-id/octonomy-go/issues/86)). Fourteen places in this repository
   state which server contract the SDK vendors. `make contract-check` mechanized **three** — both
