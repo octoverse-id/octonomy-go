@@ -506,8 +506,9 @@ func runResponseVector(v responseVector, surface APIVersion, tweak func(*Client)
 			return
 		}
 		_, _ = w.Write(body)
-		// Padding is streamed rather than built, so the server side of a 32 MiB
-		// vector allocates nothing; what is measured is the client's read.
+		// Padding is streamed from one 64 KiB chunk rather than built, so the
+		// server side of a 32 MiB vector never holds the whole body; what is
+		// measured is the client's read.
 		writePadding(w, v.PadToBytes-len(body))
 	}))
 	defer srv.Close()
