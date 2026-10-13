@@ -17,27 +17,28 @@ guards against a response that decodes to nothing. It is the first minor this li
 **Upgrading from `1.0.0`:**
 
 - **`/api/v1` is still the default here.** `Config.APIVersion` defaults to `APIV1` on this line
-  (`DefaultAPIVersion`), so a client that sets nothing sends every request to `/api/v1` after the
-  upgrade, exactly as it did before. **The `/v2` module defaults to `APIV2`; this line does not, and
-  never will**, because it cannot change a default under a caller. Opt in with
+  (`DefaultAPIVersion`), so a client that sets nothing sends every request `1.0.0` could make to
+  `/api/v1` after the upgrade, exactly as before. **The `/v2` module defaults to `APIV2`; this line
+  does not, and never will**, because it cannot change a default under a caller. Opt in with
   `Config.APIVersion: octonomy.APIV2`, which needs an Octonomy server of 2.0 or later.
 - **`/api/v2` and namespace scoping are available, opt-in.** `WithNamespace`, `WithGlobalNamespace`,
-  `WithApplication` and `WithIncludeGlobal` scope any request, and a request whose own scoping
-  contradicts itself or the client's API version is refused before it is sent — a namespace on an
-  `APIV1` client among them.
+  `WithApplication` and `WithIncludeGlobal` are request options, each with the domain its doc
+  comment states (`WithApplication` on a request with no body, `WithIncludeGlobal` on a read, both
+  namespace options on `/api/v2`). A request whose own scoping contradicts itself or the client's
+  API version is refused before it is sent — a namespace on an `APIV1` client among them.
 - **Nothing `1.0.0` exported was removed or changed, except `Version`'s value.** Every declaration
   it exported is here with the same type and signature, and every constant with the same value
   (`make compat-diff` checks each one); the exported API only adds. `Version` names the release, so
   it reads `1.1.0`, and the default `User-Agent` built from it is now `octonomy-go/1.1.0`. The
   `*Update` structs keep their pointer fields: `TagUpdate{IsActive: octonomy.Bool(false)}` compiles
   as it did, and `String`, `Bool` and `Int` stay. What an addition can still break is what it can
-  break in any Go minor: an *unkeyed* composite literal of a struct that gained a field — `Config`,
-  `Tag`, `Vocabulary`, `VocabularyListParams`, or `APIError` — stops compiling (keyed literals are
-  unaffected); a caller's struct that embeds one of this package's types beside another type
-  declaring a name this release added can find that selector ambiguous; and a dot-import can
-  collide with a new name.
-- **What an existing caller can see change, on `/api/v1` as well** — the fixes among them are
-  described under *Fixed*:
+  break in any Go minor — the caveats Go's own compatibility promise sets aside, which
+  [`docs/versioning.md`](docs/versioning.md)'s MINOR rule names. Chief among them, an *unkeyed*
+  composite literal of a struct that gained a field — `Config`, `Tag`, `Vocabulary`,
+  `VocabularyListParams`, or `APIError` — stops compiling, and so does a conversion between one of
+  those structs and a caller's own struct of its old shape; keyed literals are unaffected.
+- **What an existing caller can see change, on `/api/v1` as well** — each fix among them is
+  described in full in this entry's *Fixed* section:
   - **`IsNotFound` is no longer true for a bare 404.** The status-to-code mapping
     (`codeFromStatus`) is removed on **both** API versions, not only on `/api/v2`: a non-2xx with no
     Octonomy error envelope now carries `CodeUnexpectedStatus`, and `IsValidation`, `IsAuthError`,
@@ -49,20 +50,30 @@ guards against a response that decodes to nothing. It is the first minor this li
   - **A non-2xx whose body cannot be read is an `*APIError`** carrying `CodeUnexpectedStatus` and
     the status, where `1.0.0` returned a plain `read response body` error; the read failure is
     wrapped, so `errors.Is` still finds it — `ErrResponseTooLarge` when the body was too large.
+  - **An id is escaped once in a request path.** `1.0.0` escaped it twice, so `Tags.Get(ctx, "a b")`
+    asked the server for `a%20b`; it now asks for `a b`. Server-minted ids never need escaping, so
+    no request for an existing row changes.
   - **`TagUpdate{Metadata: Metadata{}}` empties the stored metadata** (`VocabularyUpdate` too); in
     `1.0.0` it sent no `metadata` key, and the stored object stayed as it was.
   - **A list whose `pagination` block has a `limit` below 1 is an error**, **`Delete` requires the
     `204` Octonomy answers it with**, **a nil `RequestOption` is an error** rather than a panic, and
-    **a response or request body nested past 10,000 levels — which a `Metadata` that contains
-    itself always is — is refused** rather than exhausting Go 1.13's stack or hanging its encoder.
-    None of the four changes what a well-formed call to an Octonomy server returns.
-  - **On a modern Go, a `Metadata` that contains itself no longer unwraps to
+    **a response nested past 10,000 levels is refused**, and so is **a request body that does** —
+    which a `Metadata` that contains itself always does — rather than exhausting Go 1.13's stack or
+    hanging its encoder. (A caller's own `json.Marshaler` inside a body, `json.RawMessage`
+    included, is not walked, and is sent as it marshals; [`COMPAT.md`](COMPAT.md) records it.) None
+    of the four changes what a well-formed call to an Octonomy server returns.
+  - **On a modern Go, a request carrying a `Metadata` that contains itself no longer fails with
     `*json.UnsupportedValueError`.** `1.0.0` left that cycle to `json.Marshal`, which detects it
-    there (and hangs on Go 1.13); this release refuses it before encoding, with an error of its own.
-  - **Error text is not API.** Several responses that were already errors under `1.0.0` — a
-    `{"data": null}`, an array where one resource belongs, a list whose `data` or `pagination` has
-    the wrong JSON type — are now refused by an earlier check with a different message. Branch on
-    `errors.Is`, `errors.As` and the `Is*` helpers, never on a message.
+    there (and hangs on Go 1.13); a client method now refuses it before encoding, with an error of
+    its own. Calling `json.Marshal` on a `TagUpdate` or `VocabularyUpdate` yourself is unchanged.
+  - **Some responses that were already errors fail differently.** A single resource's
+    `{"data": null}`, a list whose `data` or `pagination` has the wrong JSON type, and an array or a
+    scalar where a resource belongs — as the single resource, or as a list row — were each an error
+    under `1.0.0` and still are, with a different message. The last of those `1.0.0` reported with
+    the `*json.UnmarshalTypeError` the decode returned; a shape check now refuses it first with an
+    error of this package's own, so `errors.As` no longer finds that type there. Branch on this
+    package's sentinels, `*APIError` and the `Is*` helpers: neither a message nor an `encoding/json`
+    error type is part of this API.
 - **Six new resource groups**: tag aliases, tag resolution, assignments, resource tags, audit logs,
   and the health probes — plus `Each`, `BuildTagTree`, `DecodeMetadata`, `WithRequestID`, and the
   `q` / `slug` vocabulary filters.
@@ -79,9 +90,10 @@ guards against a response that decodes to nothing. It is the first minor this li
   field, the `/api/v1` default, the Go 1.13-only JSON depth guards — and the irreducible type-name
   delta. `tools/compatdiff`, a new standard-library-only tool module, writes it from two checks:
   - **Parity with `main`** at the commit `tools/compatdiff/baselines.pin` names. Every exported
-    declaration on each side is compared by type identity — constant values, signatures, field types
-    and struct tags, comparability, interface method sets — so it sees a changed default or a
-    changed tag that a symbol-name diff would report as parity. A difference not listed in
+    declaration on each side is compared by type identity — constant values (`Version`'s aside, as
+    in the check below), signatures, field types and struct tags, comparability, interface method
+    sets — so it sees a changed default or a changed tag that a symbol-name diff would report as
+    parity. A difference not listed in
     `tools/compatdiff/carveouts.txt` fails, and so does a listed one that no longer exists.
   - **Compatibility with every published release of this line** — `v1.0.0`, the only one before
     this release. Every
@@ -505,8 +517,9 @@ guards against a response that decodes to nothing. It is the first minor this li
   - **Two things stay out, and are now written as policy rather than as terms of a freeze.** No
     webhook receiver — a consumer needing one moves to `/v2`. And **no major, ever**: the module path
     is unsuffixed, Go accepts only `v0`/`v1` versions on it, and `.../v2` is `main`'s module. So every
-    change here has to keep `v1.0.0` callers compiling — unkeyed struct literals aside, a caveat
-    `docs/versioning.md`'s MINOR rule now carries on this branch too — and two decisions follow for the
+    change here has to keep `v1.0.0` callers compiling — less the caveats any Go minor carries,
+    unkeyed struct literals chief among them, which `docs/versioning.md`'s MINOR rule now carries on
+    this branch too — and two decisions follow for the
     port: the `*Update` structs keep their pointer fields rather than taking `main`'s `Optional[T]`
     (so PATCH still cannot clear a nullable field here), and `/api/v2` arrives opt-in.
   - **`scripts/compat-guard.sh` refuses a major instead of a minor.** `compat_minor_violation`,
@@ -604,8 +617,9 @@ guards against a response that decodes to nothing. It is the first minor this li
 - **A nil `RequestOption` is an error, not a panic.** `v1.0.0` called every option unconditionally.
 - **A path segment is escaped once.** The first release assigned an already-escaped path to
   `url.URL.Path`, so `String()` escaped it again and an id of `a b` reached the server as the literal `a%20b`. Tag and
-  vocabulary ids are server-minted uuids, which never need escaping, so no call this tree could then
-  make was affected; the fix landed with the transport port because the resource groups #94 later
+  vocabulary ids are server-minted uuids, which never need escaping, so no request for an existing
+  row changed — an id that does need escaping named no row either way, and now reaches the server as
+  it was written. The fix landed with the transport port because the resource groups #94 later
   ported address rows by caller-chosen ids.
 - **The `vuln` CI job stopped running govulncheck at all, and took every merge with it.**
   `golang/govulncheck-action` installs `golang.org/x/vuln/cmd/govulncheck@latest` and offers no
