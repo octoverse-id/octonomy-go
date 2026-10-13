@@ -422,6 +422,16 @@
       "outcome": {"reason": "api_error", "status": 503, "code": "unexpected_status"}
     },
     {
+      "name": "health-error-body-over-the-ceiling",
+      "description": "The probes read under the same ceiling as the API, by their own request path: an oversized non-2xx probe answer is still an API error, with the size refusal reachable through it.",
+      "surfaces": ["v1"],
+      "call": "health",
+      "status": 503,
+      "body": "{\"status\":\"unavailable\"}",
+      "pad_to_bytes": 33554433,
+      "outcome": {"reason": "api_error", "status": 503, "code": "unexpected_status", "wraps": "response_too_large"}
+    },
+    {
       "name": "health-empty-object",
       "description": "A 2xx whose body names no status must not read as a healthy server.",
       "surfaces": ["v1", "v2"],
@@ -495,6 +505,15 @@
       "description": "Namespace isolation sits below application on the server, so a namespaced read that names no application is refused.",
       "surfaces": ["v2"],
       "call": "list",
+      "options": [{"namespace": ["merchant", "m-1"]}],
+      "outcome": {"reason": "namespace_requires_application"}
+    },
+    {
+      "name": "v2-namespaced-read-blank-application-param",
+      "description": "An application parameter that is present but blank names no application. Presence is what makes it contradict an option; it is not what satisfies a namespaced read.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "params": {"application_id": "  "},
       "options": [{"namespace": ["merchant", "m-1"]}],
       "outcome": {"reason": "namespace_requires_application"}
     },
