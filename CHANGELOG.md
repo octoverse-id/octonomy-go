@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-13
+
+**The compat line speaks `/api/v2`.** This release brings the Go 1.13 line to capability parity with
+the `/v2` module ([epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)): every resource
+group the Octonomy REST API publishes, the `/api/v2` surface with its namespace axis, and `main`'s
+guards against a response that decodes to nothing. It is the first minor this line has published.
+
+**Upgrading from `1.0.0`:**
+
+- **`/api/v1` is still the default here.** `Config.APIVersion` defaults to `APIV1` on this line
+  (`DefaultAPIVersion`), so a client that sets nothing sends every request to `/api/v1` after the
+  upgrade, exactly as it did before. **The `/v2` module defaults to `APIV2`; this line does not, and
+  never will**, because it cannot change a default under a caller. Opt in with
+  `Config.APIVersion: octonomy.APIV2`, which needs an Octonomy server of 2.0 or later.
+- **`/api/v2` and namespace scoping are available, opt-in.** `WithNamespace`, `WithGlobalNamespace`,
+  `WithApplication` and `WithIncludeGlobal` scope any request, and a request whose own scoping
+  contradicts itself or the client's API version is refused before it is sent — a namespace on an
+  `APIV1` client among them.
+- **Your code still compiles.** Every declaration `1.0.0` exported is here with the same type and
+  signature (`make compat-diff` checks each one), and the `*Update` structs keep their pointer
+  fields: `TagUpdate{IsActive: octonomy.Bool(false)}` compiles as it did, and `String`, `Bool` and
+  `Int` stay. The one exception is Go's own caveat for any minor: an *unkeyed* composite literal of
+  a struct that gained a field — `Config`, `Tag`, `Vocabulary`, `VocabularyListParams`, or
+  `APIError` — stops compiling. Keyed literals are unaffected.
+- **What an existing caller can see change, on `/api/v1` as well** — each described under *Fixed*:
+  - **`IsNotFound` is no longer true for a bare 404.** The status-to-code mapping
+    (`codeFromStatus`) is removed on **both** API versions, not only on `/api/v2`: a non-2xx with no
+    Octonomy error envelope now carries `CodeUnexpectedStatus`, and `IsValidation`, `IsAuthError`,
+    `IsForbidden` and `IsConflict` stop inferring their codes the same way. An Octonomy error
+    envelope's code is still reported verbatim, so a real `not_found` is still `IsNotFound`.
+  - **A decoded resource with a blank identity is an error**, not a zero value (#40's guard): a
+    `{"data": {}}`, a null or renamed `id`, or an id-less list row.
+  - **Response bodies are bounded at 32 MiB**, reported as `ErrResponseTooLarge`; a non-2xx that
+    trips it is still an `*APIError`, and `errors.Is` finds `ErrResponseTooLarge` through it.
+  - **`TagUpdate{Metadata: Metadata{}}` empties the stored metadata** (`VocabularyUpdate` too); in
+    `1.0.0` it sent no `metadata` key, and the stored object stayed as it was.
+  - **A list whose `pagination` block has a `limit` below 1 is an error**, **`Delete` requires the
+    `204` Octonomy answers it with**, **a nil `RequestOption` is an error** rather than a panic, and
+    **a response nested past 10,000 levels, or a request `Metadata` that contains itself, is
+    refused** rather than exhausting Go 1.13's stack or hanging its encoder. None of the four
+    changes what a well-formed call to an Octonomy server returns.
+- **Six new resource groups**: tag aliases, tag resolution, assignments, resource tags, audit logs,
+  and the health probes — plus `Each`, `BuildTagTree`, `DecodeMetadata`, `WithRequestID`, and the
+  `q` / `slug` vocabulary filters.
+- **Known limitations**, listed declaration by declaration in [`COMPAT.md`](COMPAT.md): there is **no
+  webhook receiver** on this line (a consumer needing one moves to `/v2`), and a PATCH **cannot clear
+  a nullable field** — the pointer fields have no third state — except `Metadata`, as above.
+
 ### Added
 - **`COMPAT.md`, and the two checks that write it**
   ([#100](https://github.com/octoverse-id/octonomy-go/issues/100), the acceptance criterion of
@@ -561,14 +609,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up, and now prints which (`govulncheck -version`) before scanning. Both modules scan clean on
   go1.26.9 and on go1.27.2. `docs/development.md` and `docs/release.md` say why a local
   `make release-check` on go1.25 now fails `vuln`, and how to get CI's verdict on a laptop.
-- **Documentation only; no code change, and no version bump or tag is planned for it.** This branch
+- **Documentation only; no code change, and no release of its own.** This branch
   carried its own copies of `main`'s documentation, written when `main` was a `/api/v1`-only client
   with two resource groups, and they had aged into false statements about it — most harmfully a line
   in `docs/versioning.md` telling a reader **not** to adopt the `/v2` module if they wanted REST v2
   endpoints, which is now backwards. Descriptions of the modern line are replaced by links to `main`'s
   own files, so the same drift has nothing left to attach to (#51). Note the reach: pkg.go.dev
-  renders the README of the *released* version, so `v1.0.0`'s rendered page keeps the old text until
-  some other fix cuts a `v1.0.1`. This corrects what a reader sees on GitHub, which is where the two
+  renders the README of the *released* version, so `v1.0.0`'s rendered page keeps the old text, and
+  the corrected text reaches pkg.go.dev with this release. It corrected what a reader saw on GitHub
+  as soon as it merged, which is where the two
   lines get compared.
 - **CI comments no longer paraphrase branch protection.** Two comments in `.github/workflows/ci.yml`,
   and the matching prose in `docs/development.md` and in this file's `1.0.0` entry, described the
@@ -738,9 +787,10 @@ an installable version that never existed.
 - `WithActor` per-request option, and `String`/`Bool`/`Int` pointer helpers for optional fields.
 - Runnable `examples/quickstart` program and a vendored `docs/openapi.yaml` contract reference.
 
-[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v1.0.0...support/go1.13
+[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v1.1.0...support/go1.13
+[1.1.0]: https://github.com/octoverse-id/octonomy-go/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/octoverse-id/octonomy-go/releases/tag/v1.0.0
 
-<!-- Both links point at THIS line. `main` is a different module (/v2) with its own
+<!-- Every link points at THIS line. `main` is a different module (/v2) with its own
      versions, so an [Unreleased] link to main's commits would compare a consumer of
-     v1.0.0 against code they cannot install. -->
+     this line against code they cannot install. -->

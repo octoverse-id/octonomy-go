@@ -162,10 +162,10 @@ left implying an installable version that never existed.
 | **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` | Released. Taking capability parity with `main` ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)); never a major; sunset 2027-08-31 |
 | **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.1` | Released, and moving on its own schedule. [`main`'s release state](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md#release-state) is the record; the `go list -m` query under [Adopting the modern line](#adopting-the-modern-line) is what settles what a fresh `go get` would pick |
 
-Nothing about `v1.0.0` can be withdrawn: `retract` shipped in Go 1.16, so a Go 1.13 consumer's
-toolchain ignores it, and `GOPROXY` caches tags permanently. That is why this line's CI runs a real
-`go1.13` job and a real-server smoke test, and why `scripts/compat-guard.sh` blocks a release PR whose
-version, module path, base branch, and CHANGELOG heading do not all agree.
+Nothing this line publishes can be withdrawn, `v1.0.0` included: `retract` shipped in Go 1.16, so a
+Go 1.13 consumer's toolchain ignores it, and `GOPROXY` caches tags permanently. That is why this
+line's CI runs a real `go1.13` job and a real-server smoke test, and why `scripts/compat-guard.sh`
+blocks a release PR whose version, module path, base branch, and CHANGELOG heading do not all agree.
 
 ## Bump rules
 
