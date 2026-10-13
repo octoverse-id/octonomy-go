@@ -31,10 +31,11 @@ import (
 // outcome REASON is recognised in a Go error. testdata/README.md describes the
 // format.
 //
-// A behaviour change that the vectors do not reflect fails this test, and it
-// runs in the root package, so the required test jobs run it on every pull
-// request. TestBehaviorVectorsCatchADeviation proves the first half of that
-// claim for two behaviours by bending them.
+// A change to a behaviour a vector pins fails this test, and it runs in the
+// root package, so the required test jobs run it on every pull request. A
+// behaviour no vector pins is not protected, which is why each rule is tried at
+// more than one point. TestBehaviorVectorsCatchADeviation proves the first half
+// of that for the ceiling, the API version and the route check by bending them.
 
 const behaviorVectorsFile = "testdata/behavior_vectors.json"
 
@@ -274,6 +275,14 @@ func (v responseVector) validate() error {
 	}
 	if v.PadToBytes != 0 && v.PadToBytes < len(*v.Body) {
 		return fmt.Errorf("pad_to_bytes %d is shorter than the body", v.PadToBytes)
+	}
+	// Each builds the body its own way, so a vector takes at most one, and a 204
+	// -- which carries no body -- takes neither.
+	if v.PadToBytes != 0 && v.Nest != nil {
+		return errors.New("pad_to_bytes and nest are not combined")
+	}
+	if v.Status == http.StatusNoContent && (v.PadToBytes != 0 || v.Nest != nil) {
+		return errors.New("a 204 carries no body to pad or nest")
 	}
 	if v.Nest != nil {
 		if v.Nest.Placeholder == "" || v.Nest.Depth < 1 {
@@ -792,18 +801,19 @@ func TestBehaviorVectorsCatchADeviation(t *testing.T) {
 	}{
 		{"body-at-the-ceiling", func(c *Client) { c.maxResponseBytes-- }},
 		{"body-over-the-ceiling", func(c *Client) { c.maxResponseBytes++ }},
+		// The response is the same on either surface, so only the route check can
+		// notice this one: it is what proves that check is load-bearing.
+		{"single-resource", func(c *Client) { c.apiVersion = APIV2 }},
 	}
 	for _, tc := range responseCases {
 		v, ok := response[tc.vector]
 		if !ok {
 			t.Fatalf("no response vector %q: this proof needs it", tc.vector)
 		}
+		// A run error fails TestBehaviorVectors too, so it counts as noticed.
 		got, err := runResponseVector(v, APIVersion(v.Surfaces[0]), tc.tweak)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.vector, err)
-		}
-		if reflect.DeepEqual(got, v.Outcome) {
-			t.Errorf("%s still matched %s with its ceiling moved: the vectors would not notice the change", tc.vector, got)
+		if err == nil && reflect.DeepEqual(got, v.Outcome) {
+			t.Errorf("%s still matched %s with the client bent: the vectors would not notice the change", tc.vector, got)
 		}
 	}
 
@@ -813,6 +823,9 @@ func TestBehaviorVectorsCatchADeviation(t *testing.T) {
 	}{
 		{"v2-namespaced-read", func(c *Client) { c.apiVersion = APIV1 }},
 		{"v1-include-global", func(c *Client) { c.apiVersion = APIV2 }},
+		// Sent on either surface with the same scoping: only the route check sees
+		// the request move.
+		{"v1-plain-read", func(c *Client) { c.apiVersion = APIV2 }},
 	}
 	for _, tc := range requestCases {
 		v, ok := request[tc.vector]
@@ -842,10 +855,52 @@ func TestBehaviorVectorClassifiersFailClosed(t *testing.T) {
 	if _, err := classifyRefusal(errors.New("octonomy: something no vector describes")); err == nil {
 		t.Error("an unrecognised refusal was classified")
 	}
-	if _, err := classifyRefusal(&APIError{StatusCode: 400, Code: CodeValidation}); err == nil {
+	twice := errors.New("octonomy: WithNamespace requires the v2 API surface, and WithIncludeGlobal applies to reads only")
+	if _, err := classifyRefusal(twice); err == nil {
+		t.Error("a refusal two reasons recognise was classified")
+	}
+	// The message matches a refusal pattern, so only the API-error check stands
+	// between this and a classification: without it the case would pass.
+	apiErr := &APIError{StatusCode: 400, Code: CodeValidation, Message: "WithNamespace requires the v2 API surface"}
+	if _, err := classifyRefusal(apiErr); err == nil {
 		t.Error("an API error was classified as a refusal, although a refusal sends nothing")
 	}
+	if _, err := classifyRefusal(fmt.Errorf("%w: WithNamespace requires the v2 API surface", ErrUnreachable)); err == nil {
+		t.Error("an unreachable request was classified as a refusal")
+	}
 }
+
+// TestBehaviorVectorsReadSentRequestsStrictly holds observeSent to the reading
+// the README specifies, because a lenient one hides a transport that sends the
+// scoping wrong: include_global=1, half a namespace pair, a parameter twice.
+func TestBehaviorVectorsReadSentRequestsStrictly(t *testing.T) {
+	build := func(query string, headers map[string]string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/api/v2/tags?"+query, nil)
+		for k, v := range headers {
+			r.Header.Set(k, v)
+		}
+		return r
+	}
+	good, err := observeSent(build("application_id=storefront&include_global=true",
+		map[string]string{namespaceTypeHeader: "merchant", namespaceIDHeader: "m-1"}))
+	want := requestOutcome{Reason: "sent", Namespace: []string{"merchant", "m-1"}, ApplicationID: strPtrForVectors("storefront"), IncludeGlobal: true}
+	if err != nil || !reflect.DeepEqual(good, want) {
+		t.Fatalf("a well-formed request read as %s, %v; want %s", good, err, want)
+	}
+	for name, r := range map[string]*http.Request{
+		"include_global=1":            build("include_global=1", nil),
+		"include_global twice":        build("include_global=true&include_global=true", nil),
+		"application_id twice":        build("application_id=a&application_id=a", nil),
+		"a namespace type with no id": build("", map[string]string{namespaceTypeHeader: "merchant"}),
+		"a namespace id with no type": build("", map[string]string{namespaceIDHeader: "m-1"}),
+	} {
+		if got, err := observeSent(r); err == nil {
+			t.Errorf("%s was read as %s", name, got)
+		}
+	}
+}
+
+func strPtrForVectors(s string) *string { return &s }
 
 // TestBehaviorVectorsFileIsStrict proves the validation the real file passes is
 // not vacuous: each malformed file below is one mistake an editor could make,
@@ -860,7 +915,13 @@ func TestBehaviorVectorsFileIsStrict(t *testing.T) {
 	}
 	mutations := []struct{ name, from, to string }{
 		{"a misspelled field", `"outcome": {"reason": "envelope_missing"}`, `"outcome": {"reason": "envelope_missing", "resaon": "x"}`},
-		{"an unknown reason", `"outcome": {"reason": "malformed_json"}`, `"outcome": {"reason": "malformed_jsn"}`},
+		// pagination_missing has two vectors, so the other still names it and only
+		// the unknown-reason check can refuse this one.
+		{"an unknown reason", `"outcome": {"reason": "pagination_missing"}`, `"outcome": {"reason": "pagination_mising"}`},
+		{"an empty surface list", `"surfaces": ["v1"],`, `"surfaces": [],`},
+		{"an option set to false", `{"include_global": true}`, `{"include_global": false}`},
+		{"padding and nesting combined", `"nest": {"placeholder": "@NEST@", "depth": 9997},`, `"nest": {"placeholder": "@NEST@", "depth": 9997}, "pad_to_bytes": 40000,`},
+		{"a padded 204", `"status": 204,`, `"status": 204, "pad_to_bytes": 10,`},
 		{"an unknown surface", `"surfaces": ["v1"],`, `"surfaces": ["v3"],`},
 		{"an unknown call", `"call": "delete",`, `"call": "remove",`},
 		{"an unknown option", `{"global_namespace": true}`, `{"globalnamespace": true}`},

@@ -12,6 +12,15 @@
       "outcome": {"reason": "ok", "id": "t-1"}
     },
     {
+      "name": "single-resource-accepted-not-ok",
+      "description": "Any 2xx answers a single-resource call; 202 decodes as 200 does.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 202,
+      "body": "{\"data\":{\"id\":\"t-1\",\"slug\":\"summer-sale\"}}",
+      "outcome": {"reason": "ok", "id": "t-1"}
+    },
+    {
       "name": "single-resource-empty-body",
       "description": "A 2xx with no body where a resource was expected. Decoding nothing into a resource yields a zero value; it must be an error.",
       "surfaces": ["v1", "v2"],
@@ -19,6 +28,15 @@
       "status": 200,
       "body": "",
       "outcome": {"reason": "envelope_missing"}
+    },
+    {
+      "name": "single-resource-whitespace-body",
+      "description": "A body of only whitespace is not empty: it is a JSON document with nothing in it.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 200,
+      "body": "   ",
+      "outcome": {"reason": "malformed_json"}
     },
     {
       "name": "single-resource-without-envelope",
@@ -48,6 +66,15 @@
       "outcome": {"reason": "not_a_resource"}
     },
     {
+      "name": "single-resource-data-empty-object-with-space",
+      "description": "An empty object is empty however it is spaced.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 200,
+      "body": "{\"data\":{ }}",
+      "outcome": {"reason": "not_a_resource"}
+    },
+    {
       "name": "single-resource-data-array",
       "description": "An array where one resource belongs -- the list shape answering a single-resource call.",
       "surfaces": ["v1", "v2"],
@@ -63,6 +90,15 @@
       "call": "get",
       "status": 200,
       "body": "{\"data\":\"t-1\"}",
+      "outcome": {"reason": "not_a_resource"}
+    },
+    {
+      "name": "single-resource-data-number",
+      "description": "A number where one resource belongs.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 200,
+      "body": "{\"data\":5}",
       "outcome": {"reason": "not_a_resource"}
     },
     {
@@ -91,6 +127,24 @@
       "status": 200,
       "body": "{\"data\":{\"tag_id\":\"t-1\",\"slug\":\"summer-sale\"}}",
       "outcome": {"reason": "identity_missing"}
+    },
+    {
+      "name": "single-resource-id-whitespace",
+      "description": "Identity is checked for absence and emptiness, not trimmed: an id of only whitespace is present, and decodes as it was sent.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"   \",\"slug\":\"summer-sale\"}}",
+      "outcome": {"reason": "ok", "id": "   "}
+    },
+    {
+      "name": "single-resource-field-wrong-type",
+      "description": "A field of the resource carrying the wrong JSON type is refused, not decoded leniently.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"t-1\",\"usage_count\":\"7\"}}",
+      "outcome": {"reason": "type_mismatch"}
     },
     {
       "name": "single-resource-truncated-json",
@@ -174,6 +228,15 @@
       "outcome": {"reason": "pagination_unusable"}
     },
     {
+      "name": "list-pagination-limit-zero-with-rows",
+      "description": "An unusable limit is refused on a page that has rows, not only on an empty one.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "status": 200,
+      "body": "{\"data\":[{\"id\":\"t-1\",\"slug\":\"a\"}],\"pagination\":{\"limit\":0,\"offset\":0,\"count\":1,\"next\":null}}",
+      "outcome": {"reason": "pagination_unusable"}
+    },
+    {
       "name": "list-pagination-wrong-type",
       "description": "A pagination value of the wrong JSON type.",
       "surfaces": ["v1", "v2"],
@@ -219,6 +282,15 @@
       "outcome": {"reason": "identity_missing"}
     },
     {
+      "name": "list-row-field-wrong-type",
+      "description": "A field of a row carrying the wrong JSON type.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "status": 200,
+      "body": "{\"data\":[{\"id\":\"t-1\",\"is_active\":\"yes\"}],\"pagination\":{\"limit\":50,\"offset\":0,\"count\":1,\"next\":null}}",
+      "outcome": {"reason": "type_mismatch"}
+    },
+    {
       "name": "delete-no-content",
       "description": "A delete (a deactivation, on the server) answered the way Octonomy answers every delete: 204 and no body.",
       "surfaces": ["v1", "v2"],
@@ -242,6 +314,15 @@
       "surfaces": ["v1", "v2"],
       "call": "delete",
       "status": 200,
+      "body": "",
+      "outcome": {"reason": "unexpected_delete_response"}
+    },
+    {
+      "name": "delete-answered-with-a-202",
+      "description": "A 202 is a 2xx, and still not the 204 the delete contract names.",
+      "surfaces": ["v1", "v2"],
+      "call": "delete",
+      "status": 202,
       "body": "",
       "outcome": {"reason": "unexpected_delete_response"}
     },
@@ -271,6 +352,24 @@
       "status": 409,
       "body": "{\"error\":{\"code\":\"a_code_from_the_future\",\"message\":\"Something new.\"}}",
       "outcome": {"reason": "api_error", "status": 409, "code": "a_code_from_the_future"}
+    },
+    {
+      "name": "error-envelope-code-case-kept",
+      "description": "Verbatim includes case: a code is not normalised.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 429,
+      "body": "{\"error\":{\"code\":\"Rate_Limited\",\"message\":\"Slow down.\"}}",
+      "outcome": {"reason": "api_error", "status": 429, "code": "Rate_Limited"}
+    },
+    {
+      "name": "error-envelope-without-message",
+      "description": "A code is what establishes the envelope; an envelope with a code and no message is still one.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 409,
+      "body": "{\"error\":{\"code\":\"conflict\"}}",
+      "outcome": {"reason": "api_error", "status": 409, "code": "conflict"}
     },
     {
       "name": "error-envelope-on-a-list",
@@ -413,6 +512,15 @@
       "outcome": {"reason": "api_error", "status": 503, "code": "not_ready"}
     },
     {
+      "name": "health-status-body-on-a-500",
+      "description": "not_ready comes from the body, whatever the non-2xx status: a 500 carrying the health view's status body is not_ready too.",
+      "surfaces": ["v1", "v2"],
+      "call": "health",
+      "status": 500,
+      "body": "{\"status\":\"unavailable\"}",
+      "outcome": {"reason": "api_error", "status": 500, "code": "not_ready"}
+    },
+    {
       "name": "health-bare-503",
       "description": "A 503 without that body is no more not_ready than a bare 404 is not_found.",
       "surfaces": ["v1", "v2"],
@@ -420,6 +528,24 @@
       "status": 503,
       "body": "<html>Service Unavailable</html>",
       "outcome": {"reason": "api_error", "status": 503, "code": "unexpected_status"}
+    },
+    {
+      "name": "health-503-empty-object",
+      "description": "A JSON object with no status is not the health view's body.",
+      "surfaces": ["v1", "v2"],
+      "call": "health",
+      "status": 503,
+      "body": "{}",
+      "outcome": {"reason": "api_error", "status": 503, "code": "unexpected_status"}
+    },
+    {
+      "name": "health-503-error-envelope",
+      "description": "A probe answered with an Octonomy error envelope keeps that envelope's code, as any call does.",
+      "surfaces": ["v1", "v2"],
+      "call": "health",
+      "status": 503,
+      "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Down for maintenance.\"}}",
+      "outcome": {"reason": "api_error", "status": 503, "code": "service_unavailable"}
     },
     {
       "name": "health-error-body-over-the-ceiling",
@@ -430,6 +556,16 @@
       "body": "{\"status\":\"unavailable\"}",
       "pad_to_bytes": 33554433,
       "outcome": {"reason": "api_error", "status": 503, "code": "unexpected_status", "wraps": "response_too_large"}
+    },
+    {
+      "name": "health-body-over-the-ceiling",
+      "description": "A 2xx probe over the ceiling is refused like any other 2xx, and is not an API error.",
+      "surfaces": ["v1"],
+      "call": "health",
+      "status": 200,
+      "body": "{\"status\":\"ok\"}",
+      "pad_to_bytes": 33554433,
+      "outcome": {"reason": "response_too_large"}
     },
     {
       "name": "health-empty-object",
@@ -448,6 +584,15 @@
       "status": 200,
       "body": "{\"status\":\"   \"}",
       "outcome": {"reason": "health_status_missing"}
+    },
+    {
+      "name": "health-empty-body",
+      "description": "A 2xx probe with no body at all.",
+      "surfaces": ["v1", "v2"],
+      "call": "health",
+      "status": 200,
+      "body": "",
+      "outcome": {"reason": "health_status_missing"}
     }
   ],
   "request": [
@@ -465,6 +610,14 @@
       "surfaces": ["v1"],
       "call": "list",
       "options": [{"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "namespace_requires_v2"}
+    },
+    {
+      "name": "v1-namespaced-create",
+      "description": "The v1 refusal does not depend on the call: a write that names a namespace is refused on v1 too.",
+      "surfaces": ["v1"],
+      "call": "create",
+      "options": [{"namespace": ["merchant", "m-1"]}],
       "outcome": {"reason": "namespace_requires_v2"}
     },
     {
@@ -492,11 +645,36 @@
       "outcome": {"reason": "sent", "namespace": ["merchant", "m-1"], "application_id": "storefront", "include_global": false}
     },
     {
+      "name": "v2-namespaced-get",
+      "description": "A namespaced single-resource read that names its application.",
+      "surfaces": ["v2"],
+      "call": "get",
+      "options": [{"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "sent", "namespace": ["merchant", "m-1"], "application_id": "storefront", "include_global": false}
+    },
+    {
+      "name": "v2-namespaced-delete",
+      "description": "A namespaced delete that names its application: the option is how a bodyless delete names one.",
+      "surfaces": ["v2"],
+      "call": "delete",
+      "options": [{"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "sent", "namespace": ["merchant", "m-1"], "application_id": "storefront", "include_global": false}
+    },
+    {
       "name": "v2-namespaced-read-application-from-params",
       "description": "The application may come from the call's own parameters instead of the option.",
       "surfaces": ["v2"],
       "call": "list",
       "params": {"application_id": "storefront"},
+      "options": [{"namespace": ["merchant", "m-1"]}],
+      "outcome": {"reason": "sent", "namespace": ["merchant", "m-1"], "application_id": "storefront", "include_global": false}
+    },
+    {
+      "name": "v2-namespaced-resolve-application-from-params",
+      "description": "Resolution takes its application from its own parameters too.",
+      "surfaces": ["v2"],
+      "call": "resolve",
+      "params": {"application_id": "storefront", "scope": "global"},
       "options": [{"namespace": ["merchant", "m-1"]}],
       "outcome": {"reason": "sent", "namespace": ["merchant", "m-1"], "application_id": "storefront", "include_global": false}
     },
@@ -550,6 +728,14 @@
       "outcome": {"reason": "namespace_type_required"}
     },
     {
+      "name": "namespace-type-whitespace",
+      "description": "A namespace type of only whitespace names no type.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "options": [{"namespace": ["  ", "m-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "namespace_type_required"}
+    },
+    {
       "name": "namespace-id-blank",
       "description": "A namespace type with no id: half a pair.",
       "surfaces": ["v2"],
@@ -566,11 +752,27 @@
       "outcome": {"reason": "namespace_type_reserved"}
     },
     {
+      "name": "namespace-type-reserved-is-case-sensitive",
+      "description": "Namespace values are opaque and not case-folded, on the client as on the server: \"Global\" is an ordinary type, and only \"global\" is reserved.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "options": [{"namespace": ["Global", "g-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "sent", "namespace": ["Global", "g-1"], "application_id": "storefront", "include_global": false}
+    },
+    {
       "name": "two-namespaces",
       "description": "Two different namespaces on one request are a contradiction, never last-wins: last-wins on this axis is a cross-merchant read.",
       "surfaces": ["v2"],
       "call": "list",
       "options": [{"namespace": ["merchant", "m-1"]}, {"namespace": ["merchant", "m-2"]}, {"application": "storefront"}],
+      "outcome": {"reason": "namespace_contradiction"}
+    },
+    {
+      "name": "two-namespaces-differing-in-type",
+      "description": "Two namespaces with the same id and different types are as contradictory as two ids.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "options": [{"namespace": ["merchant", "m-1"]}, {"namespace": ["store", "m-1"]}, {"application": "storefront"}],
       "outcome": {"reason": "namespace_contradiction"}
     },
     {
@@ -580,6 +782,14 @@
       "call": "list",
       "options": [{"namespace": ["merchant", "m-1"]}, {"namespace": ["merchant", "m-1"]}, {"application": "storefront"}],
       "outcome": {"reason": "sent", "namespace": ["merchant", "m-1"], "application_id": "storefront", "include_global": false}
+    },
+    {
+      "name": "namespace-sent-verbatim",
+      "description": "A namespace goes out exactly as written, case included.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "options": [{"namespace": ["Merchant", "M-1"]}, {"application": "storefront"}],
+      "outcome": {"reason": "sent", "namespace": ["Merchant", "M-1"], "application_id": "storefront", "include_global": false}
     },
     {
       "name": "namespace-replaced-through-global",
@@ -632,6 +842,15 @@
       "outcome": {"reason": "application_contradiction"}
     },
     {
+      "name": "application-agrees-with-params",
+      "description": "An option naming the same application as the call's own parameter contradicts nothing, and the parameter is sent once.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "params": {"application_id": "storefront"},
+      "options": [{"application": "storefront"}],
+      "outcome": {"reason": "sent", "namespace": null, "application_id": "storefront", "include_global": false}
+    },
+    {
       "name": "application-option-on-create",
       "description": "On a write the body's application is authoritative and the server may drop the query value, so the option is refused rather than sometimes ignored.",
       "surfaces": ["v1", "v2"],
@@ -662,6 +881,30 @@
       "call": "create",
       "options": [{"include_global": true}],
       "outcome": {"reason": "include_global_on_write"}
+    },
+    {
+      "name": "v2-include-global-on-update",
+      "description": "The same for an update.",
+      "surfaces": ["v2"],
+      "call": "update",
+      "options": [{"include_global": true}],
+      "outcome": {"reason": "include_global_on_write"}
+    },
+    {
+      "name": "v2-include-global-on-delete",
+      "description": "And for a delete: it is not a safe method, so the server would not read include_global on it either.",
+      "surfaces": ["v2"],
+      "call": "delete",
+      "options": [{"include_global": true}],
+      "outcome": {"reason": "include_global_on_write"}
+    },
+    {
+      "name": "v2-include-global-without-namespace",
+      "description": "include_global needs a v2 client, not a namespace: on a global read it is sent, and the server decides what it adds.",
+      "surfaces": ["v2"],
+      "call": "list",
+      "options": [{"include_global": true}],
+      "outcome": {"reason": "sent", "namespace": null, "application_id": null, "include_global": true}
     },
     {
       "name": "v2-namespaced-read-including-global",
