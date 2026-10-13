@@ -25,12 +25,15 @@ guards against a response that decodes to nothing. It is the first minor this li
   `WithApplication` and `WithIncludeGlobal` scope any request, and a request whose own scoping
   contradicts itself or the client's API version is refused before it is sent — a namespace on an
   `APIV1` client among them.
-- **Your code still compiles.** Every declaration `1.0.0` exported is here with the same type and
-  signature (`make compat-diff` checks each one), and the `*Update` structs keep their pointer
-  fields: `TagUpdate{IsActive: octonomy.Bool(false)}` compiles as it did, and `String`, `Bool` and
-  `Int` stay. The one exception is Go's own caveat for any minor: an *unkeyed* composite literal of
-  a struct that gained a field — `Config`, `Tag`, `Vocabulary`, `VocabularyListParams`, or
-  `APIError` — stops compiling. Keyed literals are unaffected.
+- **Nothing `1.0.0` exported was removed or changed.** Every declaration it exported is here with
+  the same type and signature (`make compat-diff` checks each one); this release only adds. The
+  `*Update` structs keep their pointer fields: `TagUpdate{IsActive: octonomy.Bool(false)}` compiles
+  as it did, and `String`, `Bool` and `Int` stay. What an addition can still break is what it can
+  break in any Go minor: an *unkeyed* composite literal of a struct that gained a field — `Config`,
+  `Tag`, `Vocabulary`, `VocabularyListParams`, or `APIError` — stops compiling (keyed literals are
+  unaffected); a caller's struct that embeds one of this package's types beside another type
+  declaring a name this release added can find that selector ambiguous; and a dot-import can
+  collide with a new name.
 - **What an existing caller can see change, on `/api/v1` as well** — each described under *Fixed*:
   - **`IsNotFound` is no longer true for a bare 404.** The status-to-code mapping
     (`codeFromStatus`) is removed on **both** API versions, not only on `/api/v2`: a non-2xx with no
@@ -39,8 +42,10 @@ guards against a response that decodes to nothing. It is the first minor this li
     envelope's code is still reported verbatim, so a real `not_found` is still `IsNotFound`.
   - **A decoded resource with a blank identity is an error**, not a zero value (#40's guard): a
     `{"data": {}}`, a null or renamed `id`, or an id-less list row.
-  - **Response bodies are bounded at 32 MiB**, reported as `ErrResponseTooLarge`; a non-2xx that
-    trips it is still an `*APIError`, and `errors.Is` finds `ErrResponseTooLarge` through it.
+  - **Response bodies are bounded at 32 MiB**, reported as `ErrResponseTooLarge`.
+  - **A non-2xx whose body cannot be read is an `*APIError`** carrying `CodeUnexpectedStatus` and
+    the status, where `1.0.0` returned a plain `read response body` error; the read failure is
+    wrapped, so `errors.Is` still finds it — `ErrResponseTooLarge` when the body was too large.
   - **`TagUpdate{Metadata: Metadata{}}` empties the stored metadata** (`VocabularyUpdate` too); in
     `1.0.0` it sent no `metadata` key, and the stored object stayed as it was.
   - **A list whose `pagination` block has a `limit` below 1 is an error**, **`Delete` requires the
@@ -68,7 +73,8 @@ guards against a response that decodes to nothing. It is the first minor this li
     and struct tags, comparability, interface method sets — so it sees a changed default or a
     changed tag that a symbol-name diff would report as parity. A difference not listed in
     `tools/compatdiff/carveouts.txt` fails, and so does a listed one that no longer exists.
-  - **Compatibility with every published release of this line** — `v1.0.0` today. Every
+  - **Compatibility with every published release of this line** — `v1.0.0`, the only one before
+    this release. Every
     declaration it exported must still be here unchanged, with no exception list, since this line
     can never publish a major. Every `v1.*` tag must be named in the pin file, so a release's
     follow-up pin cannot be forgotten.
@@ -552,6 +558,13 @@ guards against a response that decodes to nothing. It is the first minor this li
 - **Response bodies are bounded.** `v1.0.0` read every body with an unbounded `ioutil.ReadAll`, so
   one response could grow the client's memory without limit. The ceiling is 32 MiB
   (`ErrResponseTooLarge`, above).
+- **A non-2xx whose body cannot be read is still an `*APIError`.** `v1.0.0` returned a plain
+  `octonomy: read response body` error when reading a response failed, whatever its status, so a
+  `503` whose body was cut off stopped satisfying `AsAPIError` while every other `503` kept working.
+  A non-2xx now becomes an `*APIError` with its `StatusCode`, `CodeUnexpectedStatus` (an unread body
+  cannot have carried a code), and the read failure wrapped, so `errors.Is` finds it — and
+  `ErrResponseTooLarge`, for a body over the ceiling. A 2xx whose body cannot be read is still a
+  plain error.
 - **Two Go 1.13 hazards no longer reach the process.** Go 1.13's `encoding/json` has no cycle
   detection and no depth limit: probed on go1.13.15, a `Metadata` that contains itself hangs
   `json.Marshal`, and a deeply nested response decodes until the stack is exhausted — a fatal runtime

@@ -136,7 +136,7 @@ $ go list -m github.com/octoverse-id/octonomy-go/v2@latest
 
 Every resource group the vendored contracts publish is on this tree. What remains are deliberate
 differences from the modern line — permanent, or not planned — and the second column says which;
-[epic #88](https://github.com/octoverse-id/octonomy-go/issues/88) tracks the rest of the parity work.
+[epic #88](https://github.com/octoverse-id/octonomy-go/issues/88) records how this line reached parity.
 The table is the reasons, in brief; [`COMPAT.md`](../COMPAT.md) is the complete list, declaration by
 declaration, and `make compat-diff` fails on a difference it does not list.
 
