@@ -531,7 +531,7 @@
     },
     {
       "name": "health-nesting-at-the-limit",
-      "description": "The probe decodes under the same limit: a status body nested exactly 10000 levels deep (here 9998 brackets inside the outer object and a key) is decoded.",
+      "description": "The probe decodes under the same limit: a status body nested exactly 10000 levels deep (here 9999 opening brackets inside the outer object, which is level 1) is decoded.",
       "surfaces": ["v1", "v2"],
       "call": "health",
       "status": 200,
