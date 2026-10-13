@@ -159,7 +159,7 @@ left implying an installable version that never existed.
 
 | Line | First release | State |
 | ---- | ------------- | ----- |
-| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` | Released. Taking capability parity with `main` ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)); never a major; sunset 2027-08-31 |
+| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` | Released. Reached capability parity with `main` at 5e40964 in `v1.1.0` ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)), and ports what `main` adds after it; never a major; sunset 2027-08-31 |
 | **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.1` | Released, and moving on its own schedule. [`main`'s release state](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md#release-state) is the record; the `go list -m` query under [Adopting the modern line](#adopting-the-modern-line) is what settles what a fresh `go get` would pick |
 
 Nothing this line publishes can be withdrawn, `v1.0.0` included: `retract` shipped in Go 1.16, so a
@@ -198,7 +198,7 @@ Backward-compatible **additions** to the exported API.
   names — constant values, signatures, field types, struct tags and the order of exported fields,
   comparability, interface method sets — and fails on any declaration a release exported that is
   not still here unchanged. It has no
-  exception list. It does not see the unkeyed-literal caveat above, which an added field causes and
+  exception list; it does not compare the value of `Version`, which names the release. It does not see the unkeyed-literal caveat above, which an added field causes and
   which this rule already accepts, nor a change of behaviour behind an unchanged declaration.
 - **On the compat line a minor is the only way an addition ships**, and the parity work does ship
   this way. The line took no minors until [#89](https://github.com/octoverse-id/octonomy-go/issues/89)

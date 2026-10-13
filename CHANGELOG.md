@@ -25,8 +25,10 @@ guards against a response that decodes to nothing. It is the first minor this li
   `WithApplication` and `WithIncludeGlobal` scope any request, and a request whose own scoping
   contradicts itself or the client's API version is refused before it is sent — a namespace on an
   `APIV1` client among them.
-- **Nothing `1.0.0` exported was removed or changed.** Every declaration it exported is here with
-  the same type and signature (`make compat-diff` checks each one); this release only adds. The
+- **Nothing `1.0.0` exported was removed or changed, except `Version`'s value.** Every declaration
+  it exported is here with the same type and signature, and every constant with the same value
+  (`make compat-diff` checks each one); the exported API only adds. `Version` names the release, so
+  it reads `1.1.0`, and the default `User-Agent` built from it is now `octonomy-go/1.1.0`. The
   `*Update` structs keep their pointer fields: `TagUpdate{IsActive: octonomy.Bool(false)}` compiles
   as it did, and `String`, `Bool` and `Int` stay. What an addition can still break is what it can
   break in any Go minor: an *unkeyed* composite literal of a struct that gained a field — `Config`,
@@ -34,7 +36,8 @@ guards against a response that decodes to nothing. It is the first minor this li
   unaffected); a caller's struct that embeds one of this package's types beside another type
   declaring a name this release added can find that selector ambiguous; and a dot-import can
   collide with a new name.
-- **What an existing caller can see change, on `/api/v1` as well** — each described under *Fixed*:
+- **What an existing caller can see change, on `/api/v1` as well** — the fixes among them are
+  described under *Fixed*:
   - **`IsNotFound` is no longer true for a bare 404.** The status-to-code mapping
     (`codeFromStatus`) is removed on **both** API versions, not only on `/api/v2`: a non-2xx with no
     Octonomy error envelope now carries `CodeUnexpectedStatus`, and `IsValidation`, `IsAuthError`,
@@ -50,9 +53,16 @@ guards against a response that decodes to nothing. It is the first minor this li
     `1.0.0` it sent no `metadata` key, and the stored object stayed as it was.
   - **A list whose `pagination` block has a `limit` below 1 is an error**, **`Delete` requires the
     `204` Octonomy answers it with**, **a nil `RequestOption` is an error** rather than a panic, and
-    **a response nested past 10,000 levels, or a request `Metadata` that contains itself, is
-    refused** rather than exhausting Go 1.13's stack or hanging its encoder. None of the four
-    changes what a well-formed call to an Octonomy server returns.
+    **a response or request body nested past 10,000 levels — which a `Metadata` that contains
+    itself always is — is refused** rather than exhausting Go 1.13's stack or hanging its encoder.
+    None of the four changes what a well-formed call to an Octonomy server returns.
+  - **On a modern Go, a `Metadata` that contains itself no longer unwraps to
+    `*json.UnsupportedValueError`.** `1.0.0` left that cycle to `json.Marshal`, which detects it
+    there (and hangs on Go 1.13); this release refuses it before encoding, with an error of its own.
+  - **Error text is not API.** Several responses that were already errors under `1.0.0` — a
+    `{"data": null}`, an array where one resource belongs, a list whose `data` or `pagination` has
+    the wrong JSON type — are now refused by an earlier check with a different message. Branch on
+    `errors.Is`, `errors.As` and the `Is*` helpers, never on a message.
 - **Six new resource groups**: tag aliases, tag resolution, assignments, resource tags, audit logs,
   and the health probes — plus `Each`, `BuildTagTree`, `DecodeMetadata`, `WithRequestID`, and the
   `q` / `slug` vocabulary filters.
@@ -76,7 +86,8 @@ guards against a response that decodes to nothing. It is the first minor this li
   - **Compatibility with every published release of this line** — `v1.0.0`, the only one before
     this release. Every
     declaration it exported must still be here unchanged, with no exception list, since this line
-    can never publish a major. Every `v1.*` tag must be named in the pin file, so a release's
+    can never publish a major; the one thing it does not compare is the value of `Version`, which
+    names the release. Every `v1.*` tag must be named in the pin file, so a release's
     follow-up pin cannot be forgotten.
 
   `make compat-diff` runs both, and fails on a `COMPAT.md` that is not what they produce; `make
@@ -576,7 +587,9 @@ guards against a response that decodes to nothing. It is the first minor this li
   responses. Both are proven
   in child processes, since the unguarded case cannot be observed from inside the process it kills.
   `main` had no counterpart when this was written: a modern `encoding/json` detects encoding cycles
-  and bounds decoding depth itself.
+  and bounds decoding depth itself. One consequence there: built with a modern Go, `1.0.0` returned
+  the encoder's `*json.UnsupportedValueError` for a `Metadata` that contains itself, and this release
+  returns its own error instead, from the walk that runs first on every toolchain.
 - **A list whose `pagination` block is unusable is an error.** The first release required only that
   the key be present and not null, so `{"data": [], "pagination": {}}` decoded to a page with
   `Limit` 0 and `Count` 0 — "one page, nothing after it" to a caller paging on `Count` — with a nil
