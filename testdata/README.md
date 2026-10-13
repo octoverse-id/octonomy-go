@@ -63,7 +63,7 @@ which one an implementation reports first is not something these vectors pin.
 
 | Reason | Meaning |
 | ------ | ------- |
-| `ok` | the call succeeds. A `list` outcome carries `rows`; a `health` outcome carries `health_status`, the word the server sent |
+| `ok` | the call succeeds, and carries what arrived: a `get` outcome the decoded `id`, a `list` outcome the decoded `ids` in order (`[]` for none), a `health` outcome `health_status`, the word the server sent. A `delete` outcome carries nothing |
 | `api_error` | the call fails with the API error type, carrying `status`, `code` (the envelope's code verbatim, `unexpected_status` without one, `not_ready` for a probe that answered with its own status body), `request_id` when the envelope carried one, and `wraps: response_too_large` when the body was over the ceiling |
 | `envelope_missing` | a 2xx with no body, or with no `data` key |
 | `not_a_resource` | a resource position holding `null`, an array, a scalar, or `{}` |
@@ -100,6 +100,10 @@ The `description` of each vector that names one says what it means.
   response (or, for a request vector, answers any well-formed request
   successfully), and require exactly one request for a response vector, and one
   or none for a request vector — none exactly when it was refused.
+- Require that request to be the one the call stands for, on the surface the
+  vector names: under `/api/v1` or `/api/v2`, or the readiness probe, which sits
+  outside both. A vector that passes on a request to another route proves
+  nothing about its own.
 - Recognise every outcome as **exactly one** reason. An error no reason
   recognises, or one that two recognise, is a failure, never the nearest match.
 - Read the file strictly: an unknown key, call, surface, option or reason is an

@@ -9,7 +9,7 @@
       "call": "get",
       "status": 200,
       "body": "{\"data\":{\"id\":\"t-1\",\"slug\":\"summer-sale\"}}",
-      "outcome": {"reason": "ok"}
+      "outcome": {"reason": "ok", "id": "t-1"}
     },
     {
       "name": "single-resource-empty-body",
@@ -108,7 +108,7 @@
       "call": "list",
       "status": 200,
       "body": "{\"data\":[{\"id\":\"t-1\",\"slug\":\"a\"},{\"id\":\"t-2\",\"slug\":\"b\"}],\"pagination\":{\"limit\":50,\"offset\":0,\"count\":2,\"next\":null}}",
-      "outcome": {"reason": "ok", "rows": 2}
+      "outcome": {"reason": "ok", "ids": ["t-1", "t-2"]}
     },
     {
       "name": "list-empty-page",
@@ -117,16 +117,16 @@
       "call": "list",
       "status": 200,
       "body": "{\"data\":[],\"pagination\":{\"limit\":50,\"offset\":0,\"count\":0,\"next\":null}}",
-      "outcome": {"reason": "ok", "rows": 0}
+      "outcome": {"reason": "ok", "ids": []}
     },
     {
       "name": "list-data-null",
-      "description": "A present-but-null data array means no rows, as [] does. Whether a binding exposes it as an empty or an absent collection is that line's own business; the vector pins only the row count.",
+      "description": "A present-but-null data array means no rows, as [] does. Whether a binding exposes it as an empty or an absent collection is that line's own business; the vector pins only that no rows arrived.",
       "surfaces": ["v1", "v2"],
       "call": "list",
       "status": 200,
       "body": "{\"data\":null,\"pagination\":{\"limit\":50,\"offset\":0,\"count\":0,\"next\":null}}",
-      "outcome": {"reason": "ok", "rows": 0}
+      "outcome": {"reason": "ok", "ids": []}
     },
     {
       "name": "list-without-data",
@@ -343,7 +343,7 @@
       "status": 200,
       "body": "{\"data\":{\"id\":\"t-1\",\"slug\":\"summer-sale\"}}",
       "pad_to_bytes": 33554432,
-      "outcome": {"reason": "ok"}
+      "outcome": {"reason": "ok", "id": "t-1"}
     },
     {
       "name": "body-over-the-ceiling",
@@ -373,7 +373,7 @@
       "status": 200,
       "body": "{\"data\":{\"id\":\"t-1\",\"metadata\":{\"deep\":@NEST@}}}",
       "nest": {"placeholder": "@NEST@", "depth": 9997},
-      "outcome": {"reason": "ok"}
+      "outcome": {"reason": "ok", "id": "t-1"}
     },
     {
       "name": "nesting-past-the-limit",

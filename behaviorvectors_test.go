@@ -65,13 +65,14 @@ type nestSpec struct {
 // responseOutcome is both what a vector expects and what the binding observed,
 // so the two compare with reflect.DeepEqual and print the same way.
 type responseOutcome struct {
-	Reason       string  `json:"reason"`
-	Status       int     `json:"status,omitempty"`
-	Code         string  `json:"code,omitempty"`
-	RequestID    string  `json:"request_id,omitempty"`
-	Wraps        string  `json:"wraps,omitempty"`
-	Rows         *int    `json:"rows,omitempty"`
-	HealthStatus *string `json:"health_status,omitempty"`
+	Reason       string   `json:"reason"`
+	Status       int      `json:"status,omitempty"`
+	Code         string   `json:"code,omitempty"`
+	RequestID    string   `json:"request_id,omitempty"`
+	Wraps        string   `json:"wraps,omitempty"`
+	ID           *string  `json:"id,omitempty"`
+	IDs          []string `json:"ids,omitempty"`
+	HealthStatus *string  `json:"health_status,omitempty"`
 }
 
 type requestVector struct {
@@ -291,8 +292,13 @@ func (v responseVector) validate() error {
 		if o.Status != 0 || o.Code != "" || o.RequestID != "" || o.Wraps != "" {
 			return errors.New("an ok outcome carries no status, code, request_id or wraps")
 		}
-		if (o.Rows != nil) != (v.Call == "list") {
-			return errors.New("an ok outcome carries rows exactly when the call is list")
+		// What arrived is part of the outcome, so a transport that ran every guard
+		// and then handed back a zero value cannot read as ok.
+		if (o.ID != nil) != (v.Call == "get") {
+			return errors.New("an ok outcome carries id exactly when the call is get")
+		}
+		if (o.IDs != nil) != (v.Call == "list") {
+			return errors.New("an ok outcome carries ids exactly when the call is list")
 		}
 		if (o.HealthStatus != nil) != (v.Call == "health") {
 			return errors.New("an ok outcome carries health_status exactly when the call is health")
@@ -304,11 +310,11 @@ func (v responseVector) validate() error {
 		if o.Wraps != "" && o.Wraps != "response_too_large" {
 			return fmt.Errorf("wraps %q is not a reason an api_error can carry", o.Wraps)
 		}
-		if o.Rows != nil || o.HealthStatus != nil {
-			return errors.New("an api_error outcome carries no rows or health_status")
+		if o.ID != nil || o.IDs != nil || o.HealthStatus != nil {
+			return errors.New("an api_error outcome carries no id, ids or health_status")
 		}
 	default:
-		if o != (responseOutcome{Reason: o.Reason}) {
+		if !reflect.DeepEqual(o, responseOutcome{Reason: o.Reason}) {
 			return fmt.Errorf("a %s outcome carries nothing but its reason", o.Reason)
 		}
 	}
@@ -444,6 +450,31 @@ func vectorClient(srv *httptest.Server, surface APIVersion, tweak func(*Client))
 	return c, nil
 }
 
+// vectorRoute is the one request each call makes, under the surface the vector
+// names -- checked on every run, so a vector cannot pass on a request that went
+// to another surface or another route than the one its call stands for. The
+// health probe sits outside /api/<version> by design.
+func vectorRoute(call string, surface APIVersion) string {
+	api := "/api/" + string(surface)
+	switch call {
+	case "get":
+		return "GET " + api + "/tags/t-1"
+	case "update":
+		return "PATCH " + api + "/tags/t-1"
+	case "delete":
+		return "DELETE " + api + "/tags/t-1"
+	case "list":
+		return "GET " + api + "/tags"
+	case "create":
+		return "POST " + api + "/tags"
+	case "resolve":
+		return "GET " + api + "/tag-resolution"
+	case "health":
+		return "GET /health/ready"
+	}
+	return "unknown call " + call
+}
+
 // runResponseVector answers the vector's call with its canned response and
 // reports what the client made of it. An error return means the run itself went
 // wrong -- the server was not asked exactly once, or the outcome could not be
@@ -454,11 +485,11 @@ func runResponseVector(v responseVector, surface APIVersion, tweak func(*Client)
 		nested := strings.Repeat("[", v.Nest.Depth) + strings.Repeat("]", v.Nest.Depth)
 		body = []byte(strings.Replace(*v.Body, v.Nest.Placeholder, nested, 1))
 	}
-	var hits int
 	var mu sync.Mutex
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		hits++
+		seen = append(seen, r.Method+" "+r.URL.Path)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(v.Status)
@@ -483,14 +514,20 @@ func runResponseVector(v responseVector, surface APIVersion, tweak func(*Client)
 	var callErr error
 	switch v.Call {
 	case "get":
-		_, callErr = c.Tags.Get(ctx, "t-1")
-		got = responseOutcome{Reason: "ok"}
+		var tag *Tag
+		tag, callErr = c.Tags.Get(ctx, "t-1")
+		if callErr == nil {
+			got = responseOutcome{Reason: "ok", ID: &tag.ID}
+		}
 	case "list":
 		var page *List[Tag]
 		page, callErr = c.Tags.List(ctx, nil)
 		if callErr == nil {
-			rows := len(page.Data)
-			got = responseOutcome{Reason: "ok", Rows: &rows}
+			ids := make([]string, 0, len(page.Data))
+			for _, row := range page.Data {
+				ids = append(ids, row.ID)
+			}
+			got = responseOutcome{Reason: "ok", IDs: ids}
 		}
 	case "delete":
 		callErr = c.Tags.Delete(ctx, "t-1")
@@ -506,10 +543,10 @@ func runResponseVector(v responseVector, surface APIVersion, tweak func(*Client)
 		return responseOutcome{}, fmt.Errorf("unknown call %q", v.Call)
 	}
 	mu.Lock()
-	n := hits
+	routes := append([]string(nil), seen...)
 	mu.Unlock()
-	if n != 1 {
-		return responseOutcome{}, fmt.Errorf("the server was asked %d times, want exactly once (err: %v)", n, callErr)
+	if want := vectorRoute(v.Call, surface); len(routes) != 1 || routes[0] != want {
+		return responseOutcome{}, fmt.Errorf("the server was asked %q, want exactly %q once (err: %v)", routes, want, callErr)
 	}
 	if callErr == nil {
 		return got, nil
@@ -660,6 +697,9 @@ func runRequestVector(v requestVector, surface APIVersion, tweak func(*Client)) 
 	mu.Unlock()
 	switch {
 	case callErr == nil && len(requests) == 1:
+		if got, want := requests[0].Method+" "+requests[0].URL.Path, vectorRoute(v.Call, surface); got != want {
+			return requestOutcome{}, fmt.Errorf("the request went to %q, want %q", got, want)
+		}
 		return observeSent(requests[0])
 	case callErr != nil && len(requests) == 0:
 		return classifyRefusal(callErr)
@@ -779,11 +819,10 @@ func TestBehaviorVectorsCatchADeviation(t *testing.T) {
 		if !ok {
 			t.Fatalf("no request vector %q: this proof needs it", tc.vector)
 		}
+		// A run error is a failure in TestBehaviorVectors too, so it counts as
+		// noticed: moving the surface under a sent vector shows up as the wrong route.
 		got, err := runRequestVector(v, APIVersion(v.Surfaces[0]), tc.tweak)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.vector, err)
-		}
-		if reflect.DeepEqual(got, v.Outcome) {
+		if err == nil && reflect.DeepEqual(got, v.Outcome) {
 			t.Errorf("%s still matched %s on the other surface: the vectors would not notice the change", tc.vector, got)
 		}
 	}
@@ -826,7 +865,9 @@ func TestBehaviorVectorsFileIsStrict(t *testing.T) {
 		{"an unknown call", `"call": "delete",`, `"call": "remove",`},
 		{"an unknown option", `{"global_namespace": true}`, `{"globalnamespace": true}`},
 		{"a param the call does not take", `"params": {"scope": "merchant"},`, `"params": {"scope": "merchant", "slug": "x"},`},
-		{"rows missing from a list", `"outcome": {"reason": "ok", "rows": 0}`, `"outcome": {"reason": "ok"}`},
+		{"ids missing from a list", `"outcome": {"reason": "ok", "ids": []}`, `"outcome": {"reason": "ok"}`},
+		{"id missing from a get", `"outcome": {"reason": "ok", "id": "t-1"}`, `"outcome": {"reason": "ok"}`},
+		{"the retired rows field", `"outcome": {"reason": "ok", "ids": []}`, `"outcome": {"reason": "ok", "ids": [], "rows": 0}`},
 		{"a reason nothing names", `"outcome": {"reason": "depth_exceeded"}`, `"outcome": {"reason": "malformed_json"}`},
 	}
 	for _, m := range mutations {
