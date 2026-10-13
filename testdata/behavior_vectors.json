@@ -712,6 +712,15 @@
       "outcome": {"reason": "namespace_requires_application"}
     },
     {
+      "name": "v2-namespaced-resolve-without-application",
+      "description": "Resolution is a bodyless read like any other: namespaced, it must name its application.",
+      "surfaces": ["v2"],
+      "call": "resolve",
+      "params": {"scope": "global"},
+      "options": [{"namespace": ["merchant", "m-1"]}],
+      "outcome": {"reason": "namespace_requires_application"}
+    },
+    {
       "name": "v2-namespaced-create",
       "description": "A write carries its application in its body, which the transport does not inspect; it is sent, and the server decides.",
       "surfaces": ["v2"],
