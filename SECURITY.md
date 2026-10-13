@@ -17,7 +17,8 @@ resource groups, `/api/v2` and the namespace axis. The security-fixes-only freez
 `v1.0.0` was withdrawn in #89; see the support policy in [docs/versioning.md](docs/versioning.md).
 Two things never come here: a **webhook receiver**, and a **breaking change** — the line's
 unsuffixed module path can never publish a major, so every `1.x` keeps `v1.0.0` code compiling
-(unkeyed struct literals aside — see the MINOR rule in [docs/versioning.md](docs/versioning.md)). If
+(less the caveats any Go minor carries, unkeyed struct literals chief among them — see the MINOR
+rule in [docs/versioning.md](docs/versioning.md)). If
 you need either, the upgrade is to the `/v2` module on a current Go toolchain —
 [`main`'s README](https://github.com/octoverse-id/octonomy-go/blob/main/README.md) states the floor
 it requires today.

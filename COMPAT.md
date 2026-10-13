@@ -21,8 +21,8 @@ something this file does not account for:
    longer exists.
 2. **Compatibility with this line's published releases.** Every feature each one exported is
    still here, unchanged, and so is the order of each struct's exported fields, so code that
-   compiled against it compiles against this line -- except
-   an unkeyed struct literal, which any minor release may break ([`docs/versioning.md`](docs/versioning.md),
+   compiled against it compiles against this line -- except in the ways any minor release may
+   break it, an unkeyed struct literal chief among them ([`docs/versioning.md`](docs/versioning.md),
    the MINOR rule). This check has no exceptions:
 
    - [`v1.0.0`](https://github.com/octoverse-id/octonomy-go/tree/v1.0.0) (`ad3ced172994`): 150 features.

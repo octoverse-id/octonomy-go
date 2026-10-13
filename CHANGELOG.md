@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-13
+
+**The compat line speaks `/api/v2`.** This release brings the Go 1.13 line to capability parity with
+the `/v2` module ([epic #88](https://github.com/octoverse-id/octonomy-go/issues/88)): every resource
+group the Octonomy REST API publishes, the `/api/v2` surface with its namespace axis, and `main`'s
+guards against a response that decodes to nothing. It is the first minor this line has published.
+
+**Upgrading from `1.0.0`:**
+
+- **`/api/v1` is still the default here.** `Config.APIVersion` defaults to `APIV1` on this line
+  (`DefaultAPIVersion`), so a client that sets nothing sends every request `1.0.0` could make to
+  `/api/v1` after the upgrade, exactly as before. **The `/v2` module defaults to `APIV2`; this line
+  does not, and never will**, because it cannot change a default under a caller. Opt in with
+  `Config.APIVersion: octonomy.APIV2`, which needs an Octonomy server of 2.0 or later.
+- **`/api/v2` and namespace scoping are available, opt-in.** `WithNamespace`, `WithGlobalNamespace`,
+  `WithApplication` and `WithIncludeGlobal` are request options, each with the domain its doc
+  comment states: `WithNamespace` only on an `APIV2` client, `WithIncludeGlobal` only on a read from
+  one, `WithApplication` only on a request with no body, and `WithGlobalNamespace` on either
+  surface. A request whose own scoping contradicts itself or the client's API version is refused
+  before it is sent — a namespace on an `APIV1` client among them.
+- **Nothing `1.0.0` exported was removed or changed, except `Version`'s value.** Every declaration
+  it exported is here with the same type and signature, and every constant with the same value
+  (`make compat-diff` checks each one); the exported API only adds. `Version` names the release, so
+  it reads `1.1.0`, and the default `User-Agent` built from it is now `octonomy-go/1.1.0`. The
+  `*Update` structs keep their pointer fields: `TagUpdate{IsActive: octonomy.Bool(false)}` compiles
+  as it did, and `String`, `Bool` and `Int` stay. What an addition can still break is what it can
+  break in any Go minor — the caveats Go's own compatibility promise sets aside, which
+  [`docs/versioning.md`](docs/versioning.md)'s MINOR rule names. Chief among them, an *unkeyed*
+  composite literal of a struct that gained a field — `Config`, `Tag`, `Vocabulary`,
+  `VocabularyListParams`, or `APIError` — stops compiling, and so does a conversion between one of
+  those structs and a caller's own struct of its old shape; keyed literals are unaffected.
+- **What an existing caller can see change, on `/api/v1` as well** — each fix among them is
+  described in full in the *Fixed* section of `CHANGELOG.md`'s `1.1.0` entry:
+  - **`IsNotFound` is no longer true for a bare 404.** The status-to-code mapping
+    (`codeFromStatus`) is removed on **both** API versions, not only on `/api/v2`: a non-2xx with no
+    Octonomy error envelope now carries `CodeUnexpectedStatus`, and `IsValidation`, `IsAuthError`,
+    `IsForbidden` and `IsConflict` stop inferring their codes the same way. An Octonomy error
+    envelope's code is still reported verbatim, so a real `not_found` is still `IsNotFound`.
+  - **A decoded resource with a blank identity is an error**, not a zero value (#40's guard) — a
+    `{"data": {}}`, an `id` that is null, empty or renamed, and an id-less list row among them.
+  - **Response bodies are bounded at 32 MiB**, reported as `ErrResponseTooLarge`.
+  - **A non-2xx whose body cannot be read is an `*APIError`** carrying `CodeUnexpectedStatus` and
+    the status, where `1.0.0` returned a plain `read response body` error; the read failure is
+    wrapped, so `errors.Is` still finds it — `ErrResponseTooLarge` when the body was too large.
+  - **An id is escaped once in a request path.** `1.0.0` escaped it twice, so `Tags.Get(ctx, "a b")`
+    asked the server for `a%20b`; it now asks for `a b`. Server-minted ids never need escaping, so
+    no request for an existing row changes.
+  - **`TagUpdate{Metadata: Metadata{}}` empties the stored metadata** (`VocabularyUpdate` too); in
+    `1.0.0` it sent no `metadata` key, and the stored object stayed as it was.
+  - **A list whose `pagination` block has a `limit` below 1 is an error**, **`Delete` requires the
+    `204` Octonomy answers it with**, **a nil `RequestOption` is an error** rather than a panic, and
+    **a response nested past 10,000 levels is refused**, and so is **a request body that does** —
+    which a `Metadata` that contains itself always does — rather than exhausting Go 1.13's stack or
+    hanging its encoder. (A caller's own `json.Marshaler` inside a body, `json.RawMessage`
+    included, is not walked, and is sent as it marshals; [`COMPAT.md`](COMPAT.md) records it.) None
+    of the four changes what a well-formed call to an Octonomy server returns.
+  - **On a modern Go, a request carrying a `Metadata` that contains itself no longer fails with
+    `*json.UnsupportedValueError`.** `1.0.0` left that cycle to `json.Marshal`, which detects it
+    there (and hangs on Go 1.13); a client method now refuses it before encoding, with an error of
+    its own. Calling `json.Marshal` on a `TagUpdate` or `VocabularyUpdate` yourself is unchanged.
+  - **Some responses that were already errors fail differently.** A single resource's
+    `{"data": null}`, a list whose `data` or `pagination` has the wrong JSON type, and an array or a
+    scalar where a resource belongs — as the single resource, or as a list row — were each an error
+    under `1.0.0` and still are, with a different message. The last of those `1.0.0` reported with
+    the `*json.UnmarshalTypeError` the decode returned; a shape check now refuses it first with an
+    error of this package's own, so `errors.As` no longer finds that type there. Branch on this
+    package's sentinels, `*APIError` and the `Is*` helpers: neither a message nor an `encoding/json`
+    error type is part of this API.
+- **Six new resource groups**: tag aliases, tag resolution, assignments, resource tags, audit logs,
+  and the health probes — plus `Each`, `BuildTagTree`, `DecodeMetadata`, `WithRequestID`, and the
+  `q` / `slug` vocabulary filters.
+- **Known limitations**, listed declaration by declaration in [`COMPAT.md`](COMPAT.md): there is **no
+  webhook receiver** on this line (a consumer needing one moves to `/v2`), and a PATCH **cannot clear
+  a nullable field** — the pointer fields have no third state — except `Metadata`, as above.
+
 ### Added
 - **`COMPAT.md`, and the two checks that write it**
   ([#100](https://github.com/octoverse-id/octonomy-go/issues/100), the acceptance criterion of
@@ -16,13 +91,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field, the `/api/v1` default, the Go 1.13-only JSON depth guards — and the irreducible type-name
   delta. `tools/compatdiff`, a new standard-library-only tool module, writes it from two checks:
   - **Parity with `main`** at the commit `tools/compatdiff/baselines.pin` names. Every exported
-    declaration on each side is compared by type identity — constant values, signatures, field types
-    and struct tags, comparability, interface method sets — so it sees a changed default or a
-    changed tag that a symbol-name diff would report as parity. A difference not listed in
+    declaration on each side is compared by type identity — constant values (`Version`'s aside, as
+    in the check below), signatures, field types and struct tags, comparability, interface method
+    sets — so it sees a changed default or a changed tag that a symbol-name diff would report as
+    parity. A difference not listed in
     `tools/compatdiff/carveouts.txt` fails, and so does a listed one that no longer exists.
-  - **Compatibility with every published release of this line** — `v1.0.0` today. Every
+  - **Compatibility with every published release of this line** — `v1.0.0`, the only one before
+    this release. Every
     declaration it exported must still be here unchanged, with no exception list, since this line
-    can never publish a major. Every `v1.*` tag must be named in the pin file, so a release's
+    can never publish a major; the one thing it does not compare is the value of `Version`, which
+    names the release. Every `v1.*` tag must be named in the pin file, so a release's
     follow-up pin cannot be forgotten.
 
   `make compat-diff` runs both, and fails on a `COMPAT.md` that is not what they produce; `make
@@ -66,8 +144,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     error. `slices.Reverse` became two local helpers, and the doc comment's `slices.DeleteFunc` and
     `slices.SortFunc` examples are a loop and `sort.Slice`.
   - **`examples/`** gains `vocabularies`, `tags`, `aliases`, `resolution`, `assignments`,
-    `resources`, `audit-logs`, `health` and `namespaces`, and `quickstart` is rewritten — ten, one
-    per resource group plus the quickstart; `main`'s `webhook` is out by policy. Each was run against
+    `resources`, `audit-logs`, `health` and `namespaces`, and `quickstart` is rewritten — ten: one
+    per resource group, `namespaces`, and the quickstart. `main`'s `webhook` is out by policy. Each
+    was run against
     a booted `make dev-server`. They target this line's default `/api/v1`, except `namespaces`, which
     shows the `APIV2` opt-in and the refusal a v1 client gives `WithNamespace`. Where `main`'s
     clear a field with `Null`, these show what this line does instead, and where they read
@@ -440,8 +519,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Two things stay out, and are now written as policy rather than as terms of a freeze.** No
     webhook receiver — a consumer needing one moves to `/v2`. And **no major, ever**: the module path
     is unsuffixed, Go accepts only `v0`/`v1` versions on it, and `.../v2` is `main`'s module. So every
-    change here has to keep `v1.0.0` callers compiling — unkeyed struct literals aside, a caveat
-    `docs/versioning.md`'s MINOR rule now carries on this branch too — and two decisions follow for the
+    change here has to keep `v1.0.0` callers compiling — less the caveats any Go minor carries,
+    unkeyed struct literals chief among them, which `docs/versioning.md`'s MINOR rule now carries on
+    this branch too — and two decisions follow for the
     port: the `*Update` structs keep their pointer fields rather than taking `main`'s `Optional[T]`
     (so PATCH still cannot clear a nullable field here), and `/api/v2` arrives opt-in.
   - **`scripts/compat-guard.sh` refuses a major instead of a minor.** `compat_minor_violation`,
@@ -504,6 +584,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Response bodies are bounded.** `v1.0.0` read every body with an unbounded `ioutil.ReadAll`, so
   one response could grow the client's memory without limit. The ceiling is 32 MiB
   (`ErrResponseTooLarge`, above).
+- **A non-2xx whose body cannot be read is still an `*APIError`.** `v1.0.0` returned a plain
+  `octonomy: read response body` error when reading a response failed, whatever its status, so a
+  `503` whose body was cut off stopped satisfying `AsAPIError` while every other `503` kept working.
+  A non-2xx now becomes an `*APIError` with its `StatusCode`, `CodeUnexpectedStatus` (an unread body
+  cannot have carried a code), and the read failure wrapped, so `errors.Is` finds it — and
+  `ErrResponseTooLarge`, for a body over the ceiling. A 2xx whose body cannot be read is still a
+  plain error.
 - **Two Go 1.13 hazards no longer reach the process.** Go 1.13's `encoding/json` has no cycle
   detection and no depth limit: probed on go1.13.15, a `Metadata` that contains itself hangs
   `json.Marshal`, and a deeply nested response decodes until the stack is exhausted — a fatal runtime
@@ -515,7 +602,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   responses. Both are proven
   in child processes, since the unguarded case cannot be observed from inside the process it kills.
   `main` had no counterpart when this was written: a modern `encoding/json` detects encoding cycles
-  and bounds decoding depth itself.
+  and bounds decoding depth itself. One consequence there: built with a modern Go, `1.0.0` returned
+  the encoder's `*json.UnsupportedValueError` for a `Metadata` that contains itself, and this release
+  returns its own error instead, from the walk that runs first on every toolchain.
 - **A list whose `pagination` block is unusable is an error.** The first release required only that
   the key be present and not null, so `{"data": [], "pagination": {}}` decoded to a page with
   `Limit` 0 and `Count` 0 — "one page, nothing after it" to a caller paging on `Count` — with a nil
@@ -530,8 +619,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A nil `RequestOption` is an error, not a panic.** `v1.0.0` called every option unconditionally.
 - **A path segment is escaped once.** The first release assigned an already-escaped path to
   `url.URL.Path`, so `String()` escaped it again and an id of `a b` reached the server as the literal `a%20b`. Tag and
-  vocabulary ids are server-minted uuids, which never need escaping, so no call this tree could then
-  make was affected; the fix landed with the transport port because the resource groups #94 later
+  vocabulary ids are server-minted uuids, which never need escaping, so no request for an existing
+  row changed — an id that does need escaping named no row either way, and now reaches the server as
+  it was written. The fix landed with the transport port because the resource groups #94 later
   ported address rows by caller-chosen ids.
 - **The `vuln` CI job stopped running govulncheck at all, and took every merge with it.**
   `golang/govulncheck-action` installs `golang.org/x/vuln/cmd/govulncheck@latest` and offers no
@@ -561,14 +651,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up, and now prints which (`govulncheck -version`) before scanning. Both modules scan clean on
   go1.26.9 and on go1.27.2. `docs/development.md` and `docs/release.md` say why a local
   `make release-check` on go1.25 now fails `vuln`, and how to get CI's verdict on a laptop.
-- **Documentation only; no code change, and no version bump or tag is planned for it.** This branch
+- **Documentation only; no code change, and no release of its own.** This branch
   carried its own copies of `main`'s documentation, written when `main` was a `/api/v1`-only client
   with two resource groups, and they had aged into false statements about it — most harmfully a line
   in `docs/versioning.md` telling a reader **not** to adopt the `/v2` module if they wanted REST v2
   endpoints, which is now backwards. Descriptions of the modern line are replaced by links to `main`'s
   own files, so the same drift has nothing left to attach to (#51). Note the reach: pkg.go.dev
-  renders the README of the *released* version, so `v1.0.0`'s rendered page keeps the old text until
-  some other fix cuts a `v1.0.1`. This corrects what a reader sees on GitHub, which is where the two
+  renders the README of the *released* version, so `v1.0.0`'s rendered page keeps the old text, and
+  the corrected text reaches pkg.go.dev with this release. It corrected what a reader saw on GitHub
+  as soon as it merged, which is where the two
   lines get compared.
 - **CI comments no longer paraphrase branch protection.** Two comments in `.github/workflows/ci.yml`,
   and the matching prose in `docs/development.md` and in this file's `1.0.0` entry, described the
@@ -738,9 +829,10 @@ an installable version that never existed.
 - `WithActor` per-request option, and `String`/`Bool`/`Int` pointer helpers for optional fields.
 - Runnable `examples/quickstart` program and a vendored `docs/openapi.yaml` contract reference.
 
-[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v1.0.0...support/go1.13
+[Unreleased]: https://github.com/octoverse-id/octonomy-go/compare/v1.1.0...support/go1.13
+[1.1.0]: https://github.com/octoverse-id/octonomy-go/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/octoverse-id/octonomy-go/releases/tag/v1.0.0
 
-<!-- Both links point at THIS line. `main` is a different module (/v2) with its own
+<!-- Every link points at THIS line. `main` is a different module (/v2) with its own
      versions, so an [Unreleased] link to main's commits would compare a consumer of
-     v1.0.0 against code they cannot install. -->
+     this line against code they cannot install. -->

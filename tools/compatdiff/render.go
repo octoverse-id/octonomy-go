@@ -49,8 +49,8 @@ func renderCompat(r compatReport) string {
 	w("   longer exists.\n")
 	w("2. **Compatibility with this line's published releases.** Every feature each one exported is\n")
 	w("   still here, unchanged, and so is the order of each struct's exported fields, so code that\n")
-	w("   compiled against it compiles against this line -- except\n")
-	w("   an unkeyed struct literal, which any minor release may break ([`docs/versioning.md`](docs/versioning.md),\n")
+	w("   compiled against it compiles against this line -- except in the ways any minor release may\n")
+	w("   break it, an unkeyed struct literal chief among them ([`docs/versioning.md`](docs/versioning.md),\n")
 	w("   the MINOR rule). This check has no exceptions:\n\n")
 	for _, rel := range r.releases {
 		w("   - [`%s`](%s/tree/%s) (`%s`): %d features.\n", rel.tag, repoURL, rel.tag, short(rel.commit), rel.features)

@@ -27,9 +27,9 @@ originate.
   consumer needing one moves to `/v2`. Do not port `webhook/`.
 - **No major, ever — so no breaking change, ever.** The module path is unsuffixed, Go accepts only
   `v0`/`v1` versions on it, and the suffixed path a major would need is `main`'s module. Every
-  change here must therefore keep `v1.0.0` callers compiling — an *unkeyed* struct literal aside,
-  which any Go minor that adds a field can break (`docs/versioning.md`, the MINOR rule) — and must
-  not move behaviour they correctly rely on: a break has no version to ride. In practice — never
+  change here must therefore keep `v1.0.0` callers compiling — less the caveats any Go minor
+  carries, an *unkeyed* struct literal chief among them (`docs/versioning.md`, the MINOR rule) —
+  and must not move behaviour they correctly rely on: a break has no version to ride. In practice — never
   change an exported field's type or a method's signature, never remove or rename a symbol, and
   never change a default (so `/api/v2` arrives opt-in: an existing caller's requests must not move
   to another surface on an in-range upgrade). A bug fix still changes behaviour; that is what makes
@@ -84,8 +84,9 @@ on `main`.
     a default on this line never changes, so read each one against `v1.0.0`, not against `main`.
 - **Every difference from `main`'s exported API is ported or written down (#100).** `make
   compat-diff`, in the required `compat guard` job, compares every exported declaration with
-  `main`'s at the commit `tools/compatdiff/baselines.pin` names — constant values, signatures, field
-  types and struct tags, comparability, interface method sets — and fails on a difference
+  `main`'s at the commit `tools/compatdiff/baselines.pin` names — constant values (`Version`'s
+  aside, which names the release), signatures, field types and struct tags, comparability,
+  interface method sets — and fails on a difference
   `tools/compatdiff/carveouts.txt` does not list, on a listed one that no longer exists, and on any
   declaration a published release of this line exported that is not still here unchanged. That last
   check has **no exception list**: it is the no-major rule above, checked. `COMPAT.md` is written

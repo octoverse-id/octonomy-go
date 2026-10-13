@@ -76,12 +76,13 @@ not a ceiling, and Go before 1.16 auto-resolves `@latest` on a first build.
   could revise: the line's module path is unsuffixed, a tree carrying a `go.mod` can tag only
   `v0`/`v1` versions on an unsuffixed path, and the suffixed path a major would need is a different
   module — `.../v2` is `main`'s. Every release here is therefore a `v1.x`, and every change must
-  keep `v1.0.0` callers compiling — with the one Go-level exception every minor carries, an
-  *unkeyed* struct literal (see the MINOR rule) — and must not move behaviour they correctly rely
+  keep `v1.0.0` callers compiling — less the Go-level caveats every minor carries (see the MINOR
+  rule), an *unkeyed* struct literal chief among them — and must not move behaviour they correctly rely
   on: a break has no version to ride. (A bug fix still changes behaviour — that is what makes it
   one. What it may not change is a signature, a field's type, or a default.) "Breaking" on this
   branch has the meaning Go's own compatibility promise gives it: an added struct field is not a
-  break, and an unkeyed literal of that struct is the exposure the MINOR rule names. Two
+  break, and what it can still break, an unkeyed literal of that struct chief among them, is what
+  the MINOR rule names. Two
   consequences are worth naming because the port meets them first. The `*Update` structs keep their
   pointer fields rather than taking `main`'s `Optional[T]`, so a PATCH on this line cannot clear a
   nullable field. And `/api/v2` arrives **opt-in**: a caller who sets nothing keeps speaking
@@ -136,7 +137,7 @@ $ go list -m github.com/octoverse-id/octonomy-go/v2@latest
 
 Every resource group the vendored contracts publish is on this tree. What remains are deliberate
 differences from the modern line — permanent, or not planned — and the second column says which;
-[epic #88](https://github.com/octoverse-id/octonomy-go/issues/88) tracks the rest of the parity work.
+[epic #88](https://github.com/octoverse-id/octonomy-go/issues/88) records how this line reached parity.
 The table is the reasons, in brief; [`COMPAT.md`](../COMPAT.md) is the complete list, declaration by
 declaration, and `make compat-diff` fails on a difference it does not list.
 
@@ -159,13 +160,13 @@ left implying an installable version that never existed.
 
 | Line | First release | State |
 | ---- | ------------- | ----- |
-| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` | Released. Taking capability parity with `main` ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)); never a major; sunset 2027-08-31 |
+| **Compat** (`github.com/octoverse-id/octonomy-go`) | `v1.0.0` | Released. Reached capability parity with `main` at 5e40964 in `v1.1.0` ([#88](https://github.com/octoverse-id/octonomy-go/issues/88)), and ports what `main` adds after it; never a major; sunset 2027-08-31 |
 | **Modern** (`github.com/octoverse-id/octonomy-go/v2`) | `v2.0.0-alpha.1` | Released, and moving on its own schedule. [`main`'s release state](https://github.com/octoverse-id/octonomy-go/blob/main/docs/versioning.md#release-state) is the record; the `go list -m` query under [Adopting the modern line](#adopting-the-modern-line) is what settles what a fresh `go get` would pick |
 
-Nothing about `v1.0.0` can be withdrawn: `retract` shipped in Go 1.16, so a Go 1.13 consumer's
-toolchain ignores it, and `GOPROXY` caches tags permanently. That is why this line's CI runs a real
-`go1.13` job and a real-server smoke test, and why `scripts/compat-guard.sh` blocks a release PR whose
-version, module path, base branch, and CHANGELOG heading do not all agree.
+Nothing this line publishes can be withdrawn, `v1.0.0` included: `retract` shipped in Go 1.16, so a
+Go 1.13 consumer's toolchain ignores it, and `GOPROXY` caches tags permanently. That is why this
+line's CI runs a real `go1.13` job and a real-server smoke test, and why `scripts/compat-guard.sh`
+blocks a release PR whose version, module path, base branch, and CHANGELOG heading do not all agree.
 
 ## Bump rules
 
@@ -179,16 +180,22 @@ Backward-compatible **bug fixes**. No change to the exported Go API.
 Backward-compatible **additions** to the exported API.
 - Examples: a new resource service, a new method, a new optional field on a `*Params`/`*Create` struct,
   a new `Is*` helper.
-- Existing callers keep compiling and working unchanged, with **one Go-level caveat**: adding a
+- Existing callers keep compiling and working unchanged, less the **caveats Go's own compatibility
+  promise sets aside for any addition**. The one a caller is likely to meet: adding a
   field to an exported struct breaks a caller who wrote an *unkeyed* composite literal, because such
   a literal must supply exactly one value per field, in order. It applies to every exported struct
-  whose fields are all exported — among them `Config`, `ListOptions`, `Pagination`, `APIError`, the
-  models, and the `*Create` / `*Update` / `*ListParams` / `*List` types — and so to the parity work,
-  which adds `Config.APIVersion` and the namespace fields on the models. It does not apply to
+  whose fields are all exported — among them `Config`, `ListOptions`, `Pagination`, the models, and
+  the `*Create` / `*Update` / `*ListParams` / `*List` types — and so to the parity work, which adds
+  `Config.APIVersion` and the namespace fields on the models. It applies too to a struct that gains
+  its first unexported field, since an unkeyed literal that compiled before it named every field:
+  `APIError` gained one with the parity work. It does not apply to
   `Client` or the `*Service` types, which carry unexported fields and cannot be written unkeyed from
   outside the package. `go vet`'s `composites` check flags unkeyed literals of imported types, so
   the practical exposure is low; it is not zero, which is what "backward-compatible" would otherwise
-  imply.
+  imply. Rarer ones include a conversion between such a struct and a caller's own struct type of
+  its old shape, which the added field also breaks; a selector made ambiguous in a caller's struct
+  that embeds one of this package's types beside another declaring the same new name; and a new
+  exported name colliding with a dot-import.
 - A prerelease does not carry that guarantee:
   while a line is on prereleases, a necessary breaking change may ride a prerelease bump with a
   CHANGELOG entry, and that stops the moment a stable release of that major ships. Whether the modern
@@ -198,8 +205,9 @@ Backward-compatible **additions** to the exported API.
   names — constant values, signatures, field types, struct tags and the order of exported fields,
   comparability, interface method sets — and fails on any declaration a release exported that is
   not still here unchanged. It has no
-  exception list. It does not see the unkeyed-literal caveat above, which an added field causes and
-  which this rule already accepts, nor a change of behaviour behind an unchanged declaration.
+  exception list; it does not compare the value of `Version`, which names the release. It does not
+  see the caveats above, which an addition causes and which this rule already accepts, nor a change
+  of behaviour behind an unchanged declaration.
 - **On the compat line a minor is the only way an addition ships**, and the parity work does ship
   this way. The line took no minors until [#89](https://github.com/octoverse-id/octonomy-go/issues/89)
   withdrew the freeze, and `v1.0.x` was the only shape a release could take; `scripts/compat-guard.sh`
