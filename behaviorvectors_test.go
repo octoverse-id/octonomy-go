@@ -848,6 +848,11 @@ func TestBehaviorVectorClassifiersFailClosed(t *testing.T) {
 	if _, err := classifyResponseError(errors.New("octonomy: something no vector describes")); err == nil {
 		t.Error("an unrecognised response error was classified")
 	}
+	// The message matches a reason, so only the unreachable check stands between
+	// this and a classification.
+	if _, err := classifyResponseError(fmt.Errorf(`%w: list response has no "pagination" block`, ErrUnreachable)); err == nil {
+		t.Error("an unreachable request was classified as a response")
+	}
 	both := errors.New(`octonomy: expected 204 No Content, and list response has no "pagination" block`)
 	if _, err := classifyResponseError(both); err == nil {
 		t.Error("an error two response reasons recognise was classified")
@@ -913,6 +918,16 @@ func TestBehaviorVectorsFileIsStrict(t *testing.T) {
 	if _, err := decodeBehaviorVectors(raw); err != nil {
 		t.Fatalf("the real file must decode: %v", err)
 	}
+	// An empty list cannot be written as an edit to the real file, so it is
+	// built: a file with no request vectors at all must be refused.
+	vf, err := decodeBehaviorVectors(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&behaviorVectorFile{Version: 1, Response: vf.Response}).validate(); err == nil {
+		t.Error("a file with no request vectors was accepted")
+	}
+
 	mutations := []struct{ name, from, to string }{
 		{"a misspelled field", `"outcome": {"reason": "envelope_missing"}`, `"outcome": {"reason": "envelope_missing", "resaon": "x"}`},
 		// pagination_missing has two vectors, so the other still names it and only
@@ -922,6 +937,17 @@ func TestBehaviorVectorsFileIsStrict(t *testing.T) {
 		{"an option set to false", `{"include_global": true}`, `{"include_global": false}`},
 		{"padding and nesting combined", `"nest": {"placeholder": "@NEST@", "depth": 9997},`, `"nest": {"placeholder": "@NEST@", "depth": 9997}, "pad_to_bytes": 40000,`},
 		{"a padded 204", `"status": 204,`, `"status": 204, "pad_to_bytes": 10,`},
+		{"a name used twice", `"name": "single-resource-empty-body",`, `"name": "single-resource",`},
+		{"trailing data after the object", "  ]\n}", "  ]\n}\n{}"},
+		{"a health ok without its word", `"outcome": {"reason": "ok", "health_status": "ok"}`, `"outcome": {"reason": "ok"}`},
+		{"an api_error status that is not the response's", `"code": "not_found", "request_id": "req_4f1c"}`, `"code": "not_found", "request_id": "req_4f1c", "status": 403}`},
+		{"a 204 with a body", "\"status\": 204,\n      \"body\": \"\",", "\"status\": 204,\n      \"body\": \"x\","},
+		{"a body with no body field", "\"status\": 204,\n      \"body\": \"\",", "\"status\": 204,"},
+		{"padding shorter than the body", `"pad_to_bytes": 33554432,`, `"pad_to_bytes": 3,`},
+		{"half a sent namespace", `"outcome": {"reason": "sent", "namespace": ["merchant", "m-1"]`, `"outcome": {"reason": "sent", "namespace": ["merchant"]`},
+		{"a nest of depth 0", `"depth": 9997}`, `"depth": 0}`},
+		{"a surface listed twice", `"surfaces": ["v1"],`, `"surfaces": ["v1", "v1"],`},
+		{"a request with no options field", "\"options\": [],\n      ", ""},
 		{"an unknown surface", `"surfaces": ["v1"],`, `"surfaces": ["v3"],`},
 		{"an unknown call", `"call": "delete",`, `"call": "remove",`},
 		{"an unknown option", `{"global_namespace": true}`, `{"globalnamespace": true}`},
