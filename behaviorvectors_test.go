@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -189,8 +190,13 @@ func decodeBehaviorVectors(raw []byte) (*behaviorVectorFile, error) {
 	if err := dec.Decode(&vf); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
-	if dec.More() {
-		return nil, errors.New("trailing data after the vector object")
+	// The object must be the whole input. Decoder.More is not that check: it
+	// asks whether another element follows inside an array or object, so a
+	// stray "]" or "}" after the object reads as nothing more. A second Decode
+	// that ends in io.EOF is.
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("trailing data after the vector object (%v)", err)
 	}
 	if err := vf.validate(); err != nil {
 		return nil, err
@@ -954,6 +960,11 @@ func TestBehaviorVectorsFileIsStrict(t *testing.T) {
 		{"a padded 204", `"status": 204,`, `"status": 204, "pad_to_bytes": 10,`},
 		{"a name used twice", `"name": "single-resource-empty-body",`, `"name": "single-resource",`},
 		{"trailing data after the object", "  ]\n}", "  ]\n}\n{}"},
+		// Decoder.More reports only whether another element follows, so a stray
+		// closing bracket after the object read as "nothing more" until the check
+		// required io.EOF.
+		{"a stray closing bracket after the object", "  ]\n}", "  ]\n}\n]"},
+		{"a stray closing brace after the object", "  ]\n}", "  ]\n}\n}"},
 		{"a health ok without its word", `"outcome": {"reason": "ok", "health_status": "ok"}`, `"outcome": {"reason": "ok"}`},
 		{"an api_error status that is not the response's", `"code": "not_found", "request_id": "req_4F1c-Xy"}`, `"code": "not_found", "request_id": "req_4F1c-Xy", "status": 403}`},
 		{"a 204 with a body", "\"status\": 204,\n      \"body\": \"\",", "\"status\": 204,\n      \"body\": \"x\","},
