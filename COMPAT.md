@@ -11,7 +11,7 @@ originate; this line ports them ([epic #88](https://github.com/octoverse-id/octo
 `tools/compatdiff` writes it from two checks, and `make compat-diff` fails when either finds
 something this file does not account for:
 
-1. **Parity with `main`**, at [`5e409641e3df`](https://github.com/octoverse-id/octonomy-go/tree/5e409641e3dfafb83227e02efee3d8a50ec5602c), the commit `tools/compatdiff/baselines.pin`
+1. **Parity with `main`**, at [`cb2d4994e453`](https://github.com/octoverse-id/octonomy-go/tree/cb2d4994e45321e616e79fd6201ecb41252136c4), the commit `tools/compatdiff/baselines.pin`
    names. Every importable package on each side is compared declaration by declaration, by type
    identity rather than spelling: each package's name, constants with their types and values,
    variables, function and method signatures (the method sets of T and of *T), each type's kind

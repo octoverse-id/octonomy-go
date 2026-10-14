@@ -22,6 +22,10 @@
 // declaration-level lines api.go prints: types, signatures, constant values,
 // struct tags, comparability and interface method sets.
 //
+// It also holds testdata/behavior_vectors.json to main's at the same pinned
+// commit, byte for byte as committed (#104, vectors.go): both lines run that file, and a copy
+// that drifted would let each pass its own version of the rules.
+//
 // Usage:
 //
 //	compatdiff [-repo DIR] check   both checks, and COMPAT.md matches what they produce
@@ -170,6 +174,11 @@ func evaluate(dir, remote, mainBranch string) (findings []string, rendered, top 
 	if !onMain {
 		findings = append(findings, fmt.Sprintf("pin: %s names %s for main, and it is not on %s/%s -- a pin into this line's own history would compare the line with itself.", pinFile, p.main, remote, mainBranch))
 	}
+	vectors, err := vectorFindings(r, top, p.main)
+	if err != nil {
+		return nil, "", "", err
+	}
+	findings = append(findings, vectors...)
 	// Every release tag the clone has must be a baseline. A release's own PR
 	// cannot name the commit its tag is cut on, so its line arrives in the PR
 	// after -- and without this, forgetting that PR would leave Check B

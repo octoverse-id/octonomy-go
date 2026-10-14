@@ -288,6 +288,15 @@ a test one, so it was recorded here rather than ported in a test change, and bot
   and an `interface{}` callback. #100's parity check found it too, as the one difference from
   `main` no carve-out explained.
 
+## Ported from `main` after 5e40964
+
+A test file `main` gained after the commit above, recorded with the commit its port compares
+against.
+
+| `main` file | At | Verdict | Here | Rules met, and what became of them |
+| ----------- | -- | ------- | ---- | ---------------------------------- |
+| `behaviorvectors_test.go` | cb2d499 ([#128](https://github.com/octoverse-id/octonomy-go/pull/128), [#130](https://github.com/octoverse-id/octonomy-go/pull/130), [#104](https://github.com/octoverse-id/octonomy-go/issues/104)) | **PORTED** here (#104) | `behaviorvectors_test.go` | The binding for `testdata/behavior_vectors.json`, which is `main`'s file, byte for byte as committed, at the commit `tools/compatdiff/baselines.pin` names — `make compat-diff` fails on a copy that would not commit as `main`'s blob. Type parameters (`pickOneReason[T]`) → one non-generic helper returning the reason; `any` → `interface{}`; `os.ReadFile` → `ioutil.ReadFile`; `slices.Contains` and `min` → loops; `*List[Tag]` → `*TagList`; `Set(…)` → `String(…)`; `Header.Values` (1.14) → `r.Header[http.CanonicalHeaderKey(k)]`; per-iteration loop variables (1.22) → a shadow in each loop a closure captures. `depth_exceeded` is recognised by this line's own `errJSONTooDeep`, not by `encoding/json`'s depth error, which Go 1.13 does not have — so the vector asserts the guard `jsondepth.go` adds |
+
 ## Test files with no `main` counterpart
 
 | File | From | What it covers |
@@ -301,7 +310,7 @@ a test one, so it was recorded here rather than ported in a test change, and bot
 | `transport_test.go` | #112 (#91) | Holds `main`'s `octonomy_test.go` cases, since this line's own `octonomy_test.go` is kept |
 | `update_test.go` | #112 (#91) | The `*Update` value-receiver `MarshalJSON` (#37), and the per-field wire round-trip of every `*Update` type |
 | `doccomment_test.go` | #100 | No comment in a file a consumer compiles carries a token only `main`'s dialect has — `omitzero`, type-parameter syntax, the `/v2` module's path where a reader would build with it, a Go version at `main`'s floor or later, an `octonomy.Name` this package does not declare, or a post-1.13 standard-library name in a code example — with a fixture of `main`'s own comment forms |
-| `tools/compatdiff/*_test.go` | #100 | The parity and compatibility checks behind `COMPAT.md`: every kind of declaration change is a difference and no spelling change is; an unlisted difference and a stale carve-out line each fail; each way a published release's caller stops compiling fails Check B; the pins are what they claim; and the command end to end on throwaway repositories — the work tree read rather than `HEAD`, an ignored file left out, a shallow clone refused, a stale `COMPAT.md` refused |
+| `tools/compatdiff/*_test.go` | #100 | The parity and compatibility checks behind `COMPAT.md`: every kind of declaration change is a difference and no spelling change is; an unlisted difference and a stale carve-out line each fail; each way a published release's caller stops compiling fails Check B; the pins are what they claim; the behaviour vector file equals `main`'s at the pin (a changed byte, a missing copy and a pin from before the file each fail, #104); and the command end to end on throwaway repositories — the work tree read rather than `HEAD`, an ignored file left out, a shallow clone refused, a stale `COMPAT.md` refused |
 | `contractgate_test.go` | #98 | What runs the contract gate: ci.yml's `test` and `compat-guard` jobs and `on:` block pinned as text, and the `contract-*` and `release-check` recipes pinned as make's rule database resolves them under each real goal, each still phony. In this package, so `go test ./...` runs it outside the make targets it guards |
 | `tools/contractdrift/acceptance_test.go` | #98 | `make contract-check` itself fails on a removed query parameter, a dropped schema field, a retyped property and a rerouted method — one staged copy of the repository per case, broken in the client's source or the specs, run through the real target; and every recorded-gap `unsent_inputs` row held to its field's absence |
 | `updateguard_test.go` | #96 | The source half of the `*Update` checks: no shipped struct tag names `omitzero`, which Go 1.13's `encoding/json` ignores; every `*Update` field can be left out; every PATCH body is a `*Update`; `updateBodies` names every `*Update` type |
@@ -309,7 +318,8 @@ a test one, so it was recorded here rather than ported in a test change, and bot
 
 ## Keeping this table true
 
-The `main` side is pinned to 5e40964 and cannot drift. The "Here" side moves when an owning issue
+The `main` side is pinned and cannot drift: to 5e40964 for every table but one, and, in *Ported from
+`main` after 5e40964*, to the commit each row names. The "Here" side moves when an owning issue
 lands, and that issue's PR updates its row. `TestDispositionTableNamesEveryTestFile` fails when a
 test file in this package has no mention here, so a port that lands under a new name, or a new
 compat-only file, cannot go unrecorded.

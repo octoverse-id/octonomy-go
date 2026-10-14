@@ -58,6 +58,7 @@ func commitAll(t *testing.T, dir, msg string) string {
 type fixtureRepo struct {
 	origin  string // file:// URL
 	work    string // a full clone, on the compat branch
+	preVec  string // a main commit from before main had the vector file
 	mainSHA string
 	relSHA  string // what v1.0.0 names
 	headSHA string // the compat branch's tip
@@ -81,6 +82,8 @@ main func Each[$0 any]($0)
 compat func Each(interface{})
 `
 
+const fixtureVectors = "{\n  \"version\": 1,\n  \"response\": []\n}\n"
+
 func newFixtureRepo(t *testing.T) *fixtureRepo {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -102,6 +105,10 @@ func newFixtureRepo(t *testing.T) *fixtureRepo {
 		// leave every Go file of this commit out.
 		".gitattributes": "*.go export-ignore\n",
 	})
+	f.preVec = commitAll(t, seed, "main, before the vectors")
+	// The orphan compat branch below keeps this file from the seed's work
+	// tree, so both sides start with the same bytes, as a real port does.
+	writeTree(t, seed, map[string]string{vectorFile: fixtureVectors})
 	f.mainSHA = commitAll(t, seed, "main")
 
 	git(t, seed, "checkout", "-q", "--orphan", "compat")
@@ -399,6 +406,155 @@ func TestCommandRefusesWhatItCannotDecide(t *testing.T) {
 	for _, args := range [][]string{{}, {"verify"}, {"check", "extra"}, {"-nope", "check"}} {
 		if code, out := runIn(t, f.work, args...); code != 2 {
 			t.Errorf("args %q: exit %d, want 2:\n%s", args, code, out)
+		}
+	}
+}
+
+// TestVectorFileMustEqualMainsAtThePin holds this line's copy of the behaviour
+// vectors to main's at the pin (#104): a differing byte as a commit would store
+// it, a copy that is not a regular file, a missing copy, and a pin from before
+// main had the file each fail and say which; a check git cannot make exits 2.
+func TestVectorFileMustEqualMainsAtThePin(t *testing.T) {
+	f := newFixtureRepo(t)
+	path := filepath.Join(f.work, filepath.FromSlash(vectorFile))
+
+	t.Run("identical", func(t *testing.T) {
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 0)
+	})
+
+	t.Run("one byte changed", func(t *testing.T) {
+		f.write(t, vectorFile, strings.Replace(fixtureVectors, "1", "2", 1))
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: "+vectorFile+" differs from main's at "+f.mainSHA+", first at line 2")
+	})
+
+	t.Run("a trailing newline dropped", func(t *testing.T) {
+		f.write(t, vectorFile, strings.TrimSuffix(fixtureVectors, "\n"))
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: "+vectorFile+" differs from main's")
+	})
+
+	t.Run("missing here", func(t *testing.T) {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: this tree has no "+vectorFile)
+	})
+
+	t.Run("an identical copy a checkout converted to CRLF", func(t *testing.T) {
+		// What core.autocrlf does on Windows: the committed blob is main's, and
+		// the work-tree file is not byte-identical to it. It is the same file.
+		git(t, f.work, "config", "core.autocrlf", "true")
+		defer git(t, f.work, "config", "--unset", "core.autocrlf")
+		f.write(t, vectorFile, strings.ReplaceAll(fixtureVectors, "\n", "\r\n"))
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 0)
+	})
+
+	t.Run("a real edit in a converted checkout points at the edit", func(t *testing.T) {
+		git(t, f.work, "config", "core.autocrlf", "true")
+		defer git(t, f.work, "config", "--unset", "core.autocrlf")
+		edited := strings.Replace(fixtureVectors, "1", "2", 1)
+		f.write(t, vectorFile, strings.ReplaceAll(edited, "\n", "\r\n"))
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: "+vectorFile+" differs from main's at "+f.mainSHA+", first at line 2")
+	})
+
+	t.Run("CRLF without the conversion is a different file", func(t *testing.T) {
+		f.write(t, vectorFile, strings.ReplaceAll(fixtureVectors, "\n", "\r\n"))
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: "+vectorFile+" differs from main's at "+f.mainSHA+", first at line 1")
+	})
+
+	t.Run("a check that cannot be made is not a finding", func(t *testing.T) {
+		// A copy git cannot read: hashing it fails, and that must surface as
+		// exit 2, never as a claim about main or about this copy.
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a file whatever its mode")
+		}
+		if err := os.Chmod(path, 0); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Chmod(path, 0o644) }()
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 2)
+		if strings.Contains(out, "vectors:") {
+			t.Errorf("a failed git command was reported as a finding:\n%s", out)
+		}
+	})
+
+	t.Run("a directory where the file belongs", func(t *testing.T) {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			_ = os.Remove(path)
+			f.write(t, vectorFile, fixtureVectors)
+		}()
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: this tree's "+vectorFile+" is not a regular file")
+	})
+
+	t.Run("a symlink to an identical copy is not a copy", func(t *testing.T) {
+		elsewhere := filepath.Join(t.TempDir(), "vectors.json")
+		if err := os.WriteFile(elsewhere, []byte(fixtureVectors), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(elsewhere, path); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		defer func() {
+			_ = os.Remove(path)
+			f.write(t, vectorFile, fixtureVectors)
+		}()
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: this tree's "+vectorFile+" is not a regular file")
+	})
+
+	t.Run("the pin predates the vectors", func(t *testing.T) {
+		pins := filepath.Join(f.work, filepath.FromSlash(pinFile))
+		original, err := os.ReadFile(pins)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.WriteFile(pins, original, 0o644) }()
+		f.write(t, pinFile, strings.Replace(string(original), f.mainSHA, f.preVec, 1))
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: main at "+f.preVec+" has no "+vectorFile)
+	})
+}
+
+func TestBlobIDTakesOnlyARegularFilesBlob(t *testing.T) {
+	const id = "7dfbf7a1711bd974fd2119057014c75d43056a15"
+	for _, mode := range []string{"100644", "100755"} {
+		got, err := blobID(mode + " blob " + id + "\t" + vectorFile)
+		if err != nil || got != id {
+			t.Errorf("mode %s: got %q, %v; want the id", mode, got, err)
+		}
+	}
+	for name, listing := range map[string]string{
+		"a symlink":       "120000 blob " + id + "\t" + vectorFile,
+		"a directory":     "040000 tree " + id + "\t" + vectorFile,
+		"a submodule":     "160000 commit " + id + "\t" + vectorFile,
+		"two entries":     "100644 blob " + id + "\t" + vectorFile + "\n100644 blob " + id + "\t" + vectorFile,
+		"a malformed one": "100644 " + id,
+	} {
+		if got, err := blobID(listing); err == nil {
+			t.Errorf("%s was taken as %q", name, got)
 		}
 	}
 }
