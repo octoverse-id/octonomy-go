@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Transport behaviour vectors** ([#104](https://github.com/octoverse-id/octonomy-go/issues/104)).
+  Tests and docs only; no exported symbol or behaviour changes. `testdata/behavior_vectors.json`
+  pins, as language-neutral data, the transport behaviour no API contract expresses: which of its
+  own requests a client refuses before sending — the namespace, application and `include_global`
+  scope rules — and what it makes of a response: the `data` envelope, a blank identity, the
+  pagination block, error-code mapping (an envelope's code verbatim, `unexpected_status` without
+  one, on both surfaces), the 32 MiB ceiling and the 10000-level nesting limit. Each vector names an
+  outcome **reason**, never a Go type or message, so the Go 1.13 line can run the same file with a
+  binding of its own and, once it does, a rule changed on one line and not the other fails on the
+  line that missed it.
+  - **`behaviorvectors_test.go`** is this module's binding. It runs in the root package, so the
+    required test jobs fail on a change to a behaviour a vector pins. It reads the file strictly,
+    recognises every observed outcome as exactly one reason — an error no reason recognises, or two
+    do, is a failure rather than the nearest match — refuses a reason it does not bind or one no
+    vector names, and checks that each call reached its own route on the surface the vector names
+    and that an `ok` carries the identity that arrived.
+  - **`TestBehaviorVectorsCatchADeviation`** is the proof the issue asked for: it moves the
+    response ceiling by one byte and the client's API version, without touching the file, and
+    requires the vectors that cover each to stop matching — including two the route check alone
+    can notice. A wider mutation run against the transport is recorded in the pull request.
+  - `testdata/README.md` documents the format for any binding, and the **sampling rule** the vectors
+    meet — every boundary on every path and surface it has, at the bound and one past it; case- and
+    space-only differences for every comparison of caller-supplied values; a normalising fixture for
+    every verbatim value; 200 and another 2xx for every success decoder; a bare vector for every
+    status this SDK's first release mapped — and what they deliberately do not pin. `AGENTS.md` makes
+    a change to a covered behaviour change the file in the same pull request.
 - **The prose that names the vendored contract is enforced by something that fails**
   ([#86](https://github.com/octoverse-id/octonomy-go/issues/86)). Fourteen places in this repository
   state which server contract the SDK vendors. `make contract-check` mechanized **three** — both

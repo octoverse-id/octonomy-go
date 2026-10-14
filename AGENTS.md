@@ -366,6 +366,20 @@ third is a decision, not a convenience.
   (`OCTONOMY_TEST_NAMESPACE_A_TOKEN`/`_B_TOKEN`) are the only way to reach the refusal path, and the
   only way `include_global`'s fail-closed branch runs at all. Reaching for the wildcard token because
   it is the convenient one is how an isolation assertion comes to assert nothing.
+- **A change to transport behaviour no contract expresses changes `testdata/behavior_vectors.json`
+  in the same PR (#104).** The vectors pin the scope refusals, error-code mapping, the envelope,
+  identity and pagination guards, the 32 MiB ceiling and the nesting limit, as language-neutral
+  data, so the Go 1.13 line can run the same file and, once it does, a rule changed on one line and
+  not the other fails on the one that missed it. `behaviorvectors_test.go` is this module's binding
+  and runs in the root package, so a change to a behaviour a vector pins fails the required test
+  jobs until the file says what the code does — and a behaviour no vector pins is not protected, so
+  every vector meets the sampling rule `testdata/README.md` states (each boundary on every path and
+  surface it has, case- and space-only differences for exact comparisons, and so on). Add a vector
+  when you add a refusal or change what a response decodes to; a new reason needs its binding in the
+  same change, and the binding refuses a reason it does not know and one no vector names. Each
+  vector carries exactly one defect — which of two a response reports first is not pinned. The
+  reasons stay language-neutral strings: never a Go sentinel name, a message, or a type.
+  `testdata/README.md` is the format.
 - Run tests with `-race`. Keep new code covered.
 
 ## Local Development
