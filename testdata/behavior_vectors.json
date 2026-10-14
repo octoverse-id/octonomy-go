@@ -138,6 +138,15 @@
       "outcome": {"reason": "ok", "id": "   "}
     },
     {
+      "name": "single-resource-id-kept-verbatim",
+      "description": "A decoded identity arrives exactly as sent, case and punctuation included.",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"T-1_Ab.c\",\"slug\":\"summer-sale\"}}",
+      "outcome": {"reason": "ok", "id": "T-1_Ab.c"}
+    },
+    {
       "name": "single-resource-field-wrong-type",
       "description": "A field of the resource carrying the wrong JSON type is refused, not decoded leniently.",
       "surfaces": ["v1", "v2"],
@@ -388,6 +397,15 @@
       "status": 429,
       "body": "{\"error\":{\"code\":\"Rate_Limited\",\"message\":\"Slow down.\"}}",
       "outcome": {"reason": "api_error", "status": 429, "code": "Rate_Limited"}
+    },
+    {
+      "name": "error-envelope-kept-with-its-spaces",
+      "description": "Verbatim includes surrounding space: neither the code nor the request id of an envelope is trimmed. (A code that is only whitespace is a different case, and not pinned here.)",
+      "surfaces": ["v1", "v2"],
+      "call": "get",
+      "status": 409,
+      "body": "{\"error\":{\"code\":\" Conflict_Now \",\"message\":\"Taken.\",\"request_id\":\" req_7Ab-Q \"}}",
+      "outcome": {"reason": "api_error", "status": 409, "code": " Conflict_Now ", "request_id": " req_7Ab-Q "}
     },
     {
       "name": "error-envelope-without-message",
@@ -997,6 +1015,14 @@
       "call": "get",
       "options": [{"application": "storefront"}, {"application": "storefront"}],
       "outcome": {"reason": "sent", "namespace": null, "application_id": "storefront", "include_global": false}
+    },
+    {
+      "name": "application-sent-verbatim",
+      "description": "An application id goes out exactly as the caller wrote it, surrounding space included: the server keeps an id as sent, so trimming it would scope the request to a different application.",
+      "surfaces": ["v1", "v2"],
+      "call": "list",
+      "options": [{"application": " Storefront "}],
+      "outcome": {"reason": "sent", "namespace": null, "application_id": " Storefront ", "include_global": false}
     },
     {
       "name": "application-contradicts-params",

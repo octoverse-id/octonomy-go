@@ -43,8 +43,12 @@ promise is this rule, and a rule the file does not meet is a gap to close:
   two applications, an application option and the call's own parameter — with a
   difference only in case and one only in surrounding space, since each is
   compared exactly.
-- **Every value said to arrive "verbatim"** with a fixture a normalisation would
-  change: mixed case, and surrounding space where the value keeps it.
+- **Every value that passes through unchanged** with a fixture a normalisation
+  would change — mixed case, and surrounding space wherever the value keeps it:
+  an envelope's code and request id, a probe's status word, a decoded identity,
+  and the application id a request sends. (A namespace is pinned for case only:
+  `net/http` trims surrounding space from every header value it sends, so no
+  client can send it.)
 - **Every decoder that accepts a success** with `200` and with another 2xx; the
   delete with `204` and with the 2xx statuses it refuses.
 - **Every status this SDK's first release mapped to a code** (400, 401, 403, 404,
