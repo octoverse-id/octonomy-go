@@ -48,10 +48,18 @@ func vectorFindings(r *repo, top, mainPin string) ([]string, error) {
 	}
 
 	path := filepath.Join(top, filepath.FromSlash(vectorFile))
-	if _, err := os.Lstat(path); os.IsNotExist(err) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
 		return []string{fmt.Sprintf("vectors: this tree has no %s -- copy main's at %s (`git show %s:%s > %s`).", vectorFile, mainPin, mainPin, vectorFile, vectorFile)}, nil
-	} else if err != nil {
+	}
+	if err != nil {
 		return nil, cannot("%v", err)
+	}
+	// hash-object follows a symlink and hashes its target, but git commits a
+	// symlink as a link -- so one pointing at an identical copy would compare
+	// equal here and still not be main's blob. Only a regular file is a copy.
+	if !info.Mode().IsRegular() {
+		return []string{fmt.Sprintf("vectors: this tree's %s is not a regular file (%s) -- git would not commit it as main's blob; copy main's file at %s (`git show %s:%s > %s`).", vectorFile, info.Mode().Type(), mainPin, mainPin, vectorFile, vectorFile)}, nil
 	}
 	got, err := r.run("hash-object", "--path="+vectorFile, "--", path)
 	if err != nil {
@@ -68,15 +76,16 @@ func vectorFindings(r *repo, top, mainPin string) ([]string, error) {
 }
 
 // blobID reads the object id out of one ls-tree line, "<mode> blob <id>\t<path>",
-// and refuses anything that is not a blob (a directory, a submodule) rather than
-// comparing an id of the wrong kind.
+// and refuses anything that is not a regular file's blob -- a directory, a
+// submodule, or a symlink, which git also lists as a blob, with mode 120000 --
+// rather than comparing an id of the wrong kind.
 func blobID(listing string) (string, error) {
 	if strings.Contains(listing, "\n") {
 		return "", fmt.Errorf("more than one entry: %q", listing)
 	}
 	fields := strings.Fields(strings.SplitN(listing, "\t", 2)[0])
-	if len(fields) != 3 || fields[1] != "blob" {
-		return "", fmt.Errorf("not a blob: %q", listing)
+	if len(fields) != 3 || fields[1] != "blob" || (fields[0] != "100644" && fields[0] != "100755") {
+		return "", fmt.Errorf("not a regular file's blob: %q", listing)
 	}
 	return fields[2], nil
 }

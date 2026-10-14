@@ -1,6 +1,6 @@
 # Transport behavior vectors — this line's copy
 
-`behavior_vectors.json` is **`main`'s file, byte for byte**, at the commit
+`behavior_vectors.json` is **`main`'s file, byte for byte as committed**, at the commit
 [`tools/compatdiff/baselines.pin`](../tools/compatdiff/baselines.pin) names for `main`
 ([#104](https://github.com/octoverse-id/octonomy-go/issues/104)). It pins, as language-neutral data,
 the transport behaviour no API contract expresses — the scope refusals, the `data` envelope,
@@ -18,7 +18,7 @@ the other fails on the line that missed it.
   `jsondepth.go`, since Go 1.13's `encoding/json` has no depth limit of its own.
 - **Never edit the file here.** `make compat-diff` (in the required `compat guard` job, and in
   `release-check`) fails on a copy that would not commit as `main`'s blob — any differing byte, a
-  checkout's own line-ending conversion aside — on a missing copy, and on a pin that predates the
-  file (`tools/compatdiff/vectors.go`). A rule changes on `main` first, in `main`'s file; it
+  checkout's own line-ending conversion aside — on one that is not a regular file, on a missing
+  copy, and on a pin that predates the file (`tools/compatdiff/vectors.go`). A rule changes on `main` first, in `main`'s file; it
   reaches this line when the pin advances — a port of everything the newer commit brings — and
   this line's binding has to pass it then.

@@ -13,10 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [epic #88](https://github.com/octoverse-id/octonomy-go/issues/88) before its sunset task). Tests,
   tooling and docs only; no exported symbol or behaviour changes.
   `testdata/behavior_vectors.json` is `main`'s file from
-  [#128](https://github.com/octoverse-id/octonomy-go/pull/128), byte for byte: language-neutral
-  vectors pinning the transport rules no API contract expresses — the scope refusals, the `data`
-  envelope, identity and pagination guards, error-code mapping, the 32 MiB ceiling and the
-  10000-level nesting limit. Both lines run it, each with its own binding, so a rule changed on one
+  [#128](https://github.com/octoverse-id/octonomy-go/pull/128), byte for byte as committed:
+  language-neutral vectors pinning the transport rules no API contract expresses — the scope
+  refusals, the `data` envelope, identity and pagination guards, error-code mapping, the 32 MiB
+  ceiling and the 10000-level nesting limit. Both lines run it, each with its own binding, so a rule changed on one
   line and not the other fails on the line that missed it. This line passes every vector unchanged:
   its transport already did what `main`'s does on every rule the file pins.
   - **`behaviorvectors_test.go`** is `main`'s binding rewritten into the Go 1.13 dialect, and runs
@@ -25,8 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the guard `jsondepth.go` adds is what refuses the body.
   - **`make compat-diff` holds the file to `main`'s at the pinned commit** — a copy that would not
     commit as `main`'s blob (any differing byte, a checkout's line-ending conversion aside), a
-    missing copy, or a pin from before the file is a finding, and a git command that fails is
-    "could not check", never a finding (`tools/compatdiff/vectors.go`, tested
+    missing copy, a copy that is not a regular file (a symlink commits as a link), or a pin from
+    before the file is a finding; a git command the verdict rests on that fails is "could not
+    check", never a finding, and only the line a finding points at may go missing when `main`'s
+    bytes cannot be read (`tools/compatdiff/vectors.go`, tested
     on a throwaway repository) — so the copy cannot be edited here or left behind when `main`
     changes a rule. To bring the file, `main`'s pin in `tools/compatdiff/baselines.pin` advances
     from 5e40964 to 676486c, `main`'s merge of #128; between the two `main` changed CI and docs

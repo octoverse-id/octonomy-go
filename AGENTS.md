@@ -333,10 +333,11 @@ stays a faithful, ergonomic client.
   `testdata/behavior_vectors.json` pins the rules no contract expresses — the scope refusals,
   error-code mapping, the envelope, identity and pagination guards, the 32 MiB ceiling and the
   nesting limit — as language-neutral data both lines run, so a rule changed on one line and not the
-  other fails on the one that missed it. Here the file is `main`'s **byte for byte** at the commit
+  other fails on the one that missed it. Here the file is `main`'s **byte for byte** as committed, at the commit
   `tools/compatdiff/baselines.pin` names, and `make compat-diff` (the required `compat guard` job)
   fails on a copy that would not commit as `main`'s blob (any differing byte, a checkout's
-  line-ending conversion aside), a missing copy, or a pin from before the file. **Never edit it here**:
+  line-ending conversion aside), one that is not a regular file, a missing copy, or a pin from
+  before the file. **Never edit it here**:
   a rule changes on `main` first, and reaches this line when the pin advances — which is a port of
   everything the newer commit brings, the file included, and this line's binding has to pass it.
   `behaviorvectors_test.go` is that binding, `main`'s rewritten into this dialect (its row in

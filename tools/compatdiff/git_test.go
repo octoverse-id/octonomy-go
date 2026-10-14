@@ -411,8 +411,9 @@ func TestCommandRefusesWhatItCannotDecide(t *testing.T) {
 }
 
 // TestVectorFileMustEqualMainsAtThePin holds this line's copy of the behaviour
-// vectors to main's at the pin (#104): a differing byte, a missing copy, and a
-// pin from before main had the file each fail, and each says which.
+// vectors to main's at the pin (#104): a differing byte as a commit would store
+// it, a copy that is not a regular file, a missing copy, and a pin from before
+// main had the file each fail and say which; a check git cannot make exits 2.
 func TestVectorFileMustEqualMainsAtThePin(t *testing.T) {
 	f := newFixtureRepo(t)
 	path := filepath.Join(f.work, filepath.FromSlash(vectorFile))
@@ -474,8 +475,23 @@ func TestVectorFileMustEqualMainsAtThePin(t *testing.T) {
 	})
 
 	t.Run("a check that cannot be made is not a finding", func(t *testing.T) {
-		// A directory where the file belongs: git cannot hash it, and that must
-		// surface as exit 2, never as a claim about main or about this copy.
+		// A copy git cannot read: hashing it fails, and that must surface as
+		// exit 2, never as a claim about main or about this copy.
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a file whatever its mode")
+		}
+		if err := os.Chmod(path, 0); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Chmod(path, 0o644) }()
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 2)
+		if strings.Contains(out, "vectors:") {
+			t.Errorf("a failed git command was reported as a finding:\n%s", out)
+		}
+	})
+
+	t.Run("a directory where the file belongs", func(t *testing.T) {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
@@ -487,10 +503,26 @@ func TestVectorFileMustEqualMainsAtThePin(t *testing.T) {
 			f.write(t, vectorFile, fixtureVectors)
 		}()
 		code, out := runIn(t, f.work, "check")
-		expect(t, code, out, 2)
-		if strings.Contains(out, "vectors:") {
-			t.Errorf("a failed git command was reported as a finding:\n%s", out)
+		expect(t, code, out, 1, "vectors: this tree's "+vectorFile+" is not a regular file")
+	})
+
+	t.Run("a symlink to an identical copy is not a copy", func(t *testing.T) {
+		elsewhere := filepath.Join(t.TempDir(), "vectors.json")
+		if err := os.WriteFile(elsewhere, []byte(fixtureVectors), 0o644); err != nil {
+			t.Fatal(err)
 		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(elsewhere, path); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		defer func() {
+			_ = os.Remove(path)
+			f.write(t, vectorFile, fixtureVectors)
+		}()
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: this tree's "+vectorFile+" is not a regular file")
 	})
 
 	t.Run("the pin predates the vectors", func(t *testing.T) {
@@ -504,4 +536,25 @@ func TestVectorFileMustEqualMainsAtThePin(t *testing.T) {
 		code, out := runIn(t, f.work, "check")
 		expect(t, code, out, 1, "vectors: main at "+f.preVec+" has no "+vectorFile)
 	})
+}
+
+func TestBlobIDTakesOnlyARegularFilesBlob(t *testing.T) {
+	const id = "7dfbf7a1711bd974fd2119057014c75d43056a15"
+	for _, mode := range []string{"100644", "100755"} {
+		got, err := blobID(mode + " blob " + id + "\t" + vectorFile)
+		if err != nil || got != id {
+			t.Errorf("mode %s: got %q, %v; want the id", mode, got, err)
+		}
+	}
+	for name, listing := range map[string]string{
+		"a symlink":       "120000 blob " + id + "\t" + vectorFile,
+		"a directory":     "040000 tree " + id + "\t" + vectorFile,
+		"a submodule":     "160000 commit " + id + "\t" + vectorFile,
+		"two entries":     "100644 blob " + id + "\t" + vectorFile + "\n100644 blob " + id + "\t" + vectorFile,
+		"a malformed one": "100644 " + id,
+	} {
+		if got, err := blobID(listing); err == nil {
+			t.Errorf("%s was taken as %q", name, got)
+		}
+	}
 }

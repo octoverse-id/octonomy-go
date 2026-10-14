@@ -19,7 +19,7 @@
 # move by a reviewable change to this file. Advancing main's pin is a port: every
 # difference the new commit brings is either ported or listed in carveouts.txt,
 # in the same pull request -- and testdata/behavior_vectors.json is taken from
-# main at the new pin, since `make compat-diff` holds it there byte for byte
+# main at the new pin, since `make compat-diff` holds it there byte for byte as committed
 # (#104, vectors.go), and this line's binding has to pass it. A release's line is added once its tag exists, in
 # the pull request after the release (docs/release.md), and `make compat-diff`
 # fails on any v1.x tag in the clone that this file does not name -- except, in
