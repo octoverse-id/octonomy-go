@@ -16,9 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#128](https://github.com/octoverse-id/octonomy-go/pull/128), byte for byte as committed:
   language-neutral vectors pinning the transport rules no API contract expresses — the scope
   refusals, the `data` envelope, identity and pagination guards, error-code mapping, the 32 MiB
-  ceiling and the 10000-level nesting limit. Both lines run it, each with its own binding, so a rule changed on one
-  line and not the other fails on the line that missed it. This line passes every vector unchanged:
-  its transport already did what `main`'s does on every rule the file pins.
+  ceiling and the 10000-level nesting limit. Both lines run it, each with its own binding, so a
+  rule changed on one line and not the other fails on the line that missed it. This line passes
+  every vector unchanged: its transport already did what `main`'s does on every rule the file pins.
   - **`behaviorvectors_test.go`** is `main`'s binding rewritten into the Go 1.13 dialect, and runs
     in the root package, so the required `test` and `go1.13` jobs run it. It recognises
     `depth_exceeded` by this line's own `errJSONTooDeep`, which makes the vector an assertion that
