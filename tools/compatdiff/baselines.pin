@@ -18,16 +18,22 @@
 # let an unchanged commit here turn red because of a merge somewhere else. Both
 # move by a reviewable change to this file. Advancing main's pin is a port: every
 # difference the new commit brings is either ported or listed in carveouts.txt,
-# in the same pull request. A release's line is added once its tag exists, in
+# in the same pull request -- and testdata/behavior_vectors.json is taken from
+# main at the new pin, since `make compat-diff` holds it there byte for byte
+# (#104, vectors.go), and this line's binding has to pass it. A release's line is added once its tag exists, in
 # the pull request after the release (docs/release.md), and `make compat-diff`
 # fails on any v1.x tag in the clone that this file does not name -- except, in
 # the CI run that pushing a tag starts, that tag, which names the release itself.
 #
-# 5e40964 is the commit the whole parity epic (#88) ports from, and the one
-# tools/contractdrift/main.pin names. The two pins are separate on purpose: each
-# advances with the work that has to come with it, which for one is the
-# contract gate's files and for the other is this line's API.
+# main's pin was 5e40964, the commit the whole parity epic (#88) ports from and
+# the one tools/contractdrift/main.pin still names, until #104 advanced it to
+# 676486c, main's merge of the behaviour vectors. Between the two, main changed
+# CI and docs (#124, which this line had already taken as #122) and added the
+# vectors, and changed no exported declaration. The two pins are separate on
+# purpose: each advances with the work that has to come with it, which for one
+# is the contract gate's files and for the other is this line's API and its
+# vectors.
 
-main 5e409641e3dfafb83227e02efee3d8a50ec5602c
+main 676486caf50bbdc0dd9655f09e228e086411f6ca
 release v1.0.0 ad3ced172994940edaccfa3e52e2d76060e4e9c4
 release v1.1.0 483ad84659b70ee281aef593a17e7792bdd24d68

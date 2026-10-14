@@ -329,6 +329,20 @@ stays a faithful, ergonomic client.
   through a make target it guards, where a copy inside the gate's module stopped running the moment
   `contract-test` was overridden. Changing a pinned job or recipe means updating its pin in the same
   commit.
+- **The transport behaviour vectors are `main`'s, and this line only runs them (#104).**
+  `testdata/behavior_vectors.json` pins the rules no contract expresses — the scope refusals,
+  error-code mapping, the envelope, identity and pagination guards, the 32 MiB ceiling and the
+  nesting limit — as language-neutral data both lines run, so a rule changed on one line and not the
+  other fails on the one that missed it. Here the file is `main`'s **byte for byte** at the commit
+  `tools/compatdiff/baselines.pin` names, and `make compat-diff` (the required `compat guard` job)
+  fails on a differing byte, a missing copy, or a pin from before the file. **Never edit it here**:
+  a rule changes on `main` first, and reaches this line when the pin advances — which is a port of
+  everything the newer commit brings, the file included, and this line's binding has to pass it.
+  `behaviorvectors_test.go` is that binding, `main`'s rewritten into this dialect (its row in
+  `docs/compat-test-disposition.md` lists each rewrite); it recognises `depth_exceeded` by
+  `errJSONTooDeep`, since Go 1.13's decoder has no depth limit. A vector this line's transport
+  fails is drift: fix the transport here to match `main`, or take the question to `main` — never
+  a local copy of the file.
 - **Every response type needs a smoke call**, and so does every list envelope. A `TestSmoke_`
   function in `integration_test.go` must call a method that decodes it, on a client that function
   built, or

@@ -58,6 +58,7 @@ func commitAll(t *testing.T, dir, msg string) string {
 type fixtureRepo struct {
 	origin  string // file:// URL
 	work    string // a full clone, on the compat branch
+	preVec  string // a main commit from before main had the vector file
 	mainSHA string
 	relSHA  string // what v1.0.0 names
 	headSHA string // the compat branch's tip
@@ -81,6 +82,8 @@ main func Each[$0 any]($0)
 compat func Each(interface{})
 `
 
+const fixtureVectors = "{\n  \"version\": 1,\n  \"response\": []\n}\n"
+
 func newFixtureRepo(t *testing.T) *fixtureRepo {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -102,6 +105,10 @@ func newFixtureRepo(t *testing.T) *fixtureRepo {
 		// leave every Go file of this commit out.
 		".gitattributes": "*.go export-ignore\n",
 	})
+	f.preVec = commitAll(t, seed, "main, before the vectors")
+	// The orphan compat branch below keeps this file from the seed's work
+	// tree, so both sides start with the same bytes, as a real port does.
+	writeTree(t, seed, map[string]string{vectorFile: fixtureVectors})
 	f.mainSHA = commitAll(t, seed, "main")
 
 	git(t, seed, "checkout", "-q", "--orphan", "compat")
@@ -401,4 +408,52 @@ func TestCommandRefusesWhatItCannotDecide(t *testing.T) {
 			t.Errorf("args %q: exit %d, want 2:\n%s", args, code, out)
 		}
 	}
+}
+
+// TestVectorFileMustEqualMainsAtThePin holds this line's copy of the behaviour
+// vectors to main's at the pin (#104): a differing byte, a missing copy, and a
+// pin from before main had the file each fail, and each says which.
+func TestVectorFileMustEqualMainsAtThePin(t *testing.T) {
+	f := newFixtureRepo(t)
+	path := filepath.Join(f.work, filepath.FromSlash(vectorFile))
+
+	t.Run("identical", func(t *testing.T) {
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 0)
+	})
+
+	t.Run("one byte changed", func(t *testing.T) {
+		f.write(t, vectorFile, strings.Replace(fixtureVectors, "1", "2", 1))
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: "+vectorFile+" differs from main's at "+f.mainSHA+", first at line 2")
+	})
+
+	t.Run("a trailing newline dropped", func(t *testing.T) {
+		f.write(t, vectorFile, strings.TrimSuffix(fixtureVectors, "\n"))
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: "+vectorFile+" differs from main's")
+	})
+
+	t.Run("missing here", func(t *testing.T) {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: this tree has no "+vectorFile)
+	})
+
+	t.Run("the pin predates the vectors", func(t *testing.T) {
+		pins := filepath.Join(f.work, filepath.FromSlash(pinFile))
+		original, err := os.ReadFile(pins)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.WriteFile(pins, original, 0o644) }()
+		f.write(t, pinFile, strings.Replace(string(original), f.mainSHA, f.preVec, 1))
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: main at "+f.preVec+" has no "+vectorFile)
+	})
 }
