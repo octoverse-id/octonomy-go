@@ -318,7 +318,8 @@ against.
 
 ## Keeping this table true
 
-The `main` side is pinned to 5e40964 and cannot drift. The "Here" side moves when an owning issue
+The `main` side is pinned and cannot drift: to 5e40964 for every table but one, and, in *Ported from
+`main` after 5e40964*, to the commit each row names. The "Here" side moves when an owning issue
 lands, and that issue's PR updates its row. `TestDispositionTableNamesEveryTestFile` fails when a
 test file in this package has no mention here, so a port that lands under a new name, or a new
 compat-only file, cannot go unrecorded.

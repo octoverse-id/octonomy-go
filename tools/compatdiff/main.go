@@ -23,7 +23,7 @@
 // struct tags, comparability and interface method sets.
 //
 // It also holds testdata/behavior_vectors.json to main's at the same pinned
-// commit, byte for byte (#104, vectors.go): both lines run that file, and a copy
+// commit, byte for byte as committed (#104, vectors.go): both lines run that file, and a copy
 // that drifted would let each pass its own version of the rules.
 //
 // Usage:

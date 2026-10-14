@@ -23,8 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     in the root package, so the required `test` and `go1.13` jobs run it. It recognises
     `depth_exceeded` by this line's own `errJSONTooDeep`, which makes the vector an assertion that
     the guard `jsondepth.go` adds is what refuses the body.
-  - **`make compat-diff` holds the file to `main`'s at the pinned commit** — a differing byte, a
-    missing copy, or a pin from before the file is a finding (`tools/compatdiff/vectors.go`, tested
+  - **`make compat-diff` holds the file to `main`'s at the pinned commit** — a copy that would not
+    commit as `main`'s blob (any differing byte, a checkout's line-ending conversion aside), a
+    missing copy, or a pin from before the file is a finding, and a git command that fails is
+    "could not check", never a finding (`tools/compatdiff/vectors.go`, tested
     on a throwaway repository) — so the copy cannot be edited here or left behind when `main`
     changes a rule. To bring the file, `main`'s pin in `tools/compatdiff/baselines.pin` advances
     from 5e40964 to 676486c, `main`'s merge of #128; between the two `main` changed CI and docs

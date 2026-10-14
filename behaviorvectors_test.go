@@ -38,10 +38,10 @@ import (
 // depth limit, so the refusal that satisfies that vector here is the guard
 // jsondepth.go adds.
 //
-// The vector file is main's, byte for byte, at the commit
-// tools/compatdiff/baselines.pin names: make compat-diff fails on a differing
-// byte (tools/compatdiff/vectors.go). Never edit it here; a rule changes on main
-// first and arrives when the pin advances.
+// The vector file is main's, byte for byte as committed, at the commit
+// tools/compatdiff/baselines.pin names: make compat-diff fails on a copy that
+// would not commit as main's blob (tools/compatdiff/vectors.go). Never edit it
+// here; a rule changes on main first and arrives when the pin advances.
 
 const behaviorVectorsFile = "testdata/behavior_vectors.json"
 

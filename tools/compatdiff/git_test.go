@@ -445,6 +445,54 @@ func TestVectorFileMustEqualMainsAtThePin(t *testing.T) {
 		expect(t, code, out, 1, "vectors: this tree has no "+vectorFile)
 	})
 
+	t.Run("an identical copy a checkout converted to CRLF", func(t *testing.T) {
+		// What core.autocrlf does on Windows: the committed blob is main's, and
+		// the work-tree file is not byte-identical to it. It is the same file.
+		git(t, f.work, "config", "core.autocrlf", "true")
+		defer git(t, f.work, "config", "--unset", "core.autocrlf")
+		f.write(t, vectorFile, strings.ReplaceAll(fixtureVectors, "\n", "\r\n"))
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 0)
+	})
+
+	t.Run("a real edit in a converted checkout points at the edit", func(t *testing.T) {
+		git(t, f.work, "config", "core.autocrlf", "true")
+		defer git(t, f.work, "config", "--unset", "core.autocrlf")
+		edited := strings.Replace(fixtureVectors, "1", "2", 1)
+		f.write(t, vectorFile, strings.ReplaceAll(edited, "\n", "\r\n"))
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: "+vectorFile+" differs from main's at "+f.mainSHA+", first at line 2")
+	})
+
+	t.Run("CRLF without the conversion is a different file", func(t *testing.T) {
+		f.write(t, vectorFile, strings.ReplaceAll(fixtureVectors, "\n", "\r\n"))
+		defer f.write(t, vectorFile, fixtureVectors)
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 1, "vectors: "+vectorFile+" differs from main's at "+f.mainSHA+", first at line 1")
+	})
+
+	t.Run("a check that cannot be made is not a finding", func(t *testing.T) {
+		// A directory where the file belongs: git cannot hash it, and that must
+		// surface as exit 2, never as a claim about main or about this copy.
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			_ = os.Remove(path)
+			f.write(t, vectorFile, fixtureVectors)
+		}()
+		code, out := runIn(t, f.work, "check")
+		expect(t, code, out, 2)
+		if strings.Contains(out, "vectors:") {
+			t.Errorf("a failed git command was reported as a finding:\n%s", out)
+		}
+	})
+
 	t.Run("the pin predates the vectors", func(t *testing.T) {
 		pins := filepath.Join(f.work, filepath.FromSlash(pinFile))
 		original, err := os.ReadFile(pins)

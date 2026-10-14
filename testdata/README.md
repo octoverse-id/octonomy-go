@@ -17,7 +17,8 @@ the other fails on the line that missed it.
   each rewrite). It recognises `depth_exceeded` by this line's own guard, `errJSONTooDeep` in
   `jsondepth.go`, since Go 1.13's `encoding/json` has no depth limit of its own.
 - **Never edit the file here.** `make compat-diff` (in the required `compat guard` job, and in
-  `release-check`) fails on a differing byte, a missing copy, or a pin that predates the file
-  (`tools/compatdiff/vectors.go`). A rule changes on `main` first, in `main`'s file; it reaches this
-  line when the pin advances — a port of everything the newer commit brings — and this line's
-  binding has to pass it then.
+  `release-check`) fails on a copy that would not commit as `main`'s blob — any differing byte, a
+  checkout's own line-ending conversion aside — on a missing copy, and on a pin that predates the
+  file (`tools/compatdiff/vectors.go`). A rule changes on `main` first, in `main`'s file; it
+  reaches this line when the pin advances — a port of everything the newer commit brings — and
+  this line's binding has to pass it then.
