@@ -26,6 +26,7 @@ something this file does not account for:
    the MINOR rule). This check has no exceptions:
 
    - [`v1.0.0`](https://github.com/octoverse-id/octonomy-go/tree/v1.0.0) (`ad3ced172994`): 150 features.
+   - [`v1.1.0`](https://github.com/octoverse-id/octonomy-go/tree/v1.1.0) (`483ad84659b7`): 467 features.
 
 Not compared: each line's module path and the value of `Version`, which name the line rather
 than describe it; parameter and type-parameter names (a type parameter prints by position,
