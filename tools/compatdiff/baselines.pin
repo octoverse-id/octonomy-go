@@ -27,13 +27,14 @@
 #
 # main's pin was 5e40964, the commit the whole parity epic (#88) ports from and
 # the one tools/contractdrift/main.pin still names, until #104 advanced it to
-# 676486c, main's merge of the behaviour vectors. Between the two, main changed
-# CI and docs (#124, which this line had already taken as #122) and added the
-# vectors, and changed no exported declaration. The two pins are separate on
+# cb2d499: main's merge of the behaviour vectors (#128) and of their binding's
+# first fix (#130). Between the two, main changed CI and docs (#124, which this
+# line had already taken as #122) and added the vectors and their binding, and
+# changed no exported declaration. The two pins are separate on
 # purpose: each advances with the work that has to come with it, which for one
 # is the contract gate's files and for the other is this line's API and its
 # vectors.
 
-main 676486caf50bbdc0dd9655f09e228e086411f6ca
+main cb2d4994e45321e616e79fd6201ecb41252136c4
 release v1.0.0 ad3ced172994940edaccfa3e52e2d76060e4e9c4
 release v1.1.0 483ad84659b70ee281aef593a17e7792bdd24d68

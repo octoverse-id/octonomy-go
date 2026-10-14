@@ -31,9 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     bytes cannot be read (`tools/compatdiff/vectors.go`, tested
     on a throwaway repository) — so the copy cannot be edited here or left behind when `main`
     changes a rule. To bring the file, `main`'s pin in `tools/compatdiff/baselines.pin` advances
-    from 5e40964 to 676486c, `main`'s merge of #128; between the two `main` changed CI and docs
-    (#124, already taken here as #122) and no exported declaration, so parity holds and `COMPAT.md`
-    changes only in the commit it names.
+    from 5e40964 to cb2d499, `main`'s merge of #128 and of its binding's first fix (#130); between
+    the two `main` changed CI and docs (#124, already taken here as #122) and no exported
+    declaration, so parity holds and `COMPAT.md` changes only in the commit it names.
   - `testdata/README.md` says where the format is described (`main`'s), `AGENTS.md` says never to
     edit the file here, and `docs/compat-test-disposition.md` gains a section for test files ported
     from a `main` commit after 5e40964, with this binding's row.
